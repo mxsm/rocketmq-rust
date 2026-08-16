@@ -76,6 +76,7 @@ cheetah-string = { workspace = true }
 hickory-resolver = { workspace = true, optional = true }
 
 [dev-dependencies]
+rocketmq-namesrv   = { workspace = true }
 rocketmq-transport = { workspace = true, features = ["socks", "test-support", "tls"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 pkcs8.workspace = true

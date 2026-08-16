@@ -45,7 +45,7 @@ fn spawn_rebalance_task<F>(service_context: &ChildServiceContext, task: F) -> st
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    spawn_client_tracked_task_with_context(service_context, "rocketmq-client-rebalance-service", task)
+    spawn_client_tracked_task_with_context(service_context, "rocketmq-client-rebalance-service", Box::pin(task))
 }
 
 fn rebalance_service_startup_failed(error: impl std::fmt::Display) -> RocketMQError {

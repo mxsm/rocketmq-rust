@@ -2006,7 +2006,7 @@ fn spawn_guard_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_tracked_task_with_context(service_context, thread_name, task) {
+    match spawn_client_tracked_task_with_context(service_context, thread_name, Box::pin(task)) {
         Ok(handle) => Some(GuardTaskHandle::Tracked { shutdown_tx, handle }),
         Err(error) => {
             tracing::error!("Failed to spawn {} background task: {}", thread_name, error);

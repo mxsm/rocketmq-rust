@@ -188,7 +188,7 @@ fn spawn_lite_pull_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let handle = spawn_client_tracked_task_with_context(service_context, thread_name, task)?;
+    let handle = spawn_client_tracked_task_with_context(service_context, thread_name, Box::pin(task))?;
     Ok(LitePullTaskHandle::Tracked { handle, cancelled })
 }
 
@@ -305,9 +305,11 @@ impl MessageQueueListener for LitePullRebalanceListener {
             }
         });
 
-        if let Err(error) =
-            spawn_client_task_with_context(&service_context, "rocketmq-client-lite-pull-rebalance-listener", task)
-        {
+        if let Err(error) = spawn_client_task_with_context(
+            &service_context,
+            "rocketmq-client-lite-pull-rebalance-listener",
+            Box::pin(task),
+        ) {
             warn!(
                 "LitePull rebalance listener ignored async assignment update because task spawn failed. error={}",
                 error

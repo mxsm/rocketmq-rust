@@ -4327,6 +4327,7 @@ dependencies = [
  "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-model",
+ "rocketmq-namesrv",
  "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-runtime",

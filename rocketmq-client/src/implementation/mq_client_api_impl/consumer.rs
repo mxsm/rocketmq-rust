@@ -95,9 +95,11 @@ impl MQClientAPIImpl {
                 .await;
         });
 
-        if let Err(error) =
-            spawn_client_task_with_context(service_context, "rocketmq-client-pop-message-async", tracked_task)
-        {
+        if let Err(error) = spawn_client_task_with_context(
+            service_context,
+            "rocketmq-client-pop-message-async",
+            Box::pin(tracked_task),
+        ) {
             if let Some(mut callback) = callback
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

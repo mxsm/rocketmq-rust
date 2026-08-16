@@ -14,6 +14,7 @@
 
 use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc as std_mpsc;
@@ -318,14 +319,17 @@ impl ClientRuntimeTaskHandle {
     }
 }
 
-pub(crate) fn spawn_client_task_with_context<F>(
+/// Heap-erased future submitted through the client task ownership boundary.
+///
+/// Callers allocate the concrete future before it enters the generic task-group
+/// spawn chain so large async state does not exhaust default Windows stacks.
+pub(crate) type ClientTaskFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+pub(crate) fn spawn_client_task_with_context(
     context: &ChildServiceContext,
     task_name: &'static str,
-    task: F,
-) -> io::Result<ClientRuntimeTaskHandle>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
+    task: ClientTaskFuture,
+) -> io::Result<ClientRuntimeTaskHandle> {
     let task_group = context.task_group().clone();
     let (completion_tx, completion_rx) = std_mpsc::channel();
     let task_id = task_group
@@ -342,14 +346,11 @@ where
     })
 }
 
-pub(crate) fn spawn_background_client_task_with_context<F>(
+pub(crate) fn spawn_background_client_task_with_context(
     context: &ChildServiceContext,
     task_name: &'static str,
-    task: F,
-) -> io::Result<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
+    task: ClientTaskFuture,
+) -> io::Result<()> {
     drop(spawn_client_task_with_context(context, task_name, task)?);
     Ok(())
 }
@@ -441,14 +442,11 @@ fn timed_out_task_report(task_name: &'static str, elapsed: Duration, aborted: bo
     report
 }
 
-pub(crate) fn spawn_client_tracked_task_with_context<F>(
+pub(crate) fn spawn_client_tracked_task_with_context(
     context: &ChildServiceContext,
     task_name: &'static str,
-    task: F,
-) -> io::Result<ClientTrackedTaskHandle>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
+    task: ClientTaskFuture,
+) -> io::Result<ClientTrackedTaskHandle> {
     let task_group = context.task_group().clone();
     let (completion_tx, completion_rx) = std_mpsc::channel();
     let task_id = task_group
@@ -652,10 +650,14 @@ pub(crate) fn spawn_delayed_client_action_with_context<F>(
         return;
     }
 
-    if let Err(error) = spawn_background_client_task_with_context(context, task_name, async move {
-        tokio::time::sleep(delay).await;
-        action();
-    }) {
+    if let Err(error) = spawn_background_client_task_with_context(
+        context,
+        task_name,
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            action();
+        }),
+    ) {
         tracing::error!(%error, task_name, "failed to spawn delayed client action");
     }
 }
@@ -756,9 +758,13 @@ mod tests {
         let completed = Arc::new(AtomicUsize::new(0));
         let completed_in_task = Arc::clone(&completed);
 
-        let handle = spawn_client_task_with_context(&service_context, "owned-task", async move {
-            completed_in_task.fetch_add(1, Ordering::Release);
-        })
+        let handle = spawn_client_task_with_context(
+            &service_context,
+            "owned-task",
+            Box::pin(async move {
+                completed_in_task.fetch_add(1, Ordering::Release);
+            }),
+        )
         .expect("task should spawn");
 
         assert!(handle.wait_finished(Duration::from_secs(1)));
@@ -780,7 +786,7 @@ mod tests {
 
         for _ in 0..TASKS {
             handles.push(
-                spawn_client_task_with_context(&service_context, "transient-task", async {})
+                spawn_client_task_with_context(&service_context, "transient-task", Box::pin(async {}))
                     .expect("transient task should spawn"),
             );
         }
@@ -804,13 +810,20 @@ mod tests {
     #[tokio::test]
     async fn tracked_task_shutdown_does_not_close_component_owner() {
         let service_context = test_service_context("client-tracked-task-isolation-test");
-        let first =
-            spawn_client_tracked_task_with_context(&service_context, "first-tracked-task", std::future::pending())
-                .expect("first task should spawn");
+        let first = spawn_client_tracked_task_with_context(
+            &service_context,
+            "first-tracked-task",
+            Box::pin(std::future::pending()),
+        )
+        .expect("first task should spawn");
         let (second_shutdown_tx, second_shutdown_rx) = tokio::sync::oneshot::channel();
-        let second = spawn_client_tracked_task_with_context(&service_context, "second-tracked-task", async move {
-            let _ = second_shutdown_rx.await;
-        })
+        let second = spawn_client_tracked_task_with_context(
+            &service_context,
+            "second-tracked-task",
+            Box::pin(async move {
+                let _ = second_shutdown_rx.await;
+            }),
+        )
         .expect("second task should spawn");
 
         let report = first.shutdown_now();
@@ -835,9 +848,12 @@ mod tests {
     #[tokio::test]
     async fn tracked_task_abort_waits_for_registry_removal() {
         let service_context = test_service_context("client-tracked-task-abort-wait-test");
-        let handle =
-            spawn_client_tracked_task_with_context(&service_context, "abort-and-wait-task", std::future::pending())
-                .expect("tracked task should spawn");
+        let handle = spawn_client_tracked_task_with_context(
+            &service_context,
+            "abort-and-wait-task",
+            Box::pin(std::future::pending()),
+        )
+        .expect("tracked task should spawn");
 
         assert!(handle.abort_and_wait(Duration::from_secs(1)).await);
         assert_eq!(service_context.task_group().task_count(), 0);

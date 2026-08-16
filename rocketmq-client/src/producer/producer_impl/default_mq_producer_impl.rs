@@ -237,7 +237,7 @@ where
     drop(spawn_client_task_with_context(
         service_context,
         thread_name,
-        tracked_task,
+        Box::pin(tracked_task),
     )?);
     Ok(())
 }
