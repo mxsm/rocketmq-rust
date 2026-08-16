@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "resultIds": ["U01-LF", "U01-MP", "U01-RDB", "U01-CMP", "U01-POP", "U01-TMR", "U01-TRD", "U01-CTL", "U01-UPG"],
+  "aggregateId": "U01",
+  "excludedModes": ["Java Controller", "Java AutoSwitchHA", "DLedger CommitLog"],
+  "remotePublication": "not-executed",
+  "scenarios": [
+    {
+      "id": "U01-LF",
+      "profile": "local-file",
+      "timeoutSeconds": 600,
+      "capabilities": ["clean-reopen", "crash-recovery", "crc", "consume-queue", "index-boundary"],
+      "requiredAssertions": ["artifact-identity", "clean-reopen", "crash-recovery", "crc", "consume-queue", "index-boundary"],
+      "requiredEvidence": ["driver-log", "store-report"]
+    },
+    {
+      "id": "U01-MP",
+      "profile": "multipath",
+      "timeoutSeconds": 600,
+      "capabilities": ["two-write-one-read", "deterministic-fault", "retirement", "restart", "offline-consolidate", "global-offset"],
+      "requiredAssertions": ["artifact-identity", "cross-root-write", "fault-selection", "retirement", "restart", "offline-consolidate", "global-offset"],
+      "requiredEvidence": ["driver-log", "multipath-report"]
+    },
+    {
+      "id": "U01-RDB",
+      "profile": "rocksdb",
+      "timeoutSeconds": 600,
+      "capabilities": ["consume-queue", "index", "query-pagination", "truncate", "restart"],
+      "requiredAssertions": ["artifact-identity", "consume-queue", "index", "query-pagination", "truncate-restart"],
+      "requiredEvidence": ["driver-log", "rocksdb-report"]
+    },
+    {
+      "id": "U01-CMP",
+      "profile": "compaction",
+      "timeoutSeconds": 600,
+      "capabilities": ["latest-key", "compound-key", "no-key", "batch", "tombstone", "half-published-generation"],
+      "requiredAssertions": ["artifact-identity", "latest-key", "key-encoding", "batch", "tombstone", "generation-recovery"],
+      "requiredEvidence": ["driver-log", "compaction-report"]
+    },
+    {
+      "id": "U01-POP",
+      "profile": "pop",
+      "timeoutSeconds": 600,
+      "capabilities": ["file-profile", "persistent-profile", "retry-v1", "dual-read-v2-write", "ack", "change-invisible", "restart", "rollback-preflight"],
+      "requiredAssertions": ["artifact-identity", "profile-state", "retry-migration", "ack", "change-invisible", "restart", "rollback-boundary"],
+      "requiredEvidence": ["driver-log", "pop-report"]
+    },
+    {
+      "id": "U01-TMR",
+      "profile": "timer",
+      "timeoutSeconds": 600,
+      "capabilities": ["java-compat", "extended", "shadow", "formal", "recall", "restart", "downgrade-boundary"],
+      "requiredAssertions": ["artifact-identity", "owner-transition", "delivery", "recall", "restart", "downgrade-boundary"],
+      "requiredEvidence": ["driver-log", "timer-report"]
+    },
+    {
+      "id": "U01-TRD",
+      "profile": "tiered",
+      "timeoutSeconds": 600,
+      "capabilities": ["read-selection", "fallback", "cleanup", "restart", "legacy-metadata", "reject-boundary"],
+      "requiredAssertions": ["artifact-identity", "read-selection", "fallback", "cleanup", "restart", "metadata-boundary"],
+      "requiredEvidence": ["driver-log", "tiered-report"]
+    },
+    {
+      "id": "U01-CTL",
+      "profile": "rust-controller-ha",
+      "timeoutSeconds": 600,
+      "capabilities": ["role-flip", "store-write-fence", "escape-bridge-epoch", "lease-expiry-self-fence", "leader-safe-wait", "rejoin-tail-truncate"],
+      "requiredAssertions": ["artifact-identity", "role-authority", "old-master-no-ack", "leader-safe-wait", "write-fence", "rejoin-tail-truncate"],
+      "requiredEvidence": ["driver-log", "controller-report"]
+    },
+    {
+      "id": "U01-UPG",
+      "profile": "upgrade",
+      "timeoutSeconds": 600,
+      "capabilities": ["v0.9.0-fixture", "current-reader", "downgrade-preflight", "allow-boundary", "reject-boundary", "immutable-old-sample"],
+      "requiredAssertions": ["artifact-identity", "fixture-version", "upgrade-read", "preflight-allow", "preflight-reject", "fixture-immutability"],
+      "requiredEvidence": ["driver-log", "upgrade-report"]
+    }
+  ]
+}
