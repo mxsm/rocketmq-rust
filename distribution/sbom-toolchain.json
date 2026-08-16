@@ -2,7 +2,12 @@
   "schema_version": 1,
   "format": "CycloneDX",
   "spec_version": "1.5",
-  "generator": "distribution/generate_component_sbom.py",
+  "generator": "rocketmq-rust-builtin-sbom",
+  "generator_version": "1.0.0",
+  "generator_entrypoints": [
+    "distribution/generate_component_sbom.py",
+    "distribution/generate_release_sbom.py"
+  ],
   "component_types": ["application", "library"],
   "content_source": "cargo metadata --locked and archive staging inventory",
   "remote_lookup": false
