@@ -21,7 +21,7 @@ use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
-pub const MESSAGE_COUNT: usize = 1;
+pub const MESSAGE_COUNT: usize = 100000000;
 pub const PRODUCER_GROUP: &str = "please_rename_unique_group_name";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
@@ -41,15 +41,26 @@ pub async fn main() -> RocketMQResult<()> {
 
     producer.start().await?;
 
-    for _ in 0..10 {
+    let mut shutdown_signal = Box::pin(tokio::signal::ctrl_c());
+    for _ in 0..MESSAGE_COUNT {
         let message = Message::builder()
             .topic(TOPIC)
             .tags(TAG)
             .body_slice("Hello RocketMQ".as_bytes())
             .build_unchecked();
 
-        let send_result = producer.send_with_timeout(message, 2000).await?;
-        println!("send result: {:?}", send_result);
+        tokio::select! {
+            signal = &mut shutdown_signal => {
+                if signal.is_ok() {
+                    println!("Ctrl-C received, shutting down gracefully");
+                }
+                break;
+            }
+            result = producer.send_with_timeout(message, 2000) => {
+                let send_result = result?;
+                println!("send result: {:?}", send_result);
+            }
+        }
     }
     producer.shutdown().await;
 
