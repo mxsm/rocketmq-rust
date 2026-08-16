@@ -14,6 +14,7 @@
 
 //! Consumer capability contracts.
 
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -339,6 +340,194 @@ pub struct DashboardConsumerUpsertRequest {
     pub consume_timeout_minute: i32,
 }
 
+const CID_RMQ_SYS_PREFIX: &str = "CID_RMQ_SYS_";
+const SYSTEM_CONSUMER_GROUPS: &[&str] = &[
+    "TOOLS_CONSUMER",
+    "FILTERSRV_CONSUMER",
+    "SELF_TEST_C_GROUP",
+    "CID_ONS-HTTP-PROXY",
+    "CID_ONSAPI_PULL",
+    "CID_ONSAPI_PERMISSION",
+    "CID_ONSAPI_OWNER",
+    "CID_RMQ_SYS_TRANS",
+    "CID_DefaultHeartBeatSyncerTopic",
+];
+
+/// Validated create-or-update request for a complete multi-broker workflow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerBatchUpsertRequest {
+    inner: DashboardConsumerUpsertRequest,
+}
+
+impl ConsumerBatchUpsertRequest {
+    /// Normalizes target names and rejects invalid or protected groups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the group, target selection, or
+    /// retry limits are invalid.
+    pub fn try_new(mut inner: DashboardConsumerUpsertRequest) -> AdminResult<Self> {
+        inner.consumer_group = validate_batch_consumer_group(inner.consumer_group)?;
+        inner.cluster_name_list = canonical_names(inner.cluster_name_list);
+        inner.broker_name_list = canonical_names(inner.broker_name_list);
+        if inner.cluster_name_list.is_empty() && inner.broker_name_list.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "brokerNameList",
+                "Select at least one cluster or broker before saving the consumer group.",
+            ));
+        }
+        validate_batch_consumer_limits(&inner)?;
+        Ok(Self { inner })
+    }
+
+    pub(crate) fn inner(&self) -> &DashboardConsumerUpsertRequest {
+        &self.inner
+    }
+}
+
+/// Validated delete request carrying both selected and authoritative brokers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerBatchDeleteRequest {
+    consumer_group: String,
+    selected_broker_names: Vec<String>,
+    all_broker_names: Vec<String>,
+}
+
+impl ConsumerBatchDeleteRequest {
+    /// Normalizes both broker sets and verifies that selection is a subset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the group is protected, either
+    /// broker set is empty, or a selected broker is outside the authoritative
+    /// set.
+    pub fn try_new<Selected, SelectedName, All, AllName>(
+        consumer_group: impl Into<String>,
+        selected_broker_names: Selected,
+        all_broker_names: All,
+    ) -> AdminResult<Self>
+    where
+        Selected: IntoIterator<Item = SelectedName>,
+        SelectedName: Into<String>,
+        All: IntoIterator<Item = AllName>,
+        AllName: Into<String>,
+    {
+        let consumer_group = validate_batch_consumer_group(consumer_group)?;
+        let selected_broker_names = canonical_names(selected_broker_names);
+        if selected_broker_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "selectedBrokerNames",
+                "Select at least one broker before deleting the consumer group.",
+            ));
+        }
+        let all_broker_names = canonical_names(all_broker_names);
+        if all_broker_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "allBrokerNames",
+                "The authoritative broker set must not be empty.",
+            ));
+        }
+        if let Some(broker_name) = selected_broker_names
+            .iter()
+            .find(|broker_name| all_broker_names.binary_search(broker_name).is_err())
+        {
+            return Err(crate::core::AdminError::invalid_argument(
+                "selectedBrokerNames",
+                format!("Broker `{broker_name}` is outside the authoritative broker set."),
+            ));
+        }
+        Ok(Self {
+            consumer_group,
+            selected_broker_names,
+            all_broker_names,
+        })
+    }
+
+    pub(crate) fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    pub(crate) fn selected_broker_names(&self) -> &[String] {
+        &self.selected_broker_names
+    }
+
+    pub(crate) fn all_broker_names(&self) -> &[String] {
+        &self.all_broker_names
+    }
+}
+
+/// Outcome of one broker mutation or one internal-topic cleanup target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerTargetOutcome {
+    pub target: String,
+    pub kind: String,
+    pub success: bool,
+    pub message: String,
+}
+
+/// Stable ordered outcomes for a closed consumer batch workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerBatchResult {
+    pub consumer_group: String,
+    pub success: bool,
+    pub targets: Vec<DashboardConsumerTargetOutcome>,
+}
+
+fn canonical_names<Names, Name>(names: Names) -> Vec<String>
+where
+    Names: IntoIterator<Item = Name>,
+    Name: Into<String>,
+{
+    let mut names = names
+        .into_iter()
+        .map(Into::into)
+        .map(|name: String| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn validate_batch_consumer_group(value: impl Into<String>) -> AdminResult<String> {
+    let value = required("consumerGroup", value)?;
+    if value.starts_with("%SYS%") || is_system_consumer_group(&value) {
+        return Err(crate::core::AdminError::invalid_argument(
+            "consumerGroup",
+            "System consumer groups cannot be mutated.",
+        ));
+    }
+    validate_subscription_group_name(&value)
+        .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+    Ok(value)
+}
+
+fn validate_batch_consumer_limits(request: &DashboardConsumerUpsertRequest) -> AdminResult<()> {
+    if request.retry_queue_nums < 0 {
+        return Err(crate::core::AdminError::invalid_argument(
+            "retryQueueNums",
+            "Retry queues must be zero or greater.",
+        ));
+    }
+    if request.retry_max_times < -1 {
+        return Err(crate::core::AdminError::invalid_argument(
+            "retryMaxTimes",
+            "Max retries must be -1 or greater.",
+        ));
+    }
+    if request.consume_timeout_minute <= 0 {
+        return Err(crate::core::AdminError::invalid_argument(
+            "consumeTimeoutMinute",
+            "Consume timeout must be greater than zero.",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_system_consumer_group(group: &str) -> bool {
+    group.starts_with(CID_RMQ_SYS_PREFIX) || SYSTEM_CONSUMER_GROUPS.contains(&group)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardConsumerDeleteRequest {
     pub consumer_group: String,
@@ -631,6 +820,19 @@ pub trait ConsumerDiagnosticAdmin: Send {
     ) -> AdminFuture<'a, DashboardConsumerRunningInfo>;
 }
 
+/// Complete consumer batch mutations owned by one leased admin session.
+pub trait ConsumerBatchMutationAdmin: Send {
+    fn upsert_consumer_group_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerBatchUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
+
+    fn delete_consumer_group_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerBatchDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
+}
+
 /// Consumer mutations require the explicit mutation adapter feature.
 pub trait ConsumerMutationAdmin: Send {
     fn patch_config_if_version<'a>(
@@ -726,6 +928,27 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
         request: &'a SetConsumerRequestModeRequest,
     ) -> AdminFuture<'a, SetConsumerRequestModeResult> {
         ConsumerAdmin::set_consumer_request_mode(self, request)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod batch_test_support {
+    use super::*;
+
+    pub(crate) fn unchecked_upsert_request(inner: DashboardConsumerUpsertRequest) -> ConsumerBatchUpsertRequest {
+        ConsumerBatchUpsertRequest { inner }
+    }
+
+    pub(crate) fn unchecked_delete_request(
+        consumer_group: impl Into<String>,
+        selected_broker_names: Vec<String>,
+        all_broker_names: Vec<String>,
+    ) -> ConsumerBatchDeleteRequest {
+        ConsumerBatchDeleteRequest {
+            consumer_group: consumer_group.into(),
+            selected_broker_names,
+            all_broker_names,
+        }
     }
 }
 
