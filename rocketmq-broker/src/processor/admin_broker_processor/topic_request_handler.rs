@@ -889,9 +889,9 @@ impl TopicRequestHandler {
             map.insert(message_queue, topic_offset);
         }
         topic_stats_table.set_offset_table(map);
-        Ok(Some(RemotingCommand::create_success_response_command().set_body(
-            topic_stats_table.encode().expect("encode TopicStatsTable failed"),
-        )))
+        Ok(Some(
+            RemotingCommand::create_success_response_command().set_body(topic_stats_table.encode()?),
+        ))
     }
 
     pub async fn get_topic_config<MS: BrokerAdminStore>(

@@ -14,15 +14,34 @@
 
 #![allow(deprecated)]
 
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::RwLock as StdRwLock;
+use std::time::Duration;
+use std::time::Instant;
+
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::ChildServiceContext;
+use tokio::sync::Mutex;
 
 use crate::producer::local_transaction_state::LocalTransactionState;
+use crate::runtime::schedule_client_fixed_delay_task_with_context;
+use crate::runtime::ClientRuntime;
+use crate::runtime::ClientScheduledTaskHandle;
 
-const MODERN_LITE_PULL_CONSUMER: &str = "DefaultLitePullConsumer";
+pub use crate::consumer::consumer_impl::default_mq_pull_consumer_impl::DefaultMQPullConsumerImpl;
+pub use crate::consumer::default_mq_pull_consumer::DefaultMQPullConsumer;
+pub use crate::consumer::default_mq_pull_consumer::MQPullConsumer;
+
 const MODERN_TRANSACTION_LISTENER: &str = "TransactionListener";
 const MODERN_TRACE_HOOKS: &str = "RocketMQ trace hooks";
 
@@ -39,131 +58,278 @@ fn unsupported_impl_api(api: &str) -> RocketMQError {
     ))
 }
 
-#[deprecated(
-    since = "0.9.0",
-    note = "Java DefaultMQPullConsumer is deprecated; use DefaultLitePullConsumer"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct DefaultMQPullConsumer {
-    consumer_group: Option<CheetahString>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleServiceState {
+    Created,
+    Running,
+    Failed,
+    Shutdown,
 }
 
-impl DefaultMQPullConsumer {
-    pub fn new() -> Self {
-        Self::default()
+struct PullScheduleCore {
+    consumer: DefaultMQPullConsumer,
+    service_context: ChildServiceContext,
+    callbacks: StdRwLock<HashMap<CheetahString, Arc<dyn PullTaskCallback>>>,
+    refresh_interval: StdRwLock<Duration>,
+    state: Mutex<ScheduleServiceState>,
+    coordinator: StdMutex<Option<ClientScheduledTaskHandle>>,
+}
+
+impl PullScheduleCore {
+    fn callback_snapshot(&self) -> HashMap<CheetahString, Arc<dyn PullTaskCallback>> {
+        self.callbacks
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
-    pub fn with_consumer_group(consumer_group: impl Into<CheetahString>) -> Self {
-        Self {
-            consumer_group: Some(consumer_group.into()),
+    async fn start(self: &Arc<Self>) -> RocketMQResult<()> {
+        let mut state = self.state.lock().await;
+        match *state {
+            ScheduleServiceState::Created => {}
+            ScheduleServiceState::Running => {
+                return Err(crate::mq_client_err!("MQPullConsumerScheduleService already started"));
+            }
+            ScheduleServiceState::Failed => {
+                return Err(crate::mq_client_err!(
+                    "MQPullConsumerScheduleService start previously failed; create a new service"
+                ));
+            }
+            ScheduleServiceState::Shutdown => {
+                return Err(crate::mq_client_err!(
+                    "MQPullConsumerScheduleService has been shut down"
+                ));
+            }
         }
+        if self.callback_snapshot().is_empty() {
+            *state = ScheduleServiceState::Failed;
+            return Err(crate::mq_client_err!("no pull task callback is registered"));
+        }
+        if let Err(error) = self.consumer.start().await {
+            *state = ScheduleServiceState::Failed;
+            return Err(error);
+        }
+        if let Err(error) = self.spawn_coordinator() {
+            self.consumer.shutdown().await?;
+            *state = ScheduleServiceState::Failed;
+            return Err(error);
+        }
+        *state = ScheduleServiceState::Running;
+        Ok(())
     }
 
-    pub fn consumer_group(&self) -> Option<&CheetahString> {
-        self.consumer_group.as_ref()
+    fn spawn_coordinator(self: &Arc<Self>) -> RocketMQResult<()> {
+        let core = self.clone();
+        let due = Arc::new(Mutex::new(HashMap::<MessageQueue, Instant>::new()));
+        let refresh_interval = *self
+            .refresh_interval
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let handle = schedule_client_fixed_delay_task_with_context(
+            &self.service_context,
+            "rocketmq-client-classic-pull-schedule",
+            refresh_interval,
+            refresh_interval,
+            Duration::from_secs(5),
+            move || {
+                let core = core.clone();
+                let due = due.clone();
+                async move {
+                    let mut due = due.lock().await;
+                let mut active_queues = HashSet::new();
+                for (topic, callback) in core.callback_snapshot() {
+                    let queues = match core.consumer.fetch_subscribe_message_queues(topic.as_str()).await {
+                        Ok(queues) => queues,
+                        Err(error) => {
+                            tracing::warn!(topic = %topic, error = %error, "scheduled Classic Pull route refresh failed");
+                            continue;
+                        }
+                    };
+                    for queue in queues {
+                        active_queues.insert(queue.clone());
+                        let now = Instant::now();
+                        if due.get(&queue).is_some_and(|deadline| *deadline > now) {
+                            continue;
+                        }
+                        let mut context = PullTaskContext::with_pull_consumer(core.consumer.clone());
+                        match callback.do_pull_task(&queue, &mut context).await {
+                            Ok(()) => {
+                                let delay = u64::try_from(context.pull_next_delay_time_millis.max(0)).unwrap_or(0);
+                                due.insert(queue, now + Duration::from_millis(delay));
+                            }
+                            Err(error) => {
+                                tracing::warn!(message_queue = %queue, error = %error, "scheduled Classic Pull callback failed");
+                                due.insert(queue, now + Duration::from_millis(3000));
+                            }
+                        }
+                    }
+                }
+                due.retain(|queue, _| active_queues.contains(queue));
+                }
+            },
+        )
+        .map_err(RocketMQError::from)?;
+        *self.coordinator.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handle);
+        Ok(())
     }
 
-    pub fn start(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api(
-            "DefaultMQPullConsumer",
-            MODERN_LITE_PULL_CONSUMER,
-        ))
-    }
-
-    pub fn shutdown(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api(
-            "DefaultMQPullConsumer",
-            MODERN_LITE_PULL_CONSUMER,
-        ))
-    }
-
-    pub fn default_mq_pull_consumer_impl(&self) -> RocketMQResult<DefaultMQPullConsumerImpl> {
-        Err(unsupported_legacy_api(
-            "DefaultMQPullConsumerImpl",
-            MODERN_LITE_PULL_CONSUMER,
-        ))
+    async fn shutdown(&self) -> RocketMQResult<()> {
+        let mut state = self.state.lock().await;
+        match *state {
+            ScheduleServiceState::Shutdown => return Ok(()),
+            ScheduleServiceState::Created => {
+                *state = ScheduleServiceState::Shutdown;
+                return Ok(());
+            }
+            ScheduleServiceState::Running | ScheduleServiceState::Failed => {}
+        }
+        let coordinator = self
+            .coordinator
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let stopped = match coordinator {
+            Some(coordinator) => coordinator.shutdown(Duration::from_secs(5)).await.is_healthy(),
+            None => true,
+        };
+        self.consumer.shutdown().await?;
+        *state = ScheduleServiceState::Shutdown;
+        if !stopped {
+            return Err(RocketMQError::Timeout {
+                operation: "classic pull schedule shutdown",
+                timeout_ms: 5000,
+            });
+        }
+        Ok(())
     }
 }
 
 #[deprecated(
     since = "0.9.0",
-    note = "Java MQPullConsumer is deprecated; use the scoped LitePull capabilities"
+    note = "Classic Pull scheduling is retained for compatibility; prefer application-owned scheduling for new code"
 )]
-pub trait MQPullConsumer {
-    fn start(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api("MQPullConsumer", MODERN_LITE_PULL_CONSUMER))
-    }
-
-    fn shutdown(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api("MQPullConsumer", MODERN_LITE_PULL_CONSUMER))
-    }
-}
-
-impl MQPullConsumer for DefaultMQPullConsumer {}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java DefaultMQPullConsumerImpl is deprecated; use DefaultLitePullConsumer"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct DefaultMQPullConsumerImpl;
-
-impl DefaultMQPullConsumerImpl {
-    pub fn new() -> RocketMQResult<Self> {
-        Err(unsupported_legacy_api(
-            "DefaultMQPullConsumerImpl",
-            MODERN_LITE_PULL_CONSUMER,
-        ))
-    }
-
-    pub fn rebalance_impl(&self) -> RocketMQResult<RebalancePullImpl> {
-        Err(unsupported_legacy_api("RebalancePullImpl", MODERN_LITE_PULL_CONSUMER))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java MQPullConsumerScheduleService is deprecated; use DefaultLitePullConsumer"
-)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MQPullConsumerScheduleService {
     consumer_group: CheetahString,
+    core: Option<Arc<PullScheduleCore>>,
 }
 
 impl MQPullConsumerScheduleService {
+    /// Creates a detached compatibility value.
+    ///
+    /// Use [`Self::with_client_runtime`] for a runnable schedule service.
     pub fn new(consumer_group: impl Into<CheetahString>) -> Self {
         Self {
             consumer_group: consumer_group.into(),
+            core: None,
         }
     }
 
+    /// Creates a schedule service backed by an application-owned client runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the consumer group or underlying Classic Pull configuration is
+    /// invalid.
+    pub fn with_client_runtime(
+        client_runtime: Arc<ClientRuntime>,
+        consumer_group: impl Into<CheetahString>,
+    ) -> RocketMQResult<Self> {
+        let consumer_group = consumer_group.into();
+        let consumer = DefaultMQPullConsumer::builder(client_runtime.clone())
+            .consumer_group(consumer_group.clone())
+            .build()?;
+        Ok(Self {
+            consumer_group,
+            core: Some(Arc::new(PullScheduleCore {
+                consumer,
+                service_context: client_runtime.component("classic-pull-schedule"),
+                callbacks: StdRwLock::new(HashMap::new()),
+                refresh_interval: StdRwLock::new(Duration::from_secs(1)),
+                state: Mutex::new(ScheduleServiceState::Created),
+                coordinator: StdMutex::new(None),
+            })),
+        })
+    }
+
+    fn core(&self) -> RocketMQResult<&Arc<PullScheduleCore>> {
+        self.core.as_ref().ok_or_else(|| {
+            RocketMQError::not_initialized(
+                "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
+            )
+        })
+    }
+
+    /// Returns the configured consumer group.
     pub fn consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
 
-    pub fn start(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api(
-            "MQPullConsumerScheduleService",
-            MODERN_LITE_PULL_CONSUMER,
-        ))
+    /// Starts the consumer and its runtime-owned schedule coordinator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an initialization error for a detached value, a stable lifecycle error for a
+    /// repeated or invalid start, or an underlying consumer or task-spawn error.
+    pub async fn start(&self) -> RocketMQResult<()> {
+        self.core()?.start().await
     }
 
-    pub fn shutdown(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api(
-            "MQPullConsumerScheduleService",
-            MODERN_LITE_PULL_CONSUMER,
-        ))
+    /// Cancels the coordinator, awaits it, and shuts down the consumer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an initialization error for a detached value, an underlying consumer shutdown
+    /// error, or a timeout when the coordinator does not stop within the shutdown bound.
+    pub async fn shutdown(&self) -> RocketMQResult<()> {
+        self.core()?.shutdown().await
     }
 
-    pub fn register_pull_task_callback<C>(
-        &mut self,
-        _topic: impl Into<CheetahString>,
-        _callback: C,
-    ) -> RocketMQResult<()>
+    /// Sets how frequently the coordinator refreshes registered topic routes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero duration or a detached schedule service.
+    pub fn set_refresh_interval(&self, refresh_interval: Duration) -> RocketMQResult<()> {
+        if refresh_interval.is_zero() {
+            return Err(crate::mq_client_err!("schedule refresh interval must be positive"));
+        }
+        *self
+            .core()?
+            .refresh_interval
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = refresh_interval;
+        Ok(())
+    }
+
+    /// Registers or replaces the callback for a topic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a blank topic or a detached schedule service.
+    pub fn register_pull_task_callback<C>(&self, topic: impl Into<CheetahString>, callback: C) -> RocketMQResult<()>
     where
         C: PullTaskCallback,
     {
-        Err(unsupported_legacy_api("PullTaskCallback", MODERN_LITE_PULL_CONSUMER))
+        let topic = topic.into();
+        if topic.trim().is_empty() {
+            return Err(crate::mq_client_err!("topic is blank"));
+        }
+        let core = self.core()?;
+        core.callbacks
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(topic, Arc::new(callback));
+        Ok(())
+    }
+
+    /// Returns the schedule service's Classic Pull consumer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an initialization error for a detached schedule service.
+    pub fn default_mq_pull_consumer(&self) -> RocketMQResult<DefaultMQPullConsumer> {
+        Ok(self.core()?.consumer.clone())
     }
 }
 
@@ -171,9 +337,17 @@ impl MQPullConsumerScheduleService {
     since = "0.9.0",
     note = "Java PullTaskCallback is deprecated with MQPullConsumerScheduleService"
 )]
-pub trait PullTaskCallback {
-    fn do_pull_task(&self, _message_queue: &MessageQueue, _context: &mut PullTaskContext) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api("PullTaskCallback", MODERN_LITE_PULL_CONSUMER))
+pub trait PullTaskCallback: Send + Sync + 'static {
+    /// Runs one scheduled pull task for a currently readable queue.
+    ///
+    /// The callback may set the next delay through `context`. Returning an error applies the
+    /// schedule service's bounded retry delay.
+    fn do_pull_task<'a>(
+        &'a self,
+        _message_queue: &'a MessageQueue,
+        _context: &'a mut PullTaskContext,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -181,51 +355,80 @@ pub trait PullTaskCallback {
     since = "0.9.0",
     note = "Java PullTaskContext is deprecated with MQPullConsumerScheduleService"
 )]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PullTaskContext {
     pull_next_delay_time_millis: i32,
+    pull_consumer: Option<DefaultMQPullConsumer>,
+}
+
+impl std::fmt::Debug for PullTaskContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PullTaskContext")
+            .field("pull_next_delay_time_millis", &self.pull_next_delay_time_millis)
+            .field("has_pull_consumer", &self.pull_consumer.is_some())
+            .finish()
+    }
 }
 
 impl Default for PullTaskContext {
     fn default() -> Self {
         Self {
             pull_next_delay_time_millis: 200,
+            pull_consumer: None,
         }
     }
 }
 
 impl PullTaskContext {
+    /// Creates a context without an attached consumer.
     pub fn new() -> Self {
         Self::default()
     }
 
+    fn with_pull_consumer(pull_consumer: DefaultMQPullConsumer) -> Self {
+        Self {
+            pull_consumer: Some(pull_consumer),
+            ..Self::default()
+        }
+    }
+
+    /// Returns the configured delay before this queue's next callback.
     pub fn pull_next_delay_time_millis(&self) -> i32 {
         self.pull_next_delay_time_millis
     }
 
+    /// Java-compatible alias for [`Self::pull_next_delay_time_millis`].
     pub fn get_pull_next_delay_time_millis(&self) -> i32 {
         self.pull_next_delay_time_millis()
     }
 
+    /// Sets the delay before this queue's next callback.
     pub fn set_pull_next_delay_time_millis(&mut self, pull_next_delay_time_millis: i32) {
         self.pull_next_delay_time_millis = pull_next_delay_time_millis;
     }
 
+    /// Returns the consumer attached by the schedule service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an initialization error when the context was constructed directly and no consumer
+    /// has been attached.
     pub fn get_pull_consumer(&self) -> RocketMQResult<DefaultMQPullConsumer> {
-        Err(unsupported_legacy_api("MQPullConsumer", MODERN_LITE_PULL_CONSUMER))
+        self.pull_consumer
+            .clone()
+            .ok_or_else(|| RocketMQError::not_initialized("PullTaskContext has no pull consumer"))
     }
 
-    pub fn set_pull_consumer<C>(&mut self, _pull_consumer: C) -> RocketMQResult<()>
-    where
-        C: MQPullConsumer,
-    {
-        Err(unsupported_legacy_api("MQPullConsumer", MODERN_LITE_PULL_CONSUMER))
+    /// Replaces the consumer attached to this context.
+    pub fn set_pull_consumer(&mut self, pull_consumer: DefaultMQPullConsumer) {
+        self.pull_consumer = Some(pull_consumer);
     }
 }
 
 #[deprecated(
     since = "0.9.0",
-    note = "Java PullTaskImpl is deprecated; use DefaultLitePullConsumer"
+    note = "Java PullTaskImpl is deprecated; use MQPullConsumerScheduleService"
 )]
 #[derive(Debug, Clone, Default)]
 pub struct PullTaskImpl {
@@ -244,7 +447,10 @@ impl PullTaskImpl {
     }
 
     pub fn run(&self) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api("PullTaskImpl", MODERN_LITE_PULL_CONSUMER))
+        self.message_queue
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(|| RocketMQError::not_initialized("PullTaskImpl has no message queue"))
     }
 }
 
@@ -257,7 +463,7 @@ pub struct RebalancePullImpl;
 
 impl RebalancePullImpl {
     pub fn new() -> RocketMQResult<Self> {
-        Err(unsupported_legacy_api("RebalancePullImpl", MODERN_LITE_PULL_CONSUMER))
+        Ok(Self)
     }
 }
 
@@ -266,13 +472,69 @@ impl RebalancePullImpl {
 pub struct MQHelper;
 
 impl MQHelper {
+    /// Retains the Java-shaped helper signature without creating a hidden runtime.
+    ///
+    /// Use [`Self::reset_offset_by_timestamp_with_client_runtime`] for the runnable equivalent.
+    ///
+    /// # Errors
+    ///
+    /// Always returns an initialization error because this compatibility signature has no
+    /// application-owned [`ClientRuntime`].
     pub fn reset_offset_by_timestamp(
         _message_model: impl Into<CheetahString>,
         _consumer_group: impl Into<CheetahString>,
         _topic: impl Into<CheetahString>,
         _timestamp: u64,
     ) -> RocketMQResult<()> {
-        Err(unsupported_legacy_api("MQHelper", MODERN_LITE_PULL_CONSUMER))
+        Err(RocketMQError::not_initialized(
+            "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
+        ))
+    }
+
+    /// Resets every queue offset for a topic to the position nearest the timestamp.
+    ///
+    /// The temporary Classic Pull consumer persists updated offsets during its bounded shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration, startup, route, offset-query, offset-store, or shutdown error.
+    pub async fn reset_offset_by_timestamp_with_client_runtime(
+        client_runtime: Arc<ClientRuntime>,
+        message_model: MessageModel,
+        consumer_group: impl Into<CheetahString>,
+        topic: impl Into<CheetahString>,
+        timestamp: u64,
+    ) -> RocketMQResult<()> {
+        let consumer = DefaultMQPullConsumer::builder(client_runtime)
+            .consumer_group(consumer_group)
+            .message_model(message_model)
+            .build()?;
+        let topic = topic.into();
+        consumer.start().await?;
+
+        let operation = async {
+            let mut queues = consumer.fetch_subscribe_message_queues(topic.as_str()).await?;
+            queues.sort();
+            for queue in queues {
+                let offset = consumer.search_offset(&queue, timestamp).await?;
+                if offset >= 0 {
+                    consumer.update_consume_offset(&queue, offset).await?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+        let shutdown = consumer.shutdown().await;
+
+        match operation {
+            Ok(()) => shutdown,
+            Err(error) => {
+                if let Err(shutdown_error) = shutdown {
+                    tracing::warn!(%shutdown_error, "MQHelper consumer shutdown failed after offset reset error");
+                }
+                Err(error)
+            }
+        }
     }
 }
 
@@ -405,18 +667,22 @@ impl ConsumeRequest {
 mod tests {
     use super::*;
 
-    #[test]
-    fn legacy_pull_consumer_returns_typed_unsupported_error() {
+    #[tokio::test]
+    async fn legacy_pull_consumer_fails_closed_without_runtime() {
         let consumer = DefaultMQPullConsumer::with_consumer_group("LegacyGroup");
 
         assert_eq!(
             consumer.consumer_group().map(|group| group.as_str()),
             Some("LegacyGroup")
         );
-        let error = consumer.start().expect_err("deprecated pull consumer should not start");
+        let error = consumer
+            .start()
+            .await
+            .expect_err("detached pull consumer should not start");
 
         assert!(error.to_string().contains("DefaultMQPullConsumer"));
-        assert!(error.to_string().contains("DefaultLitePullConsumer"));
+        assert!(error.to_string().contains("builder"));
+        assert!(!error.to_string().contains("not supported"));
     }
 
     #[test]
@@ -429,17 +695,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_schedule_service_register_callback_returns_typed_error() {
+    fn detached_schedule_service_requires_runtime_for_callbacks() {
         struct Callback;
         impl PullTaskCallback for Callback {}
 
-        let mut service = MQPullConsumerScheduleService::new("LegacyGroup");
+        let service = MQPullConsumerScheduleService::new("LegacyGroup");
         let error = service
             .register_pull_task_callback("TopicA", Callback)
-            .expect_err("deprecated schedule service should reject callbacks");
+            .expect_err("detached schedule service should require runtime");
 
-        assert!(error.to_string().contains("PullTaskCallback"));
-        assert!(error.to_string().contains("DefaultLitePullConsumer"));
+        assert!(error.to_string().contains("with_client_runtime"));
+        assert!(!error.to_string().contains("not supported"));
     }
 
     #[test]

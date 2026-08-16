@@ -29,6 +29,8 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+
+import core_release_scope
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -298,23 +300,47 @@ def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
         baseline,
         (
             "schema_version",
-            "head",
             "cargo_metadata_command",
-            "metadata_sha256",
             "rustc_version",
             "cargo_version",
             "generated_output_path",
             "workspace_packages",
+            "semantic_dependencies",
             "manifest_exceptions",
             "compatibility_manifest_exceptions",
             "source_exceptions",
         ),
         "baseline",
     )
-    if baseline["schema_version"] != 1:
+    if baseline["schema_version"] != 2:
         raise InputError(f"unsupported baseline schema_version: {baseline['schema_version']}")
-    if not re.fullmatch(r"[0-9a-f]{64}", baseline["metadata_sha256"]):
-        raise InputError("baseline metadata_sha256 must be a lowercase SHA-256 digest")
+    semantic_fields = {"package", "dependency", "kind", "optional", "features"}
+    semantic_dependencies = baseline["semantic_dependencies"]
+    if not isinstance(semantic_dependencies, list):
+        raise InputError("baseline semantic_dependencies must be a list")
+    semantic_identities: set[tuple[str, str, str, bool, tuple[str, ...]]] = set()
+    for index, entry in enumerate(semantic_dependencies):
+        if not isinstance(entry, dict) or set(entry) != semantic_fields:
+            raise InputError(f"baseline semantic_dependencies[{index}] has an invalid schema")
+        if (
+            not isinstance(entry["package"], str)
+            or not isinstance(entry["dependency"], str)
+            or not isinstance(entry["kind"], str)
+            or not isinstance(entry["optional"], bool)
+            or not isinstance(entry["features"], list)
+            or any(not isinstance(feature, str) for feature in entry["features"])
+        ):
+            raise InputError(f"baseline semantic_dependencies[{index}] is invalid")
+        identity = (
+            entry["package"],
+            entry["dependency"],
+            entry["kind"],
+            entry["optional"],
+            tuple(entry["features"]),
+        )
+        if identity in semantic_identities:
+            raise InputError(f"duplicate baseline semantic dependency: {identity}")
+        semantic_identities.add(identity)
     for key in ("cargo_metadata_command", "rustc_version", "cargo_version", "generated_output_path"):
         if not isinstance(baseline[key], str) or not baseline[key].strip():
             raise InputError(f"baseline {key} must be a non-empty string")
@@ -486,6 +512,78 @@ def normalized_metadata_sha256(metadata: dict[str, Any], source_root: Path) -> s
     return hashlib.sha256(encoded).hexdigest()
 
 
+def semantic_dependency_records(
+    metadata: dict[str, Any],
+    *,
+    core_names: set[str],
+    excluded_names: set[str],
+) -> list[dict[str, Any]]:
+    """Return the readable dependency identity used by the core release gate."""
+
+    records: dict[tuple[str, str, str, bool, tuple[str, ...]], dict[str, Any]] = {}
+    for package in workspace_packages(metadata):
+        package_name = package.get("name")
+        if package_name not in core_names:
+            continue
+        for dependency in package.get("dependencies", []):
+            dependency_name = dependency.get("name")
+            if not isinstance(dependency_name, str) or dependency_name in excluded_names:
+                continue
+            kind = dependency.get("kind") or "normal"
+            optional = bool(dependency.get("optional", False))
+            features = tuple(sorted(set(dependency.get("features") or [])))
+            identity = (package_name, dependency_name, kind, optional, features)
+            records[identity] = {
+                "package": package_name,
+                "dependency": dependency_name,
+                "kind": kind,
+                "optional": optional,
+                "features": list(features),
+            }
+    return [records[identity] for identity in sorted(records)]
+
+
+def structural_findings(
+    baseline: dict[str, Any],
+    current: list[dict[str, Any]],
+) -> list[Finding]:
+    def identity(entry: dict[str, Any]) -> tuple[str, str, str, bool, tuple[str, ...]]:
+        return (
+            entry["package"],
+            entry["dependency"],
+            entry["kind"],
+            entry["optional"],
+            tuple(entry["features"]),
+        )
+
+    expected = {identity(entry) for entry in baseline["semantic_dependencies"]}
+    actual = {identity(entry) for entry in current}
+    findings: list[Finding] = []
+    for package, dependency, kind, optional, features in sorted(actual - expected):
+        findings.append(
+            Finding(
+                "semantic-dependency-added",
+                package,
+                dependency,
+                "Cargo.toml",
+                kind,
+                f"optional={optional} features={','.join(features) or '-'}",
+            )
+        )
+    for package, dependency, kind, optional, features in sorted(expected - actual):
+        findings.append(
+            Finding(
+                "semantic-dependency-removed",
+                package,
+                dependency,
+                "Cargo.toml",
+                kind,
+                f"optional={optional} features={','.join(features) or '-'}",
+            )
+        )
+    return findings
+
+
 def write_and_verify_metadata_evidence(
     metadata: dict[str, Any], source_root: Path, baseline: dict[str, Any]
 ) -> None:
@@ -493,7 +591,11 @@ def write_and_verify_metadata_evidence(
     summary = normalized_metadata_summary(metadata, source_root)
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        output.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         reloaded = json.loads(output.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise InputError(f"cannot generate normalized metadata evidence {output}: {error}") from error
@@ -1351,7 +1453,9 @@ def run_fixtures(policy: dict[str, Any], baseline: dict[str, Any]) -> int:
         )
         alias_source = source_root / "rocketmq-broker" / "src" / "lib.rs"
         alias_source.parent.mkdir(parents=True)
-        alias_source.write_text("use mq_client::producer::DefaultMQProducer;\n", encoding="utf-8")
+        alias_source.write_text(
+            "use mq_client::producer::DefaultMQProducer;\n", encoding="utf-8", newline="\n"
+        )
         alias_findings, _ = evaluate("target", alias_metadata, source_root, policy, baseline, False)
         if "client-source-allowlist" not in {finding.rule for finding in alias_findings}:
             failures.append("client-source-alias did not produce client-source-allowlist")
@@ -1373,17 +1477,74 @@ def write_output(path: Path, mode: str, findings: list[Finding], messages: list[
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
     except OSError as error:
         raise InputError(f"cannot write output {path}: {error}") from error
+
+
+def write_structural_output(
+    path: Path,
+    *,
+    scope: str,
+    dependencies: list[dict[str, Any]],
+    findings: list[Finding],
+) -> None:
+    payload = {
+        "schema_version": 2,
+        "scope": scope,
+        "mode": "structural",
+        "status": "compliant" if not findings else "violation",
+        "dependencies": dependencies,
+        "findings": [dataclasses.asdict(finding) for finding in findings],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError as error:
+        raise InputError(f"cannot write structural output {path}: {error}") from error
+
+
+def write_structural_baseline(
+    path: Path,
+    previous: dict[str, Any],
+    dependencies: list[dict[str, Any]],
+) -> None:
+    retained = {
+        key: value
+        for key, value in previous.items()
+        if key not in {"head", "metadata_sha256", "schema_version", "semantic_dependencies"}
+    }
+    payload = {
+        "schema_version": 2,
+        **retained,
+        "semantic_dependencies": dependencies,
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("baseline", "transition", "target"),
+        choices=("baseline", "transition", "target", "structural"),
         default="baseline",
+    )
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="core-release",
     )
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
@@ -1391,6 +1552,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-root", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fixtures", action="store_true")
+    parser.add_argument("--write-structural-baseline", action="store_true")
     return parser.parse_args()
 
 
@@ -1400,6 +1562,52 @@ def main() -> int:
         policy = load_json(args.policy, "policy")
         baseline = load_json(args.baseline, "baseline")
         validate_policy(policy)
+        if args.mode == "structural":
+            if args.scope != "core-release":
+                raise InputError("structural mode currently requires --scope core-release")
+            if args.fixtures:
+                raise InputError("--fixtures is not available in structural mode")
+            metadata = read_metadata(args.metadata_file)
+            scope_document = core_release_scope.load_scope(
+                args.source_root.resolve() / "scripts/core-release-scope.json"
+            )
+            core_names = {
+                entry["name"] for entry in core_release_scope.core_packages(scope_document)
+            }
+            excluded_names = {
+                entry["name"] for entry in core_release_scope.excluded_projects(scope_document)
+            }
+            dependencies = semantic_dependency_records(
+                metadata,
+                core_names=core_names,
+                excluded_names=excluded_names,
+            )
+            if args.write_structural_baseline:
+                write_structural_baseline(args.baseline, baseline, dependencies)
+                print(
+                    "ARCHITECTURE_DEPENDENCY_BASELINE_WRITTEN "
+                    f"scope={args.scope} dependencies={len(dependencies)}"
+                )
+                return 0
+            validate_baseline(baseline, policy)
+            findings = structural_findings(baseline, dependencies)
+            for finding in findings:
+                print(finding.render())
+            if args.output is not None:
+                write_structural_output(
+                    args.output,
+                    scope=args.scope,
+                    dependencies=dependencies,
+                    findings=findings,
+                )
+            if findings:
+                print(f"ARCHITECTURE_DEPENDENCY_GUARD_FAILED findings={len(findings)}")
+                return 1
+            print(
+                "ARCHITECTURE_DEPENDENCY_GUARD_OK "
+                f"mode=structural scope={args.scope} dependencies={len(dependencies)}"
+            )
+            return 0
         validate_baseline(baseline, policy)
         if args.fixtures:
             return run_fixtures(policy, baseline)

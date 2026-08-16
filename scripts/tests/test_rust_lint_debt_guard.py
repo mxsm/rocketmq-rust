@@ -25,9 +25,18 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import rust_lint_debt_guard as guard  # noqa: E402
+import core_release_scope  # noqa: E402
 
 
 class RustLintDebtGuardTests(unittest.TestCase):
+    def test_core_inventory_excludes_non_release_projects(self) -> None:
+        entries = guard.current_inventory(ROOT, scope="core-release")
+
+        self.assertTrue(entries)
+        self.assertTrue(
+            all(core_release_scope.path_in_scope(entry["path"], "core-release") for entry in entries)
+        )
+
     def test_inventory_classifies_crate_module_and_item_scopes(self) -> None:
         entries = guard.inventory_source(
             "crate/src/lib.rs",
@@ -78,12 +87,14 @@ fn call() {}
         registry = guard.validate_registry(
             json.loads((ROOT / "scripts/rust-lint-debt-registry.json").read_text(encoding="utf-8"))
         )
+        self.assertEqual("core-release", registry["scope"])
         self.assertEqual(
             [],
             guard.compare(
                 registry,
-                guard.current_inventory(ROOT),
+                guard.current_inventory(ROOT, scope="core-release"),
                 (ROOT / ".clippy.toml").read_text(encoding="utf-8"),
+                scope="core-release",
             ),
         )
 

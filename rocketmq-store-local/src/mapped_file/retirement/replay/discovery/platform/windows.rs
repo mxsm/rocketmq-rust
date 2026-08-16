@@ -406,9 +406,10 @@ pub(super) fn enumerate_directory(directory: &File, maximum: usize) -> Result<Ve
             if name_end > used {
                 return Err(PlatformError::unsafe_namespace("directory entry name is truncated"));
             }
-            // SAFETY: the range was validated and UTF-16 code units are read without assuming alignment.
             let mut name = String::with_capacity(name_bytes / 2);
             for index in 0..name_bytes / 2 {
+                // SAFETY: `name_end <= used` validates every two-byte code unit in this range;
+                // `read_unaligned` avoids imposing alignment requirements on the directory buffer.
                 let code = unsafe { ptr::read_unaligned(base.add(name_start + index * 2).cast::<u16>()) };
                 if code > 0x7f {
                     return Err(PlatformError::unsafe_namespace(

@@ -1,11 +1,11 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "milestone": "P0",
   "design_source": "rocketmq-doc/en/architecture-release-governance.md#release-topology",
   "scope_reporting": {
     "core_scope": "scripts/core-release-scope.json",
-    "core_command": "python scripts/architecture_release_guard.py --scope core-release",
-    "repo_global_command": "python scripts/architecture_release_guard.py --scope repo-global",
+    "core_command": "python scripts/architecture_release_guard.py --scope core-release --mode structural",
+    "repo_global_command": "python scripts/architecture_release_guard.py --scope repo-global --mode structural",
     "release_decision_scope": "core-release"
   },
   "release_topology": {
@@ -14,7 +14,6 @@
       "rocketmq-macros",
       "rocketmq-runtime",
       "rocketmq-model",
-      "rocketmq-dashboard-common",
       "rocketmq-observability",
       "rocketmq-protocol",
       "rocketmq-security-api",
@@ -32,7 +31,6 @@
       "rocketmq-tieredstore",
       "rocketmq-admin-cli",
       "rocketmq-admin-tui",
-      "rocketmq-mcp",
       "rocketmq-store-rocksdb",
       "rocketmq-store",
       "rocketmq-broker",
@@ -42,10 +40,40 @@
     ],
     "rule": "Publish each package only after every current transition dependency is available at the same release version."
   },
-  "transition_debt": {
-    "source": "scripts/architecture-dependency-policy.json#target_debt",
-    "required_mode": "transition",
-    "strict_target_required_when_empty": true
+  "semantic_release_routes": [
+    {
+      "id": "dependency",
+      "command": "python scripts/architecture_dependency_guard.py --mode structural --scope core-release",
+      "result": "semantic_dependencies"
+    },
+    {
+      "id": "documentation",
+      "command": "python scripts/architecture_documentation_guard.py --mode semantic --scope core-release",
+      "result": "semantic_documents"
+    },
+    {
+      "id": "public-api-intent",
+      "command": "python scripts/public_api_intent_guard.py --scope core-release",
+      "result": "public_api_intent"
+    },
+    {
+      "id": "stable-surface",
+      "command": "python scripts/stable_surface_guard.py --scope core-release",
+      "result": "stable_surface"
+    },
+    {
+      "id": "release",
+      "command": "python scripts/architecture_release_guard.py --scope core-release --mode structural",
+      "result": "release_topology"
+    }
+  ],
+  "legacy_reporting": {
+    "required": false,
+    "modes": [
+      "baseline",
+      "transition",
+      "target"
+    ]
   },
   "compatibility_windows": {
     "source": "scripts/architecture-dependency-baseline.json#compatibility_manifest_exceptions",

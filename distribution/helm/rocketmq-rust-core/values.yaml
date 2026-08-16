@@ -1,0 +1,12 @@
+global:
+  candidateVersion: "1.0.0"
+
+services:
+  namesrv:
+    enabled: true
+  broker:
+    enabled: true
+  controller:
+    enabled: true
+  proxy:
+    enabled: true

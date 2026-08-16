@@ -26,6 +26,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import core_release_scope
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "scripts" / "stable-surface-policy.json"
@@ -98,9 +100,19 @@ def rust_sources(root: Path) -> list[Path]:
     )
 
 
-def scan_features(root: Path) -> set[NightlyFeature]:
+def scan_features(root: Path, *, scope: str = "all") -> set[NightlyFeature]:
+    scope_document = (
+        core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+        if scope != "all"
+        else None
+    )
     findings: set[NightlyFeature] = set()
     for path in rust_sources(root):
+        relative = path.relative_to(root).as_posix()
+        if scope_document is not None and not core_release_scope.path_in_scope(
+            relative, scope, scope_document
+        ):
+            continue
         try:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
@@ -121,12 +133,19 @@ def scan_features(root: Path) -> set[NightlyFeature]:
     return findings
 
 
-def validate(root: Path, policy_path: Path, mode: str) -> str:
+def validate(root: Path, policy_path: Path, mode: str, *, scope: str = "all") -> str:
     if not root.is_dir():
         raise InputError(f"root does not exist: {root}")
     policy = load_policy(policy_path)
     allowed = policy_features(policy)
-    actual = scan_features(root)
+    if scope != "all":
+        scope_document = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+        allowed = {
+            entry
+            for entry in allowed
+            if core_release_scope.path_in_scope(entry.path, scope, scope_document)
+        }
+    actual = scan_features(root, scope=scope)
 
     unregistered = sorted(actual - allowed)
     stale = sorted(allowed - actual)
@@ -139,7 +158,7 @@ def validate(root: Path, policy_path: Path, mode: str) -> str:
     if mode == "target" and actual:
         rendered = ", ".join(entry.render() for entry in sorted(actual))
         raise InputError(f"stable target still has nightly features: {rendered}")
-    return f"STABLE_SURFACE_GUARD_OK mode={mode} features={len(actual)}"
+    return f"STABLE_SURFACE_GUARD_OK mode={mode} features={len(actual)} scope={scope}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,13 +166,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--mode", choices=("baseline", "target"), default="baseline")
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="all",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        message = validate(args.root.resolve(), args.policy.resolve(), args.mode)
+        message = validate(
+            args.root.resolve(),
+            args.policy.resolve(),
+            args.mode,
+            scope=args.scope,
+        )
     except InputError as error:
         print(f"STABLE_SURFACE_GUARD_ERROR: {error}", file=sys.stderr)
         return 1

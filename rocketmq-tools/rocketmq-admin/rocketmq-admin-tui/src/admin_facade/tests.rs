@@ -563,19 +563,6 @@ fn facade_builds_phase_three_mutating_requests_without_cli_types() {
         .unwrap();
     assert_eq!(remap_static.topic().as_str(), "StaticTopic");
     assert!(remap_static.force_replace());
-
-    let container_add = facade
-        .container_add_broker_request(" 127.0.0.1:10911 ", " /tmp/broker.conf ")
-        .unwrap();
-    assert_eq!(container_add.broker_container_addr().as_str(), "127.0.0.1:10911");
-    assert_eq!(container_add.broker_config_path().as_str(), "/tmp/broker.conf");
-    assert_eq!(container_add.namesrv_addr(), Some("127.0.0.1:9876"));
-
-    let container_remove = facade
-        .container_remove_broker_request(" 127.0.0.1:10911 ", " DefaultCluster ", " broker-a ", 1)
-        .unwrap();
-    assert_eq!(container_remove.broker_container_addr().as_str(), "127.0.0.1:10911");
-    assert_eq!(container_remove.broker_identity(), "DefaultCluster:broker-a:1");
 }
 
 #[test]
@@ -632,8 +619,6 @@ fn facade_exposes_phase_three_service_futures_without_cli_types() {
         Some("DefaultCluster".to_string()),
         false,
     ));
-    std::mem::drop(facade.add_broker_to_container("127.0.0.1:10911", "/tmp/broker.conf"));
-    std::mem::drop(facade.remove_broker_from_container("127.0.0.1:10911", "DefaultCluster", "broker-a", 1));
     std::mem::drop(facade.clean_expired_consume_queue(
         Some("127.0.0.1:10911".to_string()),
         None,

@@ -48,6 +48,25 @@ class ArchitectureReleaseGuardTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stdout + result.stderr)
         self.assertIn("ARCHITECTURE_RELEASE_GUARD_OK", result.stdout)
 
+    def test_structural_core_mode_requires_semantic_release_routes(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "architecture_release_guard.py"),
+                "--scope",
+                "core-release",
+                "--mode",
+                "structural",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("mode=structural", result.stdout)
+
     def test_standalone_mcp_is_discovered_without_becoming_a_root_member(self) -> None:
         findings: list[guard.Finding] = []
 
@@ -63,6 +82,61 @@ class ArchitectureReleaseGuardTests(unittest.TestCase):
         for legacy in ("rocketmq-common", "rocketmq-remoting", '"rocketmq-rust"'):
             self.assertNotIn(legacy, source)
         self.assertIn("rocketmq-doc/en/", self.plan["design_source"])
+
+    def test_plan_publish_order_exactly_matches_core_release_scope(self) -> None:
+        scope = json.loads((SCRIPTS / "core-release-scope.json").read_text(encoding="utf-8"))
+        expected = {entry["name"] for entry in scope["core_packages"]}
+
+        self.assertEqual(expected, set(self.plan["release_topology"]["publish_order"]))
+        self.assertNotIn("rocketmq-dashboard-common", expected)
+        self.assertNotIn("rocketmq-mcp", expected)
+
+    def test_plan_requires_semantic_core_routes_instead_of_legacy_modes(self) -> None:
+        commands = {entry["id"]: entry["command"] for entry in self.plan["semantic_release_routes"]}
+
+        self.assertIn("--mode structural --scope core-release", commands["dependency"])
+        self.assertIn("--mode semantic --scope core-release", commands["documentation"])
+        self.assertIn("--scope core-release", commands["public-api-intent"])
+        self.assertIn("--scope core-release --mode structural", commands["release"])
+        serialized = json.dumps(self.plan).lower()
+        self.assertNotIn("transition_debt", self.plan)
+        for legacy in ('"required_mode": "baseline"', '"required_mode": "transition"', '"required_mode": "target"'):
+            self.assertNotIn(legacy, serialized)
+
+    def test_ci_validation_rejects_a_missing_required_core_static_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = root / ".github/workflows/rocketmq-rust-ci.yaml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("jobs: {}\n", encoding="utf-8")
+            findings: list[guard.Finding] = []
+
+            guard.validate_ci(root, findings)
+
+        self.assertIn("ci-command-missing", {finding.code for finding in findings})
+
+    def test_ci_validation_rejects_blocking_legacy_identity_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = root / ".github/workflows/rocketmq-rust-ci.yaml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                """
+jobs:
+  core:
+    steps:
+      - name: Core semantic guards
+        run: python scripts/core_release_static_guard.py
+      - name: Legacy dependency baseline
+        run: python scripts/architecture_dependency_guard.py --mode baseline
+""",
+                encoding="utf-8",
+            )
+            findings: list[guard.Finding] = []
+
+            guard.validate_ci(root, findings)
+
+        self.assertIn("ci-legacy-route-blocking", {finding.code for finding in findings})
 
     def test_missing_design_source_is_a_structured_finding(self) -> None:
         invalid = copy.deepcopy(self.plan)

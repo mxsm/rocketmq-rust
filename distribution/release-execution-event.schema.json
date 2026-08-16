@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/release-execution-event.schema.json",
+  "title": "RocketMQ Rust candidate command event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "route_id",
+    "worker_id",
+    "context_path",
+    "status"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": { "type": "string" },
+    "route_id": { "type": "string" },
+    "worker_id": { "type": "string" },
+    "context_path": { "type": "string" },
+    "status": { "enum": ["started", "passed", "failed"] },
+    "command": { "type": "array", "items": { "type": "string" } },
+    "exit_code": { "type": "integer" },
+    "started_at": { "type": "string" },
+    "completed_at": { "type": "string" },
+    "launch_error": { "type": ["string", "null"] },
+    "lifecycle_atomic_completion": { "type": "boolean" }
+  }
+}

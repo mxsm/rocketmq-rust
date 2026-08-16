@@ -70,10 +70,6 @@ use rocketmq_admin_core::client_adapter::services::consumer::SetConsumeModeReque
 use rocketmq_admin_core::client_adapter::services::consumer::StartMonitoringRequest;
 use rocketmq_admin_core::client_adapter::services::consumer::UpdateSubscriptionGroupListRequest;
 use rocketmq_admin_core::client_adapter::services::consumer::UpdateSubscriptionGroupRequest;
-use rocketmq_admin_core::client_adapter::services::container::ContainerAddBrokerRequest;
-use rocketmq_admin_core::client_adapter::services::container::ContainerOperationResult;
-use rocketmq_admin_core::client_adapter::services::container::ContainerRemoveBrokerRequest;
-use rocketmq_admin_core::client_adapter::services::container::ContainerService;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigQueryRequest;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigQueryResult;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigUpdateRequest;
@@ -424,30 +420,6 @@ impl TuiAdminFacade {
             clean_living_broker,
         )?
         .with_optional_namesrv_addr(self.namesrv_addr.clone()))
-    }
-
-    pub fn container_add_broker_request(
-        &self,
-        broker_container_addr: impl Into<String>,
-        broker_config_path: impl Into<String>,
-    ) -> RocketMQResult<ContainerAddBrokerRequest> {
-        Ok(
-            ContainerAddBrokerRequest::try_new(broker_container_addr, broker_config_path)?
-                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
-        )
-    }
-
-    pub fn container_remove_broker_request(
-        &self,
-        broker_container_addr: impl Into<String>,
-        cluster_name: impl Into<String>,
-        broker_name: impl Into<String>,
-        broker_id: i64,
-    ) -> RocketMQResult<ContainerRemoveBrokerRequest> {
-        Ok(
-            ContainerRemoveBrokerRequest::try_new(broker_container_addr, cluster_name, broker_name, broker_id)?
-                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
-        )
     }
 
     pub fn namesrv_config_query_request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
@@ -1754,34 +1726,6 @@ impl TuiAdminFacade {
                 cluster_name,
                 clean_living_broker,
             )?,
-            None,
-            self.client_runtime(),
-        )
-        .await
-    }
-
-    pub async fn add_broker_to_container(
-        &self,
-        broker_container_addr: impl Into<String>,
-        broker_config_path: impl Into<String>,
-    ) -> RocketMQResult<ContainerOperationResult> {
-        ContainerService::add_broker_by_request_with_credentials(
-            self.container_add_broker_request(broker_container_addr, broker_config_path)?,
-            None,
-            self.client_runtime(),
-        )
-        .await
-    }
-
-    pub async fn remove_broker_from_container(
-        &self,
-        broker_container_addr: impl Into<String>,
-        cluster_name: impl Into<String>,
-        broker_name: impl Into<String>,
-        broker_id: i64,
-    ) -> RocketMQResult<ContainerOperationResult> {
-        ContainerService::remove_broker_by_request_with_credentials(
-            self.container_remove_broker_request(broker_container_addr, cluster_name, broker_name, broker_id)?,
             None,
             self.client_runtime(),
         )

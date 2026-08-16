@@ -56,8 +56,8 @@ use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdResu
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyRow;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByOffsetResult;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyEntry;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyResult;
-use rocketmq_admin_core::client_adapter::services::message::UniqueKeyDirectStatus;
 use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryResult;
 use rocketmq_admin_core::client_adapter::services::producer::SendMessageResult;
 use rocketmq_admin_core::client_adapter::services::producer::SendMessageResultRow;
@@ -570,9 +570,15 @@ fn phase_two_message_detail_results_render_as_tables() {
 
     let unique = CommandResultViewModel::message_query_by_unique_key(
         "Query Message By Unique Key",
-        &QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::NotPushConsumer {
-            client_id: "client-a".into(),
-        }),
+        &QueryMessageByUniqueKeyResult::Messages(vec![QueryMessageByUniqueKeyEntry {
+            message: message.clone(),
+            tracks: vec![MessageTrackRow {
+                consumer_group: "GroupA".to_string(),
+                track_type: Some("CONSUMED".to_string()),
+                exception_desc: String::new(),
+            }],
+            track_error: Some("broker-b unavailable".to_string()),
+        }]),
     );
     assert_table(
         &unique,
@@ -596,25 +602,39 @@ fn phase_two_message_detail_results_render_as_tables() {
             "Note",
         ],
         &[
-            "",
-            "direct-status",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "client_id=client-a; not a push consumer",
+            "msg-1",
+            "found",
+            "TopicA",
+            "broker-a",
+            "3",
+            "42",
+            "9001",
+            "TagA",
+            "KeyA",
+            "127.0.0.1:10001",
+            "1700000000000",
+            "127.0.0.1:10911",
+            "1700000001000",
+            "7",
+            "payload",
+            "KEYS=KeyA; TAGS=TagA",
+            "tracks=GroupA:CONSUMED; track_error=broker-b unavailable",
         ],
     );
+
+    let direct = CommandResultViewModel::message_query_by_unique_key(
+        "Direct Consume By Unique Key",
+        &QueryMessageByUniqueKeyResult::Direct(DirectConsumeMessageResult {
+            topic: "TopicA".into(),
+            msg_id: "msg-1".into(),
+            consumer_group: "GroupA".into(),
+            client_id: "client-a".into(),
+            status: DirectConsumeMessageStatus::NotPushConsumer,
+        }),
+    );
+    assert!(direct.text_body().contains("consumer_group=GroupA"));
+    assert!(direct.text_body().contains("client_id=client-a"));
+    assert!(direct.text_body().contains("not a push consumer"));
 }
 
 #[test]

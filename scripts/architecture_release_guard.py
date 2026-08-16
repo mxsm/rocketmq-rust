@@ -278,6 +278,7 @@ def validate_release_topology(
     plan: dict[str, Any],
     policy: dict[str, Any],
     inventory: ReleaseInventory,
+    core_packages: set[str],
     root: Path,
     findings: list[Finding],
 ) -> None:
@@ -296,7 +297,7 @@ def validate_release_topology(
     if not isinstance(target_dag, dict):
         findings.append(Finding("policy-section-missing", "dependency-policy", "target_dag"))
         return
-    expected = set(target_dag)
+    expected = core_packages
     actual = set(order)
     if actual != expected:
         findings.append(
@@ -307,24 +308,24 @@ def validate_release_topology(
             )
         )
     available = set(inventory.governance_targets)
-    root_members = set(inventory.root_members)
     missing = expected - available
-    extra_root_members = root_members - expected
-    if missing or extra_root_members:
+    if missing:
         findings.append(
             Finding(
                 "release-inventory-mismatch",
                 "scripts/architecture-validation-inventory.json",
-                f"missing={sorted(missing)} extra_root_members={sorted(extra_root_members)}",
+                f"missing={sorted(missing)}",
             )
         )
 
     dependencies: dict[str, set[str]] = {}
     for caller, values in target_dag.items():
+        if caller not in core_packages:
+            continue
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
             findings.append(Finding("target-dag-invalid", "dependency-policy", f"caller={caller}"))
             continue
-        dependencies[caller] = set(values)
+        dependencies[caller] = {item for item in values if item in core_packages}
     target_debt = policy.get("target_debt", {}).get("entries", [])
     if not isinstance(target_debt, list):
         findings.append(Finding("policy-section-missing", "dependency-policy", "target_debt.entries"))
@@ -338,6 +339,8 @@ def validate_release_topology(
             findings.append(Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}"))
             continue
         caller, target, _kind, _path, _alias = identity
+        if caller not in core_packages or target not in core_packages:
+            continue
         remove_by = edge.get("remove_by")
         try:
             expired = not isinstance(remove_by, str) or date.fromisoformat(remove_by) < date.today()
@@ -407,23 +410,50 @@ def validate_compatibility_windows(
         manifest_has_edge(edge, root, findings)
 
 
-def validate_transition_contract(plan: dict[str, Any], findings: list[Finding]) -> None:
-    expected = {
-        "source": "scripts/architecture-dependency-policy.json#target_debt",
-        "required_mode": "transition",
-        "strict_target_required_when_empty": True,
-    }
-    if plan.get("transition_debt") != expected:
-        findings.append(
-            Finding("transition-contract-invalid", "release-plan", "transition_debt contract drifted")
-        )
+def validate_semantic_routes(plan: dict[str, Any], findings: list[Finding]) -> None:
+    expected = [
+        {
+            "id": "dependency",
+            "command": "python scripts/architecture_dependency_guard.py --mode structural --scope core-release",
+            "result": "semantic_dependencies",
+        },
+        {
+            "id": "documentation",
+            "command": "python scripts/architecture_documentation_guard.py --mode semantic --scope core-release",
+            "result": "semantic_documents",
+        },
+        {
+            "id": "public-api-intent",
+            "command": "python scripts/public_api_intent_guard.py --scope core-release",
+            "result": "public_api_intent",
+        },
+        {
+            "id": "stable-surface",
+            "command": "python scripts/stable_surface_guard.py --scope core-release",
+            "result": "stable_surface",
+        },
+        {
+            "id": "release",
+            "command": "python scripts/architecture_release_guard.py --scope core-release --mode structural",
+            "result": "release_topology",
+        },
+    ]
+    if plan.get("semantic_release_routes") != expected:
+        findings.append(Finding("semantic-routes-invalid", "release-plan", "semantic core route contract drifted"))
+    if plan.get("legacy_reporting") != {
+        "required": False,
+        "modes": ["baseline", "transition", "target"],
+    }:
+        findings.append(Finding("legacy-reporting-invalid", "release-plan", "legacy modes must be report-only"))
+    if "transition_debt" in plan:
+        findings.append(Finding("legacy-route-required", "release-plan", "transition_debt must not be required"))
 
 
 def validate_scope_reporting(plan: dict[str, Any], findings: list[Finding]) -> None:
     expected = {
         "core_scope": "scripts/core-release-scope.json",
-        "core_command": "python scripts/architecture_release_guard.py --scope core-release",
-        "repo_global_command": "python scripts/architecture_release_guard.py --scope repo-global",
+        "core_command": "python scripts/architecture_release_guard.py --scope core-release --mode structural",
+        "repo_global_command": "python scripts/architecture_release_guard.py --scope repo-global --mode structural",
         "release_decision_scope": "core-release",
     }
     if plan.get("scope_reporting") != expected:
@@ -438,14 +468,17 @@ def validate_ci(root: Path, findings: list[Finding]) -> None:
     except (OSError, UnicodeDecodeError) as error:
         findings.append(Finding("ci-workflow-missing", CI_PATH.as_posix(), str(error)))
         return
-    for command in (
-        "python scripts/architecture_dependency_guard.py --mode baseline",
-        "python scripts/architecture_dependency_guard.py --mode transition",
-        "python scripts/architecture_dependency_guard.py --mode target",
-        "python scripts/architecture_release_guard.py",
-    ):
-        if command not in workflow:
-            findings.append(Finding("ci-command-missing", CI_PATH.as_posix(), command))
+    required = "python scripts/core_release_static_guard.py"
+    if required not in workflow:
+        findings.append(Finding("ci-command-missing", CI_PATH.as_posix(), required))
+    legacy_modes = ("--mode baseline", "--mode transition", "--mode target")
+    for block in re.split(r"(?=^\s*-\s+name:)", workflow, flags=re.MULTILINE):
+        if "architecture_dependency_guard.py" not in block:
+            continue
+        if any(mode in block for mode in legacy_modes) and "continue-on-error: true" not in block:
+            findings.append(
+                Finding("ci-legacy-route-blocking", CI_PATH.as_posix(), block.splitlines()[0].strip())
+            )
 
 
 def validate(
@@ -457,13 +490,19 @@ def validate(
     check_ci: bool = True,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    if plan.get("schema_version") != 2 or plan.get("milestone") != "P0":
-        findings.append(Finding("plan-schema-invalid", "release-plan", "expected schema_version=2 milestone=P0"))
+    if plan.get("schema_version") != 3 or plan.get("milestone") != "P0":
+        findings.append(Finding("plan-schema-invalid", "release-plan", "expected schema_version=3 milestone=P0"))
     validate_design_source(plan, root, findings)
     inventory = discover_release_inventory(root, findings)
-    validate_release_topology(plan, policy, inventory, root, findings)
+    try:
+        scope = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+        packages = {entry["name"] for entry in core_release_scope.core_packages(scope)}
+    except core_release_scope.ScopeInputError as error:
+        findings.append(Finding("core-scope-invalid", "scripts/core-release-scope.json", str(error)))
+        packages = set()
+    validate_release_topology(plan, policy, inventory, packages, root, findings)
     validate_compatibility_windows(plan, baseline, root, findings)
-    validate_transition_contract(plan, findings)
+    validate_semantic_routes(plan, findings)
     validate_scope_reporting(plan, findings)
     if check_ci:
         validate_ci(root, findings)
@@ -473,46 +512,42 @@ def validate(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scope", choices=("core-release", "repo-global", "all"), default="all")
+    parser.add_argument("--mode", choices=("structural",), default="structural")
     args = parser.parse_args()
 
-    if args.scope in {"core-release", "all"}:
-        try:
-            scope, scope_findings = core_release_scope.validate_repository()
-        except core_release_scope.ScopeInputError as error:
-            print(f"ARCHITECTURE_RELEASE_CORE_FAILED findings=1 detail={error}")
-            if args.scope == "core-release":
-                return 1
-            scope_findings = []
-            core_failed = True
-        else:
-            core_only = [item for item in scope_findings if item.scope == "core"]
-            core_failed = bool(core_only)
-            if core_failed:
-                print(f"ARCHITECTURE_RELEASE_CORE_FAILED findings={len(core_only)}")
-                for finding in core_only:
-                    print(finding.render())
-            else:
-                print(f"ARCHITECTURE_RELEASE_CORE_OK packages={len(core_release_scope.core_packages(scope))}")
+    findings: list[Finding | core_release_scope.ScopeFinding] = []
+    try:
+        scope, scope_findings = core_release_scope.validate_repository()
+    except core_release_scope.ScopeInputError as error:
+        scope = None
+        findings.append(Finding("core-scope-invalid", "scripts/core-release-scope.json", str(error)))
+    else:
         if args.scope == "core-release":
-            return int(core_failed)
+            findings.extend(item for item in scope_findings if item.scope == "core")
+        elif args.scope == "repo-global":
+            findings.extend(item for item in scope_findings if item.scope != "core")
+        else:
+            findings.extend(scope_findings)
 
-    findings: list[Finding] = []
     plan = load_json(PLAN_PATH, "release plan", findings)
     policy = load_json(POLICY_PATH, "dependency policy", findings)
     baseline = load_json(BASELINE_PATH, "dependency baseline", findings)
     if plan is not None and policy is not None and baseline is not None:
         findings.extend(validate(plan, policy, baseline))
-    findings = sorted(findings, key=Finding.render)
+    findings = sorted(findings, key=lambda finding: finding.render())
     if findings:
-        print(f"ARCHITECTURE_RELEASE_REPO_GLOBAL_FAILED findings={len(findings)}")
+        prefix = "CORE" if args.scope == "core-release" else "REPO_GLOBAL"
+        print(f"ARCHITECTURE_RELEASE_{prefix}_FAILED findings={len(findings)}")
         for finding in findings:
             print(finding.render())
         return 1
-    print("ARCHITECTURE_RELEASE_REPO_GLOBAL_OK packages=29 standalone=7 transition_debt=tracked")
+    core_count = len(core_release_scope.core_packages(scope)) if scope is not None else 0
+    if args.scope in {"core-release", "all"}:
+        print(f"ARCHITECTURE_RELEASE_CORE_OK packages={core_count} mode={args.mode}")
+    if args.scope in {"repo-global", "all"}:
+        print("ARCHITECTURE_RELEASE_REPO_GLOBAL_OK packages=29 standalone=7 legacy_modes=report-only")
     if args.scope == "all":
-        if core_failed:
-            return 1
-        print("ARCHITECTURE_RELEASE_GUARD_OK core=27 repo_global_packages=29 standalone=7")
+        print(f"ARCHITECTURE_RELEASE_GUARD_OK core={core_count} repo_global_packages=29 standalone=7")
     return 0
 
 

@@ -19,6 +19,7 @@ use rocketmq_error::RocketMQResult;
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByKeySubCommand {
@@ -73,13 +74,9 @@ pub struct QueryMsgByKeySubCommand {
     last_key: Option<String>,
 }
 
-impl CommandExecute for QueryMsgByKeySubCommand {
-    async fn execute(
-        &self,
-        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
-        let request = QueryMessageByKeyRequest::try_new(
+impl QueryMsgByKeySubCommand {
+    fn request(&self) -> RocketMQResult<QueryMessageByKeyRequest> {
+        QueryMessageByKeyRequest::try_new(
             self.topic.clone(),
             self.msg_key.clone(),
             self.begin_timestamp,
@@ -88,16 +85,10 @@ impl CommandExecute for QueryMsgByKeySubCommand {
             self.cluster.clone(),
             self.key_type.clone(),
             self.last_key.clone(),
-        )?;
-
-        let query_result = MessageService::query_message_by_key_by_request_with_credentials(
-            request,
-            credentials,
-            client_runtime.clone(),
         )
-        .await
-        .map_err(|source| RocketMQError::internal("query message by key", source))?;
+    }
 
+    fn print_result(query_result: QueryMessageByKeyResult) {
         println!(
             "{:<50} {:>4} {:>40} {:<200}",
             "#Message ID", "#QID", "#Offset", "#IndexKey"
@@ -112,7 +103,50 @@ impl CommandExecute for QueryMsgByKeySubCommand {
                 println!("{:<50} {:>4} {:>40}", row.message_id, row.queue_id, row.queue_offset);
             }
         }
+    }
+}
+
+impl CommandExecute for QueryMsgByKeySubCommand {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+    ) -> RocketMQResult<()> {
+        let query_result = MessageService::query_message_by_key_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await
+        .map_err(|source| RocketMQError::internal("query message by key", source))?;
+
+        Self::print_result(query_result);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_by_key_builds_k_or_t_request_with_caller_last_key() {
+        let command = QueryMsgByKeySubCommand::try_parse_from([
+            "queryMsgByKey",
+            "-t",
+            "TopicA",
+            "-k",
+            "TagA",
+            "-p",
+            "T",
+            "-l",
+            "cursor-1",
+        ])
+        .unwrap();
+
+        let request = command.request().unwrap();
+        assert_eq!(request.key_type(), "T");
+        assert_eq!(request.last_key(), Some("cursor-1"));
     }
 }

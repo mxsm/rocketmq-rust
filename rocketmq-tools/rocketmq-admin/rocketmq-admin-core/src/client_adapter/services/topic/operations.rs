@@ -39,6 +39,7 @@ use super::types::TopicClusterQueryRequest;
 use super::types::TopicListItem;
 use super::types::TopicListQueryRequest;
 use super::types::TopicListResult;
+use super::types::TopicOperationFailure;
 use super::types::TopicRouteQueryRequest;
 use super::types::TopicStatusQueryRequest;
 use super::types::UpdateTopicListRequest;
@@ -49,6 +50,8 @@ use super::types::UpdateTopicRequest;
 use super::types::UpdateTopicResult;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
+use crate::client_adapter::services::stable_error_code;
+use crate::client_adapter::services::stable_error_message;
 use crate::client_adapter::services::RocketMQResult;
 use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
@@ -163,12 +166,78 @@ impl TopicService {
     /// Delete a topic through a complete core request lifecycle.
     pub async fn delete_topic_by_request(request: DeleteTopicRequest) -> RocketMQResult<DeleteTopicResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
-        let result = Self::delete_topic(&mut admin, request.topic().clone(), request.cluster_name().clone()).await;
+        let result = Self::delete_topic_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
-        result.map(|_| DeleteTopicResult {
+        result
+    }
+
+    /// Delete a topic using the caller-owned client runtime and optional credentials.
+    pub async fn delete_topic_by_request_with_credentials(
+        request: DeleteTopicRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> RocketMQResult<DeleteTopicResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::delete_topic_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub(crate) async fn delete_topic_with_admin(
+        admin: &mut DefaultMQAdminExt,
+        request: &DeleteTopicRequest,
+    ) -> RocketMQResult<DeleteTopicResult> {
+        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let broker_targets =
+            BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, request.cluster_name())?;
+        if broker_targets.is_empty() {
+            return Err(ToolsError::ClusterNotFound {
+                cluster: request.cluster_name().to_string(),
+            }
+            .into());
+        }
+
+        let mut result = DeleteTopicResult {
             topic: request.topic().clone(),
             cluster_name: request.cluster_name().clone(),
-        })
+            broker_addrs: Vec::new(),
+            failures: Vec::new(),
+            name_server_deleted: false,
+        };
+
+        for broker_addr in broker_targets {
+            match admin
+                .delete_topic_in_broker_list(HashSet::from([broker_addr.clone()]), vec![request.topic().clone()])
+                .await
+            {
+                Ok(()) => result.broker_addrs.push(broker_addr),
+                Err(error) => result.failures.push(TopicOperationFailure {
+                    broker_addr,
+                    error_code: stable_error_code(&error),
+                    error: stable_error_message(&error),
+                }),
+            }
+        }
+
+        if result.failures.is_empty() {
+            let namesrv_addrs = admin
+                .get_name_server_address_list()
+                .await
+                .into_iter()
+                .collect::<HashSet<_>>();
+            admin
+                .delete_topic_in_name_server(
+                    namesrv_addrs,
+                    Some(request.cluster_name().clone()),
+                    request.topic().clone(),
+                )
+                .await?;
+            result.name_server_deleted = true;
+        }
+
+        Ok(result)
     }
 
     /// Apply order configuration through a complete core request lifecycle.
@@ -222,7 +291,7 @@ impl TopicService {
         let result = Self::create_or_update_topic(&mut admin, config.clone(), target.clone())
             .await
             .map(|_| UpdateTopicResult {
-                order_warning: config.order,
+                order_conf_updated: config.order,
                 config,
                 target,
             });
@@ -248,7 +317,7 @@ impl TopicService {
         let result = Self::create_or_update_topic(&mut admin, config.clone(), target.clone())
             .await
             .map(|_| UpdateTopicResult {
-                order_warning: config.order,
+                order_conf_updated: config.order,
                 config,
                 target,
             });
@@ -348,6 +417,10 @@ impl TopicService {
     ) -> RocketMQResult<()> {
         use rocketmq_model::common::TopicFilterType;
 
+        let topic_name = config.topic_name.clone();
+        let write_queue_nums = config.write_queue_nums as u32;
+        let order = config.order;
+
         // Convert to internal TopicConfig
         let internal_config = RocketMQTopicConfig {
             topic_name: Some(config.topic_name.clone()),
@@ -360,22 +433,35 @@ impl TopicService {
                 .unwrap_or_default(),
             topic_sys_flag: config.topic_sys_flag.unwrap_or(0) as u32,
             order: config.order,
-            attributes: std::collections::HashMap::new(),
+            attributes: config
+                .attributes
+                .into_iter()
+                .map(|(key, value)| (CheetahString::from(key), CheetahString::from(value)))
+                .collect(),
         };
 
-        match target {
-            super::types::TopicTarget::Broker(addr) => admin
-                .create_and_update_topic_config(addr, internal_config)
-                .await
-                .map_err(|e| ToolsError::internal(format!("Failed to create/update topic: {e}")).into()),
+        let (target_addrs, target_broker_names, cluster_wide) = match target {
+            super::types::TopicTarget::Broker(addr) => {
+                let broker_names = if order {
+                    let cluster_info = admin
+                        .examine_broker_cluster_info()
+                        .await
+                        .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                    HashSet::from([BrokerAddressResolver::fetch_broker_name_by_addr(
+                        &cluster_info,
+                        addr.as_str(),
+                    )?])
+                } else {
+                    HashSet::new()
+                };
+                (vec![addr], broker_names, false)
+            }
             super::types::TopicTarget::Cluster(cluster_name) => {
-                // Get all master brokers in cluster
                 let cluster_info = admin
                     .examine_broker_cluster_info()
                     .await
                     .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
 
-                // Find master brokers in the cluster
                 let master_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, &cluster_name)?;
 
@@ -386,17 +472,30 @@ impl TopicService {
                     .into());
                 }
 
-                // Create topic on all master brokers
-                for addr in master_addrs {
-                    admin
-                        .create_and_update_topic_config(addr, internal_config.clone())
-                        .await
-                        .map_err(|e| ToolsError::internal(format!("Failed to create/update topic: {e}")))?;
-                }
-
-                Ok(())
+                let broker_names =
+                    BrokerAddressResolver::fetch_broker_name_by_cluster_name(&cluster_info, cluster_name.as_str())?
+                        .into_iter()
+                        .collect();
+                (master_addrs, broker_names, true)
             }
+        };
+
+        for addr in target_addrs {
+            admin
+                .create_and_update_topic_config(addr, internal_config.clone())
+                .await
+                .map_err(|e| ToolsError::internal(format!("Failed to create/update topic: {e}")))?;
         }
+
+        if order {
+            let order_conf = build_order_conf(&target_broker_names, write_queue_nums);
+            admin
+                .create_or_update_order_conf(topic_name, order_conf.into(), cluster_wide)
+                .await
+                .map_err(|e| ToolsError::internal(format!("Failed to create/update order config: {e}")))?;
+        }
+
+        Ok(())
     }
 
     /// Apply a batch of topic configs to one broker or every master broker in a cluster.
@@ -783,6 +882,16 @@ impl TopicService {
     }
 }
 
+fn build_order_conf(broker_names: &HashSet<String>, write_queue_nums: u32) -> String {
+    let mut broker_names = broker_names.iter().collect::<Vec<_>>();
+    broker_names.sort();
+    broker_names
+        .into_iter()
+        .map(|broker_name| format!("{broker_name}:{write_queue_nums}"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
@@ -797,6 +906,7 @@ fn admin_builder_with_credentials(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use rocketmq_client_rust::ClientRuntime;
@@ -806,6 +916,7 @@ mod tests {
     use rocketmq_runtime::RuntimeOwner;
 
     use super::admin_builder_with_credentials;
+    use super::build_order_conf;
     use crate::client_adapter::services::admin::AdminBuilder;
     use crate::core::security::AdminCredentials;
 
@@ -820,6 +931,7 @@ mod tests {
             topic_filter_type: None,
             topic_sys_flag: None,
             order: false,
+            attributes: std::collections::HashMap::new(),
         };
     }
 
@@ -844,5 +956,12 @@ mod tests {
 
         assert!(debug.contains("client_runtime: true"));
         assert!(debug.contains("rpc_hook: true"));
+    }
+
+    #[test]
+    fn order_conf_is_deterministic_for_every_target_broker() {
+        let broker_names = HashSet::from(["broker-b".to_string(), "broker-a".to_string(), "broker-c".to_string()]);
+
+        assert_eq!(build_order_conf(&broker_names, 8), "broker-a:8;broker-b:8;broker-c:8");
     }
 }

@@ -33,17 +33,20 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.registry = guard.load_json(guard.DEFAULT_REGISTRY)
-        cls.inventory = guard.build_source_inventory()
+        cls.inventory = guard.scoped_source_inventory(
+            guard.build_source_inventory(), "core-release"
+        )
         cls.fixtures = guard.load_json(
             SCRIPTS / "telemetry-semantic-guard-violations.json"
         )["fixtures"]
 
     def test_live_registry_matches_every_rust_signal(self) -> None:
         self.assertEqual([], guard.validate_registry(self.registry, self.inventory))
-        self.assertEqual(158, len(self.inventory["metrics"]))
-        self.assertEqual(15, len(self.inventory["spans"]))
-        self.assertEqual(11, len(self.inventory["events"]))
-        self.assertEqual(184, len(self.registry["signals"]))
+        self.assertEqual(202, len(self.inventory["metrics"]))
+        self.assertEqual(13, len(self.inventory["spans"]))
+        self.assertEqual(10, len(self.inventory["events"]))
+        self.assertEqual(225, len(self.registry["signals"]))
+        self.assertFalse(any(signal["owner"] == "mcp" for signal in self.registry["signals"]))
 
     def test_log_filter_metrics_have_stable_registry_contracts(self) -> None:
         symbols = {
@@ -71,11 +74,16 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
             self.assertEqual({"strategy": "aggregate"}, signal["sampling"])
 
     def test_generator_is_deterministic(self) -> None:
-        self.assertEqual(self.registry, generator.build_registry())
+        self.assertEqual(self.registry, generator.build_registry(scope="core-release"))
 
     def test_cli_reports_registered_inventory(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "telemetry_semantic_guard.py")],
+            [
+                sys.executable,
+                str(SCRIPTS / "telemetry_semantic_guard.py"),
+                "--scope",
+                "core-release",
+            ],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -84,7 +92,7 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("metrics=158 spans=15 logs=11 attributes=75", result.stdout)
+        self.assertIn("metrics=202 spans=13 logs=10", result.stdout)
 
     def test_committed_violation_fixtures_are_rejected(self) -> None:
         fixture_ids = {fixture["id"] for fixture in self.fixtures}

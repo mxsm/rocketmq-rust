@@ -23,8 +23,10 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tomllib
+from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,8 +112,14 @@ def validate_transition(previous: str, version: str) -> None:
         if previous_rc:
             if next_rc.group(1) != previous_rc.group(1) or int(next_rc.group(2)) != int(previous_rc.group(2)) + 1:
                 raise VersionError(f"RC sequence must advance exactly once: {previous} -> {version}")
-        elif int(next_rc.group(2)) != 1 or previous not in {next_rc.group(1), f"{next_rc.group(1)}-dev"}:
-            raise VersionError(f"the first RC must follow its development version: {previous} -> {version}")
+        elif previous == f"{next_rc.group(1)}-dev":
+            if int(next_rc.group(2)) != 1:
+                raise VersionError(f"the first RC must follow its development version: {previous} -> {version}")
+        elif previous != next_rc.group(1):
+            raise VersionError(
+                "an RC must follow its own development, RC, or rejected final version: "
+                f"{previous} -> {version}"
+            )
     elif previous_rc and version != previous_rc.group(1):
         raise VersionError(f"an RC can only advance or promote its own base version: {previous} -> {version}")
 
@@ -173,6 +181,47 @@ def _replace_lock_versions(text: str, core_names: set[str], previous: str, versi
     return "".join(updated)
 
 
+def _release_surface_updates(root: Path, previous: str, version: str) -> dict[Path, bytes]:
+    updates: dict[Path, bytes] = {}
+    chart = root / "distribution/helm/rocketmq-rust-core/Chart.yaml"
+    if chart.is_file():
+        original = chart.read_text(encoding="utf-8")
+        updated = original
+        for field in ("version", "appVersion"):
+            updated, count = re.subn(
+                rf'(?m)^(\s*{field}\s*:\s*["\']?){re.escape(previous)}(["\']?\s*)$',
+                rf"\g<1>{version}\g<2>",
+                updated,
+                count=1,
+            )
+            if count != 1:
+                raise VersionError(f"core Chart must contain exactly one {field}: {previous}")
+        updates[chart] = updated.encode("utf-8")
+    values = root / "distribution/helm/rocketmq-rust-core/values.yaml"
+    if values.is_file():
+        original = values.read_text(encoding="utf-8")
+        updated, count = re.subn(
+            rf'(?m)^(\s*candidateVersion\s*:\s*["\']?){re.escape(previous)}(["\']?\s*)$',
+            rf"\g<1>{version}\g<2>",
+            original,
+            count=1,
+        )
+        if count != 1:
+            raise VersionError(f"core values must contain candidateVersion: {previous}")
+        updates[values] = updated.encode("utf-8")
+    policy = root / "docker/core-container-policy.json"
+    if policy.is_file():
+        try:
+            value = json.loads(policy.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise VersionError(f"invalid core container policy: {error}") from error
+        if value.get("release_version") != previous:
+            raise VersionError(f"core container policy must use {previous}")
+        value["release_version"] = version
+        updates[policy] = (json.dumps(value, indent=2) + "\n").encode("utf-8")
+    return updates
+
+
 def plan_version_update(root: Path, version: str) -> tuple[str, dict[Path, bytes]]:
     root = root.resolve()
     packages, core_names = _read_scope(root)
@@ -213,10 +262,13 @@ def plan_version_update(root: Path, version: str) -> tuple[str, dict[Path, bytes
         _toml(path, updated)
         if updated != original:
             planned[path] = updated.encode("utf-8")
+    for path, content in _release_surface_updates(root, previous, version).items():
+        if path.read_bytes() != content:
+            planned[path] = content
     return previous, planned
 
 
-def _atomic_replace(planned: dict[Path, bytes]) -> None:
+def _atomic_replace(planned: dict[Path, bytes], validator: Callable[[], None] | None = None) -> None:
     originals = {path: path.read_bytes() for path in planned}
     temporary: dict[Path, Path] = {}
     replaced: list[Path] = []
@@ -231,7 +283,9 @@ def _atomic_replace(planned: dict[Path, bytes]) -> None:
         for path, temp in temporary.items():
             os.replace(temp, path)
             replaced.append(path)
-    except OSError as error:
+        if validator is not None:
+            validator()
+    except (OSError, VersionError) as error:
         for path in reversed(replaced):
             path.write_bytes(originals[path])
         raise VersionError(f"version transaction failed and was rolled back: {error}") from error
@@ -241,10 +295,54 @@ def _atomic_replace(planned: dict[Path, bytes]) -> None:
                 temp.unlink()
 
 
-def apply_version(root: Path, version: str) -> VersionResult:
+def apply_version(root: Path, version: str, *, validator: Callable[[], None] | None = None) -> VersionResult:
     previous, planned = plan_version_update(root, version)
-    _atomic_replace(planned)
+    _atomic_replace(planned, validator=validator)
     return VersionResult(previous, version, len(planned))
+
+
+def locked_validator(root: Path) -> Callable[[], None]:
+    root = root.resolve()
+    commands = (
+        ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+        [
+            "cargo",
+            "metadata",
+            "--locked",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+            "rocketmq-example/Cargo.toml",
+        ],
+        [
+            "cargo",
+            "metadata",
+            "--locked",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+            "fuzz/Cargo.toml",
+        ],
+        [
+            "cargo",
+            "check",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml",
+        ],
+    )
+
+    def validate() -> None:
+        for command in commands:
+            result = subprocess.run(command, cwd=root, text=True, capture_output=True, check=False)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip().splitlines()[-1:]
+                raise VersionError(f"locked validation failed ({' '.join(command)}): {' '.join(detail)}")
+
+    return validate
 
 
 def main() -> int:
@@ -256,7 +354,7 @@ def main() -> int:
     try:
         previous, planned = plan_version_update(args.root, args.version)
         if not args.check_only:
-            _atomic_replace(planned)
+            _atomic_replace(planned, validator=locked_validator(args.root))
     except VersionError as error:
         print(f"SET_WORKSPACE_VERSION_FAILED detail={error}", file=sys.stderr)
         return 1

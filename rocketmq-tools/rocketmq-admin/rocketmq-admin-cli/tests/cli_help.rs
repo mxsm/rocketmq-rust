@@ -39,7 +39,7 @@ fn bash_completion_output_exposes_root_command() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("_rocketmq-admin-cli"),
+        stdout.contains("_rocketmq__admin__cli"),
         "bash completion should include the root completion function, got: {stdout}"
     );
     assert!(
@@ -101,23 +101,40 @@ fn broker_help_exposes_update_broker_config_slice() {
 }
 
 #[test]
-fn container_help_exposes_java_container_commands() {
+fn broker_container_commands_are_excluded_from_help_and_completion() {
+    let root_help = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
+        .arg("--help")
+        .output()
+        .expect("run rocketmq-admin-cli --help");
+    assert!(root_help.status.success());
+    let root_stdout = String::from_utf8_lossy(&root_help.stdout);
+    assert!(
+        !root_stdout.contains("container"),
+        "root help must not advertise BrokerContainer"
+    );
+
     let output = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
         .args(["container", "--help"])
         .output()
         .expect("run rocketmq-admin-cli container --help");
 
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "expected container help to exit successfully, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("unrecognized subcommand"),
+        "unexpected stderr: {stderr}"
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["addBroker", "removeBroker"] {
+    let completion = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
+        .args(["--generate-completion", "bash"])
+        .output()
+        .expect("generate bash completion");
+    assert!(completion.status.success());
+    let completion_stdout = String::from_utf8_lossy(&completion.stdout);
+    for excluded in ["container", "addBroker", "removeBroker", "openmessaging"] {
         assert!(
-            stdout.contains(command),
-            "container help should expose Java command {command}, got: {stdout}"
+            !completion_stdout.contains(excluded),
+            "completion must not advertise excluded operation {excluded}"
         );
     }
 }

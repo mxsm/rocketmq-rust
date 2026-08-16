@@ -166,8 +166,8 @@ def signal_privacy(attributes: list[str]) -> str:
     return "sensitive" if HIGH_CARDINALITY_ATTRIBUTES.intersection(attributes) else "operational"
 
 
-def build_registry() -> dict[str, Any]:
-    inventory = guard.build_source_inventory()
+def build_registry(*, scope: str = "core-release") -> dict[str, Any]:
+    inventory = guard.scoped_source_inventory(guard.build_source_inventory(), scope)
     extra_attributes = {
         attribute
         for attributes in SPAN_ATTRIBUTES.values()
@@ -371,12 +371,17 @@ def build_violation_fixtures(registry: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def main() -> int:
-    registry = build_registry()
-    findings = guard.validate_registry(registry)
+    registry = build_registry(scope="core-release")
+    inventory = guard.scoped_source_inventory(guard.build_source_inventory(), "core-release")
+    findings = guard.validate_registry(registry, inventory)
     if findings:
         raise SystemExit("refusing to write invalid registry:\n- " + "\n- ".join(findings))
     write_json(REGISTRY_PATH, registry)

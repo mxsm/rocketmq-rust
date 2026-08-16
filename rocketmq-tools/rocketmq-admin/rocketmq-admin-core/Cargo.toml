@@ -91,10 +91,6 @@ name              = "connection_core_models"
 required-features = ["client-adapter"]
 
 [[test]]
-name              = "container_core_models"
-required-features = ["client-adapter"]
-
-[[test]]
 name              = "controller_core_models"
 required-features = ["client-adapter"]
 

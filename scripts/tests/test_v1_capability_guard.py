@@ -117,6 +117,18 @@ print(json.dumps([finding.as_dict() for finding in findings]))
             findings,
         )
 
+    def test_test_ids_and_commands_have_one_to_one_route_cardinality(self) -> None:
+        manifest = self.load_manifest()
+        capability = self.capability(manifest, "F-01")
+        capability["commands"].append("cargo test -p rocketmq-broker --test extra-route")
+
+        findings = self.validate_fixture(manifest)
+
+        self.assertIn(
+            "test-command-cardinality-mismatch",
+            {item["code"] for item in findings},
+        )
+
     def test_core_capability_cannot_be_intentionally_unsupported(self) -> None:
         manifest = self.load_manifest()
         capability = self.capability(manifest, "F-01")

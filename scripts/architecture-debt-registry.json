@@ -49,7 +49,7 @@
         "scripts/rust-hygiene-baseline.json",
         "scripts/rust_hygiene_guard.py"
       ],
-      "scope_count": 561
+      "scope_count": 527
     },
     {
       "id": "ARC-TRAIT-001",
@@ -81,7 +81,7 @@
         "scripts/rust-lint-debt-registry.json",
         "scripts/rust_lint_debt_guard.py"
       ],
-      "scope_count": 183
+      "scope_count": 182
     },
     {
       "id": "ARC-RUNTIME-001",

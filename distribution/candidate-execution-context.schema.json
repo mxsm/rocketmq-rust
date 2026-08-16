@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/candidate-execution-context.schema.json",
+  "title": "RocketMQ Rust candidate worker execution context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "version",
+    "run_id",
+    "attempt",
+    "worker_id",
+    "platform",
+    "publish_input",
+    "publishing_credentials_provided"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": { "type": "string" },
+    "version": { "type": "string" },
+    "run_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "worker_id": { "type": "string" },
+    "platform": { "type": "string" },
+    "architecture": { "type": "string" },
+    "python_version": { "type": "string" },
+    "ci": { "type": "boolean" },
+    "workflow_event": { "type": "string" },
+    "workflow_name": { "type": ["string", "null"] },
+    "workflow_run_id": { "type": ["string", "null"] },
+    "workflow_attempt": { "type": ["string", "null"] },
+    "publish_input": { "type": "boolean" },
+    "publishing_credentials_provided": { "type": "boolean" },
+    "publishing_credential_names": { "type": "array", "items": { "type": "string" } },
+    "captured_at": { "type": "string" }
+  }
+}

@@ -24,6 +24,8 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use futures::stream;
+use futures::StreamExt;
 use rocketmq_client_rust::PullStatus;
 use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_client_rust::{ConsumerAdmin as _, OffsetAdmin as _, TopicAdmin as _};
@@ -46,6 +48,7 @@ use crate::client_adapter::security::rpc_hook_from_credentials;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::admin::ServiceAdminSession;
 use crate::client_adapter::services::errors;
+use crate::client_adapter::services::stable_error_message;
 use crate::client_adapter::services::RocketMQError;
 use crate::client_adapter::services::RocketMQResult;
 use crate::client_adapter::services::ToolsError;
@@ -56,6 +59,7 @@ const PULL_TIMEOUT_MILLIS: u64 = 3000;
 const QUERY_MAX_NUM: i32 = 32;
 const DEFAULT_QUERY_WINDOW_MS: i64 = 36 * 60 * 60 * 1000;
 const DEFAULT_CLUSTER: &str = "DefaultCluster";
+const MESSAGE_TRACK_CONCURRENCY: usize = 8;
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {
     value
@@ -285,6 +289,14 @@ impl QueryMessageByKeyRequest {
     pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
         self.namesrv_addr = trim_optional_string(namesrv_addr);
         self
+    }
+
+    pub fn key_type(&self) -> &str {
+        self.key_type.as_str()
+    }
+
+    pub fn last_key(&self) -> Option<&str> {
+        self.last_key.as_ref().map(CheetahString::as_str)
     }
 
     pub(crate) fn admin_builder(&self) -> AdminBuilder {
@@ -569,19 +581,48 @@ impl QueryMessageByUniqueKeyRequest {
     pub(crate) fn admin_builder(&self) -> AdminBuilder {
         builder_with_namesrv(self.namesrv_addr.as_deref())
     }
+
+    fn direct_consume_request(&self) -> Option<DirectConsumeMessageRequest> {
+        Some(DirectConsumeMessageRequest {
+            topic: self.topic.clone(),
+            msg_id: self.msg_id.clone(),
+            consumer_group: self.consumer_group.clone()?,
+            client_id: self.client_id.clone()?,
+            cluster: self.cluster.clone(),
+            namesrv_addr: self.namesrv_addr.clone(),
+        })
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UniqueKeyDirectStatus {
-    PushConsumerUnsupported { client_id: CheetahString },
-    NotPushConsumer { client_id: CheetahString },
-    RunningInfoFailed { client_id: CheetahString },
+#[derive(Debug, Clone)]
+pub struct QueryMessageByUniqueKeyEntry {
+    pub message: MessageExt,
+    pub tracks: Vec<MessageTrackRow>,
+    pub track_error: Option<String>,
+}
+
+impl QueryMessageByUniqueKeyEntry {
+    #[allow(deprecated)]
+    fn from_track_result(message: MessageExt, result: RocketMQResult<Vec<MessageTrack>>) -> Self {
+        match result {
+            Ok(tracks) => Self {
+                message,
+                tracks: message_track_rows(tracks),
+                track_error: None,
+            },
+            Err(error) => Self {
+                message,
+                tracks: Vec::new(),
+                track_error: Some(stable_error_message(&error)),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum QueryMessageByUniqueKeyResult {
-    Messages(Vec<MessageExt>),
-    DirectStatus(UniqueKeyDirectStatus),
+    Messages(Vec<QueryMessageByUniqueKeyEntry>),
+    Direct(DirectConsumeMessageResult),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1327,24 +1368,9 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         request: &QueryMessageByUniqueKeyRequest,
     ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
-        if let (Some(consumer_group), Some(client_id)) = (&request.consumer_group, &request.client_id) {
-            let consumer_running_info = admin
-                .get_consumer_running_info(consumer_group.clone(), client_id.clone(), false, Some(false))
-                .await;
-
-            return Ok(QueryMessageByUniqueKeyResult::DirectStatus(
-                match consumer_running_info {
-                    Ok(info) if info.is_push_type() => UniqueKeyDirectStatus::PushConsumerUnsupported {
-                        client_id: client_id.clone(),
-                    },
-                    Ok(_) => UniqueKeyDirectStatus::NotPushConsumer {
-                        client_id: client_id.clone(),
-                    },
-                    Err(_) => UniqueKeyDirectStatus::RunningInfoFailed {
-                        client_id: client_id.clone(),
-                    },
-                },
-            ));
+        if let Some(direct_request) = request.direct_consume_request() {
+            let result = Self::direct_consume_message_with_admin(admin, &direct_request).await?;
+            return Ok(QueryMessageByUniqueKeyResult::Direct(result));
         }
 
         let (begin_timestamp, end_timestamp) =
@@ -1372,7 +1398,15 @@ impl MessageService {
             messages.truncate(1);
         }
 
-        Ok(QueryMessageByUniqueKeyResult::Messages(messages))
+        let entries = stream::iter(messages.into_iter().map(|message| async move {
+            let tracks = admin.message_track_detail(message.clone()).await;
+            QueryMessageByUniqueKeyEntry::from_track_result(message, tracks)
+        }))
+        .buffered(MESSAGE_TRACK_CONCURRENCY)
+        .collect()
+        .await;
+
+        Ok(QueryMessageByUniqueKeyResult::Messages(entries))
     }
 
     pub async fn direct_consume_message_by_request_with_credentials(
@@ -2109,6 +2143,24 @@ mod tests {
     }
 
     #[test]
+    fn query_key_request_exposes_normalized_key_type_and_last_key() {
+        let request = QueryMessageByKeyRequest::try_new(
+            "TopicA",
+            "KeyA",
+            None,
+            None,
+            64,
+            None,
+            Some(" T ".to_string()),
+            Some(" cursor-1 ".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(request.key_type(), "T");
+        assert_eq!(request.last_key(), Some("cursor-1"));
+    }
+
+    #[test]
     fn consume_request_requires_broker_before_queue() {
         let result = ConsumeMessagesRequest::try_new("topic", None, Some(0), None, None, None, None, 1);
         assert!(result.is_err());
@@ -2138,6 +2190,59 @@ mod tests {
     fn direct_consume_request_rejects_blank_target() {
         let result = DirectConsumeMessageRequest::try_new("TopicA", "MSGID", " ", "ClientA", None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn unique_key_request_builds_direct_consume_request_when_group_and_client_are_present() {
+        let request = QueryMessageByUniqueKeyRequest::try_new(
+            "MSGID",
+            Some(" GroupA ".to_string()),
+            Some(" ClientA ".to_string()),
+            " TopicA ",
+            false,
+            Some(" DefaultCluster ".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let direct = request.direct_consume_request().unwrap();
+        assert_eq!(direct.consumer_group.as_str(), "GroupA");
+        assert_eq!(direct.client_id.as_str(), "ClientA");
+        assert_eq!(direct.topic.as_str(), "TopicA");
+        assert_eq!(direct.msg_id.as_str(), "MSGID");
+        assert_eq!(direct.cluster.as_ref().unwrap().as_str(), "DefaultCluster");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn unique_key_message_entry_preserves_backend_track_rows_and_failures() {
+        let mut message = MessageExt::default();
+        message.set_msg_id("MSGID".into());
+        let entry = QueryMessageByUniqueKeyEntry::from_track_result(
+            message.clone(),
+            Ok(vec![MessageTrack {
+                consumer_group: "GroupA".to_string(),
+                track_type: Some(rocketmq_model::common::tools::track_type::TrackType::Consumed),
+                exception_desc: String::new(),
+            }]),
+        );
+
+        assert_eq!(entry.message.msg_id().as_str(), "MSGID");
+        assert_eq!(entry.tracks[0].consumer_group, "GroupA");
+        assert_eq!(entry.tracks[0].track_type.as_deref(), Some("CONSUMED"));
+        assert!(entry.track_error.is_none());
+
+        let failed = QueryMessageByUniqueKeyEntry::from_track_result(
+            message,
+            Err(RocketMQError::broker_operation_failed(
+                "MESSAGE_TRACK",
+                -1,
+                "broker-b unavailable",
+            )),
+        );
+        assert!(failed.tracks.is_empty());
+        assert!(failed.track_error.as_deref().unwrap().contains("broker-b unavailable"));
     }
 
     #[test]

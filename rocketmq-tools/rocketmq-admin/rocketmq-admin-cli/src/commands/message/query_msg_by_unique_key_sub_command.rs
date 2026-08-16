@@ -22,10 +22,12 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
+use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;
+use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyEntry;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyRequest;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyResult;
-use rocketmq_admin_core::client_adapter::services::message::UniqueKeyDirectStatus;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByUniqueKeySubCommand {
@@ -60,7 +62,8 @@ pub struct QueryMsgByUniqueKeySubCommand {
 }
 
 impl QueryMsgByUniqueKeySubCommand {
-    fn show_message(msg: &MessageExt, index: usize) -> RocketMQResult<()> {
+    fn show_message(entry: &QueryMessageByUniqueKeyEntry, index: usize) -> RocketMQResult<()> {
+        let msg = &entry.message;
         let body_tmp_file_path = Self::create_body_file(msg, index)?;
         println!("{:<20} {}", "Topic:", msg.topic());
         println!("{:<20} [{}]", "Tags:", msg.get_tags().unwrap_or_default());
@@ -89,15 +92,29 @@ impl QueryMsgByUniqueKeySubCommand {
         println!("{:<20} {:?}", "Properties:", msg.properties());
         println!("{:<20} {}", "Message Body Path:", body_tmp_file_path.display());
 
-        println!();
-        println!("WARN: messageTrackDetail is not implemented yet in rocketmq-rust");
+        if entry.tracks.is_empty() {
+            println!("{:<20} []", "Consumer Track:");
+        } else {
+            println!("Consumer Track:");
+            for track in &entry.tracks {
+                println!(
+                    "  group={} status={} exception={}",
+                    track.consumer_group,
+                    track.track_type.as_deref().unwrap_or("UNKNOWN"),
+                    track.exception_desc
+                );
+            }
+        }
+        if let Some(error) = &entry.track_error {
+            eprintln!("WARN: message track query failed: {error}");
+        }
         println!();
 
         Ok(())
     }
 
     fn create_body_file(msg: &MessageExt, index: usize) -> RocketMQResult<PathBuf> {
-        let mut body_tmp_file_path = PathBuf::from("/tmp/rocketmq/msgbodys");
+        let mut body_tmp_file_path = Self::body_directory();
         fs::create_dir_all(&body_tmp_file_path).map_err(RocketMQError::IO)?;
 
         let mut filename = msg.msg_id().to_string();
@@ -110,6 +127,43 @@ impl QueryMsgByUniqueKeySubCommand {
         fs::write(&body_tmp_file_path, &body).map_err(RocketMQError::IO)?;
 
         Ok(body_tmp_file_path)
+    }
+
+    fn body_directory() -> PathBuf {
+        std::env::temp_dir().join("rocketmq").join("msgbodys")
+    }
+
+    fn direct_consume_lines(result: &DirectConsumeMessageResult) -> Vec<String> {
+        let target = format!(
+            "topic={} msg_id={} group={} client={}",
+            result.topic, result.msg_id, result.consumer_group, result.client_id
+        );
+        match &result.status {
+            DirectConsumeMessageStatus::Consumed(detail) => vec![
+                format!("direct consume succeeded: {target}"),
+                format!(
+                    "order={} auto_commit={} consume_result={} remark={} spent_time_millis={}",
+                    detail.order,
+                    detail.auto_commit,
+                    detail.consume_result.as_deref().unwrap_or("UNKNOWN"),
+                    detail.remark.as_deref().unwrap_or_default(),
+                    detail.spent_time_millis
+                ),
+            ],
+            DirectConsumeMessageStatus::NotPushConsumer => {
+                vec![format!(
+                    "direct consume unavailable: {target}; client is not a push consumer"
+                )]
+            }
+            DirectConsumeMessageStatus::RunningInfoFailed { error } => {
+                vec![format!(
+                    "direct consume unavailable: {target}; running info failed: {error}"
+                )]
+            }
+            DirectConsumeMessageStatus::Failed { error } => {
+                vec![format!("direct consume failed: {target}; {error}")]
+            }
+        }
     }
 }
 
@@ -158,31 +212,56 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
         )
         .await?
         {
-            QueryMessageByUniqueKeyResult::Messages(messages) => {
-                for (index, msg) in messages.iter().enumerate() {
-                    Self::show_message(msg, index)?;
+            QueryMessageByUniqueKeyResult::Messages(entries) => {
+                for (index, entry) in entries.iter().enumerate() {
+                    Self::show_message(entry, index)?;
                 }
             }
-            QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::PushConsumerUnsupported {
-                client_id,
-            }) => {
-                println!(
-                    "consumeMessageDirectly path is not implemented in rocketmq-rust yet, skip direct push for client \
-                     {}",
-                    client_id
-                );
-            }
-            QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::NotPushConsumer { client_id }) => {
-                println!(
-                    "get consumer info failed or this {} client is not push consumer, not support direct push",
-                    client_id
-                );
-            }
-            QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::RunningInfoFailed { client_id }) => {
-                println!("get consumer runtime info for {} client failed", client_id);
+            QueryMessageByUniqueKeyResult::Direct(result) => {
+                for line in Self::direct_consume_lines(&result) {
+                    println!("{line}");
+                }
             }
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;
+    use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResultDetail;
+    use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageStatus;
+
+    use super::*;
+
+    #[test]
+    fn message_body_directory_is_platform_portable() {
+        let directory = QueryMsgByUniqueKeySubCommand::body_directory();
+        assert!(directory.starts_with(std::env::temp_dir()));
+        assert!(directory.ends_with(PathBuf::from("rocketmq").join("msgbodys")));
+    }
+
+    #[test]
+    fn direct_consume_lines_preserve_backend_result() {
+        let result = DirectConsumeMessageResult {
+            topic: "TopicA".into(),
+            msg_id: "MSGID".into(),
+            consumer_group: "GroupA".into(),
+            client_id: "ClientA".into(),
+            status: DirectConsumeMessageStatus::Consumed(DirectConsumeMessageResultDetail {
+                order: true,
+                auto_commit: false,
+                consume_result: Some("CR_SUCCESS".to_string()),
+                remark: Some("consumed".to_string()),
+                spent_time_millis: 7,
+            }),
+        };
+
+        let lines = QueryMsgByUniqueKeySubCommand::direct_consume_lines(&result);
+        assert!(lines.iter().any(|line| line.contains("CR_SUCCESS")));
+        assert!(lines.iter().any(|line| line.contains("spent_time_millis=7")));
+        assert!(!lines.iter().any(|line| line.contains("not implemented")));
     }
 }

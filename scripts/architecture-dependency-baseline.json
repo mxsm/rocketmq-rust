@@ -1,11 +1,5116 @@
 {
-  "schema_version": 1,
-  "head": "922c9b04dbcdac5a50b502a075f476116ceec146",
   "cargo_metadata_command": "cargo metadata --format-version 1 --no-deps",
-  "metadata_sha256": "177ad7c25abbcf964ddd5b7e05524776bd17979bef9d060963babbcfc090d536",
-  "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
   "cargo_version": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+  "compatibility_manifest_exceptions": [
+    {
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "alias": "rocketmq_store",
+      "caller": "rocketmq-broker",
+      "count": 1,
+      "debt_id": "ARC-COMP-001",
+      "kind": "normal",
+      "owner": "broker",
+      "path": "rocketmq-broker/Cargo.toml",
+      "reason": "approved store composition facade",
+      "remove_by": "2.0.0",
+      "rule": "compatibility-manifest-burn-down",
+      "target": "rocketmq-store"
+    },
+    {
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "alias": "rocketmq_store",
+      "caller": "rocketmq-store-inspect",
+      "count": 1,
+      "debt_id": "ARC-COMP-002",
+      "kind": "normal",
+      "owner": "store-tools",
+      "path": "rocketmq-tools/rocketmq-store-inspect/Cargo.toml",
+      "reason": "approved store inspection facade",
+      "remove_by": "2.0.0",
+      "rule": "compatibility-manifest-burn-down",
+      "target": "rocketmq-store"
+    }
+  ],
   "generated_output_path": "target/architecture-refactor/P1-03/cargo-metadata.normalized.json",
+  "manifest_exceptions": [],
+  "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "schema_version": 2,
+  "semantic_dependencies": [
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "chrono",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "clap",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "clap_complete",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "colored",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "dialoguer",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "indicatif",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "regex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "rocketmq-admin-core",
+      "features": [
+        "client-adapter",
+        "rocksdb-export"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "serde_yaml",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "tabled",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-cli"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "regex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-client-rust",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "rocksdb",
+      "features": [
+        "lz4",
+        "multi-threaded-cf",
+        "zstd"
+      ],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-core"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "crossterm",
+      "features": [
+        "event-stream"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "ratatui",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "rocketmq-admin-core",
+      "features": [
+        "client-adapter"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "strum",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "tokio-stream",
+      "features": [
+        "fs",
+        "io-util",
+        "net",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-admin-tui"
+    },
+    {
+      "dependency": "aes-gcm",
+      "features": [
+        "zeroize"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "base64",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "chrono",
+      "features": [
+        "std"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "hex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "hmac",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "ipnetwork",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "md-5",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "moka",
+      "features": [
+        "sync"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "serde_yaml",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "sha1",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "sha2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "subtle",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "tonic",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "tracing-subscriber",
+      "features": [
+        "env-filter",
+        "json",
+        "registry",
+        "time",
+        "tracing-log"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-auth"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "cfg-if",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "clap",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "crossbeam-skiplist",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "dirs",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "dns-lookup",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "libc",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "local-ip-address",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "num_cpus",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rand",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-auth",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-controller",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-filter",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-namesrv",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-store",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-store-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-store-rocksdb",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [
+        "test-support"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "sysinfo",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "trait-variant",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "windows",
+      "features": [
+        "Win32_System_ProcessStatus",
+        "Win32_System_Threading"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-broker"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "async_tokio"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "hickory-resolver",
+      "features": [
+        "system-config",
+        "tokio"
+      ],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "num_cpus",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "pkcs8",
+      "features": [
+        "encryption",
+        "getrandom",
+        "pem",
+        "std"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rand",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rcgen",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-auth",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [
+        "socks",
+        "test-support",
+        "tls"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [
+        "socks"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "smallvec",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "tokio-rustls",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "trait-variant",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "trybuild",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-client-rust"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "async-trait",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "clap",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "async_tokio"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "dirs",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "hex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "openraft",
+      "features": [
+        "serde",
+        "tokio-rt"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "prost",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "protoc-bin-vendored",
+      "features": [],
+      "kind": "build",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-auth",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-client-rust",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-store-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [
+        "test-support"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "rocksdb",
+      "features": [
+        "lz4",
+        "multi-threaded-cf",
+        "zstd"
+      ],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "sha2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tokio-stream",
+      "features": [
+        "net",
+        "sync"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tonic",
+      "features": [
+        "codegen",
+        "transport"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tonic-prost",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tonic-prost-build",
+      "features": [],
+      "kind": "build",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "tracing-subscriber",
+      "features": [
+        "env-filter",
+        "json",
+        "registry",
+        "time",
+        "tracing-log"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-error"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-error"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-error"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-error"
+    },
+    {
+      "dependency": "ahash",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-filter"
+    },
+    {
+      "dependency": "proc-macro-crate",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-macros"
+    },
+    {
+      "dependency": "proc-macro2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-macros"
+    },
+    {
+      "dependency": "quote",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-macros"
+    },
+    {
+      "dependency": "syn",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-macros"
+    },
+    {
+      "dependency": "base64",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "byteorder",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "chrono",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "crc",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "flate2",
+      "features": [
+        "zlib"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "local-ip-address",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "lz4_flex",
+      "features": [
+        "alloc"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "md-5",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [
+        "with_serde"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "simd-json",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "strum",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "uuid",
+      "features": [
+        "fast-rng",
+        "macro-diagnostics",
+        "v4"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "zstd",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-model"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "clap",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "async_futures",
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [
+        "serde"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "dirs",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "hashbrown",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "moka",
+      "features": [
+        "sync"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-auth",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-controller",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [
+        "test-support"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "sha2",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-namesrv"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "chrono",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "chrono-tz",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "iana-time-zone",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "opentelemetry",
+      "features": [
+        "metrics"
+      ],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "opentelemetry-appender-tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "opentelemetry-otlp",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "opentelemetry-prometheus",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "opentelemetry-semantic-conventions",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "opentelemetry_sdk",
+      "features": [
+        "metrics",
+        "rt-tokio"
+      ],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "prometheus",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "serde_yaml",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "sha2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "time",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tonic",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tracing-appender",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tracing-log",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tracing-opentelemetry",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "tracing-subscriber",
+      "features": [
+        "env-filter",
+        "json",
+        "registry",
+        "time",
+        "tracing-log"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-observability"
+    },
+    {
+      "dependency": "bitvec",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "bytemuck",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "byteorder",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "chrono",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "flate2",
+      "features": [
+        "zlib"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "itoa",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "lz4_flex",
+      "features": [
+        "alloc"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "memchr",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "rand",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [
+        "with_serde"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "rocketmq-macros",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "serde_json_any_key",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "simd-json",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "sysinfo",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "trybuild",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "zstd",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-protocol"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "async-trait",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "chrono",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "flate2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "hex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "hmac",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "prost-types",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rcgen",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-auth",
+      "features": [
+        "grpc"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-proxy-cluster",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-proxy-core",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-proxy-local",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [
+        "test-support"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "sha1",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "test-util",
+        "time"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tokio-rustls",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tokio-stream",
+      "features": [
+        "fs",
+        "io-util",
+        "net",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tonic",
+      "features": [
+        "codegen",
+        "transport"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "trybuild",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "uuid",
+      "features": [
+        "fast-rng",
+        "macro-diagnostics",
+        "v4"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "async-trait",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "libc",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-client-rust",
+      "features": [
+        "admin-mutation"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-proxy-core",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "smallvec",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "test-util",
+        "time"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "windows",
+      "features": [
+        "Win32_System_ProcessStatus",
+        "Win32_System_Threading"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-cluster"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "prost",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "prost-types",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "test-util",
+        "time"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "tonic",
+      "features": [
+        "codegen",
+        "transport"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "tonic-prost",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "tonic-prost-build",
+      "features": [],
+      "kind": "build",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "uuid",
+      "features": [
+        "fast-rng",
+        "macro-diagnostics",
+        "v4"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-core"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-broker",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-proxy-core",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "rocketmq-transport",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-proxy-local"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "chrono",
+      "features": [
+        "serde"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "cron",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "futures",
+      "features": [
+        "default",
+        "thread-pool"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "local-ip-address",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "loom",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "num_cpus",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "smallvec",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "sysinfo",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "test-util",
+        "time"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "trait-variant",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "trybuild",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "uuid",
+      "features": [
+        "v4"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "windows-sys",
+      "features": [
+        "Win32_Storage_FileSystem"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-runtime"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-security-api"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-security-api"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-security-api"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-security-api"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-security-api"
+    },
+    {
+      "dependency": "zeroize",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-security-api"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "dirs",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "fs2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "futures-util",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "hashbrown",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "libc",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "memmap2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rand",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rayon",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-store-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-store-local",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-store-rocksdb",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "rocketmq-tieredstore",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "sysinfo",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "trait-variant",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "trybuild",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "uuid",
+      "features": [
+        "fast-rng",
+        "macro-diagnostics",
+        "v4"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "windows",
+      "features": [
+        "Win32_Security",
+        "Win32_System_Memory",
+        "Win32_System_Memory_NonVolatile",
+        "Win32_System_ProcessStatus",
+        "Win32_System_Threading"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "windows-sys",
+      "features": [
+        "Wdk_Foundation",
+        "Wdk_Storage_FileSystem",
+        "Win32_Security",
+        "Win32_Storage_FileSystem",
+        "Win32_System_IO"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "hex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "sha2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-api"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "clap",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "config",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "fs2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "rocketmq-store",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "rocketmq-store-rocksdb",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "tabled",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-inspect"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "hex",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "libc",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "loom",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "memmap2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "page_size",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "rayon",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "rocketmq-store-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "sha2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "test-util",
+        "time"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "tokio-uring",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "trybuild",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "windows",
+      "features": [
+        "Wdk_Foundation",
+        "Wdk_Storage_FileSystem",
+        "Win32_Foundation",
+        "Win32_Security",
+        "Win32_Storage_FileSystem",
+        "Win32_System_IO",
+        "Win32_System_Memory",
+        "Win32_System_Threading"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-local"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "rocketmq-store-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "rocksdb",
+      "features": [
+        "lz4",
+        "multi-threaded-cf",
+        "zstd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-store-rocksdb"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "html_reports"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "rocketmq-store-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "trait-variant",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "windows-sys",
+      "features": [
+        "Win32_Storage_FileSystem"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-tieredstore"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "anyhow",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "arc-swap",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "bitvec",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "bytemuck",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "bytes",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "cheetah-string",
+      "features": [
+        "bytes",
+        "serde",
+        "simd"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "criterion",
+      "features": [
+        "async_tokio"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "dashmap",
+      "features": [
+        "serde"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "flate2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "flume",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "form_urlencoded",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "futures",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "futures-util",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "ipnet",
+      "features": [
+        "serde"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "libc",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "libc",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "local-ip-address",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "num_cpus",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "parking_lot",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "pin-project-lite",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "pkcs8",
+      "features": [
+        "encryption",
+        "getrandom",
+        "pem",
+        "std"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "pkcs8",
+      "features": [
+        "encryption",
+        "getrandom",
+        "pem",
+        "std"
+      ],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rand",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rcgen",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "reqwest",
+      "features": [
+        "json"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rocketmq-error",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rocketmq-model",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rocketmq-observability",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rocketmq-protocol",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rocketmq-runtime",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rocketmq-security-api",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "rustls-native-certs",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "serde",
+      "features": [
+        "derive"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "serde_json",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "serde_json_any_key",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "socket2",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "tempfile",
+      "features": [],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "thiserror",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "test-util",
+        "time"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "tokio",
+      "features": [
+        "fs",
+        "io-std",
+        "io-util",
+        "macros",
+        "net",
+        "process",
+        "rt-multi-thread",
+        "signal",
+        "sync",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "tokio-rustls",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "tokio-util",
+      "features": [
+        "codec",
+        "compat",
+        "io-util",
+        "net",
+        "rt",
+        "time"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "tracing",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "trait-variant",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "uuid",
+      "features": [
+        "fast-rng",
+        "macro-diagnostics",
+        "v4"
+      ],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "windows",
+      "features": [
+        "Win32_Foundation",
+        "Win32_System_ProcessStatus",
+        "Win32_System_Threading"
+      ],
+      "kind": "dev",
+      "optional": false,
+      "package": "rocketmq-transport"
+    },
+    {
+      "dependency": "zeroize",
+      "features": [],
+      "kind": "normal",
+      "optional": true,
+      "package": "rocketmq-transport"
+    }
+  ],
+  "source_exceptions": [],
   "workspace_packages": [
     "rocketmq-admin-cli",
     "rocketmq-admin-core",
@@ -36,37 +5141,5 @@
     "rocketmq-store-rocksdb",
     "rocketmq-tieredstore",
     "rocketmq-transport"
-  ],
-  "manifest_exceptions": [],
-  "compatibility_manifest_exceptions": [
-    {
-      "rule": "compatibility-manifest-burn-down",
-      "caller": "rocketmq-broker",
-      "target": "rocketmq-store",
-      "kind": "normal",
-      "path": "rocketmq-broker/Cargo.toml",
-      "alias": "rocketmq_store",
-      "count": 1,
-      "debt_id": "ARC-COMP-001",
-      "owner": "broker",
-      "reason": "approved store composition facade",
-      "remove_by": "2.0.0",
-      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md"
-    },
-    {
-      "rule": "compatibility-manifest-burn-down",
-      "caller": "rocketmq-store-inspect",
-      "target": "rocketmq-store",
-      "kind": "normal",
-      "path": "rocketmq-tools/rocketmq-store-inspect/Cargo.toml",
-      "alias": "rocketmq_store",
-      "count": 1,
-      "debt_id": "ARC-COMP-002",
-      "owner": "store-tools",
-      "reason": "approved store inspection facade",
-      "remove_by": "2.0.0",
-      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md"
-    }
-  ],
-  "source_exceptions": []
+  ]
 }
