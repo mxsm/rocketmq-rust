@@ -33,6 +33,25 @@ EXCLUDED_PREFIXES = (
 )
 
 
+def _candidate_evidence_file(root: Path, candidate: dict[str, Any], name: str) -> Path:
+    """Resolve one evidence input and normalize it into the transfer root."""
+
+    declared = candidate.get("evidence_index") if name == "EVIDENCE_INDEX.json" else None
+    candidates: list[Path] = []
+    if isinstance(declared, str) and declared:
+        candidates.append(root / declared)
+    candidates.extend((root / "evidence" / name, root / name))
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if path.is_file():
+            return resolve_existing_file(path, f"candidate {name}")
+    raise ArchiveError(f"candidate {name} is missing")
+
+
 def _tracked_source_files(source_root: Path) -> list[Path]:
     completed = subprocess.run(
         ["git", "ls-files", "-z"],
@@ -203,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     artifacts = subcommands.add_parser("export-artifacts")
     artifacts.add_argument("--candidate-manifest", type=Path, required=True)
     artifacts.add_argument("--output", type=Path, required=True)
+    artifacts.add_argument("--repository-source-root", type=Path, default=ROOT)
     target = subcommands.add_parser("export-target")
     target.add_argument("--candidate-manifest", type=Path, required=True)
     target.add_argument("--target", required=True)
@@ -217,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "import":
             output = import_bundle(args.bundle, args.output)
         else:
-            manifest, _candidate, root = load_candidate(args.candidate_manifest)
+            manifest, candidate, root = load_candidate(args.candidate_manifest)
             if args.command == "export-build-control":
                 records = [("CANDIDATE_RUN.json", manifest)]
                 series = read_json(manifest).get("series_manifest")
@@ -252,8 +272,48 @@ def main(argv: list[str] | None = None) -> int:
                 for context in partial.get("execution_contexts", []):
                     files.append(resolve_candidate_path(root, context.get("path"), "target context"))
             else:
-                allowed_roots = ["archives", "crate-packages", "helm", "oci", "sbom"]
-                files = [path for name in allowed_roots for path in (root / name).rglob("*") if path.is_file()]
+                allowed_roots = [
+                    "archives",
+                    "common-input-source",
+                    "crate-packages",
+                    "evidence",
+                    "helm",
+                    "legal",
+                    "manifests",
+                    "oci",
+                    "provenance",
+                    "sbom",
+                ]
+                records = [
+                    (path.relative_to(root).as_posix(), path)
+                    for name in allowed_roots
+                    for path in (root / name).rglob("*")
+                    if path.is_file()
+                ]
+                artifact_index = resolve_existing_file(root / "ARTIFACT_INDEX.json", "candidate artifact index")
+                records.append(("ARTIFACT_INDEX.json", artifact_index))
+                for name in ("EVIDENCE_INDEX.json", "NO_REMOTE_PUBLICATION.json"):
+                    records.append((name, _candidate_evidence_file(root, candidate, name)))
+                repository_root = args.repository_source_root.resolve(strict=True)
+                for relative in (
+                    "LICENSE-APACHE",
+                    "NOTICE",
+                    "rocketmq-doc/en/release/1.0/upgrade-and-rollback.md",
+                    "rocketmq-doc/en/release/1.0/publication-handoff.md",
+                ):
+                    path = resolve_existing_file(repository_root / relative, "publication handoff documentation")
+                    records.append((f"repository-source/{relative}", path))
+                output_path = resolve_within(root, args.output, "candidate transfer output")
+                if output_path.exists():
+                    raise ArchiveError(f"candidate transfer bundle already exists: {output_path}")
+                output = _write_bundle(
+                    read_json(manifest),
+                    bundle_kind="artifacts",
+                    output=output_path,
+                    records=records,
+                )
+                print(f"CANDIDATE_TRANSFER_OK command={args.command} output={output}")
+                return 0
             output = export_bundle(
                 manifest,
                 bundle_kind="target" if args.command == "export-target" else "artifacts",

@@ -59,6 +59,48 @@ class ReleaseLifecycleTests(unittest.TestCase):
         self.lifecycle.transition_candidate(manifest, "staged-rc", phase=5)
         self.lifecycle.transition_candidate(manifest, "rc-candidate-ready", phase=6, gate_evidence=evidence)
 
+    @staticmethod
+    def write_publication_handoff(final: Path, marker: Path) -> Path:
+        candidate = read_json(final)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        write_json(
+            marker.parent / "PUBLICATION_HANDOFF.json",
+            {
+                "candidate_id": candidate["candidate_id"],
+                "version": candidate["version"],
+                "run_id": candidate["run_id"],
+                "attempt": candidate["attempt"],
+                "candidate_state": "ga-candidate-ready",
+                "candidate_generation": candidate["generation"],
+                "remote_publication": {"status": "not-executed"},
+                "files": [],
+            },
+        )
+        evidence_root = marker.parent / "candidate-evidence"
+        identity = {
+            "candidate_id": candidate["candidate_id"],
+            "version": candidate["version"],
+            "run_id": candidate["run_id"],
+            "attempt": candidate["attempt"],
+        }
+        for result_id in (
+            "H01-LINUX",
+            "H01-WINDOWS",
+            "H01-MACOS",
+            "H02-DRAFT-SEMANTIC",
+            "H04-FINAL-SEMANTIC",
+        ):
+            write_json(
+                evidence_root / f"{result_id}.json",
+                {**identity, "result_id": result_id, "status": "passed", "skipped": False},
+            )
+        for result_id in ("H03-DRAFT-NO-REMOTE", "H05-FINAL-NO-REMOTE"):
+            write_json(
+                evidence_root / f"{result_id}.json",
+                {**identity, "remote_publication": {"status": "not-executed"}},
+            )
+        return evidence_root
+
     def test_two_consecutive_sealed_rcs_are_required_for_final(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -217,6 +259,7 @@ class ReleaseLifecycleTests(unittest.TestCase):
             evidence = write_gate_evidence(final.parent / "gate-evidence.json", read_json(final)["candidate_id"])
             self.lifecycle.transition_candidate(final, "ga-candidate-ready", phase=6, gate_evidence=evidence)
             marker = final.parent / "handoff/PUBLICATION_READY.json"
+            handoff_evidence = self.write_publication_handoff(final, marker)
 
             with self.assertRaises(self.lifecycle.LifecycleError):
                 self.lifecycle.transition_candidate(
@@ -224,6 +267,7 @@ class ReleaseLifecycleTests(unittest.TestCase):
                     "publication-ready",
                     phase=6,
                     handoff_ready=True,
+                    handoff_evidence_root=handoff_evidence,
                     publication_marker=marker,
                     fail_after="series-commit",
                 )
@@ -249,6 +293,7 @@ class ReleaseLifecycleTests(unittest.TestCase):
                 final, "ga-candidate-ready", phase=6, gate_evidence=evidence
             )
             marker = final.parent / "handoff/PUBLICATION_READY.json"
+            handoff_evidence = self.write_publication_handoff(final, marker)
 
             with self.assertRaises(self.lifecycle.LifecycleError):
                 self.lifecycle.transition_candidate(
@@ -256,6 +301,7 @@ class ReleaseLifecycleTests(unittest.TestCase):
                     "publication-ready",
                     phase=6,
                     handoff_ready=True,
+                    handoff_evidence_root=handoff_evidence,
                     publication_marker=marker,
                     fail_after="marker-temp",
                 )

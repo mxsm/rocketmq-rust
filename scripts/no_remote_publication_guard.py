@@ -48,12 +48,14 @@ PHASE_WORKFLOWS = {
     ],
 }
 REMOTE_COMMAND = re.compile(
-    r"(?:cargo\s+publish|docker\s+push|(?:oras|helm)\s+push|gh\s+release|git\s+push)",
+    r"(?:cargo\s+publish|docker\s+(?:login|push)|(?:oras|helm)\s+push|gh\s+(?:release|workflow\s+run)|git\s+(?:push|tag))",
     re.IGNORECASE,
 )
 WRITE_PERMISSION = re.compile(r"^\s*(?:contents|packages|actions|id-token|attestations)\s*:\s*write\s*$", re.MULTILINE)
 SECRET_ROUTE = re.compile(r"\$\{\{\s*secrets\.", re.IGNORECASE)
 AUTOMATIC_RELEASE = re.compile(r"^\s*(?:release|registry_package)\s*:\s*$|^\s*tags\s*:", re.MULTILINE)
+HANDOFF_SCRIPT_SUFFIXES = {".sh", ".ps1", ".bat", ".cmd"}
+HANDOFF_FORBIDDEN_KEYS = {"command", "args", "shell", "workflow_dispatch_payload", "token", "secret"}
 
 
 def audit_workflow_files(workflow_root: Path, workflow_names: list[str]) -> list[str]:
@@ -72,6 +74,56 @@ def audit_workflow_files(workflow_root: Path, workflow_names: list[str]) -> list
             findings.append(f"remote publication command in {name}")
         if AUTOMATIC_RELEASE.search(text):
             findings.append(f"automatic publication trigger in {name}")
+    return findings
+
+
+def audit_handoff(handoff_root: Path) -> list[str]:
+    """Inspect handoff structure and executable surfaces for publication payloads."""
+
+    findings: list[str] = []
+    if not handoff_root.is_dir():
+        return ["publication handoff root is missing"]
+    manifest_path = handoff_root / "PUBLICATION_HANDOFF.json"
+    if not manifest_path.is_file():
+        return ["publication handoff manifest is missing"]
+    manifest = read_json(manifest_path)
+    if manifest.get("remote_publication", {}).get("status") != "not-executed":
+        findings.append("publication handoff remote status is not not-executed")
+    if manifest.get("future_publication", {}).get("executed") is not False:
+        findings.append("publication handoff marks future publication as executed")
+
+    def inspect_json(value: Any, relative: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).lower() in HANDOFF_FORBIDDEN_KEYS:
+                    findings.append(f"executable or secret-bearing field in handoff JSON: {relative}:{key}")
+                inspect_json(child, relative)
+        elif isinstance(value, list):
+            for child in value:
+                inspect_json(child, relative)
+        elif isinstance(value, str) and REMOTE_COMMAND.search(value):
+            findings.append(f"remote publication payload in handoff JSON: {relative}")
+
+    for path in sorted(handoff_root.rglob("*")):
+        if path.is_symlink():
+            findings.append(f"symbolic link in publication handoff: {path.relative_to(handoff_root)}")
+            continue
+        if not path.is_file():
+            continue
+        relative = path.relative_to(handoff_root).as_posix()
+        if path.suffix.lower() in HANDOFF_SCRIPT_SUFFIXES:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                findings.append(f"unreadable publication handoff script: {relative}")
+            else:
+                if REMOTE_COMMAND.search(text):
+                    findings.append(f"remote publication command in handoff script: {relative}")
+        elif path.suffix.lower() == ".json":
+            try:
+                inspect_json(read_json(path), relative)
+            except ReleaseStateError as error:
+                findings.append(f"invalid handoff JSON {relative}: {error}")
     return findings
 
 
@@ -190,6 +242,7 @@ def audit_no_remote_publication(
     workflow_root: Path,
     output: Path,
     current_route_id: str | None = None,
+    handoff_root: Path | None = None,
 ) -> dict[str, Any]:
     if phase not in PHASE_WORKFLOWS:
         raise NoRemotePublicationError("phase must be 5 or 6", "indeterminate")
@@ -202,6 +255,8 @@ def audit_no_remote_publication(
     )
     violations.extend(finding for finding in workflow_findings if not finding.startswith("missing workflow"))
     indeterminate.extend(finding for finding in workflow_findings if finding.startswith("missing workflow"))
+    if handoff_root is not None:
+        violations.extend(audit_handoff(handoff_root))
     status = "violation-detected" if violations else "indeterminate" if indeterminate else "not-executed"
     value = {
         "schema_version": 1,
@@ -215,6 +270,7 @@ def audit_no_remote_publication(
         "publishing_credentials_provided": bool(credential_names),
         "publishing_credential_names": credential_names,
         "workflow_files": PHASE_WORKFLOWS[phase],
+        "handoff_scanned": handoff_root is not None,
         "violations": sorted(set(violations)),
         "indeterminate_reasons": sorted(set(indeterminate)),
         "generated_at": utc_now(),
@@ -237,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--static-only", action="store_true")
     parser.add_argument("--current-route-id")
+    parser.add_argument("--handoff", type=Path)
     args = parser.parse_args(argv)
     if args.static_only:
         findings = audit_workflow_files(args.workflow_root, PHASE_WORKFLOWS[args.phase])
@@ -256,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
             workflow_root=args.workflow_root,
             output=args.output,
             current_route_id=args.current_route_id or os.environ.get("RELEASE_CANDIDATE_ROUTE_ID"),
+            handoff_root=args.handoff,
         )
     except NoRemotePublicationError as error:
         print(f"NO_REMOTE_PUBLICATION_FAILED status={error.status} detail={error}", file=sys.stderr)

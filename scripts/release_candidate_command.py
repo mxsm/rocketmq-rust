@@ -63,11 +63,11 @@ REMOTE_PUBLICATION_COMMAND = re.compile(
 )
 REMOTE_PUBLICATION_SUBCOMMANDS = {
     "cargo": "publish",
-    "docker": "push",
+    "docker": ("login", "push"),
     "helm": "push",
     "oras": "push",
-    "gh": "release",
-    "git": "push",
+    "gh": ("release", "workflow"),
+    "git": ("push", "tag"),
 }
 
 
@@ -106,8 +106,10 @@ def _remote_publication_operation(command: Sequence[str]) -> str | None:
     if expected is None or len(command) < 2:
         return None
     arguments = [item.lower() for item in command[1:]]
-    if expected in arguments:
-        return f"{executable} {expected}"
+    forbidden = (expected,) if isinstance(expected, str) else expected
+    matched = next((item for item in forbidden if item in arguments), None)
+    if matched is not None:
+        return f"{executable} {matched}"
     return None
 
 
@@ -119,6 +121,7 @@ def run_command(
     context_path: Path,
     event_root: Path,
     command: Sequence[str],
+    portable_root: Path | None = None,
 ) -> int:
     require_safe_id(route_id, "route_id")
     require_safe_id(worker_id, "worker_id")
@@ -138,6 +141,13 @@ def run_command(
     context = read_json(context_path)
     if context.get("candidate_id") != candidate["candidate_id"] or context.get("worker_id") != worker_id:
         raise CommandError("execution context does not match candidate and worker")
+    context_reference = str(context_path)
+    if portable_root is not None:
+        portable_root = portable_root.resolve(strict=True)
+        try:
+            context_reference = context_path.relative_to(portable_root).as_posix()
+        except ValueError as error:
+            raise CommandError("execution context escapes the portable event bundle") from error
     event_root = event_root.resolve()
     started_path = event_root / f"{route_id}.started.json"
     completed_path = event_root / f"{route_id}.completed.json"
@@ -151,7 +161,7 @@ def run_command(
         "attempt": candidate["attempt"],
         "route_id": route_id,
         "worker_id": worker_id,
-        "context_path": str(context_path),
+        "context_path": context_reference,
         "status": "started",
         "command": _redact_command(command),
         "started_at": utc_now(),
@@ -188,7 +198,7 @@ def run_command(
             "attempt": candidate["attempt"],
             "route_id": route_id,
             "worker_id": worker_id,
-            "context_path": str(context_path),
+            "context_path": context_reference,
             "status": "passed" if exit_code == 0 else "failed",
             "exit_code": exit_code,
             "started_at": started["started_at"],
@@ -208,7 +218,7 @@ def run_command(
             candidate["candidate_id"],
             route_id,
             worker_id,
-            str(context_path),
+            context_reference,
         )
         if identity != expected_identity:
             raise CommandError("child-produced lifecycle completion event is not attributable to this route")
@@ -230,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--worker-id", required=True)
     run.add_argument("--context", type=Path, required=True)
     run.add_argument("--event-root", type=Path, required=True)
+    run.add_argument("--portable-root", type=Path)
     run.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command and args.command[0] == "--" else args.command
@@ -241,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             context_path=args.context,
             event_root=args.event_root,
             command=command,
+            portable_root=args.portable_root,
         )
     except ReleaseStateError as error:
         print(f"RELEASE_CANDIDATE_COMMAND_FAILED detail={error}", file=sys.stderr)

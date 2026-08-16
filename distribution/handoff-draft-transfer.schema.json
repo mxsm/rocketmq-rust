@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/handoff-draft-transfer.schema.json",
+  "title": "RocketMQ Rust publication handoff draft transfer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "version",
+    "run_id",
+    "attempt",
+    "expected_platforms",
+    "files"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": { "type": "string", "minLength": 1 },
+    "version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "expected_platforms": {
+      "type": "array",
+      "items": { "enum": ["linux", "windows", "macos"] },
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "type", "size"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "type": { "const": "file" },
+          "size": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

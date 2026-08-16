@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/handoff-platform-result.schema.json",
+  "title": "RocketMQ Rust handoff platform verification result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "version",
+    "run_id",
+    "attempt",
+    "worker_id",
+    "result_id",
+    "platform",
+    "target",
+    "archive_id",
+    "status",
+    "skipped",
+    "assertions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": { "type": "string", "minLength": 1 },
+    "version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "worker_id": { "type": "string", "minLength": 1 },
+    "result_id": { "enum": ["H01-LINUX", "H01-WINDOWS", "H01-MACOS"] },
+    "platform": { "enum": ["linux", "windows", "macos"] },
+    "target": { "type": "string", "minLength": 1 },
+    "archive_id": { "type": "string", "minLength": 1 },
+    "status": { "const": "passed" },
+    "skipped": { "const": false },
+    "assertions": { "type": "array", "minItems": 1 },
+    "mode": { "type": "string" },
+    "verified_files": { "type": "integer", "minimum": 1 },
+    "source_bindings": { "type": "integer", "minimum": 1 },
+    "remote_publication": { "type": "object" },
+    "secret_scan": { "type": "object" }
+  }
+}

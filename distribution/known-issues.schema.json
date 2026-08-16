@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/known-issues.schema.json",
+  "title": "RocketMQ Rust publication candidate known issues",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["issue_id", "severity", "impact", "workaround", "owner", "target_version", "approval_status", "approver", "waiver_expiry", "resolution_status"],
+    "properties": {
+      "issue_id": { "type": "string", "minLength": 1 },
+      "severity": { "enum": ["Medium", "Low"] },
+      "impact": { "type": "string", "minLength": 1 },
+      "workaround": { "type": "string", "minLength": 1 },
+      "owner": { "type": "string", "minLength": 1 },
+      "target_version": { "type": "string", "minLength": 1 },
+      "approval_status": { "const": "approved" },
+      "approver": { "const": "mxsm" },
+      "waiver_expiry": { "type": "string", "format": "date" },
+      "resolution_status": { "const": "open" }
+    }
+  }
+}
