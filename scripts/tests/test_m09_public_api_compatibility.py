@@ -24,14 +24,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "scripts" / "public-api-snapshot-baseline.json"
-EVIDENCE = (
-    ROOT
-    / "rocketmq-doc"
-    / "en"
-    / "architecture-public-api-compatibility.md"
-)
-
-
 def load_module(name: str, relative: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / relative)
     if spec is None or spec.loader is None:
@@ -55,35 +47,86 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         targets = PUBLIC_API.workspace_library_targets()
 
-        self.assertEqual(1, baseline["schema_version"])
-        self.assertEqual("default", baseline["feature_profile"])
+        self.assertEqual(3, baseline["schema_version"])
+        self.assertEqual("structural", baseline["identity"])
+        self.assertEqual("core-release", baseline["scope"])
         self.assertGreater(len(targets), 0)
         self.assertEqual({package for package, _ in targets}, set(baseline["packages"]))
-        self.assertEqual(40, len(baseline["source_commit"]))
-        for package in baseline["packages"].values():
-            self.assertGreater(package["public_path_count"], 0)
-            self.assertEqual(64, len(package["public_path_sha256"]))
-            self.assertEqual(64, len(package["rustdoc_json_sha256"]))
+        def keys(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    yield key.lower()
+                    yield from keys(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from keys(item)
+
+        baseline_keys = set(keys(baseline))
+        self.assertFalse(any("sha" in key for key in baseline_keys))
+        self.assertFalse(any("digest" in key for key in baseline_keys))
+        self.assertFalse(any("fingerprint" in key for key in baseline_keys))
+        for package_name, package in baseline["packages"].items():
+            self.assertIn(f"{package_name}:default", package["profile_ids"])
+            for profile_id in package["profile_ids"]:
+                profile = baseline["profiles"][profile_id]
+                self.assertEqual(package_name, profile["package"])
+                self.assertGreater(len(profile["public_api"]), 0)
+                for item in profile["public_api"]:
+                    self.assertEqual(
+                        {"package", "module", "item_path", "kind", "visibility", "signature", "feature"},
+                        set(item),
+                    )
+
+        expected_matrix_profiles = {entry.id for entry in MATRIX.MATRIX if entry.group == "feature"}
+        actual_matrix_profiles = {
+            matrix_id
+            for profile in baseline["profiles"].values()
+            for matrix_id in profile["matrix_ids"]
+        }
+        self.assertEqual(expected_matrix_profiles, actual_matrix_profiles)
 
     def test_snapshot_diff_requires_classification_and_marks_removal_breaking(self) -> None:
-        package = {
+        item = {
+            "package": "demo",
+            "module": "demo",
+            "item_path": "demo::Api",
+            "kind": "struct",
+            "visibility": "public",
+            "signature": "{}",
+            "feature": "default",
+        }
+        profile = {
+            "package": "demo",
             "target": "demo",
+            "default_features": True,
+            "all_features": False,
+            "features": [],
+            "declared_default_features": [],
+            "source": "workspace-default",
+            "matrix_ids": [],
             "crate_version": "1.0.0",
-            "public_path_count": 1,
-            "public_path_sha256": "a",
-            "rustdoc_json_sha256": "b",
+            "public_api": [item],
         }
         baseline = {
-            "schema_version": 1,
-            "feature_profile": "default",
+            "schema_version": 3,
+            "identity": "structural",
+            "scope": "core-release",
+            "freeze": {
+                "version": "1.0.0-rc.1",
+                "breaking_change_policy": "approval-required-after-freeze",
+            },
             "toolchain": {"rustc": "same"},
-            "packages": {"demo": package},
+            "packages": {"demo": {"target": "demo", "profile_ids": ["demo:default"]}},
+            "profiles": {"demo:default": profile},
+            "compatibility_decisions": [],
+            "frozen_contracts": [],
         }
 
         self.assertEqual([], PUBLIC_API.compare_snapshots(baseline, baseline))
-        changed = {**baseline, "packages": {"demo": {**package, "public_path_count": 2}}}
-        self.assertEqual("unclassified", PUBLIC_API.compare_snapshots(baseline, changed)[0]["classification"])
-        removed = {**baseline, "packages": {}}
+        changed = json.loads(json.dumps(baseline))
+        changed["profiles"]["demo:default"]["public_api"][0]["signature"] = "changed"
+        self.assertEqual("breaking", PUBLIC_API.compare_snapshots(baseline, changed)[0]["classification"])
+        removed = {**baseline, "packages": {}, "profiles": {}}
         self.assertEqual("breaking", PUBLIC_API.compare_snapshots(baseline, removed)[0]["classification"])
 
     def test_current_feature_boundaries_are_exact(self) -> None:
@@ -93,7 +136,7 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         proxy = manifest("rocketmq-proxy")["features"]
 
         self.assertEqual([], protocol["default"])
-        self.assertEqual(["tls"], transport["default"])
+        self.assertEqual(["tls", "socks"], transport["default"])
         self.assertEqual([], admin["default"])
         self.assertEqual(["cluster-mode", "local-mode"], proxy["default"])
         self.assertEqual(
@@ -108,6 +151,7 @@ class PublicApiCompatibilityTests(unittest.TestCase):
                 "otlp-traces",
                 "otlp-logs",
                 "tieredstore",
+                "tls",
             },
             set(proxy),
         )
@@ -177,32 +221,21 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         self.assertIn("<java-root>", route.command)
         self.assertNotIn("D:\\", route.command)
 
-    def test_evidence_records_current_snapshot_and_approved_breaking_cleanup(self) -> None:
-        evidence = EVIDENCE.read_text(encoding="utf-8")
+    def test_freeze_contracts_and_migration_decisions_are_machine_readable(self) -> None:
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
 
-        targets = PUBLIC_API.workspace_library_targets()
-
-        self.assertIn(f"library_targets={len(targets)}", evidence)
-        self.assertIn("differences=0", evidence)
-        self.assertIn("40/40", evidence)
-        self.assertIn("feature=24/24", evidence)
-        self.assertIn("wire=6/6", evidence)
-        self.assertIn("storage=10/10", evidence)
-        self.assertIn("additive groups: 4", evidence)
-        self.assertIn("deprecated: 0", evidence)
-        self.assertIn("breaking groups: 4", evidence)
-        self.assertIn("scoped Client capabilities", evidence)
-        self.assertIn("versioned Runtime diagnostics", evidence)
-        self.assertIn("authorized Transport dispatch capabilities", evidence)
-        self.assertIn("non-default `test-support`", evidence)
-        self.assertIn("Client compatibility facade", evidence)
-        self.assertIn("Store `bench_support`", evidence)
-        self.assertIn("ClientRuntime::new", evidence)
-        self.assertIn("ClusterConfig", evidence)
-        self.assertIn("Dashboard admin operations", evidence)
-        self.assertIn("MappedBuffer::read_zero_copy", evidence)
-        self.assertIn("MappedBuffer::read_copy", evidence)
-        self.assertIn("repository owner explicitly approved", evidence)
+        self.assertEqual(
+            {"F-13", "F-15", "F-18"},
+            {contract["capability_id"] for contract in baseline["frozen_contracts"]},
+        )
+        self.assertEqual(
+            {"compatible-addition", "approved-break", "renamed-wrapper", "removed-placeholder"},
+            {decision["classification"] for decision in baseline["compatibility_decisions"]},
+        )
+        for decision in baseline["compatibility_decisions"]:
+            if decision["classification"] != "compatible-addition":
+                self.assertTrue(decision["approved_by"])
+                self.assertTrue(decision["approved_on"])
 
 
 if __name__ == "__main__":

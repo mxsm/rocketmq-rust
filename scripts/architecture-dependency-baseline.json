@@ -1406,6 +1406,27 @@
       "package": "rocketmq-controller"
     },
     {
+      "dependency": "openraft-macros",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "openraft-rt",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
+      "dependency": "openraft-rt-tokio",
+      "features": [],
+      "kind": "normal",
+      "optional": false,
+      "package": "rocketmq-controller"
+    },
+    {
       "dependency": "parking_lot",
       "features": [],
       "kind": "normal",

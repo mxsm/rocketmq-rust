@@ -63,17 +63,28 @@ class StableSurfaceGuardTests(unittest.TestCase):
         )
 
     def run_guard(self, mode: str = "baseline") -> subprocess.CompletedProcess[str]:
+        return self.run_guard_with_api(mode=mode)
+
+    def run_guard_with_api(
+        self,
+        *,
+        mode: str = "baseline",
+        api_baseline: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [
+            sys.executable,
+            str(GUARD),
+            "--root",
+            str(self.root),
+            "--policy",
+            str(self.policy),
+            "--mode",
+            mode,
+        ]
+        if api_baseline is not None:
+            command.extend(("--api-baseline", str(api_baseline)))
         return subprocess.run(
-            [
-                sys.executable,
-                str(GUARD),
-                "--root",
-                str(self.root),
-                "--policy",
-                str(self.policy),
-                "--mode",
-                mode,
-            ],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -111,6 +122,105 @@ class StableSurfaceGuardTests(unittest.TestCase):
         result = self.run_guard("target")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("mode=target features=0", result.stdout)
+
+    def test_target_mode_rejects_an_unapproved_api_break_decision(self) -> None:
+        self.source.write_text("pub fn value() {}\n", encoding="utf-8")
+        self.write_policy([])
+        baseline = self.root / "api-baseline.json"
+        value = self.api_freeze_fixture()
+        value["compatibility_decisions"].append(
+            {
+                "id": "API-001",
+                "classification": "approved-break",
+                "applies_to": "post-freeze",
+                "profile_id": "rocketmq-store:default",
+                "package": "rocketmq-store",
+                "item_path": "rocketmq_store::MappedFileBuilder",
+                "change": "signature",
+                "replacement": "rocketmq_store::MappedFileBuilder",
+                "reason": "Test fixture.",
+                "approved_by": "",
+                "approved_on": "2026-08-16",
+            }
+        )
+        baseline.write_text(json.dumps(value), encoding="utf-8")
+
+        result = self.run_guard_with_api(mode="target", api_baseline=baseline)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("approved_by must be non-empty", result.stderr)
+
+    def test_target_mode_accepts_a_complete_api_freeze_contract(self) -> None:
+        self.source.write_text("pub fn value() {}\n", encoding="utf-8")
+        self.write_policy([])
+        baseline = self.root / "api-baseline.json"
+        baseline.write_text(json.dumps(self.api_freeze_fixture()), encoding="utf-8")
+
+        result = self.run_guard_with_api(mode="target", api_baseline=baseline)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("api_freeze=verified", result.stdout)
+
+    @staticmethod
+    def api_freeze_fixture() -> dict[str, object]:
+        profiles = {}
+        packages = {}
+        contracts = []
+        anchors = {
+            "F-13": ("rocketmq-store", "rocketmq_store::MappedFileBuilder"),
+            "F-18": ("rocketmq-client-rust", "rocketmq_client_rust::DefaultMQPullConsumer"),
+            "F-15": ("rocketmq-proxy-core", "rocketmq_proxy_core::SettingsPolicyValues"),
+        }
+        for capability_id, (package, item_path) in anchors.items():
+            profile_id = f"{package}:default"
+            profiles[profile_id] = {
+                "package": package,
+                "target": package.replace("-", "_"),
+                "default_features": True,
+                "all_features": False,
+                "features": [],
+                "declared_default_features": [],
+                "source": "workspace-default",
+                "matrix_ids": [],
+                "crate_version": "1.0.0",
+                "public_api": [
+                    {
+                        "package": package,
+                        "module": item_path.rsplit("::", 1)[0],
+                        "item_path": item_path,
+                        "kind": "struct",
+                        "visibility": "public",
+                        "signature": "{}",
+                        "feature": "default",
+                    }
+                ],
+            }
+            packages[package] = {"target": package.replace("-", "_"), "profile_ids": [profile_id]}
+            contracts.append(
+                {
+                    "capability_id": capability_id,
+                    "profile_id": profile_id,
+                    "package": package,
+                    "item_paths": [item_path],
+                    "behavior": "Frozen test behavior.",
+                    "evidence": ["fixture-test"],
+                }
+            )
+        return {
+            "schema_version": 3,
+            "identity": "structural",
+            "scope": "core-release",
+            "freeze": {
+                "version": "1.0.0-rc.1",
+                "breaking_change_policy": "approval-required-after-freeze",
+            },
+            "toolchain": {"rustc": "x", "rustdoc": "x", "cargo": "x"},
+            "packages": packages,
+            "profiles": profiles,
+            "public_api_intent": {},
+            "compatibility_decisions": [],
+            "frozen_contracts": contracts,
+        }
 
 
 class RepositoryStableSurfaceContracts(unittest.TestCase):

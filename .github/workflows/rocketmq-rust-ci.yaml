@@ -183,8 +183,8 @@ jobs:
       - name: Check shared-mutation baseline
         run: python scripts/arc_mut_guard.py
 
-      - name: Check stable nightly surface baseline
-        run: python scripts/stable_surface_guard.py --scope core-release
+      - name: Check stable nightly and public API target
+        run: python scripts/stable_surface_guard.py --scope core-release --mode target
 
   architecture-contracts:
     name: Architecture Contracts

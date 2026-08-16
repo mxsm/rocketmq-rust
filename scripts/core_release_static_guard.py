@@ -61,7 +61,10 @@ def required_routes() -> tuple[StaticRoute, ...]:
         ),
         StaticRoute("architecture-debt", (python, "scripts/architecture_debt_guard.py", "--check", *scope)),
         StaticRoute("module-maintainability", (python, "scripts/module_maintainability_guard.py", *scope)),
-        StaticRoute("stable-surface", (python, "scripts/stable_surface_guard.py", *scope)),
+        StaticRoute(
+            "stable-surface",
+            (python, "scripts/stable_surface_guard.py", *scope, "--mode", "target"),
+        ),
         StaticRoute(
             "architecture-release",
             (python, "scripts/architecture_release_guard.py", *scope, "--mode", "structural"),

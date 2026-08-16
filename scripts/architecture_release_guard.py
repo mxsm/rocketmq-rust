@@ -429,7 +429,7 @@ def validate_semantic_routes(plan: dict[str, Any], findings: list[Finding]) -> N
         },
         {
             "id": "stable-surface",
-            "command": "python scripts/stable_surface_guard.py --scope core-release",
+            "command": "python scripts/stable_surface_guard.py --scope core-release --mode target",
             "result": "stable_surface",
         },
         {

@@ -46,6 +46,11 @@ openraft = { version = "=0.10.0-alpha.21", default-features = false, features = 
   "serde",
   "tokio-rt",
 ] }
+# OpenRaft prereleases use caret constraints internally. Keep the companion
+# crates on the same alpha so Cargo cannot resolve a newer, incompatible ABI.
+openraft-macros   = "=0.10.0-alpha.21"
+openraft-rt       = "=0.10.0-alpha.21"
+openraft-rt-tokio = "=0.10.0-alpha.21"
 
 # gRPC networking
 tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
