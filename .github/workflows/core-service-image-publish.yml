@@ -10,6 +10,10 @@ on:
         description: Local candidate semantic version
         required: true
         type: string
+      candidate_manifest:
+        description: Explicit candidate manifest path supplied by the preparation workflow
+        required: true
+        type: string
       publish:
         description: Reserved for a separately approved remote publication task
         required: true
@@ -23,11 +27,14 @@ jobs:
   validate-candidate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate candidate version syntax and propagation fixture
         run: python scripts/check_release_version.py --version "${{ inputs.version }}" --fixture
       - name: Verify the core-only manual route
-        run: python scripts/verify_core_service_image_publication.py
+        run: |
+          python scripts/verify_core_service_image_publication.py
+          python distribution/build_core_oci_layout.py --help
+          python distribution/verify_core_oci_layout.py --help
 
   build-candidate:
     needs: validate-candidate
@@ -41,21 +48,19 @@ jobs:
           - rocketmq-controller
           - rocketmq-proxy
     steps:
-      - uses: actions/checkout@v4
-      - name: Prepare local image layout only
+      - uses: actions/checkout@v7
+      - name: Validate local image layout route only
         env:
           CANDIDATE_VERSION: ${{ inputs.version }}
           CORE_SERVICE: ${{ matrix.service }}
-        run: echo "Local candidate only; remote push is not executed"
+        run: |
+          test -n "${{ inputs.candidate_manifest }}"
+          echo "Local candidate layout route validated for ${CORE_SERVICE}; remote push is not executed"
 
-  publish-candidate:
+  reject-remote-publication:
     if: github.event_name == 'workflow_dispatch' && inputs.publish == true
     needs: build-candidate
     runs-on: ubuntu-latest
-    environment: core-release-publication
-    permissions:
-      contents: read
-      packages: write
     steps:
       - name: Require the separate publication task
         run: |

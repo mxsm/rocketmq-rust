@@ -1,0 +1,15 @@
+{{- range $service, $config := .Values.services }}
+{{- if $config.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+  labels:
+    {{- include "rocketmq-core.labels" (dict "Release" $.Release "service" $service) | nindent 4 }}
+data:
+  service.toml: |
+    service = {{ $service | quote }}
+    workDir = "/var/lib/rocketmq"
+{{- end }}
+{{- end }}

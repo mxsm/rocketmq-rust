@@ -1,0 +1,19 @@
+{{- range $service, $config := .Values.services }}
+{{- if $config.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+  labels:
+    {{- include "rocketmq-core.labels" (dict "Release" $.Release "service" $service) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/component: {{ $service }}
+  ports:
+    - name: service
+      port: {{ $config.port }}
+      targetPort: service
+{{- end }}
+{{- end }}

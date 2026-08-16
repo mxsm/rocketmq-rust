@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["global", "services"],
+  "properties": {
+    "global": {
+      "type": "object",
+      "required": ["candidateVersion", "imageRegistry", "imagePullPolicy"],
+      "properties": {
+        "candidateVersion": {"type": "string", "pattern": "^1\\.0\\.0(?:-rc\\.[1-9][0-9]*)?$"},
+        "imageRegistry": {"type": "string", "minLength": 1},
+        "imagePullPolicy": {"enum": ["IfNotPresent", "Never"]},
+        "storageClassName": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "services": {
+      "type": "object",
+      "required": ["namesrv", "broker", "controller", "proxy"],
+      "properties": {
+        "namesrv": {"$ref": "#/$defs/statefulService"},
+        "broker": {"$ref": "#/$defs/brokerService"},
+        "controller": {"$ref": "#/$defs/statefulService"},
+        "proxy": {"$ref": "#/$defs/proxyService"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "service": {
+      "type": "object",
+      "required": ["enabled", "replicas", "port"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "replicas": {"type": "integer", "minimum": 1},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "statefulService": {
+      "allOf": [
+        {"$ref": "#/$defs/service"},
+        {"type": "object", "required": ["storage"], "properties": {"storage": {"type": "string", "minLength": 1}}}
+      ]
+    },
+    "brokerService": {
+      "allOf": [
+        {"$ref": "#/$defs/statefulService"},
+        {"type": "object", "required": ["controllerMode"], "properties": {"controllerMode": {"type": "boolean"}}}
+      ]
+    },
+    "proxyService": {
+      "allOf": [
+        {"$ref": "#/$defs/service"},
+        {
+          "type": "object",
+          "required": ["tls"],
+          "properties": {
+            "tls": {
+              "type": "object",
+              "required": ["enabled", "secretName"],
+              "properties": {"enabled": {"type": "boolean"}, "secretName": {"type": "string"}},
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

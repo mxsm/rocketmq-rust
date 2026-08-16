@@ -70,7 +70,8 @@
         "otel-traces",
         "otlp-logs",
         "otlp-metrics",
-        "otlp-traces"
+        "otlp-traces",
+        "tls"
       ]
     },
     "controller": {

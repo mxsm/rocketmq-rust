@@ -8,6 +8,40 @@
     "rocketmq-controller",
     "rocketmq-proxy"
   ],
+  "dockerfile": "distribution/container/core-service.Dockerfile",
+  "runtime": {
+    "user": "10001:10001",
+    "binary_root": "/usr/local/bin",
+    "config_root": "/etc/rocketmq",
+    "work_root": "/var/lib/rocketmq"
+  },
+  "required_labels": [
+    "org.opencontainers.image.version",
+    "org.opencontainers.image.source",
+    "org.opencontainers.image.created",
+    "io.rocketmq.service",
+    "io.rocketmq.build.run-id",
+    "io.rocketmq.build.artifact-id",
+    "io.rocketmq.build.requested-features",
+    "io.rocketmq.build.effective-features"
+  ],
+  "chart": {
+    "path": "distribution/helm/rocketmq-rust-core",
+    "profiles": [
+      "values-dev-single.yaml",
+      "values-production-default-ha.yaml",
+      "values-production-controller-ha.yaml",
+      "values-production-proxy-tls.yaml"
+    ]
+  },
+  "excluded_capabilities": [
+    "BrokerContainer",
+    "Dashboard",
+    "DLedger CommitLog",
+    "MCP",
+    "OpenMessaging",
+    "SRE"
+  ],
   "publication": {
     "default": "local-layout-only",
     "remote": "separate-approved-task"

@@ -93,7 +93,7 @@ def verify(workflow: Path, policy: Path) -> list[PublicationFinding]:
                 "default-permissions", str(workflow), "top-level contents: read is required"
             )
         )
-    publish_block = _mapping_block(workflow_text, "publish-candidate", 2)
+    publish_block = _mapping_block(workflow_text, "reject-remote-publication", 2)
     condition_line = next(
         (line.split(":", 1)[1].split("#", 1)[0].strip() for line in publish_block if re.match(r"^\s{4}if:", line)),
         "",
@@ -105,10 +105,10 @@ def verify(workflow: Path, policy: Path) -> list[PublicationFinding]:
                 "publish-condition", str(workflow), "remote job lacks the manual publish condition"
             )
         )
-    if not any(line.strip() == "environment: core-release-publication" for line in publish_block):
+    if any("packages: write" in line or "environment:" in line for line in publish_block):
         findings.append(
             PublicationFinding(
-                "protected-environment", str(workflow), "remote job lacks protected environment"
+                "remote-write-route", str(workflow), "preparation workflow must not request a publication environment"
             )
         )
     if 'check_release_version.py --version "${{ inputs.version }}" --fixture' not in workflow_text:
@@ -117,7 +117,7 @@ def verify(workflow: Path, policy: Path) -> list[PublicationFinding]:
                 "version-validation", str(workflow), "workflow input is not semantically validated"
             )
         )
-    dry_run = workflow_text.split("publish-candidate:", 1)[0]
+    dry_run = workflow_text.split("reject-remote-publication:", 1)[0]
     if "secrets." in dry_run or re.search(r"(?m)^\s+packages:\s*write", dry_run):
         findings.append(
             PublicationFinding(
@@ -141,7 +141,7 @@ def verify(workflow: Path, policy: Path) -> list[PublicationFinding]:
     version = policy_value.get("release_version")
     if not isinstance(version, str) or VERSION.fullmatch(version) is None:
         findings.append(PublicationFinding("release-version", str(policy), repr(version)))
-    combined = workflow_text.lower() + "\n" + json.dumps(policy_value).lower()
+    combined = workflow_text.lower() + "\n" + json.dumps(services).lower()
     leaked = sorted(token for token in EXCLUDED_TOKENS if token in combined)
     if leaked:
         findings.append(PublicationFinding("excluded-service", "core-release", ",".join(leaked)))

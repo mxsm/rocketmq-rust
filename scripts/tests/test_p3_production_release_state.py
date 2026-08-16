@@ -99,6 +99,16 @@ class ProductionReleaseStateTests(unittest.TestCase):
                 )
                 self.assertIn(command, self.dockerfile)
 
+    def test_core_candidate_policy_is_separate_and_local_only(self) -> None:
+        policy = json.loads((ROOT / "docker" / "core-container-policy.json").read_text(encoding="utf-8"))
+        self.assertEqual("core-release", policy["scope"])
+        self.assertEqual(
+            {"rocketmq-namesrv", "rocketmq-broker", "rocketmq-controller", "rocketmq-proxy"},
+            set(policy["services"]),
+        )
+        self.assertEqual("local-layout-only", policy["publication"]["default"])
+        self.assertEqual("separate-approved-task", policy["publication"]["remote"])
+
     def test_builder_is_local_only_and_binds_verifiable_metadata(self) -> None:
         self.assertIn("docker buildx build", self.builder)
         self.assertIn("--load", self.builder)
