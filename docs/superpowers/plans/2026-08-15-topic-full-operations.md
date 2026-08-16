@@ -1170,11 +1170,11 @@ git commit -m "feat(dashboard): complete topic operations workspace"
 - Consumes: the complete backend/frontend implementation.
 - Produces: validated, reviewable Topic parity ready for branch integration.
 
-- [ ] **Step 1: Add the smallest required Topic styles**
+- [x] **Step 1: Add the smallest required Topic styles**
 
 Add dense responsive rules for the multi-filter toolbar, target checkbox groups, operation-result rows, config inconsistency notice, send result grid, and consumer/config tables. Reuse existing CSS variables and ensure children use `min-width: 0`; table overflow stays local. At `max-width: 900px`, stack form/result grids to one column.
 
-- [ ] **Step 2: Run source policy scans**
+- [x] **Step 2: Run source policy scans**
 
 Run:
 
@@ -1185,7 +1185,7 @@ rg -n "<button" rocketmq-dashboard/rocketmq-dashboard-web/frontend/src/pages roc
 
 Expected: no new gradient, hard-coded white, internal parity copy, or raw Topic button. Existing unrelated matches must be reported, not rewritten.
 
-- [ ] **Step 3: Run full frontend validation**
+- [x] **Step 3: Run full frontend validation**
 
 Run from `rocketmq-dashboard/rocketmq-dashboard-web/frontend`:
 
@@ -1196,7 +1196,7 @@ npm run build
 
 Expected: all tests pass and production build exits zero. The known Vite chunk-size advisory is informational unless its threshold becomes an error.
 
-- [ ] **Step 4: Run full backend validation**
+- [x] **Step 4: Run full backend validation**
 
 Run from `rocketmq-dashboard/rocketmq-dashboard-web/backend`:
 
@@ -1209,7 +1209,9 @@ cargo test --all-targets --all-features
 
 Expected: all commands exit zero.
 
-- [ ] **Step 5: Verify repository hygiene**
+Task 9 validation note: backend Clippy/build/test passed. The required formatter command was executed but hit the existing Windows path-length `os error 206`; the root formatter reproduced the same baseline, and the root workspace Clippy reproduced the existing third-party `openraft 0.10.0-alpha.21` E0599. These failures are recorded in the ignored Task 9 report and are not represented as passing gates.
+
+- [x] **Step 5: Verify repository hygiene**
 
 Run from the worktree root:
 
@@ -1221,7 +1223,7 @@ git log --oneline --decorate -12
 
 Expected: only intentional plan checkbox updates, if any, remain; no `dist`, logs, screenshots, `node_modules`, or root `producer.rs` change appears.
 
-- [ ] **Step 6: Run browser QA against the local RocketMQ environment**
+- [x] **Step 6: Run browser QA against the local RocketMQ environment**
 
 Use the already selected in-app browser. Capture the Java reference Topic list/form and the Rust `/topics` list/form at the same viewport. Exercise with the local NameServer `127.0.0.1:9876` and local Broker:
 
@@ -1235,13 +1237,15 @@ Use the already selected in-app browser. Capture the Java reference Topic list/f
 8. Delete the disposable Topic and verify list/detail cleanup.
 9. Compare reference and implementation screenshots side-by-side for layout, density, borders, typography, contrast, focus, overflow, and dialog sizing.
 
+Task 9 QA note: the exact-name whole-delete safety boundary was verified, but the operator explicitly chose to retain the disposable QA Topic. The final destructive click and list/detail cleanup assertion were therefore skipped by user choice and are not reported as executed.
+
 Do not run Reset/Skip/Delete against an existing user workload. If the local environment lacks a consumer or second broker, verify the truthful empty/disabled state and record that limitation rather than fabricating data.
 
-- [ ] **Step 7: Fix only defects found by validation, rerun their focused RED/GREEN tests, then rerun Steps 2–5**
+- [x] **Step 7: Fix only defects found by validation, rerun their focused RED/GREEN tests, then rerun Steps 2–5**
 
 Every fix receives a failing regression test first. Do not broaden scope during polish.
 
-- [ ] **Step 8: Commit final polish**
+- [x] **Step 8: Commit final polish**
 
 ```powershell
 git add rocketmq-dashboard/rocketmq-dashboard-web/frontend/src docs/superpowers/plans/2026-08-15-topic-full-operations.md
