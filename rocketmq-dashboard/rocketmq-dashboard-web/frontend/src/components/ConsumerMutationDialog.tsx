@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { brokerApi } from '../api/broker_api';
 import { consumerApi } from '../api/consumer_api';
+import { useConsumerQueryScope } from '../pages/consumers/ConsumerQueryScopeProvider';
 import type { ConsumerGroupListItem, ConsumerOperationResult, ConsumerUpsertRequest } from '../types/consumer';
 import { Button } from './ui/Button';
 import {
@@ -45,6 +46,7 @@ export default function ConsumerMutationDialog({
   onOpenChange,
   onSucceeded
 }: ConsumerMutationDialogProps) {
+  const { scope } = useConsumerQueryScope();
   const [group, setGroup] = useState(consumer?.rawGroupName ?? '');
   const [form, setForm] = useState(defaultForm());
   const [brokers, setBrokers] = useState<string[]>([]);
@@ -57,15 +59,40 @@ export default function ConsumerMutationDialog({
     setForm(defaultForm());
     setError(null);
     let cancelled = false;
-    brokerApi
-      .list()
-      .then((result) => {
+    void (async () => {
+      try {
+        const result = await brokerApi.list();
         if (cancelled) return;
-        setBrokers(Array.from(new Set(result.items.map((broker) => broker.brokerName))).sort());
-      })
-      .catch((reason: unknown) => {
+        const names = Array.from(new Set(result.items.map((broker) => broker.brokerName))).sort();
+        setBrokers(names);
+        if (mode === 'edit' && consumer) {
+          const config = await consumerApi.config(consumer.rawGroupName, scope);
+          if (cancelled) return;
+          const effective = config.effective;
+          if (effective) {
+            setForm({
+              clusterNameList: [],
+              brokerNameList: config.targets
+                .filter((target) => target.config !== null)
+                .map((target) => target.brokerName),
+              consumeEnable: effective.consumeEnable,
+              consumeFromMinEnable: effective.consumeFromMinEnable,
+              consumeBroadcastEnable: effective.consumeBroadcastEnable,
+              consumeMessageOrderly: effective.consumeMessageOrderly,
+              retryQueueNums: effective.retryQueueNums,
+              retryMaxTimes: effective.retryMaxTimes,
+              brokerId: effective.brokerId,
+              whichBrokerWhenConsumeSlowly: effective.whichBrokerWhenConsumeSlowly,
+              notifyConsumerIdsChangedEnable: effective.notifyConsumerIdsChangedEnable,
+              groupSysFlag: effective.groupSysFlag,
+              consumeTimeoutMinute: effective.consumeTimeoutMinute
+            });
+          }
+        }
+      } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -172,10 +199,12 @@ export default function ConsumerMutationDialog({
 }
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  const id = `consumer-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   return (
     <div className="field">
-      <Label>{label}</Label>
+      <Label htmlFor={id}>{label}</Label>
       <Input
+        id={id}
         type="number"
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}

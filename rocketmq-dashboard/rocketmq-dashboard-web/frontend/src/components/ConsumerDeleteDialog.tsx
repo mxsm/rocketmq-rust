@@ -31,12 +31,14 @@ export default function ConsumerDeleteDialog({
   const [confirmation, setConfirmation] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ConsumerOperationResult | null>(null);
 
   useEffect(() => {
     if (!open || !consumer) return;
     setSelected([]);
     setConfirmation('');
     setError(null);
+    setResult(null);
     let cancelled = false;
     consumerApi
       .brokers(group)
@@ -71,8 +73,12 @@ export default function ConsumerDeleteDialog({
     setError(null);
     try {
       const result = await consumerApi.delete(group, { brokerNames: selected });
-      onSucceeded(result);
-      onOpenChange(false);
+      setResult(result);
+      const allSucceeded = result.success && result.targets.every((target) => target.success);
+      if (allSucceeded) {
+        onSucceeded(result);
+        onOpenChange(false);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -112,6 +118,15 @@ export default function ConsumerDeleteDialog({
           />
         </div>
 
+        {result ? (
+          <div className="consumer-operation-result" role="status">
+            {result.targets.map((target) => (
+              <div key={target.target} className={target.success ? 'notice notice-success' : 'notice notice-danger'}>
+                <strong>{target.target}</strong> {target.kind} · {target.message}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {error ? <div className="inline-validation" role="alert">{error}</div> : null}
 
         <DialogFooter>
