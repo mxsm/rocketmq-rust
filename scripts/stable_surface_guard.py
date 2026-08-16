@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Freeze the remaining Rust nightly feature surface until stable closeout."""
+"""Freeze nightly debt and the core-release structural public API contract."""
 
 from __future__ import annotations
 
@@ -27,10 +27,12 @@ from pathlib import Path
 from typing import Any
 
 import core_release_scope
+import public_api_snapshot
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "scripts" / "stable-surface-policy.json"
+DEFAULT_API_BASELINE = ROOT / "scripts" / "public-api-snapshot-baseline.json"
 FEATURE_ATTRIBUTE_RE = re.compile(r"#!\s*\[\s*feature\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
 FEATURE_START_RE = re.compile(r"#!\s*\[\s*feature\b")
 FEATURE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -133,7 +135,14 @@ def scan_features(root: Path, *, scope: str = "all") -> set[NightlyFeature]:
     return findings
 
 
-def validate(root: Path, policy_path: Path, mode: str, *, scope: str = "all") -> str:
+def validate(
+    root: Path,
+    policy_path: Path,
+    mode: str,
+    *,
+    scope: str = "all",
+    api_baseline: Path | None = None,
+) -> str:
     if not root.is_dir():
         raise InputError(f"root does not exist: {root}")
     policy = load_policy(policy_path)
@@ -158,13 +167,25 @@ def validate(root: Path, policy_path: Path, mode: str, *, scope: str = "all") ->
     if mode == "target" and actual:
         rendered = ", ".join(entry.render() for entry in sorted(actual))
         raise InputError(f"stable target still has nightly features: {rendered}")
-    return f"STABLE_SURFACE_GUARD_OK mode={mode} features={len(actual)} scope={scope}"
+    api_status = "not-requested"
+    if api_baseline is not None:
+        try:
+            baseline = json.loads(api_baseline.read_text(encoding="utf-8"))
+            public_api_snapshot.validate_baseline_contract(baseline)
+        except (OSError, json.JSONDecodeError, public_api_snapshot.SnapshotError) as error:
+            raise InputError(f"invalid public API freeze: {error}") from error
+        api_status = "verified"
+    return (
+        f"STABLE_SURFACE_GUARD_OK mode={mode} features={len(actual)} "
+        f"scope={scope} api_freeze={api_status}"
+    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
+    parser.add_argument("--api-baseline", type=Path)
     parser.add_argument("--mode", choices=("baseline", "target"), default="baseline")
     parser.add_argument(
         "--scope",
@@ -176,12 +197,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    api_baseline = args.api_baseline
+    if api_baseline is None and args.mode == "target" and args.scope == "core-release":
+        api_baseline = DEFAULT_API_BASELINE
     try:
         message = validate(
             args.root.resolve(),
             args.policy.resolve(),
             args.mode,
             scope=args.scope,
+            api_baseline=api_baseline.resolve() if api_baseline is not None else None,
         )
     except InputError as error:
         print(f"STABLE_SURFACE_GUARD_ERROR: {error}", file=sys.stderr)

@@ -47,9 +47,10 @@ class CoreReleaseStaticGuardTests(unittest.TestCase):
             self.assertIn("core-release", command)
         self.assertEqual("structural", commands["architecture-dependency"][commands["architecture-dependency"].index("--mode") + 1])
         self.assertEqual("semantic", commands["architecture-documentation"][commands["architecture-documentation"].index("--mode") + 1])
+        self.assertEqual("target", commands["stable-surface"][commands["stable-surface"].index("--mode") + 1])
         self.assertEqual("structural", commands["architecture-release"][commands["architecture-release"].index("--mode") + 1])
         serialized = " ".join(argument for command in commands.values() for argument in command).lower()
-        for forbidden in ("sha256", "fingerprint", "--mode baseline", "--mode transition", "--mode target"):
+        for forbidden in ("sha256", "fingerprint", "--mode baseline", "--mode transition"):
             self.assertNotIn(forbidden, serialized)
 
     def test_run_routes_records_every_result_and_returns_failure(self) -> None:

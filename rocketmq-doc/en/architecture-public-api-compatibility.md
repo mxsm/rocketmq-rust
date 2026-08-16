@@ -6,18 +6,19 @@ paths removed by the architecture migration.
 
 ## Public API snapshot
 
-- Scope: every current workspace library target (`library_targets=27`);
-  the standalone `rocketmq-mcp` project is validated by its own locked matrix
-- Feature profile: default
+- Scope: every core-release library target (`library_targets=26`); excluded
+  Dashboard, MCP, and SRE projects are not part of this denominator
+- Structural profiles: `profiles=50` (26 workspace defaults plus the 24 frozen
+  public-feature matrix entries)
 - Snapshot comparison: `differences=0`
 - Canonical target path counts:
 
   | Package | Previous | Current | Reviewed cause |
   |---|---:|---:|---|
-  | `rocketmq-client-rust` | 280 | 285 | scoped Admin/LitePull/Producer/Session and Proxy Cluster capabilities |
+  | `rocketmq-client-rust` | 280 | 313 | scoped Admin/LitePull/Classic Pull/Producer/Session and Proxy Cluster capabilities |
   | `rocketmq-runtime` | 351 | 374 | bounded operation/resource and versioned runtime diagnostics capabilities |
-  | `rocketmq-transport` | 194 | 212 | authorized dispatch and request/response sink capabilities |
-  | `rocketmq-store` | 254 | 263 | cumulative Store capability work; benchmark helpers are absent from the default feature surface |
+  | `rocketmq-transport` | 194 | 204 | authorized dispatch and request/response sink capabilities |
+  | `rocketmq-store` | 254 | 276 | cumulative Store capability work, including the functional mapped-file builder |
 
 - Accepted source-level cleanup relative to the previous compatibility surface:
   - additive groups: 4
@@ -37,9 +38,8 @@ paths removed by the architecture migration.
 
 Previously approved source cleanups remain in force: `ClientRuntime::new` was
 removed and callers use fallible `ClientRuntime::try_new`; `ClusterConfig` owns mandatory bounded-execution
-fields without changing Serde backward reads; Dashboard admin operations use
-concurrent `&self` receivers; and `MappedBuffer::read_zero_copy` was replaced
-by the accurately named `MappedBuffer::read_copy`.
+fields without changing Serde backward reads; and `MappedBuffer::read_zero_copy`
+was replaced by the accurately named `MappedBuffer::read_copy`.
 
 The package count is derived from `cargo metadata`; the guard rejects a
 baseline that is missing a current library target or retains a removed one.
@@ -86,8 +86,8 @@ is the compatibility classification authority for this change; it does not
 waive protocol, wire, persisted-layout, or implemented-behavior compatibility.
 The same authority explicitly approved the `ClusterConfig` source-shape change:
 the obsolete fixed-lane execution contract is not retained.
-It also approved the Dashboard receiver cleanup and typed blocking-profile
-additions; neither changes RocketMQ wire, storage, or recovery contracts.
+It also approved typed blocking-profile additions; they do not change RocketMQ
+wire, storage, or recovery contracts.
 The same source-compatibility decision applies to the mapped-buffer read
 cleanup: old internal names are not retained when they misstate allocation and
 ownership.

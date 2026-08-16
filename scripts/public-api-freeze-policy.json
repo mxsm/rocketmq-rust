@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "freeze": {
+    "version": "1.0.0-rc.1",
+    "breaking_change_policy": "approval-required-after-freeze"
+  },
+  "compatibility_decisions": [
+    {
+      "id": "API-0.9-001",
+      "classification": "compatible-addition",
+      "applies_to": "0.9-to-1.0",
+      "reason": "The 1.0 core capabilities add typed, fallible APIs without removing an already supported wire or persisted contract."
+    },
+    {
+      "id": "API-0.9-002",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_runtime::ClientRuntime::new",
+      "replacement": "rocketmq_runtime::ClientRuntime::try_new",
+      "reason": "Runtime construction is fallible and must not hide initialization failure behind a panic-compatible constructor.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-07-29"
+    },
+    {
+      "id": "API-0.9-003",
+      "classification": "renamed-wrapper",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_store::MappedBuffer::read_zero_copy",
+      "replacement": "rocketmq_store::MappedBuffer::read_copy",
+      "reason": "The old name claimed zero-copy behavior that the implementation never provided; the replacement states the ownership cost accurately.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-07-29"
+    },
+    {
+      "id": "API-0.9-004",
+      "classification": "removed-placeholder",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_client_rust::MQClientAPIExt",
+      "replacement": "rocketmq_client_rust::{AdminClient,ConsumerClient,ProducerClient,RouteClient,TransactionClient}",
+      "reason": "The exported placeholder and production probe facades were replaced by narrow capabilities; test-only probes moved behind the explicit test-support feature.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-07-29"
+    }
+  ],
+  "frozen_contracts": [
+    {
+      "capability_id": "F-13",
+      "profile_id": "rocketmq-store:default",
+      "package": "rocketmq-store",
+      "item_paths": [
+        "rocketmq_store::log_file::mapped_file::builder::MappedFileBuilder"
+      ],
+      "behavior": "MappedFileBuilder creates a usable mapped file for supported defaults and returns a typed configuration or I/O error for unsupported or invalid inputs.",
+      "evidence": [
+        "cargo test -p rocketmq-store --test public_api_contract"
+      ]
+    },
+    {
+      "capability_id": "F-15",
+      "profile_id": "rocketmq-proxy-core:default",
+      "package": "rocketmq-proxy-core",
+      "item_paths": [
+        "rocketmq_proxy_core::settings::ServerSettingsPolicy",
+        "rocketmq_proxy_core::settings::SettingsConfig",
+        "rocketmq_proxy_core::settings::SettingsPolicyProvider",
+        "rocketmq_proxy_core::settings::SettingsPolicyValues"
+      ],
+      "behavior": "One immutable server policy generation overrides server-owned gRPC settings while preserving client identity and subscription expressions.",
+      "defaults": {
+        "max_body_size": 4194304,
+        "validate_message_type": true,
+        "retry_max_attempts": 17,
+        "receive_batch_size": 32,
+        "long_polling_timeout_seconds": 20,
+        "fifo": false,
+        "lite_subscription_quota": 2000,
+        "max_lite_topic_size": 64
+      },
+      "evidence": [
+        "cargo test -p rocketmq-proxy-core --test effective_settings"
+      ]
+    },
+    {
+      "capability_id": "F-18",
+      "profile_id": "rocketmq-client-rust:default",
+      "package": "rocketmq-client-rust",
+      "item_paths": [
+        "rocketmq_client_rust::consumer::consumer_impl::default_mq_pull_consumer_impl::DefaultMQPullConsumerImpl",
+        "rocketmq_client_rust::consumer::default_mq_pull_consumer::ClassicPullCallback",
+        "rocketmq_client_rust::consumer::default_mq_pull_consumer::DefaultMQPullConsumer",
+        "rocketmq_client_rust::consumer::default_mq_pull_consumer::PullOptions",
+        "rocketmq_client_rust::consumer::default_mq_pull_consumer_builder::DefaultMQPullConsumerBuilder"
+      ],
+      "behavior": "The deprecated Classic Pull facade remains functional on the shared runtime, supports synchronous and asynchronous pull, queue discovery, offset persistence, listeners, and scheduled callbacks without advertising LitePull stream semantics.",
+      "evidence": [
+        "cargo test -p rocketmq-client-rust --test classic_pull_equivalence"
+      ]
+    }
+  ]
+}
