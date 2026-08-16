@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "identity_kind": "unofficial-community",
+  "distribution_name": "RocketMQ Rust Community Distribution",
+  "official_apache_release": false,
+  "project": {
+    "name": "rocketmq-rust",
+    "repository": "https://github.com/mxsm/rocketmq-rust",
+    "homepage": "https://github.com/mxsm/rocketmq-rust"
+  },
+  "crate_registry": {
+    "registry": "crates.io",
+    "owner": "mxsm",
+    "namespace": "rocketmq",
+    "package_prefix": "rocketmq-"
+  },
+  "oci": {
+    "registry": "ghcr.io",
+    "namespace": "mxsm/rocketmq-rust"
+  },
+  "helm": {
+    "chart_name": "rocketmq-rust",
+    "annotations": {
+      "rocketmqrust.com/distribution-owner": "The RocketMQ Rust Authors",
+      "rocketmqrust.com/repository": "https://github.com/mxsm/rocketmq-rust",
+      "rocketmqrust.com/official-apache-release": "false"
+    }
+  },
+  "legal": {
+    "license": "Apache-2.0",
+    "notice_owner": "The RocketMQ Rust Authors",
+    "upstream_owner": "The Apache Software Foundation",
+    "disclaimer": "Unofficial community distribution; not an official Apache Software Foundation release."
+  },
+  "approval": {
+    "approver": "mxsm",
+    "approved_revision": 1,
+    "approved_on": "2026-08-16",
+    "effective_scope": "core-release-1.0",
+    "decision_source": "release-approver-confirmed"
+  },
+  "required_consumers": [
+    "crate-package-planner",
+    "binary-archive-builder",
+    "oci-layout-builder",
+    "helm-candidate-builder",
+    "legal-sbom-provenance",
+    "public-staged-metadata"
+  ]
+}
