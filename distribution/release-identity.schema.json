@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmqrust.com/schemas/release-identity.schema.json",
+  "title": "RocketMQ Rust release identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "revision",
+    "identity_kind",
+    "distribution_name",
+    "official_apache_release",
+    "project",
+    "crate_registry",
+    "oci",
+    "helm",
+    "legal",
+    "approval",
+    "required_consumers"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "identity_kind": {
+      "type": "string",
+      "enum": ["unofficial-community", "apache-governance"]
+    },
+    "distribution_name": { "type": "string", "minLength": 1 },
+    "official_apache_release": { "type": "boolean" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "repository", "homepage"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "pattern": "^https://" },
+        "homepage": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "crate_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "owner", "namespace", "package_prefix"],
+      "properties": {
+        "registry": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 },
+        "package_prefix": { "type": "string", "minLength": 1 }
+      }
+    },
+    "oci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "namespace"],
+      "properties": {
+        "registry": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 }
+      }
+    },
+    "helm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chart_name", "annotations"],
+      "properties": {
+        "chart_name": { "type": "string", "minLength": 1 },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rocketmqrust.com/distribution-owner",
+            "rocketmqrust.com/repository",
+            "rocketmqrust.com/official-apache-release"
+          ],
+          "properties": {
+            "rocketmqrust.com/distribution-owner": { "type": "string", "minLength": 1 },
+            "rocketmqrust.com/repository": { "type": "string", "pattern": "^https://" },
+            "rocketmqrust.com/official-apache-release": { "enum": ["false", "true"] }
+          }
+        }
+      }
+    },
+    "legal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["license", "notice_owner", "upstream_owner", "disclaimer"],
+      "properties": {
+        "license": { "type": "string", "minLength": 1 },
+        "notice_owner": { "type": "string", "minLength": 1 },
+        "upstream_owner": { "type": "string", "minLength": 1 },
+        "disclaimer": { "type": "string", "minLength": 1 }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approver",
+        "approved_revision",
+        "approved_on",
+        "effective_scope",
+        "decision_source"
+      ],
+      "properties": {
+        "approver": { "type": "string", "minLength": 1 },
+        "approved_revision": { "type": "integer", "minimum": 1 },
+        "approved_on": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "effective_scope": { "type": "string", "minLength": 1 },
+        "decision_source": { "const": "release-approver-confirmed" }
+      }
+    },
+    "required_consumers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "crate-package-planner",
+          "binary-archive-builder",
+          "oci-layout-builder",
+          "helm-candidate-builder",
+          "legal-sbom-provenance",
+          "public-staged-metadata"
+        ]
+      }
+    }
+  }
+}
