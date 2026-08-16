@@ -173,6 +173,17 @@ pub struct DashboardConsumerProgress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerBroker {
+    pub broker_name: String,
+    pub broker_address: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerBrokerList {
+    pub items: Vec<DashboardConsumerBroker>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardConsumerResetRequest {
     pub group: String,
     pub topic: String,
@@ -368,6 +379,15 @@ pub trait DashboardAdmin: Send + Sync {
         &'a self,
         request: &'a DashboardConsumerResetRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
+
+    fn dashboard_consumer_brokers<'a>(&'a self, _group: &'a str) -> AdminFuture<'a, DashboardConsumerBrokerList> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "dashboard_consumer_brokers",
+                "Consumer broker discovery is not implemented by this adapter",
+            ))
+        })
+    }
 
     fn dashboard_list_producers(&self) -> AdminFuture<'_, Vec<DashboardProducerInfo>>;
     fn dashboard_producer_connections<'a>(

@@ -39,8 +39,10 @@ use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::core::consumer::is_system_consumer_group;
 use crate::core::dashboard;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
@@ -320,6 +322,54 @@ impl dashboard::DashboardAdmin for AdminSession {
                 ),
                 target_count: offsets.len(),
             })
+        })
+    }
+
+    fn dashboard_consumer_brokers<'a>(
+        &'a self,
+        group: &'a str,
+    ) -> AdminFuture<'a, dashboard::DashboardConsumerBrokerList> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let group = group.trim();
+            if group.is_empty() || group.starts_with("%SYS%") || is_system_consumer_group(group) {
+                return Err(AdminError::invalid_argument(
+                    "consumerGroup",
+                    "System consumer groups cannot be inspected for deletion.",
+                ));
+            }
+            validate_subscription_group_name(group)
+                .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+            let targets = authoritative_consumer_broker_targets(&cluster_info)?;
+            let mut items = Vec::new();
+            for (broker_name, broker_addr) in targets {
+                let wrapper = self
+                    .inner
+                    .get_all_subscription_group(CheetahString::from(broker_addr.as_str()), 5_000)
+                    .await
+                    .map_err(|error| backend_error("get_all_subscription_group", error))?;
+                let has_group = wrapper
+                    .get_subscription_group_table()
+                    .keys()
+                    .any(|name| name.as_str() == group);
+                if has_group {
+                    items.push(dashboard::DashboardConsumerBroker {
+                        broker_name,
+                        broker_address: broker_addr.to_string(),
+                    });
+                }
+            }
+            if items.is_empty() {
+                return Err(AdminError::not_found("consumerGroup", group));
+            }
+            items.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
+            Ok(dashboard::DashboardConsumerBrokerList { items })
         })
     }
 
@@ -780,6 +830,34 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 }
 
+fn authoritative_consumer_broker_targets(
+    cluster_info: &ClusterInfo,
+) -> crate::core::AdminResult<Vec<(String, CheetahString)>> {
+    let Some(broker_table) = cluster_info.broker_addr_table.as_ref() else {
+        return Err(AdminError::backend(
+            "examine_broker_cluster_info",
+            "Broker cluster metadata is unavailable.",
+        ));
+    };
+    let mut targets = broker_table
+        .iter()
+        .filter_map(|(broker_name, broker)| {
+            broker
+                .broker_addrs()
+                .get(&MASTER_ID)
+                .map(|broker_addr| (broker_name.to_string(), broker_addr.clone()))
+        })
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Err(AdminError::backend(
+            "examine_broker_cluster_info",
+            "No master broker targets are available.",
+        ));
+    }
+    targets.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(targets)
+}
+
 fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
     let view = error.boundary_view();
     let context = (!view.context().is_empty()).then(|| view.context().to_string());
@@ -791,4 +869,55 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
         view.http().status.as_u16(),
         view.is_retryable(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+
+    fn broker_data(broker_name: &str, master_addr: Option<&str>) -> BrokerData {
+        let mut broker_addrs = HashMap::new();
+        if let Some(master_addr) = master_addr {
+            broker_addrs.insert(MASTER_ID, CheetahString::from(master_addr));
+        }
+        BrokerData::new(
+            CheetahString::from("cluster-a"),
+            CheetahString::from(broker_name),
+            broker_addrs,
+            None,
+        )
+    }
+
+    #[test]
+    fn authoritative_targets_fail_closed_without_master_addresses() {
+        let broker_table = HashMap::from([(CheetahString::from("broker-a"), broker_data("broker-a", None))]);
+        let cluster_info = ClusterInfo::new(Some(broker_table), None);
+
+        assert!(authoritative_consumer_broker_targets(&cluster_info).is_err());
+    }
+
+    #[test]
+    fn authoritative_targets_are_sorted_master_name_address_pairs() {
+        let broker_table = HashMap::from([
+            (
+                CheetahString::from("broker-b"),
+                broker_data("broker-b", Some("10.0.0.2:10911")),
+            ),
+            (
+                CheetahString::from("broker-a"),
+                broker_data("broker-a", Some("10.0.0.1:10911")),
+            ),
+        ]);
+        let cluster_info = ClusterInfo::new(Some(broker_table), None);
+
+        let targets = authoritative_consumer_broker_targets(&cluster_info).expect("master targets");
+        assert_eq!(
+            targets,
+            vec![
+                ("broker-a".to_string(), CheetahString::from("10.0.0.1:10911")),
+                ("broker-b".to_string(), CheetahString::from("10.0.0.2:10911")),
+            ]
+        );
+    }
 }
