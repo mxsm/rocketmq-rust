@@ -14,6 +14,8 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,8 +37,46 @@ const DETECTOR_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const DETECTOR_SCAN_INITIAL_DELAY: Duration = Duration::from_secs(3);
 const DETECTOR_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 
+pub(crate) trait FaultClock: Send + Sync {
+    fn now_millis(&self) -> u64;
+}
+
+struct SystemFaultClock;
+
+impl FaultClock for SystemFaultClock {
+    fn now_millis(&self) -> u64 {
+        current_millis()
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct ManualFaultClock {
+    now_millis: AtomicU64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ManualFaultClock {
+    pub(crate) fn new(now_millis: u64) -> Self {
+        Self {
+            now_millis: AtomicU64::new(now_millis),
+        }
+    }
+
+    pub(crate) fn set_now_millis(&self, now_millis: u64) {
+        self.now_millis.store(now_millis, AtomicOrdering::Release);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl FaultClock for ManualFaultClock {
+    fn now_millis(&self) -> u64 {
+        self.now_millis.load(AtomicOrdering::Acquire)
+    }
+}
+
 pub struct LatencyFaultToleranceImpl<R, S> {
     service_context: ChildServiceContext,
+    clock: Arc<dyn FaultClock>,
     fault_item_table: DashMap<CheetahString, Arc<FaultItem>>,
     detect_timeout: AtomicU32,
     detect_interval: AtomicU32,
@@ -109,8 +149,13 @@ pub struct LatencyFaultDetectorLifecycleProbe {
 
 impl<R, S> LatencyFaultToleranceImpl<R, S> {
     pub fn new(service_context: ChildServiceContext) -> Self {
+        Self::new_with_clock_inner(service_context, Arc::new(SystemFaultClock))
+    }
+
+    fn new_with_clock_inner(service_context: ChildServiceContext, clock: Arc<dyn FaultClock>) -> Self {
         Self {
             service_context,
+            clock,
             resolver: RwLock::new(None),
             service_detector: RwLock::new(None),
             fault_item_table: Default::default(),
@@ -119,6 +164,11 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
             start_detector_enable: AtomicBool::new(false),
             detector_lifecycle: Mutex::new(DetectorLifecycle::default()),
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn new_with_clock(service_context: ChildServiceContext, clock: Arc<dyn FaultClock>) -> Self {
+        Self::new_with_clock_inner(service_context, clock)
     }
 
     pub fn set_resolver(&self, resolver: R) {
@@ -135,6 +185,19 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
             self.detect_interval.load(AtomicOrdering::Acquire),
             self.detect_timeout.load(AtomicOrdering::Acquire),
         )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn fault_item_state_for_test(&self, name: &CheetahString) -> Option<(bool, bool, u64, u64)> {
+        let now_millis = self.clock.now_millis();
+        self.fault_item_table.get(name).map(|item| {
+            (
+                item.is_available_at(now_millis),
+                item.is_reachable(),
+                item.get_start_timestamp(),
+                item.get_current_latency(),
+            )
+        })
     }
 
     pub async fn shutdown_detector(&self) -> bool {
@@ -192,7 +255,7 @@ where
             .or_insert_with(|| Arc::new(FaultItem::new(name.clone())));
 
         entry.set_current_latency(current_latency);
-        entry.update_not_available_duration(not_available_duration);
+        entry.update_not_available_duration_at(not_available_duration, self.clock.now_millis());
         entry.set_reachable(reachable);
 
         if !reachable {
@@ -202,7 +265,10 @@ where
 
     #[inline]
     fn is_available(&self, name: &CheetahString) -> bool {
-        self.fault_item_table.get(name).is_none_or(|item| item.is_available())
+        let now_millis = self.clock.now_millis();
+        self.fault_item_table
+            .get(name)
+            .is_none_or(|item| item.is_available_at(now_millis))
     }
 
     #[inline]
@@ -281,12 +347,11 @@ where
             .iter()
             .filter_map(|entry| {
                 let fault_item = entry.value();
-                if current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64)
-                    < 0
-                {
+                let now_millis = self.clock.now_millis();
+                if now_millis as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64) < 0 {
                     return None;
                 }
-                let next_check_stamp = current_millis() + detect_interval as u64;
+                let next_check_stamp = now_millis + detect_interval as u64;
                 fault_item
                     .check_stamp
                     .store(next_check_stamp, std::sync::atomic::Ordering::Release);
@@ -486,7 +551,10 @@ impl FaultItem {
     }
 
     pub fn update_not_available_duration(&self, not_available_duration: u64) {
-        let now = current_millis();
+        self.update_not_available_duration_at(not_available_duration, current_millis());
+    }
+
+    fn update_not_available_duration_at(&self, not_available_duration: u64, now: u64) {
         if not_available_duration > 0
             && now + not_available_duration > self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
         {
@@ -507,8 +575,11 @@ impl FaultItem {
     }
 
     pub fn is_available(&self) -> bool {
-        let now = current_millis();
-        now >= self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
+        self.is_available_at(current_millis())
+    }
+
+    fn is_available_at(&self, now_millis: u64) -> bool {
+        now_millis >= self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn is_reachable(&self) -> bool {

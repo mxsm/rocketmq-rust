@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "javaVersion": "5.5.0",
+  "latencyMaxMs": [50, 100, 550, 1800, 3000, 5000, 15000],
+  "notAvailableDurationMs": [0, 0, 2000, 5000, 6000, 10000, 30000],
+  "stateCases": [
+    {
+      "id": "slow-broker-window",
+      "initialNowMs": 1000,
+      "latencyMs": 550,
+      "isolation": false,
+      "reachable": true,
+      "expectedDurationMs": 2000,
+      "checks": [
+        {"atMs": 2999, "available": false, "reachable": true},
+        {"atMs": 3000, "available": true, "reachable": true}
+      ]
+    },
+    {
+      "id": "connection-isolation-window",
+      "initialNowMs": 5000,
+      "latencyMs": 1,
+      "isolation": true,
+      "reachable": false,
+      "expectedDurationMs": 10000,
+      "checks": [
+        {"atMs": 14999, "available": false, "reachable": false},
+        {"atMs": 15000, "available": true, "reachable": false}
+      ]
+    }
+  ],
+  "selectionCases": [
+    {
+      "id": "avoid-slow-and-unreachable-brokers",
+      "initialNowMs": 1000,
+      "updates": [
+        {"atMs": 1000, "broker": "broker-a", "latencyMs": 550, "isolation": false, "reachable": true},
+        {"atMs": 1000, "broker": "broker-b", "latencyMs": 1, "isolation": true, "reachable": false}
+      ],
+      "selectionAtMs": 1500,
+      "queues": ["broker-a", "broker-b", "broker-c"],
+      "lastBroker": null,
+      "expectedBroker": "broker-c"
+    },
+    {
+      "id": "probe-recovery-enters-reachable-fallback",
+      "initialNowMs": 1000,
+      "updates": [
+        {"atMs": 1000, "broker": "broker-b", "latencyMs": 1, "isolation": true, "reachable": false},
+        {"atMs": 2000, "broker": "broker-b", "latencyMs": 1, "isolation": false, "reachable": true}
+      ],
+      "selectionAtMs": 2000,
+      "queues": ["broker-b", "broker-c"],
+      "lastBroker": "broker-c",
+      "expectedBroker": "broker-b"
+    },
+    {
+      "id": "route-removal-excludes-stale-broker",
+      "initialNowMs": 1000,
+      "updates": [
+        {"atMs": 1000, "broker": "broker-a", "latencyMs": 550, "isolation": false, "reachable": true}
+      ],
+      "selectionAtMs": 1500,
+      "queues": ["broker-c"],
+      "lastBroker": null,
+      "expectedBroker": "broker-c"
+    },
+    {
+      "id": "retry-does-not-stick-to-last-broker",
+      "initialNowMs": 1000,
+      "updates": [],
+      "selectionAtMs": 1000,
+      "queues": ["broker-a", "broker-b"],
+      "lastBroker": "broker-a",
+      "expectedBroker": "broker-b"
+    }
+  ]
+}
