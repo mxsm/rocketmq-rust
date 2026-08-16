@@ -73,3 +73,6 @@ jobs:
         run: |
           python distribution/merge_candidate_partials.py --help
           python distribution/transfer_candidate.py --help
+          python distribution/generate_release_sbom.py --help
+          python distribution/generate_release_provenance.py --help
+          python scripts/legal_artifact_guard.py --help
