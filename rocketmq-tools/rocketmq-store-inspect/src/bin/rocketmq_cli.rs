@@ -22,7 +22,38 @@ use rocketmq_store_inspect::downgrade_preflight::DowngradePreflightRequest;
 use rocketmq_store_inspect::multipath_consolidate::consolidate_multipath;
 use rocketmq_store_inspect::multipath_consolidate::ConsolidationRequest;
 
+fn print_release_version_if_requested(component: &str) -> bool {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let version = std::ffi::OsStr::new("--version");
+    let verbose = std::ffi::OsStr::new("--verbose");
+    let requested = (arguments.len() == 1 && arguments[0].as_os_str() == version)
+        || (arguments.len() == 2 && arguments[0].as_os_str() == version && arguments[1].as_os_str() == verbose);
+    if !requested {
+        return false;
+    }
+    println!("{component}");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    if arguments.len() == 2 {
+        println!(
+            "artifact_id={}",
+            option_env!("ROCKETMQ_RELEASE_ARTIFACT_ID").unwrap_or("development")
+        );
+        println!(
+            "requested_features={}",
+            option_env!("ROCKETMQ_RELEASE_REQUESTED_FEATURES").unwrap_or("default")
+        );
+        println!(
+            "effective_features={}",
+            option_env!("ROCKETMQ_RELEASE_EFFECTIVE_FEATURES").unwrap_or("default")
+        );
+    }
+    true
+}
+
 fn main() {
+    if print_release_version_if_requested("rocketmq-store-inspect") {
+        return;
+    }
     let exit_code = run();
     if exit_code != 0 {
         std::process::exit(exit_code);

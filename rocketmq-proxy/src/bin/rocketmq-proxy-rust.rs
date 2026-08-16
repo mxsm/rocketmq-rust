@@ -44,7 +44,38 @@ use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use tracing::info;
 
+fn print_release_version_if_requested(component: &str) -> bool {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let version = std::ffi::OsStr::new("--version");
+    let verbose = std::ffi::OsStr::new("--verbose");
+    let requested = (arguments.len() == 1 && arguments[0].as_os_str() == version)
+        || (arguments.len() == 2 && arguments[0].as_os_str() == version && arguments[1].as_os_str() == verbose);
+    if !requested {
+        return false;
+    }
+    println!("{component}");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    if arguments.len() == 2 {
+        println!(
+            "artifact_id={}",
+            option_env!("ROCKETMQ_RELEASE_ARTIFACT_ID").unwrap_or("development")
+        );
+        println!(
+            "requested_features={}",
+            option_env!("ROCKETMQ_RELEASE_REQUESTED_FEATURES").unwrap_or("default")
+        );
+        println!(
+            "effective_features={}",
+            option_env!("ROCKETMQ_RELEASE_EFFECTIVE_FEATURES").unwrap_or("default")
+        );
+    }
+    true
+}
+
 fn main() -> ProxyResult<()> {
+    if print_release_version_if_requested("rocketmq-proxy-rust") {
+        return Ok(());
+    }
     let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
     let service_context = owner.root_context().component("proxy");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy").map_err(|error| ProxyError::Transport {

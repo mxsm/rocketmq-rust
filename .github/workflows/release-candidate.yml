@@ -1,0 +1,75 @@
+name: Core release candidate preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_manifest:
+        description: Candidate manifest path in the prepared workspace
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      candidate_manifest:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-common:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: core-release-candidate-input
+          path: ${{ inputs.candidate_manifest }}
+          if-no-files-found: error
+          retention-days: 14
+
+  build-target:
+    needs: prepare-common
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate local-only candidate contract
+        shell: pwsh
+        run: |
+          python distribution/build_release_binaries.py --help
+          python distribution/build_release_archive.py --help
+          python distribution/verify_release_archive.py --help
+      - uses: actions/upload-artifact@v7
+        with:
+          name: core-release-${{ matrix.target }}-${{ github.run_attempt }}
+          path: target/v1-release
+          if-no-files-found: warn
+          retention-days: 14
+
+  aggregate:
+    needs: build-target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: core-release-*-${{ github.run_attempt }}
+          path: target/v1-release/downloads
+      - name: Validate aggregation tools
+        run: |
+          python distribution/merge_candidate_partials.py --help
+          python distribution/transfer_candidate.py --help

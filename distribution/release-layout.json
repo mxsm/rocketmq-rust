@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "distribution": "RocketMQ Rust Community Distribution",
+  "identity_kind": "unofficial-community",
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "archive_format": "tar.gz",
+      "executable_suffix": ""
+    },
+    "x86_64-pc-windows-msvc": {
+      "archive_format": "zip",
+      "executable_suffix": ".exe"
+    },
+    "x86_64-apple-darwin": {
+      "archive_format": "tar.gz",
+      "executable_suffix": ""
+    }
+  },
+  "binaries": [
+    {
+      "id": "namesrv",
+      "kind": "service",
+      "package": "rocketmq-namesrv",
+      "binary": "rocketmq-namesrv-rust",
+      "requested_features": ["observability", "otlp-logs", "otlp-metrics", "otlp-traces"],
+      "effective_features": ["default", "observability", "otel-logs", "otel-metrics", "otel-traces", "otlp-logs", "otlp-metrics", "otlp-traces", "tls"]
+    },
+    {
+      "id": "broker",
+      "kind": "service",
+      "package": "rocketmq-broker",
+      "binary": "rocketmq-broker-rust",
+      "requested_features": ["extended_timeline", "observability", "otlp-logs", "otlp-metrics", "otlp-traces", "rocksdb_store", "tieredstore"],
+      "effective_features": ["default", "extended_timeline", "local_file_store", "observability", "otel-logs", "otel-metrics", "otel-traces", "otlp-logs", "otlp-metrics", "otlp-traces", "rocksdb_store", "tieredstore"]
+    },
+    {
+      "id": "controller",
+      "kind": "service",
+      "package": "rocketmq-controller",
+      "binary": "rocketmq-controller-rust",
+      "requested_features": ["metrics-otlp", "otlp-logs", "otlp-traces", "storage-rocksdb"],
+      "effective_features": ["default", "metrics", "metrics-otlp", "otel-logs", "otel-traces", "otlp-logs", "otlp-traces", "storage-rocksdb"]
+    },
+    {
+      "id": "proxy",
+      "kind": "service",
+      "package": "rocketmq-proxy",
+      "binary": "rocketmq-proxy-rust",
+      "requested_features": ["otlp-logs", "otlp-metrics", "otlp-traces", "tieredstore", "tls"],
+      "effective_features": ["cluster-mode", "default", "local-mode", "observability", "otel-logs", "otel-metrics", "otel-traces", "otlp-logs", "otlp-metrics", "otlp-traces", "tieredstore", "tls"]
+    },
+    {
+      "id": "admin",
+      "kind": "tool",
+      "package": "rocketmq-admin-cli",
+      "binary": "rocketmq-admin-cli",
+      "requested_features": [],
+      "effective_features": ["default"]
+    },
+    {
+      "id": "store-inspect",
+      "kind": "tool",
+      "package": "rocketmq-store-inspect",
+      "binary": "rocketmq-cli-rust",
+      "archive_binary": "rocketmq-store-inspect",
+      "requested_features": [],
+      "effective_features": ["default", "rocksdb-store"],
+      "required_dependencies": ["rocketmq-store-rocksdb", "rocksdb"]
+    }
+  ],
+  "configs": {
+    "namesrv": "distribution/config/nameserver/namesrv.toml",
+    "broker": "distribution/config/broker/broker.toml",
+    "controller": "distribution/config/controller/controller.toml",
+    "proxy": "distribution/config/proxy/proxy.toml"
+  },
+  "common_files": ["LICENSE-APACHE", "NOTICE", "README.md", "RELEASE_NOTES.md"],
+  "archive_directories": ["bin", "conf", "data", "logs", "run", "sbom", "scripts"],
+  "excluded_capabilities": ["BrokerContainer", "Dashboard", "DLedger CommitLog", "MCP", "OpenMessaging", "SRE"]
+}
