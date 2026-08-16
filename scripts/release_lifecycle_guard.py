@@ -174,6 +174,36 @@ def _validate_known_issues(candidate: dict[str, Any]) -> None:
             raise LifecycleError(f"known issue waiver is missing or expired: {issue.get('issue_id')}")
 
 
+def _validate_handoff_evidence(root: Path | None, candidate: dict[str, Any]) -> None:
+    if root is None or not root.is_dir():
+        raise LifecycleError("publication-ready requires a retained handoff evidence root")
+    semantic = {
+        "H01-LINUX",
+        "H01-WINDOWS",
+        "H01-MACOS",
+        "H02-DRAFT-SEMANTIC",
+        "H04-FINAL-SEMANTIC",
+    }
+    no_remote = {"H03-DRAFT-NO-REMOTE", "H05-FINAL-NO-REMOTE"}
+    expected_identity = (
+        candidate["candidate_id"],
+        candidate["version"],
+        candidate["run_id"],
+        candidate["attempt"],
+    )
+    for result_id in sorted(semantic | no_remote):
+        value = read_json(resolve_existing_file(root / f"{result_id}.json", f"handoff result {result_id}"))
+        identity = (value.get("candidate_id"), value.get("version"), value.get("run_id"), value.get("attempt"))
+        if identity != expected_identity:
+            raise LifecycleError(f"handoff result belongs to another candidate: {result_id}")
+        if result_id in semantic:
+            if value.get("status") != "passed" or value.get("skipped") is not False:
+                raise LifecycleError(f"handoff semantic result is incomplete: {result_id}")
+        elif value.get("remote_publication", {}).get("status") != "not-executed":
+            raise LifecycleError(f"handoff no-remote result is incomplete: {result_id}")
+        ensure_no_digest_fields(value)
+
+
 def _completion_event(
     current_route_id: str | None,
     candidate: dict[str, Any],
@@ -237,6 +267,7 @@ def transition_candidate(
     gate_evidence: Path | None = None,
     rejection_reason: str | None = None,
     handoff_ready: bool = False,
+    handoff_evidence_root: Path | None = None,
     current_route_id: str | None = None,
     fail_after: str | None = None,
     publication_marker: Path | None = None,
@@ -298,6 +329,7 @@ def transition_candidate(
             if publication_marker.exists():
                 raise LifecycleError("publication-ready marker already exists")
             _validate_known_issues(candidate)
+            _validate_handoff_evidence(handoff_evidence_root, candidate)
             target_outcome = "success"
             seal = True
         elif transition == "rejected":
@@ -317,6 +349,27 @@ def transition_candidate(
             marker_temp = publication_marker.with_name(f".{publication_marker.name}.pending")
             if marker_temp.exists():
                 raise LifecycleError("publication-ready marker has an unresolved pending file")
+            handoff_path = publication_marker.parent / "PUBLICATION_HANDOFF.json"
+            handoff = read_json(resolve_existing_file(handoff_path, "publication handoff manifest"))
+            handoff_identity = (
+                handoff.get("candidate_id"),
+                handoff.get("version"),
+                handoff.get("run_id"),
+                handoff.get("attempt"),
+            )
+            candidate_identity = (
+                candidate["candidate_id"],
+                candidate["version"],
+                candidate["run_id"],
+                candidate["attempt"],
+            )
+            if (
+                handoff_identity != candidate_identity
+                or handoff.get("candidate_state") != "ga-candidate-ready"
+                or handoff.get("remote_publication", {}).get("status") != "not-executed"
+            ):
+                raise LifecycleError("publication handoff identity or no-remote status is invalid")
+            parent = read_json(resolve_existing_file(Path(candidate["parent_manifest"]), "final parent manifest"))
             marker_value = {
                 "schema_version": 1,
                 "state": "publication-ready",
@@ -327,7 +380,39 @@ def transition_candidate(
                 "series_id": series["series_id"],
                 "series_generation": target_generation,
                 "operation_id": operation_id,
-                "remote_publication": "not-executed",
+                "candidate_snapshot": {
+                    "candidate_id": candidate["candidate_id"],
+                    "version": candidate["version"],
+                    "run_id": candidate["run_id"],
+                    "attempt": candidate["attempt"],
+                    "state": "publication-ready",
+                    "generation": candidate["generation"] + 1,
+                    "series_id": series["series_id"],
+                    "series_generation": target_generation,
+                    "parent_lineage": {
+                        "candidate_id": parent.get("candidate_id"),
+                        "version": parent.get("version"),
+                        "ordinal": parent.get("ordinal"),
+                    },
+                },
+                "handoff_identity": {
+                    "candidate_id": handoff["candidate_id"],
+                    "version": handoff["version"],
+                    "run_id": handoff["run_id"],
+                    "attempt": handoff["attempt"],
+                    "candidate_generation": handoff.get("candidate_generation"),
+                    "file_count": len(handoff.get("files", [])),
+                },
+                "final_result_ids": [
+                    "H01-LINUX",
+                    "H01-WINDOWS",
+                    "H01-MACOS",
+                    "H02-DRAFT-SEMANTIC",
+                    "H03-DRAFT-NO-REMOTE",
+                    "H04-FINAL-SEMANTIC",
+                    "H05-FINAL-NO-REMOTE",
+                ],
+                "remote_publication": {"status": "not-executed"},
                 "created_at": utc_now(),
             }
             ensure_no_digest_fields(marker_value)
@@ -391,6 +476,10 @@ def transition_candidate(
         if marker_temp is not None:
             publication_marker.parent.mkdir(parents=True, exist_ok=True)
             os.replace(marker_temp, publication_marker)
+            if read_json(publication_marker) != marker_value:
+                raise LifecycleError("publication-ready marker differs after atomic commit")
+            if candidate["state"] != "publication-ready" or series["generation"] != target_generation:
+                raise LifecycleError("publication-ready marker became visible before candidate/series commit")
             series["pending_operation"] = None
             series["updated_at"] = utc_now()
             atomic_write_json(series_manifest, series)
@@ -476,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gate-evidence", type=Path)
     parser.add_argument("--rejection-reason")
     parser.add_argument("--handoff-ready", action="store_true")
+    parser.add_argument("--handoff-evidence-root", type=Path)
     parser.add_argument("--current-route-id")
     parser.add_argument("--publication-marker", type=Path)
     parser.add_argument("--recover-series", type=Path)
@@ -502,6 +592,7 @@ def main(argv: list[str] | None = None) -> int:
                 gate_evidence=args.gate_evidence,
                 rejection_reason=args.rejection_reason,
                 handoff_ready=args.handoff_ready,
+                handoff_evidence_root=args.handoff_evidence_root,
                 current_route_id=args.current_route_id,
                 publication_marker=args.publication_marker,
             )

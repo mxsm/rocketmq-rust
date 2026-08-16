@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -136,6 +137,25 @@ class NoRemotePublicationGuardTests(unittest.TestCase):
                 workflow_root, ["release-candidate.yml"]
             )
             self.assertTrue(any("write permission" in finding for finding in findings))
+            self.assertTrue(any("remote publication command" in finding for finding in findings))
+
+    def test_handoff_contract_is_scanned_instead_of_trusting_a_boolean(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handoff = Path(temp_dir)
+            (handoff / "PUBLICATION_HANDOFF.json").write_text(
+                json.dumps(
+                    {
+                        "remote_publication": {"status": "not-executed"},
+                        "future_publication": {"executed": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (handoff / "safe.ps1").write_text("Write-Output 'local-only'\n", encoding="utf-8")
+            self.assertEqual([], self.guard.audit_handoff(handoff))
+
+            (handoff / "unsafe.ps1").write_text("docker login ghcr.io\n", encoding="utf-8")
+            findings = self.guard.audit_handoff(handoff)
             self.assertTrue(any("remote publication command" in finding for finding in findings))
 
 

@@ -1,0 +1,193 @@
+name: V1 Functional Acceptance and Local Handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_source_artifact:
+        description: Access-restricted candidate source bundle artifact name
+        required: true
+        type: string
+      candidate_control_artifact:
+        description: Access-restricted candidate control bundle artifact name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-functional-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_source_artifact }}
+          path: target/candidate-input/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_control_artifact }}
+          path: target/candidate-input/control
+      - name: Prepare immutable draft transfer
+        shell: bash
+        run: >-
+          bash scripts/run-publication-handoff.sh
+          --mode PrepareDraft
+          --candidate-source-bundle target/candidate-input/source/CANDIDATE_SOURCE_BUNDLE.tar
+          --candidate-control-bundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar
+          --output-root target/v1-publication-handoff
+          --draft-bundle-output target/HANDOFF_DRAFT_TRANSFER.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/HANDOFF_DRAFT_TRANSFER.tar
+          if-no-files-found: error
+
+  platform-linux:
+    needs: prepare-draft
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_source_artifact }}
+          path: target/candidate-input/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_control_artifact }}
+          path: target/candidate-input/control
+      - uses: actions/download-artifact@v4
+        with:
+          name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/draft
+      - name: Verify Linux handoff archive
+        run: >-
+          bash scripts/run-publication-handoff.sh --mode Platform
+          --candidate-source-bundle target/candidate-input/source/CANDIDATE_SOURCE_BUNDLE.tar
+          --candidate-control-bundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar
+          --draft-bundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
+          --platform linux --result-id H01-LINUX
+          --platform-bundle-output target/H01-LINUX
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H01-LINUX-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/H01-LINUX
+          if-no-files-found: error
+
+  platform-windows:
+    needs: prepare-draft
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_source_artifact }}
+          path: target/candidate-input/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_control_artifact }}
+          path: target/candidate-input/control
+      - uses: actions/download-artifact@v4
+        with:
+          name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/draft
+      - name: Verify Windows handoff archive
+        shell: pwsh
+        run: >-
+          ./scripts/run-publication-handoff.ps1 -Mode Platform
+          -CandidateSourceBundle target/candidate-input/source/CANDIDATE_SOURCE_BUNDLE.tar
+          -CandidateControlBundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar
+          -DraftBundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
+          -Platform windows -ResultId H01-WINDOWS
+          -PlatformBundleOutput target/H01-WINDOWS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H01-WINDOWS-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/H01-WINDOWS
+          if-no-files-found: error
+
+  platform-macos:
+    needs: prepare-draft
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_source_artifact }}
+          path: target/candidate-input/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_control_artifact }}
+          path: target/candidate-input/control
+      - uses: actions/download-artifact@v4
+        with:
+          name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/draft
+      - name: Verify macOS handoff archive
+        run: >-
+          bash scripts/run-publication-handoff.sh --mode Platform
+          --candidate-source-bundle target/candidate-input/source/CANDIDATE_SOURCE_BUNDLE.tar
+          --candidate-control-bundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar
+          --draft-bundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
+          --platform macos --result-id H01-MACOS
+          --platform-bundle-output target/H01-MACOS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H01-MACOS-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/H01-MACOS
+          if-no-files-found: error
+
+  aggregate-handoff:
+    if: always()
+    needs: [prepare-draft, platform-linux, platform-windows, platform-macos]
+    runs-on: [self-hosted, linux, x64, rocketmq-release-candidate]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the complete platform denominator
+        shell: bash
+        run: |
+          [[ '${{ needs.prepare-draft.result }}' == 'success' ]]
+          [[ '${{ needs.platform-linux.result }}' == 'success' ]]
+          [[ '${{ needs.platform-windows.result }}' == 'success' ]]
+          [[ '${{ needs.platform-macos.result }}' == 'success' ]]
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: H01-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/platform-results
+      - uses: actions/download-artifact@v4
+        with:
+          name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/draft
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_source_artifact }}
+          path: target/candidate-input/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_control_artifact }}
+          path: target/candidate-input/control
+      - name: Finalize retained publication handoff
+        run: >-
+          bash scripts/run-publication-handoff.sh --mode Finalize
+          --candidate-source-bundle target/candidate-input/source/CANDIDATE_SOURCE_BUNDLE.tar
+          --candidate-control-bundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar
+          --draft-bundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
+          --platform-bundles-root target/platform-results
+          --output-root target/v1-publication-handoff
+      - uses: actions/upload-artifact@v4
+        with:
+          name: publication-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/v1-publication-handoff
+          if-no-files-found: error
+
+  handoff-lifecycle-finalizer:
+    if: always()
+    needs: aggregate-handoff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record aggregate outcome
+        run: test '${{ needs.aggregate-handoff.result }}' = 'success'

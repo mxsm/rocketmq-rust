@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "directories": [
+    {"source_domain": "candidate", "source": "crate-packages", "destination": "crate-packages"},
+    {"source_domain": "candidate", "source": "archives", "destination": "archives"},
+    {"source_domain": "candidate", "source": "oci", "destination": "oci-layout"},
+    {"source_domain": "candidate", "source": "helm", "destination": "helm"},
+    {"source_domain": "candidate", "source": "sbom", "destination": "sbom"},
+    {"source_domain": "candidate", "source": "provenance", "destination": "provenance"}
+  ],
+  "files": [
+    {"source_domain": "candidate", "source": "ARTIFACT_INDEX.json", "destination": "manifests/ARTIFACT_INDEX.json"},
+    {"source_domain": "candidate", "source": "EVIDENCE_INDEX.json", "destination": "evidence/EVIDENCE_INDEX.json"},
+    {"source_domain": "candidate", "source": "NO_REMOTE_PUBLICATION.json", "destination": "evidence/NO_REMOTE_PUBLICATION.json"},
+    {"source_domain": "candidate", "source": "common-input-source/RELEASE_NOTES.md", "destination": "docs/RELEASE_NOTES.md"},
+    {"source_domain": "repository", "source": "LICENSE-APACHE", "destination": "legal/LICENSE-APACHE"},
+    {"source_domain": "repository", "source": "NOTICE", "destination": "legal/NOTICE"},
+    {"source_domain": "repository", "source": "rocketmq-doc/en/release/1.0/upgrade-and-rollback.md", "destination": "docs/UPGRADE_ROLLBACK.md"},
+    {"source_domain": "repository", "source": "rocketmq-doc/en/release/1.0/publication-handoff.md", "destination": "docs/PUBLICATION_HANDOFF.md"}
+  ]
+}
