@@ -1,0 +1,25 @@
+name: Core Kubernetes candidate assets
+
+on:
+  pull_request:
+    paths:
+      - distribution/helm/rocketmq-rust-core/**
+      - distribution/container/core-service.Dockerfile
+      - docker/core-container-policy.json
+      - scripts/core_container_image_guard.py
+      - scripts/tests/test_core_container_image_guard.py
+      - .github/workflows/core-kubernetes-assets-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-core-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate four-service local candidate boundary
+        run: |
+          python -m unittest scripts.tests.test_core_container_image_guard scripts.tests.test_package_core_helm
+          python scripts/core_container_image_guard.py --policy docker/core-container-policy.json --chart distribution/helm/rocketmq-rust-core

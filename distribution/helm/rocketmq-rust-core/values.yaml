@@ -1,12 +1,30 @@
 global:
   candidateVersion: "1.0.0"
+  imageRegistry: "ghcr.io/mxsm/rocketmq-rust"
+  imagePullPolicy: IfNotPresent
+  storageClassName: ""
 
 services:
   namesrv:
     enabled: true
+    replicas: 1
+    port: 9876
+    storage: 1Gi
   broker:
     enabled: true
+    replicas: 1
+    port: 10911
+    storage: 10Gi
+    controllerMode: false
   controller:
-    enabled: true
+    enabled: false
+    replicas: 3
+    port: 9878
+    storage: 2Gi
   proxy:
-    enabled: true
+    enabled: false
+    replicas: 1
+    port: 8081
+    tls:
+      enabled: false
+      secretName: ""

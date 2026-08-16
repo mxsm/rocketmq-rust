@@ -28,7 +28,7 @@ def create_candidate(root: Path, *, version: str = "1.0.0") -> Path:
         {
             "schema_version": 1,
             "candidate_id": f"{version}-runlocal-attempt1-ordinal1",
-            "candidate_kind": "final",
+            "candidate_kind": "rc" if "-rc." in version else "final",
             "version": version,
             "run_id": "local",
             "attempt": 1,

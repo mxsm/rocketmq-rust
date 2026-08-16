@@ -1,0 +1,12 @@
+services:
+  namesrv:
+    enabled: true
+    replicas: 2
+  broker:
+    enabled: true
+    replicas: 2
+    controllerMode: false
+  controller:
+    enabled: false
+  proxy:
+    enabled: false

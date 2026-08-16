@@ -65,7 +65,7 @@ class CoreServiceImagePublicationTests(unittest.TestCase):
                 .read_text(encoding="utf-8")
                 .replace("default: false", "default: true")
                 .replace(
-                    'run: echo "Local candidate only; remote push is not executed"',
+                    'run: |\n          test -n "${{ inputs.candidate_manifest }}"',
                     "run: echo ${{ secrets.CARGO_REGISTRY_TOKEN }}",
                 ),
                 encoding="utf-8",

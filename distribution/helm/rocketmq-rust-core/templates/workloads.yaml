@@ -1,0 +1,79 @@
+{{- range $service, $config := .Values.services }}
+{{- if $config.enabled }}
+{{- $stateful := or (eq $service "broker") (eq $service "controller") }}
+---
+apiVersion: apps/v1
+kind: {{ ternary "StatefulSet" "Deployment" $stateful }}
+metadata:
+  name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+  labels:
+    {{- include "rocketmq-core.labels" (dict "Release" $.Release "service" $service) | nindent 4 }}
+spec:
+  replicas: {{ $config.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $service }}
+  {{- if $stateful }}
+  serviceName: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: {{ $service }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: {{ $service }}
+          image: {{ include "rocketmq-core.image" (dict "Values" $.Values "service" $service) }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          args: ["-c", "/etc/rocketmq/service.toml"]
+          ports:
+            - name: service
+              containerPort: {{ $config.port }}
+          readinessProbe:
+            tcpSocket:
+              port: service
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rocketmq
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/rocketmq
+          {{- if and (eq $service "proxy") $config.tls.enabled }}
+            - name: proxy-tls
+              mountPath: /etc/rocketmq/tls
+              readOnly: true
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+        {{- if not $stateful }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if and (eq $service "proxy") $config.tls.enabled }}
+        - name: proxy-tls
+          secret:
+            secretName: {{ required "services.proxy.tls.secretName is required when TLS is enabled" $config.tls.secretName }}
+        {{- end }}
+  {{- if $stateful }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $.Values.global.storageClassName }}
+        storageClassName: {{ $.Values.global.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $config.storage }}
+  {{- end }}
+{{- end }}
+{{- end }}

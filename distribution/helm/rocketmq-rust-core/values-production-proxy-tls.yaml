@@ -1,0 +1,14 @@
+services:
+  namesrv:
+    enabled: true
+  broker:
+    enabled: true
+    controllerMode: false
+  controller:
+    enabled: false
+  proxy:
+    enabled: true
+    replicas: 2
+    tls:
+      enabled: true
+      secretName: rocketmq-proxy-tls
