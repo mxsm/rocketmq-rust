@@ -65,7 +65,7 @@ export default function DlqMessagePage() {
     try {
       const data = await consumerApi.list();
       if (groupRequestRef.current !== requestId) return;
-      const nextGroups = data.items.map((item) => item.group).filter((group) => !group.startsWith('CID_RMQ_SYS_')).sort();
+      const nextGroups = data.items.map((item) => item.rawGroupName).filter((group) => !group.startsWith('CID_RMQ_SYS_')).sort();
       setGroups(nextGroups);
       setConsumerGroup((current) => current || nextGroups[0] || '');
     } catch (requestError) {

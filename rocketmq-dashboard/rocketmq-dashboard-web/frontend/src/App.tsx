@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import RouteLoading from './components/RouteLoading';
 import AppLayout from './layouts/AppLayout';
+import { ConsumerQueryScopeProvider } from './pages/consumers/ConsumerQueryScopeProvider';
 
 const AclPage = lazy(() => import('./pages/AclPage'));
 const BrokerDetailPage = lazy(() => import('./pages/BrokerDetailPage'));
@@ -29,28 +30,30 @@ export default function App() {
           path="/*"
           element={
             <AppLayout>
-              <Routes>
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/ops" element={<Navigate to="/config" replace />} />
-                <Route path="/proxy" element={<ProxyPage />} />
-                <Route path="/dashboard" element={<DashboardPage />} />
-                <Route path="/cluster" element={<Navigate to="/brokers" replace />} />
-                <Route path="/topics" element={<TopicListPage />} />
-                <Route path="/topics/:topic" element={<TopicDetailPage />} />
-                <Route path="/consumers" element={<ConsumerListPage />} />
-                <Route path="/consumers/:group" element={<ConsumerDetailPage />} />
-                <Route path="/producers" element={<ProducerListPage />} />
-                <Route path="/brokers" element={<BrokerListPage />} />
-                <Route path="/brokers/:brokerName" element={<BrokerDetailPage />} />
-                <Route path="/messages" element={<MessageQueryPage />} />
-                <Route path="/messages/dlq" element={<DlqMessagePage />} />
-                <Route path="/dlq" element={<Navigate to="/messages/dlq" replace />} />
-                <Route path="/message-trace" element={<MessageTracePage />} />
-                <Route path="/acl" element={<AclPage />} />
-                <Route path="/monitors" element={<MonitorPage />} />
-                <Route path="/config" element={<ConfigPage />} />
-                <Route path="*" element={<Navigate to="/dashboard" replace />} />
-              </Routes>
+              <ConsumerQueryScopeProvider>
+                <Routes>
+                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/ops" element={<Navigate to="/config" replace />} />
+                  <Route path="/proxy" element={<ProxyPage />} />
+                  <Route path="/dashboard" element={<DashboardPage />} />
+                  <Route path="/cluster" element={<Navigate to="/brokers" replace />} />
+                  <Route path="/topics" element={<TopicListPage />} />
+                  <Route path="/topics/:topic" element={<TopicDetailPage />} />
+                  <Route path="/consumers" element={<ConsumerListPage />} />
+                  <Route path="/consumers/:group" element={<ConsumerDetailPage />} />
+                  <Route path="/producers" element={<ProducerListPage />} />
+                  <Route path="/brokers" element={<BrokerListPage />} />
+                  <Route path="/brokers/:brokerName" element={<BrokerDetailPage />} />
+                  <Route path="/messages" element={<MessageQueryPage />} />
+                  <Route path="/messages/dlq" element={<DlqMessagePage />} />
+                  <Route path="/dlq" element={<Navigate to="/messages/dlq" replace />} />
+                  <Route path="/message-trace" element={<MessageTracePage />} />
+                  <Route path="/acl" element={<AclPage />} />
+                  <Route path="/monitors" element={<MonitorPage />} />
+                  <Route path="/config" element={<ConfigPage />} />
+                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                </Routes>
+              </ConsumerQueryScopeProvider>
             </AppLayout>
           }
         />

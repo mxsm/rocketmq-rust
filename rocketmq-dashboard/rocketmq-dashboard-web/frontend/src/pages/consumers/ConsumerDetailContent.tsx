@@ -1,5 +1,5 @@
 import { ListChecks, RadioTower, RotateCcw, Users } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { consumerApi } from '../../api/consumer_api';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ErrorState from '../../components/ErrorState';
@@ -18,33 +18,39 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Label } from '../../components/ui/Label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
-import type { ConsumerGroupInfo, ConsumerProgress, ConsumerQueueProgress } from '../../types/consumer';
+import type {
+  ConsumerProgressQueue,
+  ConsumerProgressView,
+  ConsumerSummaryView
+} from '../../types/consumer';
+import { useConsumerQueryScope } from './ConsumerQueryScopeProvider';
 import { normalizeConsumerValue } from './consumer-model';
 
 interface ConsumerDetailContentProps {
   group: string;
-  consumer?: ConsumerGroupInfo | null;
   initialTab?: 'overview' | 'progress' | 'reset';
 }
 
-const progressColumns: AppDataTableColumn<ConsumerQueueProgress>[] = [
-  { id: 'topic', header: 'Topic', width: '220px', cell: (row) => <code>{row.topic}</code> },
+const queueColumns: AppDataTableColumn<ConsumerProgressQueue>[] = [
   { id: 'broker', header: 'Broker', width: '150px', cell: (row) => row.brokerName },
   { id: 'queue', header: 'Queue', width: '80px', cell: (row) => row.queueId },
   { id: 'brokerOffset', header: 'Broker offset', width: '130px', cell: (row) => row.brokerOffset },
   { id: 'consumerOffset', header: 'Consumer offset', width: '140px', cell: (row) => row.consumerOffset },
+  { id: 'client', header: 'Client', width: '180px', cell: (row) => <span title={row.clientInfo}>{row.clientInfo || '-'}</span> },
   {
     id: 'lag',
     header: 'Lag',
     width: '100px',
-    cell: (row) => <StatusBadge status={String(row.diff)} tone={row.diff > 0 ? 'warning' : 'success'} />
-  }
+    cell: (row) => <StatusBadge status={String(row.diffTotal)} tone={row.diffTotal > 0 ? 'warning' : 'success'} />
+  },
+  { id: 'lastConsume', header: 'Last consume time', width: '180px', cell: (row) => formatTimestamp(row.lastTimestamp) }
 ];
 
-export default function ConsumerDetailContent({ group, consumer, initialTab = 'overview' }: ConsumerDetailContentProps) {
+export default function ConsumerDetailContent({ group, initialTab = 'overview' }: ConsumerDetailContentProps) {
+  const { scope, revision } = useConsumerQueryScope();
   const [activeTab, setActiveTab] = useState(initialTab);
-  const [identity, setIdentity] = useState<ConsumerGroupInfo | null>(consumer ?? null);
-  const [progress, setProgress] = useState<ConsumerProgress | null>(null);
+  const [summary, setSummary] = useState<ConsumerSummaryView | null>(null);
+  const [progress, setProgress] = useState<ConsumerProgressView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -63,16 +69,14 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
     setLoading(true);
     setError(null);
     try {
-      const [nextProgress, nextIdentity] = await Promise.all([
-        consumerApi.progress(group),
-        consumer
-          ? Promise.resolve(consumer)
-          : consumerApi.list().then((result) => result.items.find((item) => item.group === group) ?? null)
+      const [nextSummary, nextProgress] = await Promise.all([
+        consumerApi.summary(group, scope),
+        consumerApi.progress(group, scope)
       ]);
       if (token !== requestToken.current) return;
+      setSummary(nextSummary);
       setProgress(nextProgress);
-      setIdentity(nextIdentity);
-      setResetTopic((current) => current || nextProgress.queues[0]?.topic || '');
+      setResetTopic((current) => current || nextProgress.topics[0]?.topic || '');
     } catch (requestError) {
       if (token === requestToken.current) {
         setError(requestError instanceof Error ? requestError.message : String(requestError));
@@ -86,7 +90,7 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
     currentGroupRef.current = group;
     resetOperationToken.current += 1;
     setActiveTab(initialTab);
-    setIdentity(consumer ?? null);
+    setSummary(null);
     setProgress(null);
     setResetTopic('');
     setValidationError(null);
@@ -98,7 +102,10 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
       requestToken.current += 1;
       resetOperationToken.current += 1;
     };
-  }, [group, consumer, initialTab]);
+  }, [group, initialTab, scope.mode, scope.proxyAddress, revision]);
+
+  const topics = progress?.topics ?? [];
+  const topicOptions = useMemo(() => topics.map((topic) => topic.topic), [topics]);
 
   const reviewReset = () => {
     const timestamp = Number(resetTimestamp);
@@ -144,16 +151,17 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
     }
   };
 
-  if (loading && !progress) return <LoadingState label="Loading consumer progress" />;
+  if (loading && !progress) return <LoadingState label="Loading consumer workspace" />;
   if (error && !progress) return <ErrorState message={error} onRetry={() => void load()} />;
 
   return (
     <div className="entity-detail-content consumer-detail-content">
       {notice ? <div className="notice notice-success" role="status">{notice}</div> : null}
-      {loading && progress ? <LoadingState label="Refreshing consumer progress" /> : null}
+      {loading && progress ? <LoadingState label="Refreshing consumer workspace" /> : null}
       {!loading && error && progress ? (
-        <ErrorState message={error} onRetry={() => void load()} retryLabel="Retry progress refresh" />
+        <ErrorState message={error} onRetry={() => void load()} retryLabel="Retry workspace refresh" />
       ) : null}
+
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
         <TabsList aria-label="Consumer detail sections">
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -164,31 +172,44 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
         <TabsContent value="overview">
           <div className="metric-grid entity-detail-metrics">
             <MetricCard label="Topics" value={progress?.topicCount ?? 0} detail="Tracked by queue progress" icon={<ListChecks size={18} />} />
-            <MetricCard label="Total lag" value={progress?.diffTotal ?? identity?.diffTotal ?? 0} detail="Aggregate offset difference" icon={<RotateCcw size={18} />} />
-            <MetricCard label="Queues" value={progress?.queues.length ?? 0} detail="Reported queue entries" icon={<RadioTower size={18} />} />
-            <MetricCard label="Connected clients" value={identity?.clientCount ?? 0} detail="Consumer group summary" icon={<Users size={18} />} />
+            <MetricCard label="Total lag" value={progress?.totalDiff ?? summary?.diffTotal ?? 0} detail="Aggregate offset difference" icon={<RotateCcw size={18} />} />
+            <MetricCard label="Connections" value={summary?.connectionCount ?? 0} detail="Consumer group summary" icon={<Users size={18} />} />
+            <MetricCard label="TPS" value={summary?.consumeTps ?? 0} detail="Reported consume throughput" icon={<RadioTower size={18} />} />
           </div>
           <dl className="entity-description-grid">
-            <div><dt>Consumer group</dt><dd className="mono">{group}</dd></div>
-            <div><dt>Consume type</dt><dd>{normalizeConsumerValue(identity?.consumeType ?? '')}</dd></div>
-            <div><dt>Message model</dt><dd>{normalizeConsumerValue(identity?.messageModel ?? '')}</dd></div>
-            <div><dt>Progress source</dt><dd>Live admin API</dd></div>
+            <div><dt>Consumer group</dt><dd className="mono">{summary?.group ?? group}</dd></div>
+            <div><dt>Category</dt><dd>{summary?.category ?? '-'}</dd></div>
+            <div><dt>Consume type</dt><dd>{normalizeConsumerValue(summary?.consumeType ?? '')}</dd></div>
+            <div><dt>Message model</dt><dd>{normalizeConsumerValue(summary?.messageModel ?? '')}</dd></div>
+            <div><dt>Version</dt><dd>{summary?.versionDesc ?? '-'}</dd></div>
+            <div><dt>Brokers</dt><dd className="mono">{summary?.brokerNames.join(', ') ?? '-'}</dd></div>
           </dl>
         </TabsContent>
 
         <TabsContent value="progress">
-          <AppDataTable
-            ariaLabel="Consumer queue progress"
-            rows={progress?.queues ?? []}
-            columns={progressColumns}
-            getRowId={(row) => `${row.topic}-${row.brokerName}-${row.queueId}`}
-            page={1}
-            pageSize={Math.max(progress?.queues.length ?? 0, 1)}
-            total={progress?.queues.length ?? 0}
-            onPageChange={() => undefined}
-            emptyTitle="No queue progress"
-            emptyDetail="This group has no queue offset entries in the current response."
-          />
+          {topics.length === 0 ? (
+            <div className="notice notice-neutral" role="status">No Topic progress is currently reported for this group.</div>
+          ) : null}
+          {topics.map((topic) => (
+            <section key={topic.topic} className="consumer-progress-section">
+              <header>
+                <h3>{topic.topic}</h3>
+                <span>Lag {topic.diffTotal}</span>
+              </header>
+              <AppDataTable
+                ariaLabel={`Progress for ${topic.topic}`}
+                rows={topic.queues}
+                columns={queueColumns}
+                getRowId={(row) => `${topic.topic}:${row.brokerName}:${row.queueId}`}
+                page={1}
+                pageSize={Math.max(topic.queues.length, 1)}
+                total={topic.queues.length}
+                onPageChange={() => undefined}
+                emptyTitle="No queue progress"
+                emptyDetail="This Topic has no queue offset entries in the current response."
+              />
+            </section>
+          ))}
         </TabsContent>
 
         <TabsContent value="reset">
@@ -206,9 +227,7 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
                   value={resetTopic}
                   onChange={(event) => setResetTopic(event.target.value)}
                 >
-                  {Array.from(new Set(progress?.queues.map((queue) => queue.topic) ?? [])).map((topic) => (
-                    <option key={topic} value={topic}>{topic}</option>
-                  ))}
+                  {topicOptions.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
                 </select>
               </div>
               <div className="field">
@@ -232,7 +251,7 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
                 Force reset
               </label>
             </div>
-            {validationError ? <div className="inline-validation" role="status">{validationError}</div> : null}
+            {validationError ? <div className="inline-validation" role="alert">{validationError}</div> : null}
             <Button type="button" variant="destructive" onClick={reviewReset}>
               <RotateCcw size={15} aria-hidden="true" /> Review reset
             </Button>
@@ -262,4 +281,9 @@ export default function ConsumerDetailContent({ group, consumer, initialTab = 'o
       </AlertDialog>
     </div>
   );
+}
+
+function formatTimestamp(value: number): string {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
 }
