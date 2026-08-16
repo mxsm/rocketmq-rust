@@ -47,6 +47,7 @@ use crate::model::BrokerConfigView;
 use crate::model::BrokerInfo;
 use crate::model::BrokerListView;
 use crate::model::BrokerRuntimeStats;
+use crate::model::ConsumerBrokerListView;
 use crate::model::ConsumerGroupInfo;
 use crate::model::ConsumerListView;
 use crate::model::ConsumerProgress;
@@ -91,6 +92,7 @@ pub struct DashboardAdminClient {
     admin_session: Arc<Mutex<Option<Arc<ManagedAdminSession>>>>,
     topic_admin_sessions: Arc<TopicAdminSessionRegistry<AdminGuard>>,
     topic_mutation_lock: Arc<Mutex<()>>,
+    consumer_mutation_lock: Arc<Mutex<()>>,
     next_generation: Arc<AtomicU64>,
     session_tasks: ChildServiceContext,
 }
@@ -181,6 +183,52 @@ macro_rules! run_topic_admin_rpc {
     }};
 }
 
+macro_rules! run_consumer_admin_rpc {
+    ($client:expr, |$admin:ident| $operation:expr) => {
+        run_consumer_admin_rpc!($client, None, |$admin| $operation)
+    };
+    ($client:expr, $mutation_guard:expr, |$admin:ident| $operation:expr) => {{
+        let snapshot = $client.admin_config_snapshot().await?;
+        let client = $client.clone();
+        let admin_group = unique_admin_group();
+        let (response_tx, response_rx) = oneshot::channel();
+        let config_cancellation = client.session_tasks.task_group().cancellation_token();
+        let guard_cancellation = client.session_tasks.task_group().cancellation_token();
+        let operation_cancellation = client.session_tasks.task_group().cancellation_token();
+        let build_client = client.clone();
+        let build_snapshot = snapshot.clone();
+        let mutation_guard = $mutation_guard;
+        client
+            .session_tasks
+            .spawn_service(format!("consumer-admin-rpc-{admin_group}"), async move {
+                let result = run_topic_mutation_with_guard(mutation_guard, async move {
+                    run_tracked_topic_admin_service(
+                        &client.topic_admin_sessions,
+                        &client.config,
+                        snapshot,
+                        config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
+                        operation_cancellation.cancelled(),
+                        move || async move { build_client.build_topic_admin_guard(&build_snapshot, admin_group).await },
+                        move |guard| {
+                            Box::pin(async move {
+                                let $admin = guard.inner_mut();
+                                Box::pin($operation).await.map_err(DashboardError::from)
+                            })
+                        },
+                    )
+                    .await
+                })
+                .await;
+                let _ = response_tx.send(result);
+            })
+            .map_err(|error| DashboardError::Internal(format!("Could not start consumer admin RPC: {error}")))?;
+        response_rx
+            .await
+            .map_err(|_| DashboardError::Internal("Consumer admin RPC stopped before returning a result".to_string()))?
+    }};
+}
+
 async fn run_topic_mutation_with_guard<T, F>(mutation_guard: Option<OwnedMutexGuard<()>>, operation: F) -> T
 where
     F: Future<Output = T>,
@@ -193,6 +241,9 @@ mod topic;
 mod topic_session;
 
 use self::topic_session::*;
+
+mod consumer;
+mod consumer_operations;
 
 impl ManagedAdminSession {
     async fn lease(&self) -> Result<AdminSessionLease, DashboardError> {
@@ -261,6 +312,7 @@ impl DashboardAdminClient {
             admin_session: Arc::new(Mutex::new(None)),
             topic_admin_sessions: Arc::new(TopicAdminSessionRegistry::default()),
             topic_mutation_lock: Arc::new(Mutex::new(())),
+            consumer_mutation_lock: Arc::new(Mutex::new(())),
             next_generation: Arc::new(AtomicU64::new(1)),
             session_tasks,
         }
@@ -268,6 +320,10 @@ impl DashboardAdminClient {
 
     pub(crate) async fn acquire_topic_mutation_lock(&self) -> OwnedMutexGuard<()> {
         Arc::clone(&self.topic_mutation_lock).lock_owned().await
+    }
+
+    pub(crate) async fn acquire_consumer_mutation_lock(&self) -> OwnedMutexGuard<()> {
+        Arc::clone(&self.consumer_mutation_lock).lock_owned().await
     }
 
     pub async fn shutdown(&self) {
@@ -418,9 +474,26 @@ impl DashboardAdminClient {
             reset_timestamp: request.reset_timestamp as u64,
             force: request.force,
         };
-        let result = run_admin_rpc!(self, |admin| admin.dashboard_reset_consumer(&request))?;
+        let mutation_guard = self.acquire_consumer_mutation_lock().await;
+        let result = run_consumer_admin_rpc!(self, Some(mutation_guard), |admin| admin
+            .dashboard_reset_consumer(&request))?;
         Ok(MutationResult {
             message: result.message,
+        })
+    }
+
+    pub async fn consumer_brokers(&self, group: &str) -> Result<ConsumerBrokerListView, DashboardError> {
+        validate_name(group, "Consumer group")?;
+        let list = run_admin_rpc!(self, |admin| admin.dashboard_consumer_brokers(group))?;
+        Ok(ConsumerBrokerListView {
+            items: list
+                .items
+                .into_iter()
+                .map(|item| crate::model::ConsumerBrokerInfo {
+                    broker_name: item.broker_name,
+                    broker_address: item.broker_address,
+                })
+                .collect(),
         })
     }
 
