@@ -24,6 +24,11 @@ from pathlib import Path
 import sys
 from typing import Any
 
+try:
+    from scripts.v1_capability_freeze import FREEZE, validate_freeze
+except ModuleNotFoundError:
+    from v1_capability_freeze import FREEZE, validate_freeze
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "scripts" / "v1-capability-manifest.json"
@@ -317,6 +322,14 @@ def validate_manifest(
         for item in exclusions:
             if item.get("completion_status") != "intentionally-unsupported" or not item.get("reason"):
                 _finding(findings, "exclusion-status-invalid", str(item.get("exclusion_id")), repr(item))
+    if phase >= 6:
+        try:
+            freeze = load_manifest(FREEZE)
+            freeze_findings = validate_freeze(manifest, freeze, root=root)
+        except (CapabilityInputError, ValueError) as error:
+            freeze_findings = [str(error)]
+        for detail in freeze_findings:
+            _finding(findings, "phase6-freeze-invalid", "freeze", detail)
     return sorted(set(findings))
 
 

@@ -215,11 +215,16 @@ print(json.dumps([finding.as_dict() for finding in findings]))
         ):
             self.assertIn(required, document)
 
-    def test_phase_six_rejects_every_active_blocked_capability(self) -> None:
-        findings = self.validate_fixture(self.load_manifest(), phase=6)
-        blocked = {item["path"] for item in findings if item["code"] == "release-capability-blocked"}
+    def test_phase_six_accepts_the_freeze_and_rejects_status_regression(self) -> None:
+        manifest = self.load_manifest()
+        self.assertEqual([], self.validate_fixture(manifest, phase=6))
+        self.capability(manifest, "F-01")["completion_status"] = "blocked"
 
-        self.assertEqual(24, len(blocked))
+        findings = self.validate_fixture(manifest, phase=6)
+        codes = {item["code"] for item in findings}
+
+        self.assertIn("release-capability-blocked", codes)
+        self.assertIn("phase6-freeze-invalid", codes)
 
     def test_schema_and_manifest_do_not_define_content_digest_fields(self) -> None:
         self.assertTrue(MANIFEST_PATH.is_file(), "capability manifest is missing")

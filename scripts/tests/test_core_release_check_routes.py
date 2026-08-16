@@ -104,6 +104,10 @@ class CoreReleaseCheckRouteTests(unittest.TestCase):
         self.assertIn("core_release_checks.py", bash)
         self.assertIn("--phase", powershell)
         self.assertIn("--phase", bash)
+        self.assertIn("candidate_run.py validate", powershell)
+        self.assertIn("candidate_run.py validate", bash)
+        self.assertIn("release_evidence_guard.py", powershell)
+        self.assertIn("release_evidence_guard.py", bash)
 
     def test_ci_has_required_core_job_and_legacy_identity_steps_are_report_only(self) -> None:
         workflow = (ROOT / ".github/workflows/rocketmq-rust-ci.yaml").read_text(encoding="utf-8")

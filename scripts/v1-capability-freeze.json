@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "release_line": "1.0",
+  "run_id": "phase6-freeze-2026-08-16",
+  "evidence_basis": "merged-focused-validation",
+  "remote_publication": "not-executed",
+  "active_capabilities": {
+    "F-01": { "completion_status": "equivalent", "implementation_prs": [9414] },
+    "F-02": { "completion_status": "equivalent", "implementation_prs": [9420] },
+    "F-03": { "completion_status": "equivalent", "implementation_prs": [9416] },
+    "F-04": { "completion_status": "equivalent", "implementation_prs": [9449] },
+    "F-05": { "completion_status": "equivalent", "implementation_prs": [9422] },
+    "F-06": { "completion_status": "equivalent", "implementation_prs": [9428] },
+    "F-07": { "completion_status": "equivalent", "implementation_prs": [9424] },
+    "F-08": { "completion_status": "equivalent", "implementation_prs": [9452, 9485, 9487] },
+    "F-09": { "completion_status": "alternative-equivalent", "implementation_prs": [9477, 9481] },
+    "F-10": { "completion_status": "alternative-equivalent", "implementation_prs": [9469] },
+    "F-11": { "completion_status": "equivalent", "implementation_prs": [9460] },
+    "F-12": { "completion_status": "equivalent", "implementation_prs": [9474] },
+    "F-13": { "completion_status": "equivalent", "implementation_prs": [9462] },
+    "F-14": { "completion_status": "alternative-equivalent", "implementation_prs": [9467] },
+    "F-15": { "completion_status": "equivalent", "implementation_prs": [9440] },
+    "F-16": { "completion_status": "equivalent", "implementation_prs": [9458] },
+    "F-17": { "completion_status": "equivalent", "implementation_prs": [9491] },
+    "F-18": { "completion_status": "equivalent", "implementation_prs": [9493] },
+    "G-01": { "completion_status": "equivalent", "implementation_prs": [9444] },
+    "G-02": { "completion_status": "equivalent", "implementation_prs": [9465] },
+    "G-03": { "completion_status": "equivalent", "implementation_prs": [9446] },
+    "G-04": { "completion_status": "equivalent", "implementation_prs": [9471] },
+    "G-05": { "completion_status": "equivalent", "implementation_prs": [9497, 9499] },
+    "G-06": { "completion_status": "equivalent", "implementation_prs": [9517, 9519, 9522, 9524] }
+  },
+  "deferred_capabilities": {
+    "G-07": "D-G07",
+    "G-08": "D-G08"
+  },
+  "admin_operation_denominator": {
+    "raw": 96,
+    "excluded": 2,
+    "active": 94
+  },
+  "proxy_route_policy": {
+    "inventory_source": "java-5.5-generated",
+    "active_to_unsupported_allowed": false
+  },
+  "excluded_capabilities": [
+    "OpenMessaging",
+    "BrokerContainer",
+    "DLedger CommitLog",
+    "Java Controller internal protocols"
+  ]
+}
