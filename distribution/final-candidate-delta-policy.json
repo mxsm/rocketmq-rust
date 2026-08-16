@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "scope": "core-release-final-candidate",
+  "final_version": "1.0.0",
+  "ignored_source_paths": ["CANDIDATE_TRANSFER.json"],
+  "rules": [
+    {
+      "name": "cargo-manifest-version-propagation",
+      "globs": ["Cargo.toml", "**/Cargo.toml"],
+      "format": "toml",
+      "allowed_fields": [
+        "package.version",
+        "workspace.package.version",
+        "workspace.dependencies.*.version",
+        "dependencies.*.version",
+        "dev-dependencies.*.version",
+        "build-dependencies.*.version",
+        "target.*.dependencies.*.version",
+        "target.*.dev-dependencies.*.version",
+        "target.*.build-dependencies.*.version"
+      ]
+    },
+    {
+      "name": "cargo-lock-workspace-version-propagation",
+      "globs": ["Cargo.lock", "**/Cargo.lock"],
+      "format": "cargo-lock"
+    },
+    {
+      "name": "core-container-version",
+      "globs": ["docker/core-container-policy.json"],
+      "format": "json",
+      "allowed_fields": ["release_version"]
+    },
+    {
+      "name": "core-chart-version",
+      "globs": ["distribution/helm/rocketmq-rust-core/Chart.yaml"],
+      "format": "yaml-scalar",
+      "allowed_fields": ["version", "appVersion"]
+    },
+    {
+      "name": "core-chart-candidate-version",
+      "globs": ["distribution/helm/rocketmq-rust-core/values.yaml"],
+      "format": "yaml-scalar",
+      "allowed_fields": ["global.candidateVersion"]
+    }
+  ]
+}
