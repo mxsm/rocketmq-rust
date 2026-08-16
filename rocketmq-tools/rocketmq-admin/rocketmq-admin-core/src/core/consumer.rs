@@ -191,12 +191,36 @@ pub struct DashboardConsumerConfigAttribute {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DashboardConsumerRunningInfoRequest {
     consumer_group: String,
     client_id: String,
     include_jstack: bool,
     max_output_bytes: usize,
+}
+
+impl<'de> Deserialize<'de> for DashboardConsumerRunningInfoRequest {
+    fn deserialize<Deserializer>(deserializer: Deserializer) -> Result<Self, Deserializer::Error>
+    where
+        Deserializer: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SerializedRequest {
+            consumer_group: String,
+            client_id: String,
+            include_jstack: bool,
+            max_output_bytes: usize,
+        }
+
+        let request = SerializedRequest::deserialize(deserializer)?;
+        Self::try_new(
+            request.consumer_group,
+            request.client_id,
+            request.include_jstack,
+            request.max_output_bytes,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl DashboardConsumerRunningInfoRequest {
@@ -271,8 +295,8 @@ pub struct DashboardConsumerRunningInfo {
     pub subscriptions: Vec<DashboardConsumerSubscriptionItem>,
     pub process_queues: Vec<DashboardConsumerProcessQueue>,
     pub jstack: Option<String>,
-    /// True when requested property or JStack text exceeded the aggregate
-    /// output budget and was shortened at a UTF-8 character boundary.
+    /// True when requested property or JStack text was shortened at a UTF-8
+    /// character boundary, omitted by the budget, or unavailable.
     pub truncated: bool,
 }
 
@@ -759,6 +783,24 @@ mod tests {
         assert!(DashboardConsumerRunningInfoRequest::try_new("orders", " ", false, 1024).is_err());
         assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 0).is_err());
         assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 1_048_577).is_err());
+    }
+
+    #[test]
+    fn running_info_request_deserialization_cannot_bypass_validation() {
+        let valid = serde_json::from_str::<DashboardConsumerRunningInfoRequest>(
+            r#"{"consumer_group":" orders-consumer ","client_id":" client-a ","include_jstack":true,"max_output_bytes":1024}"#,
+        )
+        .expect("valid serialized request");
+        assert_eq!(valid.consumer_group(), "orders-consumer");
+        assert_eq!(valid.client_id(), "client-a");
+
+        for invalid in [
+            r#"{"consumer_group":" ","client_id":"client-a","include_jstack":false,"max_output_bytes":1024}"#,
+            r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":0}"#,
+            r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":1048577}"#,
+        ] {
+            assert!(serde_json::from_str::<DashboardConsumerRunningInfoRequest>(invalid).is_err());
+        }
     }
 
     #[test]

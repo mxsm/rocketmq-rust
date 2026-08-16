@@ -202,7 +202,14 @@ pub(super) fn map_consumer_connection(
                 .to_string(),
         })
         .collect::<Vec<_>>();
-    connections.sort_by(|left, right| left.client_id.cmp(&right.client_id));
+    connections.sort_by(|left, right| {
+        left.client_id
+            .cmp(&right.client_id)
+            .then(left.client_addr.cmp(&right.client_addr))
+            .then(left.language.cmp(&right.language))
+            .then(left.version.cmp(&right.version))
+            .then(left.version_desc.cmp(&right.version_desc))
+    });
     let mut subscriptions = connection
         .get_subscription_table()
         .values()
@@ -387,7 +394,13 @@ pub(super) fn map_consumer_running_info(
     });
 
     let jstack = if include_jstack {
-        running_info.jstack.map(|jstack| budget.take(&jstack))
+        match running_info.jstack {
+            Some(jstack) => Some(budget.take(&jstack)),
+            None => {
+                budget.truncated = true;
+                None
+            }
+        }
     } else {
         None
     };
@@ -511,6 +524,7 @@ mod tests {
     use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
     use rocketmq_protocol::protocol::body::process_queue_info::ProcessQueueInfo;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::protocol::LanguageCode;
 
     use super::*;
 
@@ -551,6 +565,24 @@ mod tests {
         connection
             .get_subscription_table_mut()
             .insert(CheetahString::from_static_str("orders"), subscription);
+        connection
+    }
+
+    fn duplicate_client_id_connection_fixture() -> ConsumerConnection {
+        let mut connection = ConsumerConnection::new();
+        for (client_addr, language, version) in [
+            ("10.0.0.9:12000", LanguageCode::JAVA, RocketMqVersion::V5_3_0),
+            ("10.0.0.8:12000", LanguageCode::RUST, RocketMqVersion::V5_2_0),
+            ("10.0.0.8:12000", LanguageCode::JAVA, RocketMqVersion::V5_3_0),
+            ("10.0.0.8:12000", LanguageCode::JAVA, RocketMqVersion::V5_2_0),
+        ] {
+            let mut client = Connection::new();
+            client.set_client_id(CheetahString::from_static_str("client-a"));
+            client.set_client_addr(CheetahString::from(client_addr));
+            client.set_language(language);
+            client.set_version(version as i32);
+            connection.insert_connection(client);
+        }
         connection
     }
 
@@ -635,6 +667,34 @@ mod tests {
         assert_eq!(mapped.subscriptions[0].topic, "orders");
         assert_eq!(mapped.subscriptions[0].expression_type, "TAG");
         assert_eq!(mapped.subscriptions[0].tags_set, vec!["created", "paid"]);
+    }
+
+    #[test]
+    fn connection_mapping_totally_orders_duplicate_client_ids() {
+        let expected = vec![
+            ("10.0.0.8:12000", "JAVA", "V5_2_0"),
+            ("10.0.0.8:12000", "JAVA", "V5_3_0"),
+            ("10.0.0.8:12000", "RUST", "V5_2_0"),
+            ("10.0.0.9:12000", "JAVA", "V5_3_0"),
+        ];
+
+        for _ in 0..32 {
+            let mapped = map_consumer_connection("orders-consumer", duplicate_client_id_connection_fixture());
+            assert_eq!(
+                mapped
+                    .connections
+                    .iter()
+                    .map(|item| {
+                        (
+                            item.client_addr.as_str(),
+                            item.language.as_str(),
+                            item.version_desc.as_str(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[tokio::test]
@@ -728,5 +788,16 @@ mod tests {
 
         assert_eq!(mapped.jstack, None);
         assert!(!mapped.truncated);
+    }
+
+    #[test]
+    fn running_info_mapping_marks_requested_but_absent_jstack_as_truncated() {
+        let mut running_info = running_info_fixture();
+        running_info.jstack = None;
+
+        let mapped = map_consumer_running_info("orders-consumer", "10.0.0.8@client-a", true, 1_048_576, running_info);
+
+        assert_eq!(mapped.jstack, None);
+        assert!(mapped.truncated);
     }
 }
