@@ -160,7 +160,7 @@ fn spawn_tracked_orderly_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, Box::pin(tracked_task)) {
         warn!("Failed to spawn {} background task: {}", thread_name, error);
         warn!("Failed to track {} background task", thread_name);
     }

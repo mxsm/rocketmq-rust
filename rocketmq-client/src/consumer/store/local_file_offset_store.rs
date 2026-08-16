@@ -354,14 +354,17 @@ impl LocalFileOffsetStore {
             .await;
         };
 
-        let command_handle =
-            match spawn_client_tracked_task_with_context(service_context, "rocketmq-client-local-offset-store", task) {
-                Ok(handle) => handle,
-                Err(error) => {
-                    error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
-                    return PersistTaskHandle::NotStarted;
-                }
-            };
+        let command_handle = match spawn_client_tracked_task_with_context(
+            service_context,
+            "rocketmq-client-local-offset-store",
+            Box::pin(task),
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
+                return PersistTaskHandle::NotStarted;
+            }
+        };
 
         let scheduled_offset_table = offset_table;
         let scheduled_dirty_flag = dirty_flag;
@@ -1056,10 +1059,10 @@ mod tests {
         let handle = spawn_client_tracked_task_with_context(
             &crate::runtime::test_service_context("local-offset-store-timeout-test"),
             "rocketmq-client-local-offset-store-timeout-test",
-            async move {
+            Box::pin(async move {
                 let _drop_flag = DropFlag(dropped_in_task);
                 pending::<()>().await;
-            },
+            }),
         )
         .expect("timeout test command task should spawn");
         let handle = PersistTaskHandle::Tokio {

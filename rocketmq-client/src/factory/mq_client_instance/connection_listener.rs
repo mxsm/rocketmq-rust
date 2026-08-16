@@ -72,7 +72,7 @@ pub(super) fn spawn(
     match spawn_client_tracked_task_with_context(
         service_context,
         "rocketmq-client-connection-events",
-        run(rx, weak_instance, shutdown_token),
+        Box::pin(run(rx, weak_instance, shutdown_token)),
     ) {
         Ok(handle) => Some(handle),
         Err(error) => {

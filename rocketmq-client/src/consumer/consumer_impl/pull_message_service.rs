@@ -705,7 +705,7 @@ impl PullMessageService {
         let handle = spawn_client_tracked_task_with_context(
             &service_context,
             "rocketmq-client-pull-message-service",
-            async move {
+            Box::pin(async move {
                 info!("{} service started", "PullMessageService");
 
                 loop {
@@ -728,7 +728,7 @@ impl PullMessageService {
                 }
 
                 info!("{} service end", "PullMessageService");
-            },
+            }),
         )
         .map_err(|error| pull_message_service_startup_failed("spawn main loop", error))?;
 
@@ -742,7 +742,13 @@ impl PullMessageService {
             let handle = spawn_client_tracked_task_with_context(
                 &service_context,
                 "rocketmq-client-pull-message-service-shard",
-                run_pull_request_shard_worker(index, worker_queue, shutdown_rx, worker_instance, metrics.clone()),
+                Box::pin(run_pull_request_shard_worker(
+                    index,
+                    worker_queue,
+                    shutdown_rx,
+                    worker_instance,
+                    metrics.clone(),
+                )),
             )
             .map_err(|error| pull_message_service_startup_failed("spawn shard worker", error))?;
 
@@ -885,7 +891,11 @@ impl PullMessageService {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()?;
-        match spawn_client_task_with_context(&service_context, "rocketmq-client-pull-delayed-scheduler", tracked_task) {
+        match spawn_client_task_with_context(
+            &service_context,
+            "rocketmq-client-pull-delayed-scheduler",
+            Box::pin(tracked_task),
+        ) {
             Ok(_) => {
                 *guard = Some(queue.clone());
                 Some(queue)
@@ -1278,7 +1288,7 @@ fn spawn_scheduled_pull_message_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, Box::pin(tracked_task)) {
         error!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }

@@ -196,9 +196,13 @@ where
                 }
             }
         });
-        spawn_client_task_with_context(service_context, "rocketmq-client-consume-delay-scheduler", task)
-            .map(|_| ())
-            .map_err(|error| crate::mq_client_err!(format!("failed to start consume delay scheduler: {error}")))
+        spawn_client_task_with_context(
+            service_context,
+            "rocketmq-client-consume-delay-scheduler",
+            Box::pin(task),
+        )
+        .map(|_| ())
+        .map_err(|error| crate::mq_client_err!(format!("failed to start consume delay scheduler: {error}")))
     }
 
     fn spawn_worker<H, F>(
@@ -234,7 +238,7 @@ where
                 }
             }
         });
-        spawn_client_task_with_context(service_context, "rocketmq-client-consume-worker", task)
+        spawn_client_task_with_context(service_context, "rocketmq-client-consume-worker", Box::pin(task))
             .map(|_| ())
             .map_err(|error| crate::mq_client_err!(format!("failed to start consume worker: {error}")))
     }

@@ -199,7 +199,9 @@ fn schedule_rebalance_wakeup(
         }
     });
 
-    if let Err(error) = spawn_client_task_with_context(service_context, "rocketmq-client-rebalance-delay", task) {
+    if let Err(error) =
+        spawn_client_task_with_context(service_context, "rocketmq-client-rebalance-delay", Box::pin(task))
+    {
         error!("Failed to spawn delayed rebalance wakeup task: {}", error);
     }
 }

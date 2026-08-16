@@ -689,7 +689,7 @@ fn spawn_trace_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    spawn_client_tracked_task_with_context(service_context, thread_name, task)
+    spawn_client_tracked_task_with_context(service_context, thread_name, Box::pin(task))
         .map(TraceTaskHandle::Tracked)
         .map_err(|error| trace_dispatcher_startup_failed(thread_name, error))
 }

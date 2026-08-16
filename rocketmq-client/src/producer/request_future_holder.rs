@@ -240,14 +240,16 @@ impl RequestFutureHolder {
 
     pub(crate) fn fail_request(self: &Arc<Self>, correlation_id: String) {
         let holder = Arc::clone(self);
-        if let Err(error) =
-            spawn_client_task_with_context(&self.service_context, "rocketmq-client-request-failure", async move {
+        if let Err(error) = spawn_client_task_with_context(
+            &self.service_context,
+            "rocketmq-client-request-failure",
+            Box::pin(async move {
                 if let Some(request) = holder.remove_request_and_get(&correlation_id).await {
                     request.set_send_request_ok(false);
                     request.execute_request_callback();
                 }
-            })
-        {
+            }),
+        ) {
             error!(%error, "failed to schedule request failure callback");
         }
     }
