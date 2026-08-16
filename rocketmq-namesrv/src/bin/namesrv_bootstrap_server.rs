@@ -81,7 +81,38 @@ type EmbeddedControllerConfig = ControllerConfig;
 #[cfg(not(feature = "embedded-controller"))]
 type EmbeddedControllerConfig = ();
 
+fn print_release_version_if_requested(component: &str) -> bool {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let version = std::ffi::OsStr::new("--version");
+    let verbose = std::ffi::OsStr::new("--verbose");
+    let requested = (arguments.len() == 1 && arguments[0].as_os_str() == version)
+        || (arguments.len() == 2 && arguments[0].as_os_str() == version && arguments[1].as_os_str() == verbose);
+    if !requested {
+        return false;
+    }
+    println!("{component}");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    if arguments.len() == 2 {
+        println!(
+            "artifact_id={}",
+            option_env!("ROCKETMQ_RELEASE_ARTIFACT_ID").unwrap_or("development")
+        );
+        println!(
+            "requested_features={}",
+            option_env!("ROCKETMQ_RELEASE_REQUESTED_FEATURES").unwrap_or("default")
+        );
+        println!(
+            "effective_features={}",
+            option_env!("ROCKETMQ_RELEASE_EFFECTIVE_FEATURES").unwrap_or("default")
+        );
+    }
+    true
+}
+
 fn main() -> Result<()> {
+    if print_release_version_if_requested("rocketmq-namesrv-rust") {
+        return Ok(());
+    }
     let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
     let service_context = owner.root_context().component("rocketmq-namesrv-runtime");
     let lifecycle =

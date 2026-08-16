@@ -1,0 +1,17 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+rocketmqHome = "./work/controller"
+configStorePath = "./work/controller/controller.properties"
+controllerType = "Raft"
+nodeId = 1
+listenAddr = "127.0.0.1:9878"
+electionTimeoutMs = 1000
+heartbeatIntervalMs = 300
+storagePath = "./work/controller/storage"
+storageBackend = "RocksDB"
+metricsExporterType = "disable"
+
+[[raftPeers]]
+id = 1
+addr = "127.0.0.1:9878"

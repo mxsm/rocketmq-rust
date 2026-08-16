@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RocketMQ Rust common release inputs",
+  "type": "object",
+  "required": ["schema_version", "candidate_id", "version", "run_id", "attempt", "files", "remote_publication"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string"},
+    "version": {"type": "string"},
+    "run_id": {"type": "string"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "files": {"type": "array"},
+    "remote_publication": {"const": "not-executed"}
+  },
+  "additionalProperties": false
+}

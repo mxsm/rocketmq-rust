@@ -82,7 +82,38 @@ const LOGO: &str = r#"
         \_| \_\___/ \___|_|\_\___|\__\_|  |_/\_/\_\      \_| \_\__,_|___/\__|  \____/\___/|_| |_|\__|_|  \___/|_|_|\___|_|
     "#;
 
+fn print_release_version_if_requested(component: &str) -> bool {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let version = std::ffi::OsStr::new("--version");
+    let verbose = std::ffi::OsStr::new("--verbose");
+    let requested = (arguments.len() == 1 && arguments[0].as_os_str() == version)
+        || (arguments.len() == 2 && arguments[0].as_os_str() == version && arguments[1].as_os_str() == verbose);
+    if !requested {
+        return false;
+    }
+    println!("{component}");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    if arguments.len() == 2 {
+        println!(
+            "artifact_id={}",
+            option_env!("ROCKETMQ_RELEASE_ARTIFACT_ID").unwrap_or("development")
+        );
+        println!(
+            "requested_features={}",
+            option_env!("ROCKETMQ_RELEASE_REQUESTED_FEATURES").unwrap_or("default")
+        );
+        println!(
+            "effective_features={}",
+            option_env!("ROCKETMQ_RELEASE_EFFECTIVE_FEATURES").unwrap_or("default")
+        );
+    }
+    true
+}
+
 pub fn main() -> Result<()> {
+    if print_release_version_if_requested("rocketmq-controller-rust") {
+        return Ok(());
+    }
     let owner = RuntimeOwner::new(controller_runtime_config())
         .map_err(|source| ControllerError::runtime_source("build controller runtime", source))?;
     let service_context = owner.root_context().component("rocketmq-controller-runtime");

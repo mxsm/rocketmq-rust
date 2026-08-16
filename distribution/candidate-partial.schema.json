@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RocketMQ Rust target candidate partial",
+  "type": "object",
+  "required": ["schema_version", "candidate_id", "version", "run_id", "attempt", "target", "worker_id", "sealed", "artifacts", "events", "execution_contexts"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "target": {"type": "string", "minLength": 1},
+    "worker_id": {"type": "string", "minLength": 1},
+    "sealed": {"type": "boolean"},
+    "artifacts": {"type": "array"},
+    "events": {"type": "array"},
+    "execution_contexts": {"type": "array"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RocketMQ Rust candidate transfer bundle",
+  "type": "object",
+  "required": ["schema_version", "bundle_kind", "candidate_id", "version", "run_id", "attempt", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "bundle_kind": {"enum": ["build-source", "build-control", "target", "artifacts"]},
+    "candidate_id": {"type": "string"},
+    "version": {"type": "string"},
+    "run_id": {"type": "string"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "files": {"type": "array"}
+  },
+  "additionalProperties": false
+}
