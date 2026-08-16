@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/release-evidence.schema.json",
+  "title": "RocketMQ Rust semantic release evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "version",
+    "run_id",
+    "attempt",
+    "phase",
+    "gate_stage",
+    "required_result_ids",
+    "results",
+    "capability_results",
+    "release_result_ids",
+    "failed_result_ids",
+    "all_required_passed",
+    "remote_publication",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "phase": { "enum": [5, 6] },
+    "gate_stage": { "enum": ["release-preparation", "full-matrix", "final-handoff"] },
+    "required_result_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/result" }
+    },
+    "capability_results": {
+      "type": "object",
+      "additionalProperties": { "enum": ["passed", "failed"] }
+    },
+    "release_result_ids": {
+      "type": "object",
+      "additionalProperties": { "enum": ["passed", "failed"] }
+    },
+    "failed_result_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "all_required_passed": { "type": "boolean" },
+    "remote_publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["not-executed", "violation-detected", "indeterminate"] }
+      }
+    },
+    "generated_at": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result_id",
+        "result_kind",
+        "status",
+        "command",
+        "exit_code",
+        "matched_test_count",
+        "executed_test_count",
+        "passed_test_count",
+        "failed_test_count",
+        "ignored_test_count",
+        "capability_ids",
+        "result_path"
+      ],
+      "properties": {
+        "result_id": { "type": "string", "minLength": 1 },
+        "result_kind": { "enum": ["test", "check", "artifact", "smoke"] },
+        "status": { "enum": ["passed", "failed", "deferred-by-scope"] },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "exit_code": { "type": "integer" },
+        "matched_test_count": { "type": "integer", "minimum": 0 },
+        "executed_test_count": { "type": "integer", "minimum": 0 },
+        "passed_test_count": { "type": "integer", "minimum": 0 },
+        "failed_test_count": { "type": "integer", "minimum": 0 },
+        "ignored_test_count": { "type": "integer", "minimum": 0 },
+        "capability_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "result_path": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

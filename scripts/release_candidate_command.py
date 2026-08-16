@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Sequence
@@ -47,6 +48,27 @@ class CommandError(ReleaseStateError):
 
 SENSITIVE_OPTION_PARTS = {"password", "token", "secret", "credential"}
 SENSITIVE_KEY_OPTIONS = {"key", "private-key", "api-key", "access-key", "secret-key", "encryption-key"}
+PUBLISHING_ENVIRONMENT = {
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "CARGO_REGISTRY_TOKEN",
+    "CRATES_IO_TOKEN",
+    "DOCKER_PASSWORD",
+    "GHCR_TOKEN",
+    "GITHUB_TOKEN",
+    "HELM_REGISTRY_PASSWORD",
+}
+REMOTE_PUBLICATION_COMMAND = re.compile(
+    r"(?:^|[\\/])(?:cargo|docker|helm|oras|gh|git)(?:\.exe)?$", re.IGNORECASE
+)
+REMOTE_PUBLICATION_SUBCOMMANDS = {
+    "cargo": "publish",
+    "docker": "push",
+    "helm": "push",
+    "oras": "push",
+    "gh": "release",
+    "git": "push",
+}
 
 
 def _sensitive_option(item: str) -> bool:
@@ -74,6 +96,21 @@ def _redact_command(command: Sequence[str]) -> list[str]:
     return rendered
 
 
+def _remote_publication_operation(command: Sequence[str]) -> str | None:
+    if not command:
+        return None
+    executable = Path(command[0]).name.lower().removesuffix(".exe")
+    if REMOTE_PUBLICATION_COMMAND.search(command[0]) is None:
+        return None
+    expected = REMOTE_PUBLICATION_SUBCOMMANDS.get(executable)
+    if expected is None or len(command) < 2:
+        return None
+    arguments = [item.lower() for item in command[1:]]
+    if expected in arguments:
+        return f"{executable} {expected}"
+    return None
+
+
 def run_command(
     candidate_manifest: Path,
     *,
@@ -87,6 +124,11 @@ def run_command(
     require_safe_id(worker_id, "worker_id")
     if not command:
         raise CommandError("candidate command cannot be empty")
+    remote_operation = _remote_publication_operation(command)
+    if remote_operation is not None:
+        raise CommandError(
+            f"remote publication operation is reserved for a separate task: {remote_operation}"
+        )
     candidate_manifest = resolve_existing_file(candidate_manifest, "candidate_manifest")
     candidate = read_json(candidate_manifest)
     validate_candidate(candidate)
@@ -104,6 +146,9 @@ def run_command(
     started = {
         "schema_version": 1,
         "candidate_id": candidate["candidate_id"],
+        "version": candidate["version"],
+        "run_id": candidate["run_id"],
+        "attempt": candidate["attempt"],
         "route_id": route_id,
         "worker_id": worker_id,
         "context_path": str(context_path),
@@ -113,6 +158,11 @@ def run_command(
     }
     atomic_write_json(started_path, started)
     environment = os.environ.copy()
+    for name in list(environment):
+        if name in PUBLISHING_ENVIRONMENT or (
+            name.startswith("CARGO_REGISTRIES_") and name.endswith("_TOKEN")
+        ):
+            environment.pop(name, None)
     environment.update(
         {
             "RELEASE_CANDIDATE_MANIFEST": str(candidate_manifest),
@@ -133,6 +183,9 @@ def run_command(
         completed = {
             "schema_version": 1,
             "candidate_id": candidate["candidate_id"],
+            "version": candidate["version"],
+            "run_id": candidate["run_id"],
+            "attempt": candidate["attempt"],
             "route_id": route_id,
             "worker_id": worker_id,
             "context_path": str(context_path),

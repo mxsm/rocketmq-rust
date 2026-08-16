@@ -76,3 +76,5 @@ jobs:
           python distribution/generate_release_sbom.py --help
           python distribution/generate_release_provenance.py --help
           python scripts/legal_artifact_guard.py --help
+      - name: Prove candidate workflows cannot publish remotely
+        run: python scripts/no_remote_publication_guard.py --phase 5 --static-only

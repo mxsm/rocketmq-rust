@@ -35,6 +35,7 @@ jobs:
           python scripts/verify_core_service_image_publication.py
           python distribution/build_core_oci_layout.py --help
           python distribution/verify_core_oci_layout.py --help
+          python scripts/no_remote_publication_guard.py --phase 5 --static-only
 
   build-candidate:
     needs: validate-candidate

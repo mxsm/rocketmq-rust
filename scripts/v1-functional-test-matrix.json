@@ -60,6 +60,7 @@
     {"capability_id":"G-05","test_id":"G05-ADMIN-OPERATION-GOLDEN-CORE","phase":4,"argv":["cargo","test","-p","rocketmq-admin-core","--test","java_operation_golden"]},
     {"capability_id":"G-05","test_id":"G05-ADMIN-OPERATION-EXIT-CODES","phase":4,"argv":["cargo","test","-p","rocketmq-admin-cli","--test","operation_exit_codes"]},
     {"capability_id":"G-05","test_id":"G05-ADMIN-OPERATION-GUARD","phase":4,"argv":["python","scripts/admin_operation_guard.py","--require-complete"]},
-    {"capability_id":"G-06","test_id":"G06-CORE-PLATFORM-MATRIX","phase":5,"argv":["python","scripts/core_platform_matrix.py","--check"]}
+    {"capability_id":"G-06","test_id":"G06-CORE-PLATFORM-MATRIX","phase":5,"argv":["python","scripts/core_platform_matrix.py","--check"]},
+    {"capability_id":"G-06","test_id":"G06-SEMANTIC-CANDIDATE-EVIDENCE","phase":5,"argv":["python","-m","unittest","scripts.tests.test_no_remote_publication_guard","scripts.tests.test_release_evidence_guard","scripts.tests.test_release_preparation_runner"]}
   ]
 }

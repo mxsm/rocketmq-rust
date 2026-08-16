@@ -14,10 +14,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.tests.release_test_support import load_module, read_json
 
@@ -153,7 +155,6 @@ class ReleaseCandidateCommandTests(unittest.TestCase):
                 "1.0.0-rc.1",
             ]
         )
-
         self.assertEqual(
             rendered,
             [
@@ -167,6 +168,51 @@ class ReleaseCandidateCommandTests(unittest.TestCase):
                 "1.0.0-rc.1",
             ],
         )
+
+    def test_remote_publication_commands_are_rejected_before_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            candidate = self.candidate.create_candidate(root / "candidates", "1.0.0-rc.1", "rc1", 1, series)
+            context = self.context.capture_context(candidate, "publisher-1", root / "context")
+            events = root / "events"
+
+            with self.assertRaises(self.command.CommandError):
+                self.command.run_command(
+                    candidate,
+                    route_id="R01-forbidden-publish",
+                    worker_id="publisher-1",
+                    context_path=context,
+                    event_root=events,
+                    command=["cargo", "publish"],
+                )
+            self.assertFalse(events.exists())
+
+    def test_publishing_credentials_are_removed_from_child_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            candidate = self.candidate.create_candidate(root / "candidates", "1.0.0-rc.1", "rc1", 1, series)
+            context = self.context.capture_context(candidate, "sanitized-1", root / "context")
+            with mock.patch.dict(
+                os.environ,
+                {"GITHUB_TOKEN": "secret", "CARGO_REGISTRIES_PRIVATE_TOKEN": "secret"},
+                clear=False,
+            ):
+                exit_code = self.command.run_command(
+                    candidate,
+                    route_id="R01-sanitized",
+                    worker_id="sanitized-1",
+                    context_path=context,
+                    event_root=root / "events",
+                    command=[
+                        sys.executable,
+                        "-c",
+                        "import os; raise SystemExit(any(name in os.environ for name in "
+                        "('GITHUB_TOKEN','CARGO_REGISTRIES_PRIVATE_TOKEN')))",
+                    ],
+                )
+            self.assertEqual(exit_code, 0)
 
     def test_sealed_candidate_cannot_capture_a_new_execution_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
