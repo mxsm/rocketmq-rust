@@ -42,7 +42,7 @@ lz4_flex = { version = "0.14", features = ["alloc"], default-features = false }
 rocketmq-error = { workspace = true, features = ["with_serde"] }
 serde.workspace = true
 serde_json.workspace = true
-simd-json = { version = "0.17.0", optional = true }
+simd-json = { version = "0.18.0", optional = true }
 strum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
