@@ -1222,6 +1222,7 @@ fn spawn_runtime_on_addr_with_grpc_config(
     (shutdown_tx, server_task)
 }
 
+#[cfg(feature = "tls")]
 fn service_manager_with_route(route_service: Arc<RecordingRouteService>) -> Arc<dyn rocketmq_proxy::ServiceManager> {
     Arc::new(ClusterServiceManager::with_services(
         route_service,
