@@ -13,14 +13,33 @@
 # limitations under the License.
 
 
-# RocketMQ home installation directory
-rocketmqHome = "${user.home}/rocketmq"
+# RocketMQ installation directory
+rocketmqHome = "/opt/rocketmq"
 
-# Storage path for KV configuration file
-kvConfigPath = "${user.home}/namesrv/kvConfig.json"
+# Persistent configuration paths
+kvConfigPath = "/opt/rocketmq/data/kvConfig.json"
+configStorePath = "/opt/rocketmq/data/rocketmq-namesrv.properties"
 
-# Storage path for nameserver configuration file
-configStorePath = "${user.home}/namesrv/namesrv.properties"
+# NameServer listener
+listenPort = 9876
+bindAddress = "0.0.0.0"
+
+# Enforcing TLS listener
+tls.enable = true
+tls.server.mode = "enforcing"
+tls.server.need.client.auth = "require"
+tls.server.authClient = true
+tls.server.certPath = "/opt/rocketmq/security/namesrv-server.crt"
+tls.server.keyPath = "/opt/rocketmq/security/namesrv-server.key"
+tls.server.trustCertPath = "/opt/rocketmq/security/ca.crt"
+tls.protocols = "TLSv1.3,TLSv1.2"
+
+# Security
+allowInsecurePublicListener = false
+authenticationEnabled = true
+authorizationEnabled = true
+authConfigPath = "/opt/rocketmq/data/auth"
+aclFile = "/opt/rocketmq/conf/plain_acl.yml"
 
 # Product environment name
 productEnvName = "center"
@@ -34,23 +53,54 @@ orderMessageEnable = false
 # Whether to return order topic configuration to broker
 returnOrderTopicConfigToBroker = true
 
-# Number of threads to handle client requests, like GET_ROUTEINTO_BY_TOPIC
-clientRequestThreadPoolNums = 8
+# Route and request admission
+clientRequestThreadPoolNums = 16
 
-# Number of threads to handle broker or operation requests, like REGISTER_BROKER
-defaultThreadPoolNums = 16
+defaultThreadPoolNums = 32
 
-# Capacity of queue to hold client requests
-clientRequestThreadPoolQueueCapacity = 50000
+clientRequestThreadPoolQueueCapacity = 100000
 
-# Capacity of queue to hold broker or operation requests
-defaultThreadPoolQueueCapacity = 10000
+defaultThreadPoolQueueCapacity = 20000
+
+namesrvWorkloadAdmissionEnable = true
+namesrvWorkloadAdmissionObserveOnly = true
+namesrvWorkloadAdmissionTimeoutMillis = 100
+
+# Route optimization features
+routeFreshnessSampleInterval = 1000
+namesrvTypedZoneRouteEnable = false
+namesrvTypedZoneRouteShadow = false
+namesrvRouteResponseCacheEnable = false
+namesrvRouteResponseCacheMaxBytes = 67108864
+namesrvRouteResponseCacheMaxEntries = 10000
+namesrvRouteResponseCacheMaxSingleResponseBytes = 1048576
+namesrvRouteResponseCacheShards = 16
+
+# Registration delta
+enableRegistrationDelta = false
 
 # Interval of periodic scanning for non-active broker (milliseconds)
 scanNotActiveBrokerInterval = 5000
 
 # Capacity of queue for unregister broker operations
-unRegisterBrokerQueueCapacity = 3000
+unRegisterBrokerQueueCapacity = 5000
+unRegisterBrokerBatchSize = 100
+unRegisterBrokerBatchTimeMillis = 2
+minBrokerNotifyConcurrency = 8
+
+# Cluster-test route cache
+clusterTestRouteCachePositiveTtlMillis = 1000
+clusterTestRouteCacheNegativeTtlMillis = 250
+clusterTestRouteCacheMaxEntries = 1000
+clusterTestRouteCacheMaxBytes = 16777216
+
+# KV mutation
+kvMutationQueueCapacity = 1024
+kvMutationBatchSize = 100
+
+# Expiry index
+expiryIndexMode = "shadow"
+expirySafetyScanInterval = 300000
 
 # Whether to support acting master functionality
 # The slave can act as master when master node is down to support:
@@ -86,3 +136,10 @@ deleteTopicWithBrokerRegistration = false
 # Configurations in this black list will not be allowed to update by command
 # Try to update these configurations by restarting the process
 configBlackList = "configBlackList;configStorePath;kvConfigPath"
+
+# Logging
+# Rust tracing filter syntax. Console logging is enabled by the NameServer
+# bootstrap; file logging remains disabled by the current implementation.
+[logging]
+filter = "info"
+reload.enabled = false

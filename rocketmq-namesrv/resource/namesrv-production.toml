@@ -33,6 +33,22 @@ kvConfigPath = "/opt/rocketmq/data/kvConfig.json"
 # Default: ~/rocketmq-namesrv/rocketmq-namesrv.properties
 configStorePath = "/opt/rocketmq/data/rocketmq-namesrv.properties"
 
+# NameServer listener.
+listenPort = 9876
+bindAddress = "0.0.0.0"
+
+# Enforcing TLS listener. The certificate files must exist before startup.
+# The NameServer security bootstrap environment variables are also required;
+# see the deployment documentation for ROCKETMQ_SECURITY_* settings.
+tls.enable = true
+tls.server.mode = "enforcing"
+tls.server.need.client.auth = "require"
+tls.server.authClient = true
+tls.server.certPath = "/opt/rocketmq/security/namesrv-server.crt"
+tls.server.keyPath = "/opt/rocketmq/security/namesrv-server.key"
+tls.server.trustCertPath = "/opt/rocketmq/security/ca.crt"
+tls.protocols = "TLSv1.3,TLSv1.2"
+
 # A public listener must never rely on the migration-only insecure override.
 allowInsecurePublicListener = false
 
@@ -118,3 +134,10 @@ expirySafetyScanInterval = 300000
 
 # Bound and coalesce minimum-broker notifications during broker churn.
 minBrokerNotifyConcurrency = 8
+
+# Logging
+# Rust tracing filter syntax. Console logging is enabled by the NameServer
+# bootstrap; file logging remains disabled by the current implementation.
+[logging]
+filter = "info"
+reload.enabled = false
