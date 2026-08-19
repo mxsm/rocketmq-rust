@@ -1175,7 +1175,6 @@ impl DefaultMQProducerImpl {
             .read()
             .set_send_latency_fault_enable(send_latency_fault_enable);
     }
-
     #[inline]
     pub fn is_send_latency_fault_enable(&self) -> bool {
         self.mq_fault_strategy.read().is_send_latency_fault_enable()
