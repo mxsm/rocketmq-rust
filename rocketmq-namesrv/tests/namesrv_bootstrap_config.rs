@@ -15,6 +15,31 @@
 use std::process::Command;
 
 #[test]
+fn namesrv_toml_observability_config_parses() {
+    let root = tempfile::tempdir().expect("create isolated NameServer config root");
+    let config_path = root.path().join("namesrv-observability.toml");
+    std::fs::write(
+        &config_path,
+        r#"rocketmqHome = "target/namesrv-observability"
+
+[observability.traces]
+exporter = "otlp_grpc"
+sampleRatio = 0.2
+
+[observability.otlp]
+endpoint = "http://file-collector:4317"
+protocol = "grpc"
+"#,
+    )
+    .expect("write NameServer observability config");
+
+    let config = rocketmq_namesrv::parse_command_and_config_file(config_path)
+        .expect("NameServer observability TOML should parse");
+
+    assert_eq!(config.observability.traces.sample_ratio, Some(0.2));
+}
+
+#[test]
 fn namesrv_without_listen_port_override_reports_9876() {
     let root = tempfile::tempdir().expect("create isolated NameServer config root");
     let config_path = root.path().join("namesrv.toml");

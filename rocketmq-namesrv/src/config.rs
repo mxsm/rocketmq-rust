@@ -644,6 +644,9 @@ pub struct NamesrvConfig {
     #[serde(alias = "rocketmqHome", default = "defaults::rocketmq_home")]
     pub rocketmq_home: String,
 
+    #[serde(default)]
+    pub observability: rocketmq_observability::ObservabilityOverrides,
+
     #[serde(alias = "kvConfigPath", default = "defaults::kv_config_path")]
     pub kv_config_path: String,
 
@@ -852,6 +855,7 @@ impl Default for NamesrvConfig {
     fn default() -> Self {
         NamesrvConfig {
             rocketmq_home: defaults::rocketmq_home(),
+            observability: rocketmq_observability::ObservabilityOverrides::default(),
             kv_config_path: defaults::kv_config_path(),
             config_store_path: defaults::config_store_path(),
             product_env_name: "center".to_string(),

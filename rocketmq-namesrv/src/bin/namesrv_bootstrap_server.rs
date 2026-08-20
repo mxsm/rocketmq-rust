@@ -175,9 +175,17 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         );
     }
 
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-namesrv")
-            .context("invalid NameServer process telemetry configuration")?;
+    let mut telemetry_bootstrap = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+    telemetry_bootstrap.logging.reload = logging_overrides.logging.reload;
+    let telemetry_resolution = rocketmq_observability::resolve_telemetry_from_env(
+        "rocketmq-namesrv",
+        telemetry_bootstrap,
+        &namesrv_config.observability,
+        rocketmq_observability::TelemetryEnvironmentSpec::default(),
+    )
+    .context("failed to resolve NameServer telemetry configuration")?;
+    let process_telemetry = telemetry_resolution.process;
+    let bootstrap_config = telemetry_resolution.bootstrap;
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
     let validated_security = validate_namesrv_security(
@@ -185,7 +193,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &namesrv_config,
         &server_config,
         controller_config.as_ref(),
-        process_telemetry.prometheus_listener_addr(),
+        telemetry_resolution.prometheus_listener_addr,
         lifecycle.config().probe_bind_addr,
     )
     .context("NameServer security bootstrap failed before listener bind")?;
@@ -193,10 +201,6 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve namesrv log filter")?;
-    let mut bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
-    bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
-        .context("failed to apply standard OTLP environment to namesrv telemetry")?;
     let telemetry_guard =
         rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
             .context("failed to initialize namesrv telemetry bootstrap")?;
@@ -415,7 +419,6 @@ fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
 
 fn build_namesrv_telemetry_bootstrap_config(
     namesrv_config: &NamesrvConfig,
-    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
 ) -> rocketmq_observability::TelemetryBootstrapConfig {
     let mut observability = rocketmq_observability::ObservabilityConfig {
         service_name: "rocketmq-namesrv".to_string(),
@@ -425,7 +428,6 @@ fn build_namesrv_telemetry_bootstrap_config(
         ..rocketmq_observability::ObservabilityConfig::default()
     };
     observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
-    process_telemetry.apply_to(&mut observability);
 
     let mut logging = rocketmq_observability::LoggingConfig::default();
     logging.file.directory = service_log_directory(namesrv_config.rocketmq_home.as_str());
@@ -1127,6 +1129,60 @@ mod tests {
     }
 
     #[test]
+    fn development_security_rejects_file_prometheus_listener_without_exposing_the_listener() {
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+        let server = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+        let namesrv = NamesrvConfig {
+            allow_insecure_public_listener: false,
+            observability: rocketmq_observability::ObservabilityOverrides {
+                metrics: rocketmq_observability::MetricsOverrides {
+                    exporter: Some(rocketmq_observability::MetricsExporter::Prometheus),
+                    ..Default::default()
+                },
+                prometheus: rocketmq_observability::PrometheusOverrides {
+                    host: Some("0.0.0.0".to_string()),
+                    port: Some(5557),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..NamesrvConfig::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-namesrv",
+            build_namesrv_telemetry_bootstrap_config(&namesrv),
+            &namesrv.observability,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
+        )
+        .expect("file Prometheus listener should resolve");
+        assert_eq!(
+            resolution.prometheus_listener_addr,
+            Some(SocketAddr::from(([0, 0, 0, 0], 5557)))
+        );
+
+        let error = validate_namesrv_security(
+            &security,
+            &namesrv,
+            &server,
+            None,
+            resolution.prometheus_listener_addr,
+            None,
+        )
+        .expect_err("a public file Prometheus listener must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("development-insecure"));
+        assert!(!message.contains("0.0.0.0"));
+        assert!(!message.contains("5557"));
+    }
+
+    #[test]
     fn secure_profile_requires_tls_authentication_and_authorization() {
         let root = tempfile::tempdir().expect("temporary security root");
         let security = secure_bootstrap(root.path());
@@ -1175,19 +1231,7 @@ mod tests {
             rocketmq_home: "target/namesrv-telemetry-bootstrap".to_string(),
             ..NamesrvConfig::default()
         };
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-namesrv",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("local NameServer process telemetry");
-
-        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
+        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
 
         assert_eq!(config.observability.service_name, "rocketmq-namesrv");
         assert_eq!(
@@ -1206,25 +1250,20 @@ mod tests {
 
     #[test]
     fn namesrv_bootstrap_accepts_standard_otlp_environment_values() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-namesrv",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("local NameServer process telemetry");
-        let mut config = build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default(), &process_telemetry);
-
-        rocketmq_observability::apply_standard_otlp_environment_values(
-            &mut config,
-            Some(std::ffi::OsStr::new("http://collector:4317")),
-            Some(std::ffi::OsStr::new("grpc")),
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://collector:4317".into()),
+            otlp_protocol: Some("grpc".into()),
+            ..Default::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-namesrv",
+            build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default()),
+            &rocketmq_observability::ObservabilityOverrides::default(),
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
         )
-        .expect("valid standard OTLP environment should apply");
+        .expect("valid standard OTLP environment should resolve");
+        let config = resolution.bootstrap;
 
         assert!(config.observability.enabled);
         assert_eq!(config.observability.service_name, "rocketmq-namesrv");
