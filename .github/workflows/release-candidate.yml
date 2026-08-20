@@ -415,15 +415,23 @@ jobs:
           & pwsh @arguments
           $lifecycleExit = $LASTEXITCODE
           $PSNativeCommandUseErrorActionPreference = $true
-          "control_root=$($candidate.candidate_root)" >> $env:GITHUB_OUTPUT
-          "series_root=$(Split-Path $candidateValue.series_manifest)" >> $env:GITHUB_OUTPUT
+          $terminalCandidate = Get-Content $candidate.candidate_manifest -Raw | ConvertFrom-Json
+          $terminalSeries = Get-Content $terminalCandidate.series_manifest -Raw | ConvertFrom-Json
+          $candidateControl = Join-Path $terminalCandidate.candidate_root "transfer/CANDIDATE_CONTROL_BUNDLE.g$($terminalCandidate.generation).tar"
+          $seriesRoot = Split-Path $terminalCandidate.series_manifest
+          $seriesControl = Join-Path $seriesRoot "RELEASE_SERIES_CONTROL_BUNDLE.g$($terminalSeries.generation).tar"
+          if (-not (Test-Path -LiteralPath $candidateControl) -or -not (Test-Path -LiteralPath $seriesControl)) { throw 'terminal lifecycle control generation is incomplete' }
+          Copy-Item -LiteralPath $candidateControl -Destination (Join-Path $terminalCandidate.candidate_root 'transfer/CANDIDATE_CONTROL_BUNDLE.tar')
+          Copy-Item -LiteralPath $seriesControl -Destination (Join-Path $seriesRoot 'RELEASE_SERIES_CONTROL_BUNDLE.tar')
+          "control_root=$($terminalCandidate.candidate_root)" >> $env:GITHUB_OUTPUT
+          "series_root=$seriesRoot" >> $env:GITHUB_OUTPUT
           if ($lifecycleExit -ne 0) { exit $lifecycleExit }
       - name: Upload committed candidate control generation
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: candidate-control-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.finalize.outputs.control_root }}/transfer/CANDIDATE_CONTROL_BUNDLE.g*.tar
+          path: ${{ steps.finalize.outputs.control_root }}/transfer/CANDIDATE_CONTROL_BUNDLE.tar
           if-no-files-found: error
           retention-days: 30
       - name: Upload committed release-series control generation
@@ -431,7 +439,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-series-control-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.finalize.outputs.series_root }}/RELEASE_SERIES_CONTROL_BUNDLE.g*.tar
+          path: ${{ steps.finalize.outputs.series_root }}/RELEASE_SERIES_CONTROL_BUNDLE.tar
           if-no-files-found: error
           retention-days: 30
       - name: Propagate lifecycle result
