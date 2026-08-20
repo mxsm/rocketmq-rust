@@ -43,8 +43,6 @@ use rocketmq_namesrv::config::DEFAULT_NAMESRV_LISTEN_PORT;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::security::NameServerTransportPolicy;
 use rocketmq_namesrv::NamesrvConfig;
-#[cfg(feature = "embedded-controller")]
-use rocketmq_observability::MetricsExporterType;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
@@ -809,16 +807,6 @@ struct ControllerConfigOverrides {
     is_process_read_event: Option<bool>,
     notify_broker_role_changed: Option<bool>,
     scan_inactive_master_interval: Option<u64>,
-    metrics_exporter_type: Option<String>,
-    metrics_grpc_exporter_target: Option<String>,
-    metrics_grpc_exporter_header: Option<String>,
-    metric_grpc_exporter_time_out_in_mills: Option<u64>,
-    metric_grpc_exporter_interval_in_mills: Option<u64>,
-    metric_logging_exporter_interval_in_mills: Option<u64>,
-    metrics_prom_exporter_port: Option<u16>,
-    metrics_prom_exporter_host: Option<String>,
-    metrics_label: Option<String>,
-    metrics_in_delta: Option<bool>,
     config_black_list: Option<String>,
     node_id: Option<u64>,
     listen_addr: Option<SocketAddr>,
@@ -890,38 +878,6 @@ fn apply_controller_config_overrides(
     }
     if let Some(scan_inactive_master_interval) = overrides.scan_inactive_master_interval {
         controller_config.scan_inactive_master_interval = scan_inactive_master_interval;
-    }
-    if let Some(metrics_exporter_type) = overrides.metrics_exporter_type {
-        controller_config.metrics_exporter_type = metrics_exporter_type
-            .parse::<MetricsExporterType>()
-            .map_err(|_| anyhow::anyhow!("invalid metricsExporterType: {}", metrics_exporter_type))?;
-    }
-    if let Some(metrics_grpc_exporter_target) = overrides.metrics_grpc_exporter_target {
-        controller_config.metrics_grpc_exporter_target = metrics_grpc_exporter_target;
-    }
-    if let Some(metrics_grpc_exporter_header) = overrides.metrics_grpc_exporter_header {
-        controller_config.metrics_grpc_exporter_header = metrics_grpc_exporter_header;
-    }
-    if let Some(metric_grpc_exporter_time_out_in_mills) = overrides.metric_grpc_exporter_time_out_in_mills {
-        controller_config.metric_grpc_exporter_time_out_in_mills = metric_grpc_exporter_time_out_in_mills;
-    }
-    if let Some(metric_grpc_exporter_interval_in_mills) = overrides.metric_grpc_exporter_interval_in_mills {
-        controller_config.metric_grpc_exporter_interval_in_mills = metric_grpc_exporter_interval_in_mills;
-    }
-    if let Some(metric_logging_exporter_interval_in_mills) = overrides.metric_logging_exporter_interval_in_mills {
-        controller_config.metric_logging_exporter_interval_in_mills = metric_logging_exporter_interval_in_mills;
-    }
-    if let Some(metrics_prom_exporter_port) = overrides.metrics_prom_exporter_port {
-        controller_config.metrics_prom_exporter_port = metrics_prom_exporter_port;
-    }
-    if let Some(metrics_prom_exporter_host) = overrides.metrics_prom_exporter_host {
-        controller_config.metrics_prom_exporter_host = metrics_prom_exporter_host;
-    }
-    if let Some(metrics_label) = overrides.metrics_label {
-        controller_config.metrics_label = metrics_label;
-    }
-    if let Some(metrics_in_delta) = overrides.metrics_in_delta {
-        controller_config.metrics_in_delta = metrics_in_delta;
     }
     if let Some(config_black_list) = overrides.config_black_list {
         controller_config.config_black_list = config_black_list;

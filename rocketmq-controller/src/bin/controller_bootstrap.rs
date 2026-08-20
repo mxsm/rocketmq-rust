@@ -171,17 +171,26 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     }
 
     let logging_overrides = load_logging_overrides(cli.config_file.as_deref())?;
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env(
-            "rocketmq-controller",
-        )
-        .context("failed to validate Controller release identity and metrics configuration")?;
+    let mut telemetry_bootstrap = build_controller_telemetry_bootstrap_config(&config);
+    telemetry_bootstrap.logging.reload = logging_overrides.logging.reload;
+    let rocketmq_observability::TelemetryResolution {
+        bootstrap: bootstrap_config,
+        process: process_telemetry,
+        prometheus_listener_addr,
+        ..
+    } = rocketmq_observability::resolve_telemetry_from_env(
+        "rocketmq-controller",
+        telemetry_bootstrap,
+        &config.observability,
+        rocketmq_observability::TelemetryEnvironmentSpec::default(),
+    )
+    .context("failed to resolve Controller telemetry configuration")?;
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load Controller security bootstrap configuration")?;
     let validated_security = validate_controller_security(
         &security_bootstrap,
         &config,
-        process_telemetry.prometheus_listener_addr(),
+        prometheus_listener_addr,
         lifecycle.config().probe_bind_addr,
     )
     .context("Controller security bootstrap failed before listener bind")?;
@@ -189,11 +198,6 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&cli, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve controller log filter")?;
-    let mut bootstrap_config = build_controller_telemetry_bootstrap_config(&config);
-    process_telemetry.apply_to(&mut bootstrap_config.observability);
-    bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
-        .context("failed to apply standard OTLP environment to controller telemetry")?;
     let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
         &bootstrap_config,
         resolved_filter.clone(),
@@ -726,6 +730,7 @@ mod tests {
         let mut controller_config = ControllerConfig::default();
         controller_config.rocketmq_home = "target/controller-telemetry-bootstrap".to_string();
         controller_config.node_id = 7;
+        controller_config.observability.metrics.exporter = Some(rocketmq_observability::MetricsExporter::Prometheus);
 
         let config = build_controller_telemetry_bootstrap_config(&controller_config);
 
@@ -740,6 +745,10 @@ mod tests {
         assert!(config.logging.console.enabled);
         assert!(!config.logging.file.enabled);
         assert_eq!(config.logging.file.file_name_prefix, "rocketmq-controller");
+        assert_eq!(
+            config.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::Disable
+        );
 
         let expected_log_dir = std::path::PathBuf::from("target/controller-telemetry-bootstrap").join("logs");
         assert_eq!(
@@ -749,15 +758,57 @@ mod tests {
     }
 
     #[test]
-    fn controller_bootstrap_accepts_standard_otlp_environment_values() {
-        let mut config = build_controller_telemetry_bootstrap_config(&ControllerConfig::default());
-
-        rocketmq_observability::apply_standard_otlp_environment_values(
-            &mut config,
-            Some(std::ffi::OsStr::new("http://collector:4317")),
-            Some(std::ffi::OsStr::new("grpc")),
+    fn controller_telemetry_bootstrap_validates_file_prometheus_listener_before_startup() {
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+        let mut controller = ControllerConfig::default();
+        controller.observability = rocketmq_observability::ObservabilityOverrides {
+            metrics: rocketmq_observability::MetricsOverrides {
+                exporter: Some(rocketmq_observability::MetricsExporter::Prometheus),
+                ..Default::default()
+            },
+            prometheus: rocketmq_observability::PrometheusOverrides {
+                host: Some("0.0.0.0".to_string()),
+                port: Some(9464),
+                path: Some("/rocketmq".to_string()),
+            },
+            ..Default::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-controller",
+            build_controller_telemetry_bootstrap_config(&controller),
+            &controller.observability,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
         )
-        .expect("valid standard OTLP environment should apply");
+        .expect("file Prometheus listener should resolve");
+
+        assert_eq!(
+            resolution.prometheus_listener_addr,
+            Some(SocketAddr::from(([0, 0, 0, 0], 9464)))
+        );
+        validate_controller_security(&security, &controller, resolution.prometheus_listener_addr, None)
+            .expect_err("public file Prometheus listener must fail closed before startup");
+    }
+
+    #[test]
+    fn controller_bootstrap_accepts_standard_otlp_environment_values() {
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://collector:4317".into()),
+            otlp_protocol: Some("grpc".into()),
+            ..Default::default()
+        };
+        let controller = ControllerConfig::default();
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-controller",
+            build_controller_telemetry_bootstrap_config(&controller),
+            &controller.observability,
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
+        )
+        .expect("valid standard OTLP environment should resolve");
+        let config = resolution.bootstrap;
 
         assert!(config.observability.enabled);
         assert_eq!(config.observability.service_name, "rocketmq-controller");
