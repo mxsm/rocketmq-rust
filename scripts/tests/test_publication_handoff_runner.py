@@ -10,8 +10,15 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from scripts.tests.release_test_support import create_source_bundle, load_module, read_json, write_gate_evidence
+from scripts.tests.release_test_support import (
+    create_source_bundle,
+    load_module,
+    read_json,
+    write_gate_evidence,
+    write_json,
+)
 from scripts.tests.test_publication_handoff import PublicationHandoffTests
 
 
@@ -147,6 +154,107 @@ class PublicationHandoffRunnerTests(unittest.TestCase):
             self.assertEqual(3, len([path for path in archive_paths if path.endswith(".manifest.json")]))
             self.assertEqual(3, len([path for path in archive_paths if path.endswith((".zip", ".tar.gz"))]))
             self.assertFalse(any(path.startswith("archives/linux/") for path in archive_paths))
+
+            prepare_import = next(output.glob(".handoff-preparedraft-*/candidate-source"))
+            prepare_control = next(output.glob(".handoff-preparedraft-*/candidate-control/CANDIDATE_RUN.json"))
+            draft = root / "platform-draft"
+            transfer.import_draft(draft_bundle, draft, read_json(prepare_control))
+            verifier = load_module("handoff_e2e_verifier", "distribution/verify_publication_handoff.py")
+            layout = read_json(ROOT / "distribution/release-layout.json")
+            binary_by_name = {
+                entry.get("archive_binary", entry["binary"]): entry for entry in layout["binaries"]
+            }
+            platform_bundles = root / "platform-bundles"
+            for platform, result_id, target in (
+                ("linux", "H01-LINUX", "x86_64-unknown-linux-gnu"),
+                ("windows", "H01-WINDOWS", "x86_64-pc-windows-msvc"),
+                ("macos", "H01-MACOS", "x86_64-apple-darwin"),
+            ):
+                bundle = platform_bundles / result_id
+                worker = f"handoff-{platform}"
+                context_reference = f"contexts/{worker}.json"
+                candidate_identity = read_json(prepare_control)
+
+                def version_result(command, **_kwargs):
+                    name = Path(command[0]).name.removesuffix(".exe")
+                    binary = binary_by_name[name]
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=(
+                            f"component={binary['id']}\n"
+                            f"version={candidate_identity['version']}\n"
+                            f"artifact_id={candidate_identity['candidate_id']}.{target}.{binary['id']}\n"
+                            f"requested_features={','.join(binary['requested_features'])}\n"
+                            f"effective_features={','.join(binary['effective_features'])}\n"
+                        ),
+                        stderr="",
+                    )
+
+                with mock.patch("subprocess.run", side_effect=version_result):
+                    report = verifier.verify_handoff(
+                        draft,
+                        prepare_control,
+                        prepare_import,
+                        prepare_import / "repository-source",
+                        mode="draft-pre-ready",
+                        result_id=result_id,
+                        platform=platform,
+                        worker_id=worker,
+                    )
+                write_json(bundle / f"{result_id}.json", report)
+                event_identity = {
+                    "schema_version": 1,
+                    "candidate_id": candidate_identity["candidate_id"],
+                    "version": candidate_identity["version"],
+                    "run_id": candidate_identity["run_id"],
+                    "attempt": candidate_identity["attempt"],
+                    "route_id": result_id,
+                    "worker_id": worker,
+                    "context_path": context_reference,
+                }
+                write_json(
+                    bundle / "events" / f"{result_id}.started.json",
+                    {**event_identity, "status": "started", "command": ["python", "verify.py", result_id]},
+                )
+                write_json(
+                    bundle / "events" / f"{result_id}.completed.json",
+                    {**event_identity, "status": "passed", "exit_code": 0},
+                )
+                write_json(
+                    bundle / context_reference,
+                    {
+                        "schema_version": 1,
+                        "candidate_id": candidate_identity["candidate_id"],
+                        "version": candidate_identity["version"],
+                        "run_id": candidate_identity["run_id"],
+                        "attempt": candidate_identity["attempt"],
+                        "worker_id": worker,
+                        "publish_input": False,
+                        "publishing_credentials_provided": False,
+                    },
+                )
+
+            self._run_powershell(
+                script,
+                "Finalize",
+                source_bundle,
+                control_bundle,
+                [
+                    "-OutputRoot",
+                    str(output),
+                    "-DraftBundle",
+                    str(draft_bundle),
+                    "-PlatformBundlesRoot",
+                    str(platform_bundles),
+                ],
+            )
+            final_handoff = output / "1.0.0" / identity["run_id"] / "attempt-1"
+            self.assertTrue((final_handoff / "PUBLICATION_READY.json").is_file())
+            final_import = next(output.glob(".handoff-finalize-*/candidate-source"))
+            final_evidence = read_json(final_import / "evidence/FINAL_HANDOFF_EVIDENCE.json")
+            self.assertTrue(final_evidence["all_required_passed"])
+            self.assertEqual("final-handoff", final_evidence["gate_stage"])
+            self.assertEqual("publication-ready", read_json(final)["state"])
 
     @staticmethod
     def _run_powershell(

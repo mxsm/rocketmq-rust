@@ -24,6 +24,7 @@ from release_state import (
     atomic_write_json,
     ensure_no_digest_fields,
     read_json,
+    require_safe_id,
     resolve_existing_file,
     utc_now,
     validate_candidate,
@@ -269,12 +270,23 @@ def audit_no_remote_publication(
     audit_point: str | None = None,
     current_route_id: str | None = None,
     handoff_root: Path | None = None,
+    result_id: str | None = None,
+    gate_stage: str | None = None,
 ) -> dict[str, Any]:
     if phase not in PHASE_WORKFLOWS:
         raise NoRemotePublicationError("phase must be 5 or 6", "indeterminate")
     manifest = resolve_existing_file(candidate_manifest, "candidate_manifest")
     candidate = read_json(manifest)
     validate_candidate(candidate)
+    if (result_id is None) != (gate_stage is None):
+        raise NoRemotePublicationError("result_id and gate_stage must be provided together", "indeterminate")
+    if result_id is not None:
+        try:
+            require_safe_id(result_id, "result_id")
+        except ReleaseStateError as error:
+            raise NoRemotePublicationError(str(error), "indeterminate") from error
+        if gate_stage != "final-handoff" or phase != 6:
+            raise NoRemotePublicationError("no-remote result identity is outside final-handoff", "indeterminate")
     audit_point, required_route_ids = _required_route_ids(candidate, audit_point)
     workflow_findings = audit_workflow_files(workflow_root, PHASE_WORKFLOWS[phase])
     violations, indeterminate, dispatches, credential_names = _runtime_evidence(
@@ -304,6 +316,9 @@ def audit_no_remote_publication(
         "indeterminate_reasons": sorted(set(indeterminate)),
         "generated_at": utc_now(),
     }
+    if result_id is not None:
+        value["result_id"] = result_id
+        value["gate_stage"] = gate_stage
     ensure_no_digest_fields(value)
     atomic_write_json(output, value)
     if status != "not-executed":
@@ -324,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--current-route-id")
     parser.add_argument("--audit-point")
     parser.add_argument("--handoff", type=Path)
+    parser.add_argument("--result-id")
+    parser.add_argument("--gate-stage", choices=("final-handoff",))
     args = parser.parse_args(argv)
     if args.static_only:
         findings = audit_workflow_files(args.workflow_root, PHASE_WORKFLOWS[args.phase])
@@ -345,6 +362,8 @@ def main(argv: list[str] | None = None) -> int:
             audit_point=args.audit_point,
             current_route_id=args.current_route_id or os.environ.get("RELEASE_CANDIDATE_ROUTE_ID"),
             handoff_root=args.handoff,
+            result_id=args.result_id,
+            gate_stage=args.gate_stage,
         )
     except NoRemotePublicationError as error:
         print(f"NO_REMOTE_PUBLICATION_FAILED status={error.status} detail={error}", file=sys.stderr)

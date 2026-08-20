@@ -56,6 +56,10 @@ class PublicationHandoffTests(unittest.TestCase):
             )
 
             self.assertEqual("passed", report["status"])
+            self.assertIn("phase", report)
+            self.assertIn("gate_stage", report)
+            self.assertEqual(6, report["phase"])
+            self.assertEqual("final-handoff", report["gate_stage"])
             self.assertEqual("not-executed", report["remote_publication"]["status"])
             self.assertFalse((draft / "PUBLICATION_READY.json").exists())
             handoff = json.loads((draft / "PUBLICATION_HANDOFF.json").read_text(encoding="utf-8"))
