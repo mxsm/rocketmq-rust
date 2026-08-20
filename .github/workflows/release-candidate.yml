@@ -53,14 +53,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: core-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+  group: core-release-candidate-${{ inputs.series_id }}
   cancel-in-progress: false
 
 jobs:
   prepare-common:
     runs-on: ubuntu-latest
-    outputs:
-      common_artifact: ${{ steps.outputs.outputs.common_artifact }}
     steps:
       - uses: actions/checkout@v7
       - name: Download explicit parent control generation
@@ -71,8 +69,9 @@ jobs:
           path: ${{ runner.temp }}/parent-control
           github-token: ${{ github.token }}
           run-id: ${{ inputs.parent_control_run_id }}
-      - name: Create the candidate and portable preparation inputs
-        id: outputs
+      - name: Prepare portable candidate inputs
+        id: prepare
+        continue-on-error: true
         shell: pwsh
         env:
           CANDIDATE_VERSION: ${{ inputs.version }}
@@ -83,80 +82,56 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $parentInputs = @(
-            $env:PARENT_CONTROL_RUN_ID,
-            $env:PARENT_CONTROL_ARTIFACT,
-            $env:PARENT_SERIES_GENERATION
-          )
+          $parentInputs = @($env:PARENT_CONTROL_RUN_ID, $env:PARENT_CONTROL_ARTIFACT, $env:PARENT_SERIES_GENERATION)
           $specified = @($parentInputs | Where-Object { $_ }).Count
-          if ($specified -ne 0 -and $specified -ne 3) {
-            throw 'parent control run, artifact, and generation must be provided together'
-          }
-
+          if ($specified -ne 0 -and $specified -ne 3) { throw 'parent control inputs must be provided together' }
           python scripts/set_workspace_version.py --version $env:CANDIDATE_VERSION
           $stateRoot = Join-Path $env:RUNNER_TEMP 'candidate-state'
           if ($specified -eq 0) {
-            python distribution/release_series.py create `
-              --release-line 1.0 `
-              --series-id $env:RELEASE_SERIES_ID `
-              --root (Join-Path $stateRoot 'series')
+            python distribution/release_series.py create --release-line 1.0 --series-id $env:RELEASE_SERIES_ID --root (Join-Path $stateRoot 'series')
           } else {
-            $parentBundles = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'parent-control') -Recurse -File -Filter '*.tar')
-            if ($parentBundles.Count -ne 1) {
-              throw 'the parent control artifact must contain exactly one series control bundle'
-            }
-            python distribution/release_series.py import-control `
-              --bundle $parentBundles[0].FullName `
-              --destination (Join-Path $stateRoot 'series') `
-              --expected-generation $env:PARENT_SERIES_GENERATION
+            $parents = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'parent-control') -Recurse -File -Filter '*.tar')
+            if ($parents.Count -ne 1) { throw 'exactly one parent series control bundle is required' }
+            python distribution/release_series.py import-control --bundle $parents[0].FullName --destination (Join-Path $stateRoot 'series') --expected-generation $env:PARENT_SERIES_GENERATION
           }
-          $seriesManifests = @(Get-ChildItem (Join-Path $stateRoot 'series') -Recurse -File -Filter 'RELEASE_SERIES.json')
-          if ($seriesManifests.Count -ne 1) {
-            throw 'exactly one release-series manifest is required'
-          }
-          $seriesManifest = $seriesManifests[0].FullName
-          python distribution/candidate_run.py create `
-            --version $env:CANDIDATE_VERSION `
-            --run-id "gha-$env:GITHUB_RUN_ID" `
-            --attempt $env:GITHUB_RUN_ATTEMPT `
-            --root (Join-Path $stateRoot 'candidates') `
-            --series-manifest $seriesManifest
-          $candidateManifests = @(Get-ChildItem (Join-Path $stateRoot 'candidates') -Recurse -File -Filter 'CANDIDATE_RUN.json')
-          if ($candidateManifests.Count -ne 1) {
-            throw 'exactly one current candidate manifest is required'
-          }
-          $candidateManifest = $candidateManifests[0].FullName
+          $series = @(Get-ChildItem (Join-Path $stateRoot 'series') -Recurse -File -Filter 'RELEASE_SERIES.json')
+          if ($series.Count -ne 1) { throw 'exactly one release-series manifest is required' }
+          python distribution/candidate_run.py create --version $env:CANDIDATE_VERSION --run-id "gha-$env:GITHUB_RUN_ID" --attempt $env:GITHUB_RUN_ATTEMPT --root (Join-Path $stateRoot 'candidates') --series-manifest $series[0].FullName
+          $manifests = @(Get-ChildItem (Join-Path $stateRoot 'candidates') -Recurse -File -Filter 'CANDIDATE_RUN.json')
+          if ($manifests.Count -ne 1) { throw 'exactly one candidate manifest is required' }
+          $manifest = $manifests[0].FullName
           if ($env:CANDIDATE_VERSION -match '-rc\.') {
-            pwsh -NoProfile -File scripts/run-v1-candidate-lifecycle.ps1 `
-              -Mode StageRc `
-              -CandidateManifest $candidateManifest
+            pwsh -NoProfile -File scripts/run-v1-candidate-lifecycle.ps1 -Mode StageRc -CandidateManifest $manifest
           }
-          $candidateRoot = Split-Path $candidateManifest
-          $transferRoot = Join-Path $candidateRoot 'transfer'
-          $commonBundle = Join-Path $transferRoot 'COMMON_RELEASE_INPUTS.tar'
-          $sourceBundle = Join-Path $transferRoot 'CORE_SOURCE_TRANSFER.tar'
-          $controlBundle = Join-Path $transferRoot 'CANDIDATE_BUILD_CONTROL_BUNDLE.tar'
-          pwsh -NoProfile -File scripts/run-release-preparation.ps1 `
-            -Mode PrepareCommon `
-            -CandidateManifest $candidateManifest `
-            -CommonInputsBundleOutput $commonBundle `
-            -BuildSourceBundleOutput $sourceBundle `
-            -BuildControlBundleOutput $controlBundle `
-            -SourceRoot $env:GITHUB_WORKSPACE
-          "common_artifact=core-release-common-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
-          "common_bundle=$commonBundle" >> $env:GITHUB_OUTPUT
-          "source_bundle=$sourceBundle" >> $env:GITHUB_OUTPUT
-          "control_bundle=$controlBundle" >> $env:GITHUB_OUTPUT
-      - name: Upload sealed common, source, and control inputs
+          $root = Split-Path $manifest
+          python scripts/run_candidate_workflow_job.py `
+            --candidate-manifest $manifest --job-id prepare-common --worker-id prepare-common `
+            --result-ids prepare-common --output (Join-Path $env:RUNNER_TEMP 'stage-outcomes/prepare-common') `
+            -- pwsh -NoProfile -File scripts/run-release-preparation.ps1 -Mode PrepareCommon `
+              -CandidateManifest $manifest `
+              -CommonInputsBundleOutput (Join-Path $root 'transfer/COMMON_RELEASE_INPUTS.tar') `
+              -BuildSourceBundleOutput (Join-Path $root 'transfer/CORE_SOURCE_TRANSFER.tar') `
+              -BuildControlBundleOutput (Join-Path $root 'transfer/CANDIDATE_BUILD_CONTROL_BUNDLE.tar') `
+              -SourceRoot $env:GITHUB_WORKSPACE
+      - name: Upload common candidate inputs
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.outputs.outputs.common_artifact }}
-          path: |
-            ${{ steps.outputs.outputs.common_bundle }}
-            ${{ steps.outputs.outputs.source_bundle }}
-            ${{ steps.outputs.outputs.control_bundle }}
+          name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-state/candidates/**/transfer/*.tar
           if-no-files-found: error
           retention-days: 14
+      - name: Upload prepare-common outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepare-common
+          path: ${{ runner.temp }}/stage-outcomes/prepare-common
+          if-no-files-found: error
+          retention-days: 14
+      - name: Propagate preparation failure
+        if: ${{ steps.prepare.outcome != 'success' }}
+        run: exit 1
 
   build-target:
     needs: prepare-common
@@ -166,56 +141,67 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            job_id: build-linux
+            result_id: S01
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
+            job_id: build-windows
+            result_id: S02
           - runner: macos-latest
             target: x86_64-apple-darwin
+            job_id: build-macos
+            result_id: S03
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          name: ${{ needs.prepare-common.outputs.common_artifact }}
+          name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-inputs
-      - name: Import candidate control and run the target preparation
-        id: target
+      - name: Build candidate target
+        id: build
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $inputRoot = Join-Path $env:RUNNER_TEMP 'candidate-inputs'
-          $commonBundle = @(Get-ChildItem $inputRoot -Recurse -File -Filter 'COMMON_RELEASE_INPUTS.tar')
-          $sourceBundle = @(Get-ChildItem $inputRoot -Recurse -File -Filter 'CORE_SOURCE_TRANSFER.tar')
-          $controlBundle = @(Get-ChildItem $inputRoot -Recurse -File -Filter 'CANDIDATE_BUILD_CONTROL_BUNDLE.tar')
-          if ($commonBundle.Count -ne 1 -or $sourceBundle.Count -ne 1 -or $controlBundle.Count -ne 1) {
-            throw 'common, source, and control inputs must each exist exactly once'
-          }
-          $workerRoot = Join-Path $env:RUNNER_TEMP 'candidate-worker'
+          $inputs = Join-Path $env:RUNNER_TEMP 'candidate-inputs'
+          $common = @(Get-ChildItem $inputs -Recurse -File -Filter 'COMMON_RELEASE_INPUTS.tar')
+          $source = @(Get-ChildItem $inputs -Recurse -File -Filter 'CORE_SOURCE_TRANSFER.tar')
+          $control = @(Get-ChildItem $inputs -Recurse -File -Filter 'CANDIDATE_BUILD_CONTROL_BUNDLE.tar')
+          if ($common.Count -ne 1 -or $source.Count -ne 1 -or $control.Count -ne 1) { throw 'candidate inputs are incomplete' }
           $selector = Join-Path $env:RUNNER_TEMP 'candidate-selector.json'
-          python distribution/transfer_candidate.py import-build-control `
-            --bundle $controlBundle[0].FullName `
-            --output $workerRoot `
-            --build-source-bundle $sourceBundle[0].FullName `
-            --selector-output $selector
+          python distribution/transfer_candidate.py import-build-control --bundle $control[0].FullName --output (Join-Path $env:RUNNER_TEMP 'candidate-worker') --build-source-bundle $source[0].FullName --selector-output $selector
           $candidate = Get-Content $selector -Raw | ConvertFrom-Json
           $targetBundle = Join-Path $candidate.candidate_root 'target-bundles/${{ matrix.target }}.tar'
-          pwsh -NoProfile -File scripts/run-release-preparation.ps1 `
-            -Mode Target `
-            -CandidateManifest $candidate.candidate_manifest `
-            -CommonInputsBundle $commonBundle[0].FullName `
-            -BuildSourceBundle $sourceBundle[0].FullName `
-            -BuildControlBundle $controlBundle[0].FullName `
-            -Target '${{ matrix.target }}' `
-            -TargetBundleOutput $targetBundle `
-            -SourceRoot $env:GITHUB_WORKSPACE
+          python scripts/run_candidate_workflow_job.py `
+            --candidate-manifest $candidate.candidate_manifest --job-id '${{ matrix.job_id }}' `
+            --worker-id '${{ matrix.job_id }}' --target '${{ matrix.target }}' `
+            --result-ids '${{ matrix.result_id }}' --output (Join-Path $env:RUNNER_TEMP 'stage-outcomes/${{ matrix.job_id }}') `
+            -- pwsh -NoProfile -File scripts/run-release-preparation.ps1 -Mode Target `
+              -CandidateManifest $candidate.candidate_manifest -CommonInputsBundle $common[0].FullName `
+              -BuildSourceBundle $source[0].FullName -BuildControlBundle $control[0].FullName `
+              -Target '${{ matrix.target }}' -TargetBundleOutput $targetBundle -SourceRoot $env:GITHUB_WORKSPACE
           "target_bundle=$targetBundle" >> $env:GITHUB_OUTPUT
-      - name: Upload the sealed target bundle
+      - name: Upload target bundle
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: core-release-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.target.outputs.target_bundle }}
+          name: core-release-target-${{ matrix.job_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.build.outputs.target_bundle }}
           if-no-files-found: error
           retention-days: 14
+      - name: Upload target outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.job_id }}
+          path: ${{ runner.temp }}/stage-outcomes/${{ matrix.job_id }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Propagate target failure
+        if: ${{ steps.build.outcome != 'success' }}
+        run: exit 1
 
   aggregate:
     needs: [prepare-common, build-target]
@@ -224,57 +210,230 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          name: ${{ needs.prepare-common.outputs.common_artifact }}
+          name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-inputs
       - uses: actions/download-artifact@v7
         with:
-          pattern: core-release-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: core-release-target-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/target-bundles
-      - name: Import candidate control and aggregate all target bundles
+      - name: Aggregate candidate artifacts
         id: aggregate
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $inputRoot = Join-Path $env:RUNNER_TEMP 'candidate-inputs'
-          $commonBundle = @(Get-ChildItem $inputRoot -Recurse -File -Filter 'COMMON_RELEASE_INPUTS.tar')
-          $sourceBundle = @(Get-ChildItem $inputRoot -Recurse -File -Filter 'CORE_SOURCE_TRANSFER.tar')
-          $controlBundle = @(Get-ChildItem $inputRoot -Recurse -File -Filter 'CANDIDATE_BUILD_CONTROL_BUNDLE.tar')
-          if ($commonBundle.Count -ne 1 -or $sourceBundle.Count -ne 1 -or $controlBundle.Count -ne 1) {
-            throw 'common, source, and control inputs must each exist exactly once'
-          }
-          $workerRoot = Join-Path $env:RUNNER_TEMP 'candidate-aggregate'
+          $inputs = Join-Path $env:RUNNER_TEMP 'candidate-inputs'
+          $common = @(Get-ChildItem $inputs -Recurse -File -Filter 'COMMON_RELEASE_INPUTS.tar')
+          $source = @(Get-ChildItem $inputs -Recurse -File -Filter 'CORE_SOURCE_TRANSFER.tar')
+          $control = @(Get-ChildItem $inputs -Recurse -File -Filter 'CANDIDATE_BUILD_CONTROL_BUNDLE.tar')
+          if ($common.Count -ne 1 -or $source.Count -ne 1 -or $control.Count -ne 1) { throw 'candidate inputs are incomplete' }
           $selector = Join-Path $env:RUNNER_TEMP 'candidate-selector.json'
-          python distribution/transfer_candidate.py import-build-control `
-            --bundle $controlBundle[0].FullName `
-            --output $workerRoot `
-            --build-source-bundle $sourceBundle[0].FullName `
-            --selector-output $selector
+          python distribution/transfer_candidate.py import-build-control --bundle $control[0].FullName --output (Join-Path $env:RUNNER_TEMP 'candidate-aggregate') --build-source-bundle $source[0].FullName --selector-output $selector
           $candidate = Get-Content $selector -Raw | ConvertFrom-Json
           $candidateSource = Join-Path $candidate.candidate_root 'transfer/CANDIDATE_SOURCE_BUNDLE.tar'
-          pwsh -NoProfile -File scripts/run-release-preparation.ps1 `
-            -Mode Aggregate `
-            -CandidateManifest $candidate.candidate_manifest `
-            -CommonInputsBundle $commonBundle[0].FullName `
-            -BuildSourceBundle $sourceBundle[0].FullName `
-            -BuildControlBundle $controlBundle[0].FullName `
-            -TargetBundlesRoot (Join-Path $env:RUNNER_TEMP 'target-bundles') `
-            -CandidateSourceBundleOutput $candidateSource `
-            -SourceRoot $env:GITHUB_WORKSPACE
+          python scripts/run_candidate_workflow_job.py `
+            --candidate-manifest $candidate.candidate_manifest --job-id aggregate --worker-id aggregate `
+            --result-ids aggregate,R01-RELEASE-VERSION,R01-CANDIDATE-LIFECYCLE,R01-CORE-IMAGE-WORKFLOW `
+            --output (Join-Path $env:RUNNER_TEMP 'stage-outcomes/aggregate') `
+            -- pwsh -NoProfile -File scripts/run-release-preparation.ps1 -Mode Aggregate `
+              -CandidateManifest $candidate.candidate_manifest -CommonInputsBundle $common[0].FullName `
+              -BuildSourceBundle $source[0].FullName -BuildControlBundle $control[0].FullName `
+              -TargetBundlesRoot (Join-Path $env:RUNNER_TEMP 'target-bundles') `
+              -CandidateSourceBundleOutput $candidateSource -SourceRoot $env:GITHUB_WORKSPACE
           $aggregateControl = Join-Path $candidate.candidate_root 'transfer/CANDIDATE_AGGREGATE_CONTROL_BUNDLE.tar'
-          python distribution/transfer_candidate.py export-build-control `
-            --candidate-manifest $candidate.candidate_manifest `
-            --output $aggregateControl
-          "candidate_source=$candidateSource" >> $env:GITHUB_OUTPUT
-          "aggregate_control=$aggregateControl" >> $env:GITHUB_OUTPUT
+          python distribution/transfer_candidate.py export-build-control --candidate-manifest $candidate.candidate_manifest --output $aggregateControl
+          Copy-Item -LiteralPath $source[0].FullName -Destination (Join-Path $candidate.candidate_root 'transfer/CORE_SOURCE_TRANSFER.tar')
+          "candidate_root=$($candidate.candidate_root)" >> $env:GITHUB_OUTPUT
       - name: Prove the candidate workflow has no publication route
+        if: ${{ steps.aggregate.outcome == 'success' }}
         run: python scripts/no_remote_publication_guard.py --phase 5 --static-only
       - name: Upload aggregate candidate state
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: core-release-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ steps.aggregate.outputs.candidate_source }}
-            ${{ steps.aggregate.outputs.aggregate_control }}
+          path: ${{ steps.aggregate.outputs.candidate_root }}/transfer/*.tar
           if-no-files-found: error
           retention-days: 14
+      - name: Upload aggregate outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: aggregate
+          path: ${{ runner.temp }}/stage-outcomes/aggregate
+          if-no-files-found: error
+          retention-days: 14
+      - name: Propagate aggregate failure
+        if: ${{ steps.aggregate.outcome != 'success' }}
+        run: exit 1
+
+  full-matrix:
+    needs: aggregate
+    runs-on: [self-hosted, linux, x64, rocketmq-release-candidate]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: core-release-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-aggregate
+      - name: Run the short functional matrix
+        id: matrix
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $inputs = Join-Path $env:RUNNER_TEMP 'candidate-aggregate'
+          $artifacts = @(Get-ChildItem $inputs -Recurse -File -Filter 'CANDIDATE_SOURCE_BUNDLE.tar')
+          $control = @(Get-ChildItem $inputs -Recurse -File -Filter 'CANDIDATE_AGGREGATE_CONTROL_BUNDLE.tar')
+          $source = @(Get-ChildItem $inputs -Recurse -File -Filter 'CORE_SOURCE_TRANSFER.tar')
+          if ($artifacts.Count -ne 1 -or $control.Count -ne 1 -or $source.Count -ne 1) { throw 'aggregate candidate inputs are incomplete' }
+          $selector = Join-Path $env:RUNNER_TEMP 'candidate-selector.json'
+          python distribution/transfer_candidate.py import-build-control --bundle $control[0].FullName --output (Join-Path $env:RUNNER_TEMP 'candidate-full-matrix') --build-source-bundle $source[0].FullName --selector-output $selector
+          $candidate = Get-Content $selector -Raw | ConvertFrom-Json
+          python distribution/transfer_candidate.py import-artifacts --bundle $artifacts[0].FullName --candidate-manifest $candidate.candidate_manifest
+          $resultIds = @(
+            'P01','P02','P03','P04','P05','P06','P07','P08','P09','P10','P11','P12',
+            'I01','I02','I03','I04','I05','M01','L01','A01',
+            'U01-LF','U01-MP','U01-RDB','U01-CMP','U01-POP','U01-TMR','U01-TRD','U01-CTL','U01-UPG','U01'
+          ) -join ','
+          python scripts/run_candidate_workflow_job.py `
+            --candidate-manifest $candidate.candidate_manifest --job-id full-matrix --worker-id full-matrix `
+            --result-ids $resultIds --output (Join-Path $env:RUNNER_TEMP 'stage-outcomes/full-matrix') `
+            -- pwsh -NoProfile -File scripts/run-v1-functional-acceptance.ps1 `
+              -CandidateManifest $candidate.candidate_manifest -AllScenarios -SkipInstallationScenarios
+      - name: Upload functional matrix outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-matrix
+          path: ${{ runner.temp }}/stage-outcomes/full-matrix
+          if-no-files-found: error
+          retention-days: 14
+      - name: Propagate functional matrix failure
+        if: ${{ steps.matrix.outcome != 'success' }}
+        run: exit 1
+
+  candidate-lifecycle-finalizer:
+    if: always()
+    needs: [prepare-common, build-target, aggregate, full-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download common control fallback
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-common
+      - name: Download aggregate candidate state
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: core-release-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-aggregate
+      - name: Download job outcomes
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: build-*
+          path: ${{ runner.temp }}/stage-outcomes
+      - name: Download prepare-common outcome
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: prepare-common
+          path: ${{ runner.temp }}/stage-outcomes/prepare-common
+      - name: Download aggregate outcome
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: aggregate
+          path: ${{ runner.temp }}/stage-outcomes/aggregate
+      - name: Download functional matrix outcome
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: full-matrix
+          path: ${{ runner.temp }}/stage-outcomes/full-matrix
+      - name: Collect outcomes and close the candidate
+        id: finalize
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PREPARE_RESULT: ${{ needs.prepare-common.result }}
+          TARGET_RESULT: ${{ needs.build-target.result }}
+          AGGREGATE_RESULT: ${{ needs.aggregate.result }}
+          MATRIX_RESULT: ${{ needs.full-matrix.result }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $aggregateRoot = Join-Path $env:RUNNER_TEMP 'candidate-aggregate'
+          $commonRoot = Join-Path $env:RUNNER_TEMP 'candidate-common'
+          $control = @(Get-ChildItem $aggregateRoot -Recurse -File -Filter 'CANDIDATE_AGGREGATE_CONTROL_BUNDLE.tar' -ErrorAction SilentlyContinue)
+          if ($control.Count -eq 0) { $control = @(Get-ChildItem $commonRoot -Recurse -File -Filter 'CANDIDATE_BUILD_CONTROL_BUNDLE.tar' -ErrorAction SilentlyContinue) }
+          if ($control.Count -eq 0) { $control = @(Get-ChildItem $commonRoot -Recurse -File -Filter 'CANDIDATE_CONTROL_BUNDLE.g*.tar' -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1) }
+          $source = @(Get-ChildItem $aggregateRoot,$commonRoot -Recurse -File -Filter 'CORE_SOURCE_TRANSFER.tar' -ErrorAction SilentlyContinue | Select-Object -First 1)
+          if ($control.Count -ne 1 -or $source.Count -ne 1) { throw 'no committed candidate control generation is available' }
+          $selector = Join-Path $env:RUNNER_TEMP 'candidate-selector.json'
+          python distribution/transfer_candidate.py import-build-control --bundle $control[0].FullName --output (Join-Path $env:RUNNER_TEMP 'candidate-finalizer') --build-source-bundle $source[0].FullName --selector-output $selector
+          $candidate = Get-Content $selector -Raw | ConvertFrom-Json
+          $artifacts = @(Get-ChildItem $aggregateRoot -Recurse -File -Filter 'CANDIDATE_SOURCE_BUNDLE.tar' -ErrorAction SilentlyContinue)
+          if ($artifacts.Count -eq 1) { python distribution/transfer_candidate.py import-artifacts --bundle $artifacts[0].FullName --candidate-manifest $candidate.candidate_manifest }
+          $candidateValue = Get-Content $candidate.candidate_manifest -Raw | ConvertFrom-Json
+          function Get-TargetResult([string]$jobId) {
+            $outcome = Join-Path $env:RUNNER_TEMP "stage-outcomes/$jobId/CANDIDATE_STAGE_OUTCOME.json"
+            if (Test-Path -LiteralPath $outcome) { return (Get-Content $outcome -Raw | ConvertFrom-Json).workflow_result }
+            if ($env:TARGET_RESULT -in @('cancelled','skipped')) { return $env:TARGET_RESULT }
+            return 'failure'
+          }
+          $workflowResults = Join-Path $env:RUNNER_TEMP 'WORKFLOW_RESULTS.json'
+          @{
+            schema_version = 1; candidate_id = $candidateValue.candidate_id; version = $candidateValue.version
+            run_id = $candidateValue.run_id; attempt = $candidateValue.attempt
+            jobs = @{
+              'prepare-common' = $env:PREPARE_RESULT; 'build-linux' = (Get-TargetResult 'build-linux')
+              'build-windows' = (Get-TargetResult 'build-windows'); 'build-macos' = (Get-TargetResult 'build-macos')
+              'aggregate' = $env:AGGREGATE_RESULT; 'full-matrix' = $env:MATRIX_RESULT
+            }
+          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $workflowResults -Encoding utf8
+          $outcomeRoot = Join-Path $candidate.candidate_root 'stage-outcomes'
+          $PSNativeCommandUseErrorActionPreference = $false
+          python scripts/collect_candidate_stage_outcomes.py --candidate-manifest $candidate.candidate_manifest --bundles-root (Join-Path $env:RUNNER_TEMP 'stage-outcomes') --workflow-results $workflowResults --profile release-candidate --output-root $outcomeRoot
+          $collectorExit = $LASTEXITCODE
+          $PSNativeCommandUseErrorActionPreference = $true
+          $arguments = @('-NoProfile','-File','scripts/run-v1-candidate-lifecycle.ps1','-CandidateManifest',$candidate.candidate_manifest)
+          if ($candidateValue.candidate_kind -eq 'rc') {
+            $arguments += @('-Mode','FinalizeRc')
+          } else {
+            $arguments += @('-Mode','FinalizeFinalFunctional','-ParentManifest',$candidateValue.parent_manifest,'-SourceRoot',$env:GITHUB_WORKSPACE)
+          }
+          if ($collectorExit -eq 0) { $arguments += @('-StageOutcomesIndex',(Join-Path $outcomeRoot 'CANDIDATE_STAGE_OUTCOMES.json')) }
+          $PSNativeCommandUseErrorActionPreference = $false
+          & pwsh @arguments
+          $lifecycleExit = $LASTEXITCODE
+          $PSNativeCommandUseErrorActionPreference = $true
+          "control_root=$($candidate.candidate_root)" >> $env:GITHUB_OUTPUT
+          "series_root=$(Split-Path $candidateValue.series_manifest)" >> $env:GITHUB_OUTPUT
+          if ($lifecycleExit -ne 0) { exit $lifecycleExit }
+      - name: Upload committed candidate control generation
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: candidate-control-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.finalize.outputs.control_root }}/transfer/CANDIDATE_CONTROL_BUNDLE.g*.tar
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload committed release-series control generation
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-series-control-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.finalize.outputs.series_root }}/RELEASE_SERIES_CONTROL_BUNDLE.g*.tar
+          if-no-files-found: error
+          retention-days: 30
+      - name: Propagate lifecycle result
+        if: ${{ steps.finalize.outcome != 'success' }}
+        run: exit 1

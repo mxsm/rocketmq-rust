@@ -181,11 +181,16 @@ def select_routes(
     profile: str | None = None,
     scenario: str | None = None,
     all_scenarios: bool = False,
+    skip_installation_scenarios: bool = False,
 ) -> tuple[str, ...]:
     if sum((profile is not None, scenario is not None, all_scenarios)) != 1:
         raise AcceptanceError("select exactly one Profile, Scenario, or AllScenarios mode")
     if all_scenarios:
+        if skip_installation_scenarios:
+            return tuple(result_id for result_id in REQUIRED_RESULT_IDS if not result_id.startswith("S"))
         return REQUIRED_RESULT_IDS
+    if skip_installation_scenarios:
+        raise AcceptanceError("installation scenarios can only be skipped with AllScenarios")
     selected = profile or scenario
     assert selected is not None
     try:
@@ -774,6 +779,7 @@ def parser() -> argparse.ArgumentParser:
     selection.add_argument("--scenario")
     selection.add_argument("--all-scenarios", action="store_true")
     selection.add_argument("--execute-one", help=argparse.SUPPRESS)
+    command.add_argument("--skip-installation-scenarios", action="store_true")
     return command
 
 
@@ -787,7 +793,11 @@ def main(argv: list[str] | None = None) -> int:
             execute_one(candidate, matrix, args.execute_one, args.target)
             return 0
         selected = select_routes(
-            matrix, profile=args.profile, scenario=args.scenario, all_scenarios=args.all_scenarios
+            matrix,
+            profile=args.profile,
+            scenario=args.scenario,
+            all_scenarios=args.all_scenarios,
+            skip_installation_scenarios=args.skip_installation_scenarios,
         )
         return run_selected(candidate, matrix, matrix_path, selected, args.target)
     except (AcceptanceError, OSError, json.JSONDecodeError) as error:
