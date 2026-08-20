@@ -165,6 +165,36 @@ mod metrics {
         assert!(!clone.child(STORE_METER_SCOPE).is_active());
     }
 
+    #[cfg(feature = "otel-traces")]
+    #[test]
+    fn metrics_enabled_reports_final_policy_and_lifecycle() {
+        let mut trace_only_config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        trace_only_config.traces.enabled = true;
+
+        let trace_only_guard = init_observability(&trace_only_config).expect("trace-only runtime should initialize");
+        let metrics_guard = init_observability(&metrics_config()).expect("metrics runtime should initialize");
+        let trace_only_handle = trace_only_guard.handle();
+        let metrics_handle = metrics_guard.handle();
+
+        assert!(!trace_only_handle.metrics_enabled());
+        assert!(metrics_handle.metrics_enabled());
+
+        trace_only_guard
+            .shutdown()
+            .into_result()
+            .expect("trace-only runtime should shut down");
+        metrics_guard
+            .shutdown()
+            .into_result()
+            .expect("metrics runtime should shut down");
+
+        assert!(!trace_only_handle.metrics_enabled());
+        assert!(!metrics_handle.metrics_enabled());
+    }
+
     #[test]
     fn component_recorders_share_one_handle_label_budget() {
         let mut config = metrics_config();

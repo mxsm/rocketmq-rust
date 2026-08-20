@@ -124,6 +124,7 @@ enum HandleBackend {
 
 struct ActiveHandle {
     state: AtomicU8,
+    metrics_enabled: bool,
     trace_policy: TracePolicy,
     metric_label_policy: MetricLabelPolicy,
     #[cfg(feature = "otel-metrics")]
@@ -192,6 +193,7 @@ impl TelemetryHandle {
         Self {
             backend: HandleBackend::Active(Arc::new(ActiveHandle {
                 state: AtomicU8::new(TelemetryState::Active as u8),
+                metrics_enabled: config.metrics.enabled,
                 trace_policy: TracePolicy::from_config(config),
                 metric_label_policy: MetricLabelPolicy::new(
                     config.metrics.cardinality_limit,
@@ -209,6 +211,7 @@ impl TelemetryHandle {
         Self {
             backend: HandleBackend::Active(Arc::new(ActiveHandle {
                 state: AtomicU8::new(TelemetryState::Active as u8),
+                metrics_enabled: config.metrics.enabled,
                 trace_policy: TracePolicy::from_config(config),
                 metric_label_policy: MetricLabelPolicy::new(
                     config.metrics.cardinality_limit,
@@ -232,6 +235,15 @@ impl TelemetryHandle {
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.state() == TelemetryState::Active
+    }
+
+    /// Returns whether this active runtime currently enables metrics.
+    #[must_use]
+    pub fn metrics_enabled(&self) -> bool {
+        match &self.backend {
+            HandleBackend::Active(inner) => self.is_active() && inner.metrics_enabled,
+            HandleBackend::Noop => false,
+        }
     }
 
     /// Returns this handle's immutable trace policy while the runtime is active.
