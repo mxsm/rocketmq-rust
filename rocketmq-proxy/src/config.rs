@@ -19,6 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_auth::AuthConfig as RocketmqAuthConfig;
 use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::ObservabilityOverrides;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -235,7 +236,7 @@ impl ProxyAuthConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
     pub mode: ProxyMode,
@@ -250,6 +251,7 @@ pub struct ProxyConfig {
     pub session: SessionConfig,
     pub settings: SettingsConfig,
     pub auth: ProxyAuthConfig,
+    pub observability: ObservabilityOverrides,
 }
 
 impl Default for ProxyConfig {
@@ -267,6 +269,7 @@ impl Default for ProxyConfig {
             session: SessionConfig::default(),
             settings: SettingsConfig::default(),
             auth: ProxyAuthConfig::default(),
+            observability: ObservabilityOverrides::default(),
         }
     }
 }
@@ -461,6 +464,49 @@ enableAclRpcHookForClusterMode: true
             .unwrap();
 
         assert!(config.enable_acl_rpc_hook_for_cluster_mode);
+    }
+
+    #[test]
+    fn proxy_config_deserializes_observability_overrides_without_changing_other_defaults() {
+        let config: ProxyConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+observability:
+  traces:
+    exporter: otlp_grpc
+    sampleRatio: 0.1
+  otlp:
+    endpoint: http://file-collector:4317
+    protocol: grpc
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("proxy observability YAML should build")
+            .try_deserialize()
+            .expect("proxy observability YAML should deserialize");
+        let defaults = ProxyConfig::default();
+
+        assert_eq!(
+            config.observability.traces.exporter,
+            Some(rocketmq_observability::TraceExporter::OtlpGrpc)
+        );
+        assert_eq!(config.observability.traces.sample_ratio, Some(0.1));
+        assert_eq!(
+            config.observability.otlp.endpoint.as_deref(),
+            Some("http://file-collector:4317")
+        );
+        assert_eq!(
+            config.observability.otlp.protocol,
+            Some(rocketmq_observability::OtlpProtocol::Grpc)
+        );
+        assert_eq!(config.mode, defaults.mode);
+        assert_eq!(config.grpc, defaults.grpc);
+        assert_eq!(config.remoting, defaults.remoting);
+        assert_eq!(config.runtime, defaults.runtime);
+        assert_eq!(config.session, defaults.session);
+        assert_eq!(config.settings, defaults.settings);
+        assert_eq!(config.auth, defaults.auth);
     }
 
     #[test]
