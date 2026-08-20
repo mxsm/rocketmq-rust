@@ -341,6 +341,11 @@ fn validate_namesrv_security(
         {
             security_bootstrap.validate(&[]).map_err(anyhow::Error::from)?
         }
+        Err(SecurityBootstrapError::DevelopmentListenerNotLoopback) => {
+            bail!(
+                "allowInsecurePublicListener is required for a non-loopback NameServer listener in the development-insecure profile"
+            );
+        }
         Err(error) => return Err(error.into()),
     };
 
@@ -1177,6 +1182,7 @@ mod tests {
         )
         .expect_err("a public file Prometheus listener must fail closed");
         let message = error.to_string();
+        assert!(message.contains("allowInsecurePublicListener"));
         assert!(message.contains("development-insecure"));
         assert!(!message.contains("0.0.0.0"));
         assert!(!message.contains("5557"));
