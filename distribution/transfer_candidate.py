@@ -163,6 +163,28 @@ def export_build_source(candidate_manifest: Path, output: Path, source_root: Pat
     )
 
 
+def export_common_inputs(candidate_manifest: Path, input_root: Path, output: Path) -> Path:
+    """Export the closed, candidate-scoped common release input tree."""
+
+    input_root = input_root.resolve(strict=True)
+    if not input_root.is_dir() or not (input_root / "COMMON_RELEASE_INPUTS.json").is_file():
+        raise ArchiveError("common release inputs are incomplete")
+    files = sorted(
+        path
+        for path in input_root.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+    if not files:
+        raise ArchiveError("common release inputs are empty")
+    return export_bundle(
+        candidate_manifest,
+        bundle_kind="common-inputs",
+        output=output,
+        source_root=input_root,
+        files=files,
+    )
+
+
 def export_build_control(candidate_manifest: Path, output: Path) -> Path:
     """Export current control state without reopening sealed artifact mutation."""
 
@@ -203,7 +225,7 @@ def _safe_member(member: tarfile.TarInfo) -> PurePosixPath:
     return path
 
 
-def import_bundle(bundle: Path, output: Path) -> Path:
+def import_bundle(bundle: Path, output: Path, *, include_manifest: bool = True) -> Path:
     bundle = resolve_existing_file(bundle, "candidate transfer bundle")
     output = output.resolve()
     if output.exists():
@@ -244,9 +266,10 @@ def import_bundle(bundle: Path, output: Path) -> Path:
             resolve_within(output, destination, "candidate transfer destination")
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
-        (output / "CANDIDATE_TRANSFER.json").write_text(
-            json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
-        )
+        if include_manifest:
+            (output / "CANDIDATE_TRANSFER.json").write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
+            )
     return output
 
 
@@ -257,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--candidate-manifest", type=Path, required=True)
     source.add_argument("--source-root", type=Path, default=ROOT)
     source.add_argument("--output", type=Path, required=True)
+    common = subcommands.add_parser("export-common-inputs")
+    common.add_argument("--candidate-manifest", type=Path, required=True)
+    common.add_argument("--input-root", type=Path, required=True)
+    common.add_argument("--output", type=Path, required=True)
     control = subcommands.add_parser("export-build-control")
     control.add_argument("--candidate-manifest", type=Path, required=True)
     control.add_argument("--output", type=Path, required=True)
@@ -271,14 +298,17 @@ def main(argv: list[str] | None = None) -> int:
     imported = subcommands.add_parser("import")
     imported.add_argument("--bundle", type=Path, required=True)
     imported.add_argument("--output", type=Path, required=True)
+    imported.add_argument("--payload-only", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "export-build-source":
             output = export_build_source(args.candidate_manifest, args.output, args.source_root)
+        elif args.command == "export-common-inputs":
+            output = export_common_inputs(args.candidate_manifest, args.input_root, args.output)
         elif args.command == "export-build-control":
             output = export_build_control(args.candidate_manifest, args.output)
         elif args.command == "import":
-            output = import_bundle(args.bundle, args.output)
+            output = import_bundle(args.bundle, args.output, include_manifest=not args.payload_only)
         else:
             manifest, candidate, root = load_candidate(args.candidate_manifest)
             if args.command == "export-target":
@@ -307,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
                     "helm",
                     "legal",
                     "manifests",
-                    "oci",
+                    "oci-layout",
                     "provenance",
                     "sbom",
                 ]
