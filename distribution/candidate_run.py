@@ -27,6 +27,7 @@ import uuid
 
 
 DISTRIBUTION = Path(__file__).resolve().parent
+ROUTE_DENOMINATOR = DISTRIBUTION / "candidate-route-denominator.json"
 if str(DISTRIBUTION) not in sys.path:
     sys.path.insert(0, str(DISTRIBUTION))
 
@@ -150,10 +151,12 @@ def create_candidate(
             "evidence_index": None,
             "event_index": None,
             "execution_context_index": None,
+            "route_denominator": read_json(ROUTE_DENOMINATOR),
             "creation_operation_id": operation_id,
             "created_at": utc_now(),
             "updated_at": utc_now(),
         }
+        validate_candidate(value)
         series["pending_operation"] = {
             "operation_id": operation_id,
             "kind": "create-candidate",

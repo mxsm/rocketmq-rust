@@ -53,6 +53,7 @@ CANDIDATE_FIELDS = {
     "evidence_index",
     "event_index",
     "execution_context_index",
+    "route_denominator",
     "creation_operation_id",
     "created_at",
     "updated_at",
@@ -131,6 +132,29 @@ def resolve_within(root: Path, path: Path, field: str) -> Path:
     except ValueError as error:
         raise ReleaseStateError(f"{field} escapes {root}: {resolved}") from error
     return resolved
+
+
+def validate_route_denominator(value: Any) -> dict[str, list[str]]:
+    """Validate and return one immutable candidate route-denominator map."""
+
+    if not isinstance(value, dict) or set(value) != {"schema_version", "audit_points"}:
+        raise ReleaseStateError("candidate route denominator fields are invalid")
+    audit_points = value.get("audit_points")
+    if value.get("schema_version") != 1 or not isinstance(audit_points, dict) or not audit_points:
+        raise ReleaseStateError("candidate route denominator schema is invalid")
+    for audit_point, route_ids in audit_points.items():
+        require_safe_id(audit_point, "route denominator audit point")
+        if (
+            not isinstance(route_ids, list)
+            or not route_ids
+            or any(
+                not isinstance(route_id, str) or SAFE_ID.fullmatch(route_id) is None
+                for route_id in route_ids
+            )
+            or len(route_ids) != len(set(route_ids))
+        ):
+            raise ReleaseStateError(f"candidate route denominator is invalid: {audit_point}")
+    return audit_points
 
 
 @contextmanager
@@ -308,6 +332,8 @@ def validate_candidate(value: dict[str, Any]) -> None:
         raise ReleaseStateError("unsupported candidate schema")
     if not isinstance(value["known_issues"], list) or not isinstance(value["sealed"], bool):
         raise ReleaseStateError("candidate known_issues/sealed fields are invalid")
+    if value.get("route_denominator") is not None:
+        validate_route_denominator(value["route_denominator"])
     ensure_no_digest_fields(value)
     if not all(isinstance(value[field], int) and value[field] >= 1 for field in ("attempt", "ordinal")):
         raise ReleaseStateError("candidate attempt and ordinal must be positive integers")

@@ -165,6 +165,7 @@ Invoke-CandidateRoute $candidate "H02-DRAFT-SEMANTIC" $worker $context $eventRoo
 )
 Invoke-CandidateRoute $candidate "H03-DRAFT-NO-REMOTE" $worker $context $eventRoot @(
     "python", "scripts/no_remote_publication_guard.py", "--candidate-manifest", $candidate, "--phase", "6",
+    "--audit-point", "handoff-draft",
     "--context-root", $contextRoot, "--event-root", $eventRoot, "--handoff", $staging,
     "--output", (Join-Path $sourceImport "evidence/H03-DRAFT-NO-REMOTE.json")
 )
@@ -179,6 +180,7 @@ Invoke-CandidateRoute $candidate "H04-FINAL-SEMANTIC" $worker $context $eventRoo
 )
 Invoke-CandidateRoute $candidate "H05-FINAL-NO-REMOTE" $worker $context $eventRoot @(
     "python", "scripts/no_remote_publication_guard.py", "--candidate-manifest", $candidate, "--phase", "6",
+    "--audit-point", "handoff-final",
     "--context-root", $contextRoot, "--event-root", $eventRoot, "--handoff", $final,
     "--output", (Join-Path $sourceImport "evidence/H05-FINAL-NO-REMOTE.json")
 )

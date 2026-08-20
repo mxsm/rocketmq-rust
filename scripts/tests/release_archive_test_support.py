@@ -50,6 +50,10 @@ def create_candidate(root: Path, *, version: str = "1.0.0") -> Path:
             "evidence_index": None,
             "event_index": None,
             "execution_context_index": None,
+            "route_denominator": {
+                "schema_version": 1,
+                "audit_points": {"test-local": ["R01-local-check"]},
+            },
             "creation_operation_id": "fixture",
             "created_at": "2026-08-16T00:00:00Z",
             "updated_at": "2026-08-16T00:00:00Z",
