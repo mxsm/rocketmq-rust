@@ -76,6 +76,35 @@ class ReleaseEvidenceGuardTests(unittest.TestCase):
             self.assertEqual(value["release_result_ids"], {"R01": "passed", "R02": "passed"})
             self.assertNotIn("sha256", str(value).lower())
 
+    def test_gate_can_separate_release_results_from_the_full_result_denominator(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = create_candidate(root)
+            results = root / "results"
+            self._result(candidate, results, "R01")
+            self._result(candidate, results, "P01")
+            for result_id in ("R01", "P01"):
+                path = results / f"{result_id}.json"
+                value = read_json(path)
+                value["phase"] = 6
+                value["gate_stage"] = "full-matrix"
+                write_json(path, value)
+            output = root / "EVIDENCE_INDEX.json"
+
+            self.guard.build_evidence(
+                candidate,
+                results,
+                phase=6,
+                gate_stage="full-matrix",
+                required_result_ids=["R01", "P01"],
+                release_result_ids=["R01"],
+                output=output,
+            )
+
+            value = read_json(output)
+            self.assertEqual({"R01": "passed"}, value["release_result_ids"])
+            self.assertEqual(["R01", "P01"], value["required_result_ids"])
+
     def test_missing_duplicate_unknown_and_zero_executed_results_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -19,7 +19,15 @@ if str(ROOT / "distribution") not in sys.path:
     sys.path.insert(0, str(ROOT / "distribution"))
 
 from release_archive_common import ArchiveError, load_candidate, require_relative_path
-from release_state import read_json, resolve_existing_file, resolve_within
+from release_state import (
+    ReleaseStateError,
+    ensure_no_digest_fields,
+    read_json,
+    resolve_existing_file,
+    resolve_within,
+    validate_candidate,
+    validate_series,
+)
 
 
 EXCLUDED_PREFIXES = (
@@ -155,6 +163,39 @@ def export_build_source(candidate_manifest: Path, output: Path, source_root: Pat
     )
 
 
+def export_build_control(candidate_manifest: Path, output: Path) -> Path:
+    """Export current control state without reopening sealed artifact mutation."""
+
+    manifest = resolve_existing_file(candidate_manifest, "candidate manifest")
+    candidate = read_json(manifest)
+    validate_candidate(candidate)
+    ensure_no_digest_fields(candidate)
+    root = Path(candidate["candidate_root"]).resolve()
+    if root != manifest.parent:
+        raise ArchiveError("candidate manifest and candidate root disagree")
+    output = resolve_within(root, output, "candidate transfer output")
+    if output.exists():
+        raise ArchiveError(f"candidate transfer bundle already exists: {output}")
+    records = [("CANDIDATE_RUN.json", manifest)]
+    series = candidate.get("series_manifest")
+    if not isinstance(series, str):
+        raise ArchiveError("candidate has no release-series manifest")
+    series_path = resolve_existing_file(Path(series), "release series")
+    series_value = read_json(series_path)
+    validate_series(series_value)
+    ensure_no_digest_fields(series_value)
+    head = series_value.get("head")
+    if (
+        series_value["pending_operation"] is not None
+        or candidate["series_generation"] != series_value["generation"]
+        or not isinstance(head, dict)
+        or head.get("ordinal") != candidate["ordinal"]
+    ):
+        raise ArchiveError("candidate and release series are not at one committed generation")
+    records.append(("RELEASE_SERIES.json", series_path))
+    return _write_bundle(candidate, bundle_kind="build-control", output=output, records=records)
+
+
 def _safe_member(member: tarfile.TarInfo) -> PurePosixPath:
     path = PurePosixPath(member.name)
     if path.is_absolute() or ".." in path.parts or member.issym() or member.islnk():
@@ -234,26 +275,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "export-build-source":
             output = export_build_source(args.candidate_manifest, args.output, args.source_root)
+        elif args.command == "export-build-control":
+            output = export_build_control(args.candidate_manifest, args.output)
         elif args.command == "import":
             output = import_bundle(args.bundle, args.output)
         else:
             manifest, candidate, root = load_candidate(args.candidate_manifest)
-            if args.command == "export-build-control":
-                records = [("CANDIDATE_RUN.json", manifest)]
-                series = read_json(manifest).get("series_manifest")
-                if isinstance(series, str) and Path(series).is_file():
-                    records.append(("RELEASE_SERIES.json", Path(series)))
-                output_path = resolve_within(root, args.output, "candidate transfer output")
-                if output_path.exists():
-                    raise ArchiveError(f"candidate transfer bundle already exists: {output_path}")
-                output = _write_bundle(
-                    read_json(manifest),
-                    bundle_kind="build-control",
-                    output=output_path,
-                    records=records,
-                )
-                print(f"CANDIDATE_TRANSFER_OK command={args.command} output={output}")
-                return 0
             if args.command == "export-target":
                 from release_archive_common import sealed_partial_path, resolve_candidate_path
 
@@ -323,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"CANDIDATE_TRANSFER_OK command={args.command} output={output}")
         return 0
-    except (ArchiveError, OSError, KeyError, json.JSONDecodeError) as error:
+    except (ReleaseStateError, OSError, KeyError, json.JSONDecodeError) as error:
         print(f"CANDIDATE_TRANSFER_FAILED detail={error}", file=sys.stderr)
         return 1
 

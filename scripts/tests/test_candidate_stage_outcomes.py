@@ -59,6 +59,9 @@ class CandidateStageOutcomeTests(unittest.TestCase):
             self.assertTrue(index["all_required_passed"])
             self.assertEqual([], index["failed_job_ids"])
             self.assertEqual(["build-linux", "aggregate"], [item["job_id"] for item in index["jobs"]])
+            self.assertEqual(["build-linux"], index["jobs"][0]["expected_route_ids"])
+            self.assertEqual(["build-linux"], index["jobs"][0]["route_ids"])
+            self.assertEqual([], index["jobs"][0]["missing_route_ids"])
             self.assertEqual(2, len(list((output / "results").rglob("*.json"))))
             self.assertEqual(4, len(list((output / "events").rglob("*.json"))))
             self.assertEqual(2, len(list((output / "contexts").rglob("*.json"))))
@@ -468,8 +471,14 @@ class CandidateStageOutcomeTests(unittest.TestCase):
                             "job_id": "build-linux",
                             "target": "x86_64-unknown-linux-gnu",
                             "result_ids": ["build-linux"],
+                            "route_ids": ["build-linux"],
                         },
-                        {"job_id": "aggregate", "target": None, "result_ids": ["aggregate"]},
+                        {
+                            "job_id": "aggregate",
+                            "target": None,
+                            "result_ids": ["aggregate"],
+                            "route_ids": ["aggregate"],
+                        },
                     ]
                 },
             },
