@@ -18,8 +18,19 @@ A signal runs only when both gates are open:
 | Build time | Compile the service with the feature for that signal and exporter. |
 | Runtime | Select a non-`disable` exporter in `observability` or through a supported environment override. |
 
-The `observability` convenience feature enables metrics and traces. OTLP logs
-remain opt-in through `otel-logs` and `otlp-logs`. Examples:
+Feature names differ by service and must be selected from that service's
+`Cargo.toml`:
+
+| Service | Convenience feature | Signal and exporter features |
+| --- | --- | --- |
+| Broker | `observability` enables metrics and traces | `otel-metrics`, `otlp-metrics`, `prometheus`, `metrics-prometheus`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| NameServer | `observability` enables metrics and traces | `otel-metrics`, `otlp-metrics`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| Controller | None | `metrics`, `metrics-otlp`, `metrics-prometheus`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| Proxy | `observability` enables metrics only | `otlp-metrics`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| MCP | `observability` enables metrics and traces | `otlp` adds OTLP metrics, traces, and logs |
+
+In particular, Controller does not define an `observability` convenience
+feature. OTLP logs remain an explicit build-time choice. Examples:
 
 ```bash
 cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
@@ -158,10 +169,10 @@ unchanged. A non-empty endpoint without `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`
 fails startup.
 
 `ROCKETMQ_RELEASE_COMMIT` and `ROCKETMQ_RELEASE_NONCE` remain build/process
-identity inputs and are not file fields. `OTEL_SERVICE_NAME` is deliberately
-not an override in this resolver. Each service composition root owns
-`service_name`, `service_namespace`, `node_type`, and `node_id`; file
-and environment input cannot change them.
+identity inputs and are not file fields. A deployment may retain
+`OTEL_SERVICE_NAME`, but this resolver deliberately ignores it. Each service
+composition root owns `service_name`, `service_namespace`, `node_type`, and
+`node_id`; file and environment input cannot change them.
 
 ## Migration from flat service fields
 
@@ -170,10 +181,28 @@ Remove those fields and migrate their values into the nested
 `[observability]` sections. Do not configure both forms: the structured
 configuration is the only file interface.
 
-Deployment environment variables remain compatibility overrides and take
-precedence over ConfigMap values. If a workload injects
-`OTEL_EXPORTER_OTLP_ENDPOINT`, it must inject
-`OTEL_EXPORTER_OTLP_PROTOCOL=grpc` at the same time.
+The Helm chart defaults
+`global.observability.environmentOverridesEnabled` to `false`. In this mode it
+always injects release identity variables, but does not inject
+`ROCKETMQ_METRICS_*`, `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_PROTOCOL`. The ConfigMap's structured file selection is
+therefore effective for all-disabled, Prometheus-only, and mixed-signal
+configurations.
+
+Set the flag to `true` only while preserving the previous environment-driven
+deployment behavior:
+
+```yaml
+global:
+  observability:
+    environmentOverridesEnabled: true
+```
+
+Compatibility mode injects the metrics variables and the resolved OTLP
+endpoint with `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. These present environment
+variables take precedence over ConfigMap values. Both the ConfigMap and the
+compatibility variables use the same structured/legacy endpoint alias
+resolution.
 
 ## Validation and secret handling
 

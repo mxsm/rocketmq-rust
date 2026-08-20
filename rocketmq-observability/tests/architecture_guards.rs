@@ -371,13 +371,129 @@ fn telemetry_environment_read_detector_catches_supported_direct_forms() {
         r#"let _ = std::env::var_os ( "ROCKETMQ_METRICS_EXPORTER" );"#,
         r#"let _ = std::env::var_os(OTEL_EXPORTER_OTLP_PROTOCOL);"#,
         r#"let _ = std::env::var(METRICS_ENABLED_ENV);"#,
+        r#"use std::env; let _ = env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT");"#,
+        r#"use std::env::var_os; let _ = var_os(METRICS_EXPORTER_ENV);"#,
+        r#"use std::env as process_env; let _ = process_env::var("ROCKETMQ_METRICS_ENABLED");"#,
+        r#"use std::env; let _ = env::vars_os().find(|(key, _)| key == "OTEL_EXPORTER_OTLP_PROTOCOL");"#,
+        r#"use std::env::vars; let _ = vars().find(|(key, _)| key == "ROCKETMQ_METRICS_PATH");"#,
     ] {
-        assert!(has_direct_telemetry_environment_read(source));
+        assert!(
+            has_direct_telemetry_environment_read(source),
+            "detector missed direct telemetry environment access: {source}"
+        );
     }
 
-    assert!(!has_direct_telemetry_environment_read(
-        r#"let _ = std::env::var("ROCKETMQ_MCP_HTTP_TOKEN");"#
-    ));
+    for source in [
+        r#"let _ = std::env::var("ROCKETMQ_MCP_HTTP_TOKEN");"#,
+        r#"use std::env; let _ = env::var_os("MY_METRICS_DEBUG");"#,
+    ] {
+        assert!(
+            !has_direct_telemetry_environment_read(source),
+            "detector must ignore unrelated environment access: {source}"
+        );
+    }
+}
+
+#[test]
+fn helm_defaults_keep_file_signal_selection_authoritative() {
+    let workspace_root = workspace_root();
+    let values = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/values.yaml"))
+        .expect("Helm values should be readable");
+    let helpers = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/_helpers.tpl"))
+        .expect("Helm helpers should be readable");
+
+    assert!(values.contains("environmentOverridesEnabled: false"));
+    for exporter in ["metricsExporter", "tracesExporter", "logsExporter"] {
+        assert!(
+            values.contains(&format!("{exporter}: disable")),
+            "default {exporter} must be disabled"
+        );
+    }
+
+    assert!(helpers.contains("define \"rocketmq.releaseIdentityEnv\""));
+    assert!(helpers.contains("define \"rocketmq.observabilityEnvironmentOverrides\""));
+    assert!(helpers.contains("if .Values.global.observability.environmentOverridesEnabled"));
+    assert!(helpers.contains("ROCKETMQ_RELEASE_COMMIT"));
+    assert!(helpers.contains("ROCKETMQ_METRICS_EXPORTER"));
+    assert!(helpers.contains("OTEL_EXPORTER_OTLP_ENDPOINT"));
+}
+
+#[test]
+fn helm_file_and_compatibility_modes_keep_effective_precedence() {
+    let workspace_root = workspace_root();
+    let schema: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/values.schema.json"))
+            .expect("Helm values schema should be readable"),
+    )
+    .expect("Helm values schema should be valid JSON");
+    let helpers = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/_helpers.tpl"))
+        .expect("Helm helpers should be readable");
+    let configmaps =
+        fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/configmaps.yaml"))
+            .expect("Helm ConfigMap template should be readable");
+    let workloads = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/workloads.yaml"))
+        .expect("Helm workload template should be readable");
+
+    let observability_schema = &schema["properties"]["global"]["properties"]["observability"];
+    assert_eq!(
+        observability_schema["properties"]["environmentOverridesEnabled"]["type"],
+        "boolean"
+    );
+    assert!(observability_schema["required"]
+        .as_array()
+        .is_some_and(|required| required.iter().any(|field| field == "environmentOverridesEnabled")));
+
+    let release_identity = helm_template_definition(&helpers, "rocketmq.releaseIdentityEnv");
+    assert!(release_identity.contains("ROCKETMQ_RELEASE_COMMIT"));
+    assert!(!release_identity.contains("ROCKETMQ_METRICS_"));
+    assert!(!release_identity.contains("OTEL_EXPORTER_"));
+
+    let compatibility = helm_template_definition(&helpers, "rocketmq.observabilityEnvironmentOverrides");
+    assert!(compatibility.contains("if .Values.global.observability.environmentOverridesEnabled"));
+    for variable in [
+        "ROCKETMQ_METRICS_ENABLED",
+        "ROCKETMQ_METRICS_EXPORTER",
+        "ROCKETMQ_METRICS_BIND_ADDR",
+        "ROCKETMQ_METRICS_PATH",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+    ] {
+        assert!(
+            compatibility.contains(variable),
+            "missing compatibility variable {variable}"
+        );
+    }
+
+    let file_config = helm_template_definition(&helpers, "rocketmq.observabilityConfig");
+    for mapping in [
+        "exporter = {{ .Values.global.observability.metricsExporter | quote }}",
+        "exporter = {{ .Values.global.observability.tracesExporter | quote }}",
+        "exporter = {{ .Values.global.observability.logsExporter | quote }}",
+    ] {
+        assert!(
+            file_config.contains(mapping),
+            "all-disabled, Prometheus-only, and mixed-signal modes require independent file exporter mapping: {mapping}"
+        );
+    }
+    assert!(file_config.contains("include \"rocketmq.observabilityOtlpEndpoint\""));
+
+    let endpoint = helm_template_definition(&helpers, "rocketmq.observabilityOtlpEndpoint");
+    assert!(endpoint.contains("if ne $structuredEndpoint $defaultEndpoint"));
+    assert!(endpoint.contains("else if ne $legacyEndpoint $defaultEndpoint"));
+    assert_eq!(
+        configmaps.matches("include \"rocketmq.observabilityConfig\"").count(),
+        5
+    );
+    assert_eq!(workloads.matches("include \"rocketmq.releaseIdentityEnv\"").count(), 5);
+    assert_eq!(
+        workloads
+            .matches("include \"rocketmq.observabilityEnvironmentOverrides\"")
+            .count(),
+        5
+    );
+    assert!(!workloads.contains("ROCKETMQ_METRICS_"));
+    assert!(!workloads.contains("OTEL_EXPORTER_OTLP_ENDPOINT"));
+    assert!(!workloads.contains("OTEL_EXPORTER_OTLP_PROTOCOL"));
 }
 
 #[test]
@@ -398,17 +514,17 @@ fn deployment_templates_share_canonical_observability_configuration_and_endpoint
         5,
         "all five service ConfigMaps must use the same canonical observability helper"
     );
+    let file_config = helm_template_definition(&helpers, "rocketmq.observabilityConfig");
+    let compatibility = helm_template_definition(&helpers, "rocketmq.observabilityEnvironmentOverrides");
+    assert!(file_config.contains("include \"rocketmq.observabilityOtlpEndpoint\""));
+    assert!(compatibility.contains("include \"rocketmq.observabilityOtlpEndpoint\""));
+    assert!(compatibility.contains(".Values.global.observability.otlpProtocol"));
     assert_eq!(
         workloads
-            .matches("include \"rocketmq.observabilityOtlpEndpoint\"")
+            .matches("include \"rocketmq.observabilityEnvironmentOverrides\"")
             .count(),
         5,
-        "all five workloads must use the same resolved OTLP endpoint as their ConfigMaps"
-    );
-    assert_eq!(
-        workloads.matches(".Values.global.observability.otlpProtocol").count(),
-        5,
-        "every injected OTLP endpoint must carry the configured gRPC protocol"
+        "all five workloads must use the compatibility helper that shares ConfigMap endpoint resolution"
     );
     assert!(!configmaps.contains(".Values.global.otelEndpoint"));
     assert!(!workloads.contains(".Values.global.otelEndpoint"));
@@ -464,7 +580,7 @@ fn runtime_configuration_and_user_documentation_exclude_removed_flat_telemetry_k
             let source =
                 fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
             for key in REMOVED_FLAT_TELEMETRY_KEYS {
-                if source.contains(key) {
+                if contains_removed_config_key(&source, key) {
                     violations.insert(format!("{}: {key}", relative_slash_path(&workspace_root, &file)));
                 }
             }
@@ -477,6 +593,106 @@ fn runtime_configuration_and_user_documentation_exclude_removed_flat_telemetry_k
          rejection tests and historical inventory fixtures are intentionally outside this scan:\n{}",
         format_paths(&violations)
     );
+}
+
+#[test]
+fn website_documents_each_services_actual_observability_features() {
+    let workspace_root = workspace_root();
+    let english = fs::read_to_string(workspace_root.join("rocketmq-website/docs/configuration/observability.md"))
+        .expect("English observability guide should be readable");
+    let chinese = fs::read_to_string(
+        workspace_root
+            .join("rocketmq-website/i18n/zh-CN/docusaurus-plugin-content-docs/current/configuration/observability.md"),
+    )
+    .expect("Chinese observability guide should be readable");
+    let contracts = [
+        (
+            "Broker",
+            "rocketmq-broker/Cargo.toml",
+            &[
+                "observability",
+                "otel-metrics",
+                "otlp-metrics",
+                "prometheus",
+                "metrics-prometheus",
+                "otel-traces",
+                "otlp-traces",
+                "otel-logs",
+                "otlp-logs",
+            ][..],
+        ),
+        (
+            "NameServer",
+            "rocketmq-namesrv/Cargo.toml",
+            &[
+                "observability",
+                "otel-metrics",
+                "otlp-metrics",
+                "otel-traces",
+                "otlp-traces",
+                "otel-logs",
+                "otlp-logs",
+            ][..],
+        ),
+        (
+            "Controller",
+            "rocketmq-controller/Cargo.toml",
+            &[
+                "metrics",
+                "metrics-otlp",
+                "metrics-prometheus",
+                "otel-traces",
+                "otlp-traces",
+                "otel-logs",
+                "otlp-logs",
+            ][..],
+        ),
+        (
+            "Proxy",
+            "rocketmq-proxy/Cargo.toml",
+            &[
+                "observability",
+                "otlp-metrics",
+                "otel-traces",
+                "otlp-traces",
+                "otel-logs",
+                "otlp-logs",
+            ][..],
+        ),
+        (
+            "MCP",
+            "rocketmq-tools/rocketmq-mcp/Cargo.toml",
+            &["observability", "otlp"][..],
+        ),
+    ];
+
+    for (service, manifest_path, expected_features) in contracts {
+        let manifest = fs::read_to_string(workspace_root.join(manifest_path))
+            .unwrap_or_else(|error| panic!("failed to read {manifest_path}: {error}"));
+        let actual_features = cargo_feature_names(&manifest);
+        let english_row = markdown_service_feature_row(&english, service);
+        let chinese_row = markdown_service_feature_row(&chinese, service);
+        for feature in expected_features {
+            assert!(
+                actual_features.contains(feature),
+                "{manifest_path} does not define {feature}"
+            );
+            let formatted = format!("`{feature}`");
+            assert!(
+                english_row.contains(&formatted),
+                "English {service} row omits {feature}"
+            );
+            assert!(
+                chinese_row.contains(&formatted),
+                "Chinese {service} row omits {feature}"
+            );
+        }
+        if service == "Controller" {
+            assert!(!actual_features.contains("observability"));
+            assert!(!english_row.contains("`observability`"));
+            assert!(!chinese_row.contains("`observability`"));
+        }
+    }
 }
 
 #[test]
@@ -724,13 +940,70 @@ fn collect_migration_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+fn helm_template_definition<'a>(source: &'a str, name: &str) -> &'a str {
+    let marker = format!("define \"{name}\"");
+    let start = source
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing Helm template definition {name}"));
+    let remainder = &source[start + marker.len()..];
+    let end = remainder.find("define \"").unwrap_or(remainder.len());
+    &remainder[..end]
+}
+
+fn contains_removed_config_key(source: &str, key: &str) -> bool {
+    source.match_indices(key).any(|(start, _)| {
+        let before = source[..start].chars().next_back();
+        let after = source[start + key.len()..].chars().next();
+        !before.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+            && !after.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+    })
+}
+
 fn has_direct_telemetry_environment_read(source: &str) -> bool {
+    const ENV_FUNCTIONS: &[&str] = &["var", "var_os", "vars", "vars_os"];
+    const TELEMETRY_ENV_CONSTANTS: &[&str] = &[
+        "METRICS_ENABLED_ENV",
+        "METRICS_EXPORTER_ENV",
+        "METRICS_BIND_ADDR_ENV",
+        "METRICS_PATH_ENV",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+    ];
+
     let compact = source
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
 
-    ["std::env::var(", "std::env::var_os("]
+    let mut namespaces = BTreeSet::from(["std::env".to_string()]);
+    let mut imported_functions = BTreeSet::new();
+    for statement in compact.split(';') {
+        let Some(import) = statement.strip_prefix("usestd::env") else {
+            continue;
+        };
+        if import.is_empty() {
+            namespaces.insert("env".to_string());
+        } else if let Some(alias) = import.strip_prefix("as") {
+            namespaces.insert(alias.to_string());
+        } else if let Some(function) = import.strip_prefix("::") {
+            let (function, alias) = function.split_once("as").unwrap_or((function, function));
+            if ENV_FUNCTIONS.contains(&function) {
+                imported_functions.insert(alias.to_string());
+            }
+        }
+    }
+
+    let mut calls = BTreeSet::new();
+    for namespace in namespaces {
+        for function in ENV_FUNCTIONS {
+            calls.insert(format!("{namespace}::{function}("));
+        }
+    }
+    for function in imported_functions {
+        calls.insert(format!("{function}("));
+    }
+
+    calls
         .iter()
         .flat_map(|call| compact.match_indices(call).map(|(index, _)| index))
         .any(|index| {
@@ -738,8 +1011,40 @@ fn has_direct_telemetry_environment_read(source: &str) -> bool {
                 .find(';')
                 .map_or(compact.len(), |offset| index + offset);
             let statement = &compact[index..end];
-            statement.contains("OTEL_") || statement.contains("ROCKETMQ_METRICS_") || statement.contains("METRICS_")
+            statement.contains("OTEL_")
+                || statement.contains("ROCKETMQ_METRICS_")
+                || TELEMETRY_ENV_CONSTANTS
+                    .iter()
+                    .any(|identifier| contains_ascii_identifier(statement, identifier))
         })
+}
+
+fn contains_ascii_identifier(source: &str, identifier: &str) -> bool {
+    source.match_indices(identifier).any(|(start, _)| {
+        let before = source[..start].chars().next_back();
+        let after = source[start + identifier.len()..].chars().next();
+        !before.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+            && !after.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+    })
+}
+
+fn cargo_feature_names(manifest: &str) -> BTreeSet<&str> {
+    manifest
+        .lines()
+        .skip_while(|line| line.trim() != "[features]")
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with('['))
+        .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn markdown_service_feature_row<'a>(document: &'a str, service: &str) -> &'a str {
+    let prefix = format!("| {service} |");
+    document
+        .lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("missing service feature row for {service}"))
 }
 
 fn subscriber_init_statement_installs_global_subscriber(source: &str, statement: &str) -> bool {

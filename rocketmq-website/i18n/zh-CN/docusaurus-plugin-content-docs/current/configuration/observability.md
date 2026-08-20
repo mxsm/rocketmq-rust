@@ -18,8 +18,18 @@ Broker、NameServer、Controller、Proxy 和 RocketMQ MCP 使用统一的
 | 构建时 | 使用对应信号及导出器的 feature 编译服务。 |
 | 运行时 | 在 `observability` 中或通过受支持的环境变量覆盖选择非 `disable` 导出器。 |
 
-`observability` 便捷 feature 会启用 metrics 和 traces。OTLP logs 仍需通过
-`otel-logs` 和 `otlp-logs` 显式启用。例如：
+不同服务的 feature 名称并不完全相同，必须以对应服务的 `Cargo.toml` 为准：
+
+| Service | 便捷 feature | 信号及导出器 feature |
+| --- | --- | --- |
+| Broker | `observability` 启用 metrics 和 traces | `otel-metrics`、`otlp-metrics`、`prometheus`、`metrics-prometheus`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| NameServer | `observability` 启用 metrics 和 traces | `otel-metrics`、`otlp-metrics`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| Controller | 无 | `metrics`、`metrics-otlp`、`metrics-prometheus`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| Proxy | `observability` 仅启用 metrics | `otlp-metrics`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| MCP | `observability` 启用 metrics 和 traces | `otlp` 同时加入 OTLP metrics、traces 和 logs |
+
+特别需要注意，Controller 没有定义 `observability` 便捷 feature。OTLP logs
+仍然需要在构建时显式选择。例如：
 
 ```bash
 cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
@@ -154,8 +164,8 @@ observability:
 设置 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` 时，服务会启动失败。
 
 `ROCKETMQ_RELEASE_COMMIT` 和 `ROCKETMQ_RELEASE_NONCE` 仍然属于构建及
-进程身份输入，不是文件字段。`OTEL_SERVICE_NAME` 特意未纳入本解析器的覆盖
-范围。每个服务的组合根负责设置 `service_name`、`service_namespace`、
+进程身份输入，不是文件字段。部署可以保留 `OTEL_SERVICE_NAME`，但本解析器
+会特意忽略它。每个服务的组合根负责设置 `service_name`、`service_namespace`、
 `node_type` 和 `node_id`；文件及环境变量均无法修改这些字段。
 
 ## 从扁平服务字段迁移
@@ -164,9 +174,24 @@ Broker 和 Controller 已不再接受旧版扁平 telemetry 字段。请删除�
 并将其值迁移到嵌套的 `[observability]` 配置段。不得同时配置两种形式：
 结构化配置是唯一的文件配置接口。
 
-部署环境变量仍作为兼容覆盖，并且优先级高于 ConfigMap 值。workload 注入
-`OTEL_EXPORTER_OTLP_ENDPOINT` 时，必须同时注入
-`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`。
+Helm chart 默认把 `global.observability.environmentOverridesEnabled` 设为
+`false`。此模式始终注入 release identity 环境变量，但不会注入
+`ROCKETMQ_METRICS_*`、`OTEL_EXPORTER_OTLP_ENDPOINT` 或
+`OTEL_EXPORTER_OTLP_PROTOCOL`，因此 ConfigMap 中的结构化文件选择可以真实
+控制全部关闭、仅 Prometheus 及混合信号配置。
+
+只有需要保留旧版环境变量驱动的部署行为时，才应显式开启该选项：
+
+```yaml
+global:
+  observability:
+    environmentOverridesEnabled: true
+```
+
+兼容模式会注入 metrics 环境变量及解析后的 OTLP endpoint，并同时设置
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`。这些实际存在的环境变量优先级高于
+ConfigMap 值。ConfigMap 与兼容环境变量使用同一套新旧 endpoint alias
+解析结果。
 
 ## 校验和敏感信息处理
 

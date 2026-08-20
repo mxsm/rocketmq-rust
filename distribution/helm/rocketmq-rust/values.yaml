@@ -4,6 +4,7 @@ global:
   imagePullSecrets: []
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
   observability:
+    environmentOverridesEnabled: false
     metricsExporter: disable
     tracesExporter: disable
     logsExporter: disable

@@ -50,6 +50,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "environmentOverridesEnabled",
             "metricsExporter",
             "tracesExporter",
             "logsExporter",
@@ -57,6 +58,9 @@
             "otlpProtocol"
           ],
           "properties": {
+            "environmentOverridesEnabled": {
+              "type": "boolean"
+            },
             "metricsExporter": {
               "type": "string",
               "enum": [
