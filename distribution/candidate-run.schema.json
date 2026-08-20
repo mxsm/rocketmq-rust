@@ -21,7 +21,8 @@
     "sealed",
     "outcome",
     "known_issues",
-    "generation"
+    "generation",
+    "route_denominator"
   ],
   "properties": {
     "schema_version": { "const": 1 },
@@ -48,6 +49,24 @@
     "evidence_index": { "type": ["string", "null"] },
     "event_index": { "type": ["string", "null"] },
     "execution_context_index": { "type": ["string", "null"] },
+    "route_denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "audit_points"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "audit_points": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
     "creation_operation_id": { "type": "string" },
     "created_at": { "type": "string" },
     "updated_at": { "type": "string" }

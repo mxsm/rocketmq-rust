@@ -132,6 +132,7 @@ def _runtime_evidence(
     context_root: Path,
     event_root: Path,
     current_route_id: str | None,
+    required_route_ids: list[str],
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     violations: list[str] = []
     indeterminate: list[str] = []
@@ -193,6 +194,13 @@ def _runtime_evidence(
         indeterminate.append(
             f"event reservations are not paired; missing_completed={sorted(set(started)-set(completed))}, orphan_completed={sorted(set(completed)-set(started))}"
         )
+    for route_id in required_route_ids:
+        if route_id not in started or route_id not in completed:
+            indeterminate.append(f"required route is missing or incomplete: {route_id}")
+            continue
+        finish = completed[route_id][1]
+        if finish.get("status") != "passed" or finish.get("exit_code") != 0:
+            indeterminate.append(f"required route did not complete successfully: {route_id}")
     for route_id in sorted(set(started) & set(completed)):
         start = started[route_id][1]
         finish = completed[route_id][1]
@@ -233,6 +241,23 @@ def _runtime_evidence(
     return violations, indeterminate, sorted(set(dispatches)), sorted(set(credential_names))
 
 
+def _required_route_ids(candidate: dict[str, Any], audit_point: str | None) -> tuple[str, list[str]]:
+    denominator = candidate.get("route_denominator")
+    if not isinstance(denominator, dict) or denominator.get("schema_version") != 1:
+        raise NoRemotePublicationError("candidate route denominator is missing", "indeterminate")
+    audit_points = denominator.get("audit_points")
+    if not isinstance(audit_points, dict) or not audit_points:
+        raise NoRemotePublicationError("candidate route denominator has no audit points", "indeterminate")
+    if audit_point is None:
+        if len(audit_points) != 1:
+            raise NoRemotePublicationError("no-remote audit point is required", "indeterminate")
+        audit_point = next(iter(audit_points))
+    route_ids = audit_points.get(audit_point)
+    if not isinstance(route_ids, list) or not route_ids:
+        raise NoRemotePublicationError(f"candidate has no route denominator for {audit_point}", "indeterminate")
+    return audit_point, route_ids
+
+
 def audit_no_remote_publication(
     candidate_manifest: Path,
     *,
@@ -241,6 +266,7 @@ def audit_no_remote_publication(
     event_root: Path,
     workflow_root: Path,
     output: Path,
+    audit_point: str | None = None,
     current_route_id: str | None = None,
     handoff_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -249,9 +275,10 @@ def audit_no_remote_publication(
     manifest = resolve_existing_file(candidate_manifest, "candidate_manifest")
     candidate = read_json(manifest)
     validate_candidate(candidate)
+    audit_point, required_route_ids = _required_route_ids(candidate, audit_point)
     workflow_findings = audit_workflow_files(workflow_root, PHASE_WORKFLOWS[phase])
     violations, indeterminate, dispatches, credential_names = _runtime_evidence(
-        candidate, context_root, event_root, current_route_id
+        candidate, context_root, event_root, current_route_id, required_route_ids
     )
     violations.extend(finding for finding in workflow_findings if not finding.startswith("missing workflow"))
     indeterminate.extend(finding for finding in workflow_findings if finding.startswith("missing workflow"))
@@ -265,6 +292,8 @@ def audit_no_remote_publication(
         "run_id": candidate["run_id"],
         "attempt": candidate["attempt"],
         "phase": phase,
+        "audit_point": audit_point,
+        "required_route_ids": required_route_ids,
         "remote_publication": {"status": status},
         "remote_publication_workflow_dispatches": dispatches,
         "publishing_credentials_provided": bool(credential_names),
@@ -293,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--static-only", action="store_true")
     parser.add_argument("--current-route-id")
+    parser.add_argument("--audit-point")
     parser.add_argument("--handoff", type=Path)
     args = parser.parse_args(argv)
     if args.static_only:
@@ -312,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             event_root=args.event_root,
             workflow_root=args.workflow_root,
             output=args.output,
+            audit_point=args.audit_point,
             current_route_id=args.current_route_id or os.environ.get("RELEASE_CANDIDATE_ROUTE_ID"),
             handoff_root=args.handoff,
         )

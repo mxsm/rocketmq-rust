@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "audit_points": {
+    "release-preparation-aggregate": [
+      "R11-aggregate-validate"
+    ],
+    "handoff-draft": [
+      "H01-LINUX",
+      "H01-WINDOWS",
+      "H01-MACOS",
+      "H01-MERGE",
+      "H01-REFRESH",
+      "H02-DRAFT-SEMANTIC"
+    ],
+    "handoff-final": [
+      "H01-LINUX",
+      "H01-WINDOWS",
+      "H01-MACOS",
+      "H01-MERGE",
+      "H01-REFRESH",
+      "H02-DRAFT-SEMANTIC",
+      "H03-DRAFT-NO-REMOTE",
+      "H00-FINALIZE",
+      "H04-FINAL-SEMANTIC"
+    ]
+  }
+}

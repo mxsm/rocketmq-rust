@@ -32,7 +32,7 @@ python scripts/release_candidate_command.py run --candidate-manifest $candidate 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($Mode -ne "Aggregate") { exit 0 }
 $noRemote = Join-Path $OutputRoot "NO_REMOTE_PUBLICATION.json"
-python scripts/release_candidate_command.py run --candidate-manifest $candidate --route-id "R11-no-remote" --worker-id $worker --context $context --event-root $eventRoot -- python scripts/no_remote_publication_guard.py --candidate-manifest $candidate --phase $Phase --context-root $contextRoot --event-root $eventRoot --output $noRemote
+python scripts/release_candidate_command.py run --candidate-manifest $candidate --route-id "R11-no-remote" --worker-id $worker --context $context --event-root $eventRoot -- python scripts/no_remote_publication_guard.py --candidate-manifest $candidate --phase $Phase --audit-point "release-preparation-aggregate" --context-root $contextRoot --event-root $eventRoot --output $noRemote
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 python scripts/release_candidate_command.py run --candidate-manifest $candidate --route-id "R11-evidence" --worker-id $worker --context $context --event-root $eventRoot -- python scripts/release_evidence_guard.py --candidate-manifest $candidate --result-root $ResultRoot --phase $Phase --gate-stage $GateStage --require-result-ids $RequiredResultIds --no-remote-evidence $noRemote --output (Join-Path $OutputRoot "EVIDENCE_INDEX.json")
 exit $LASTEXITCODE
