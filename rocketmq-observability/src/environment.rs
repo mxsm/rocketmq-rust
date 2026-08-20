@@ -39,8 +39,8 @@ pub enum StandardOtlpEnvironmentStatus {
 pub fn apply_standard_otlp_environment(
     config: &mut TelemetryBootstrapConfig,
 ) -> Result<StandardOtlpEnvironmentStatus, ObservabilityError> {
-    let endpoint = std::env::var_os(OTEL_EXPORTER_OTLP_ENDPOINT);
-    let protocol = std::env::var_os(OTEL_EXPORTER_OTLP_PROTOCOL);
+    let endpoint = crate::resolver::read_telemetry_environment_value(OTEL_EXPORTER_OTLP_ENDPOINT);
+    let protocol = crate::resolver::read_telemetry_environment_value(OTEL_EXPORTER_OTLP_PROTOCOL);
     apply_standard_otlp_environment_values(config, endpoint.as_deref(), protocol.as_deref())
 }
 

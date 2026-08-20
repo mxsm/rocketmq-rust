@@ -171,6 +171,43 @@ rocketmqrust.com/architecture-milestone: P0-05
 - {name: ROCKETMQ_METRICS_PATH, value: {{ .Values.metrics.path | quote }}}
 {{- end -}}
 
+{{/* Resolve the structured OTLP endpoint while preserving the legacy alias when only it was customized. */}}
+{{- define "rocketmq.observabilityOtlpEndpoint" -}}
+{{- $defaultEndpoint := "http://otel-collector.observability.svc.cluster.local:4317" -}}
+{{- $structuredEndpoint := .Values.global.observability.otlpEndpoint -}}
+{{- $legacyEndpoint := .Values.global.otelEndpoint -}}
+{{- if ne $structuredEndpoint $defaultEndpoint -}}
+{{- $structuredEndpoint -}}
+{{- else if ne $legacyEndpoint $defaultEndpoint -}}
+{{- $legacyEndpoint -}}
+{{- else -}}
+{{- $structuredEndpoint -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Canonical file configuration shared by Broker, NameServer, Controller, Proxy, and MCP. */}}
+{{- define "rocketmq.observabilityConfig" }}
+[observability]
+
+[observability.metrics]
+exporter = {{ .Values.global.observability.metricsExporter | quote }}
+
+[observability.traces]
+exporter = {{ .Values.global.observability.tracesExporter | quote }}
+
+[observability.logs]
+exporter = {{ .Values.global.observability.logsExporter | quote }}
+
+[observability.otlp]
+endpoint = {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}
+protocol = {{ .Values.global.observability.otlpProtocol | quote }}
+
+[observability.prometheus]
+host = "0.0.0.0"
+port = {{ .Values.metrics.port }}
+path = {{ .Values.metrics.path | quote }}
+{{- end }}
+
 {{- define "rocketmq.releaseAnnotations" -}}
 rocketmqrust.com/release-commit: {{ .Values.releaseIdentity.commit | quote }}
 rocketmqrust.com/release-nonce: {{ .Values.releaseIdentity.nonce | quote }}

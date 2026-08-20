@@ -3,6 +3,12 @@ deploymentProfile: production-controller-ha
 global:
   imagePullSecrets: []
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
+  observability:
+    metricsExporter: disable
+    tracesExporter: disable
+    logsExporter: disable
+    otlpEndpoint: http://otel-collector.observability.svc.cluster.local:4317
+    otlpProtocol: grpc
   secretRefs:
     existingSecret: rocketmq-runtime-secrets
     secretProviderClassName: ""

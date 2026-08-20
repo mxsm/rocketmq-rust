@@ -53,8 +53,8 @@ spec:
                   fieldPath: metadata.name
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/broker}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-broker}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: {{ .Values.global.observability.otlpProtocol | quote }}}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
@@ -172,8 +172,8 @@ spec:
 {{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: {{ .Values.global.observability.otlpProtocol | quote }}}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
@@ -279,8 +279,8 @@ spec:
             - {name: ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR, value: "0.0.0.0:60110"}
             - {name: ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER, value: {{ .Values.services.controller.autoInitializeCluster | quote }}}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-controller}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: {{ .Values.global.observability.otlpProtocol | quote }}}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
@@ -393,8 +393,8 @@ spec:
 {{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: {{ .Values.global.observability.otlpProtocol | quote }}}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
@@ -506,8 +506,8 @@ spec:
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: {{ .Values.global.observability.otlpProtocol | quote }}}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}

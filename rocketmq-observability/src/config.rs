@@ -200,6 +200,11 @@ pub struct PrometheusOverrides {
 }
 
 impl ObservabilityOverrides {
+    /// Applies only explicitly configured file fields to a service-owned base.
+    ///
+    /// Omitted fields preserve the base value, configured maps replace their
+    /// base maps, and each signal exporter determines that signal's enabled
+    /// state. Service identity fields are intentionally not part of this type.
     pub fn apply_to(&self, target: &mut ObservabilityConfig) {
         if let Some(environment) = &self.environment {
             target.environment = environment.clone();

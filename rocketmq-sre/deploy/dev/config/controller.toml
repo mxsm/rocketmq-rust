@@ -15,16 +15,6 @@ isProcessReadEvent = false
 notifyBrokerRoleChanged = true
 scanInactiveMasterInterval = 5000
 raftScanWaitTimeoutMs = 1000
-metricsExporterType = "disable"
-metricsGrpcExporterTarget = ""
-metricsGrpcExporterHeader = ""
-metricGrpcExporterTimeOutInMills = 3000
-metricGrpcExporterIntervalInMills = 60000
-metricLoggingExporterIntervalInMills = 10000
-metricsPromExporterPort = 5557
-metricsPromExporterHost = ""
-metricsLabel = ""
-metricsInDelta = false
 configBlackList = "configBlackList;configStorePath"
 nodeId = 1
 listenAddr = "0.0.0.0:60109"
@@ -38,3 +28,23 @@ enableElectUncleanMasterLocal = false
 [[raftPeers]]
 id = 1
 addr = "127.0.0.1:60110"
+
+[observability]
+
+[observability.metrics]
+exporter = "disable"
+
+[observability.traces]
+exporter = "disable"
+
+[observability.logs]
+exporter = "disable"
+
+[observability.otlp]
+endpoint = "http://127.0.0.1:4317"
+protocol = "grpc"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"

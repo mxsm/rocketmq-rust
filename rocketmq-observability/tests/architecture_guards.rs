@@ -67,6 +67,64 @@ const CORE_SERVICE_ENTRYPOINTS: &[&str] = &[
     "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
 ];
 
+const TELEMETRY_ENV_GOVERNED_CRATE_DIRS: &[&str] = &[
+    "rocketmq-broker",
+    "rocketmq-namesrv",
+    "rocketmq-controller",
+    "rocketmq-proxy",
+    "rocketmq-tools/rocketmq-mcp",
+    "rocketmq-observability",
+];
+
+const TELEMETRY_ENV_READ_ALLOWLIST: &[&str] = &["rocketmq-observability/src/resolver.rs"];
+
+const REMOVED_FLAT_TELEMETRY_KEYS: &[&str] = &[
+    "observabilityEnvironment",
+    "observabilityServiceInstanceId",
+    "observabilityResourceAttributes",
+    "metricsExporterType",
+    "metricsExportIntervalMillis",
+    "metricsCardinalityLimit",
+    "metricsSampleRatio",
+    "metricsTopicLabelEnabled",
+    "metricsConsumerGroupLabelEnabled",
+    "otlpExporterEndpoint",
+    "otlpExporterHeaders",
+    "otlpExporterTimeoutMillis",
+    "metricsPromExporterHost",
+    "metricsPromExporterPort",
+    "metricsPromExporterPath",
+    "traceExporterType",
+    "traceSampleRatio",
+    "tracePropagateContext",
+    "traceRecordMessageId",
+    "traceRecordMessageKeys",
+    "traceRecordBodySize",
+    "logExporterType",
+    "metricsGrpcExporterTarget",
+    "metricsGrpcExporterHeader",
+    "metricGrpcExporterTimeOutInMills",
+    "metricGrpcExporterIntervalInMills",
+    "metricLoggingExporterIntervalInMills",
+    "metricsLabel",
+    "metricsInDelta",
+];
+
+const RUNTIME_CONFIGURATION_AND_DOCUMENTATION_PATHS: &[&str] = &[
+    "distribution/helm/rocketmq-rust/templates",
+    "distribution/kubernetes/base",
+    "docker/smoke-config",
+    "rocketmq-sre/deploy/dev/config",
+    "rocketmq-sre/scripts",
+    "rocketmq-broker/README.md",
+    "rocketmq-broker/README-zh_cn.md",
+    "rocketmq-controller/README.md",
+    "rocketmq-controller/README-zh_cn.md",
+    "rocketmq-example/examples/broker_observability.yaml",
+    "rocketmq-website/docs/configuration/observability.md",
+    "rocketmq-website/i18n/zh-CN/docusaurus-plugin-content-docs/current/configuration/observability.md",
+];
+
 const DIRECT_OTEL_PATTERNS: &[&str] = &[
     "use opentelemetry",
     "opentelemetry::",
@@ -275,6 +333,148 @@ fn governed_entrypoints_do_not_bypass_the_shared_log_filter_resolver() {
     assert!(
         violations.is_empty(),
         "governed entrypoints must use rocketmq-observability for RUST_LOG/default handling:\n{}",
+        format_paths(&violations)
+    );
+}
+
+#[test]
+fn governed_services_do_not_read_telemetry_environment_outside_the_shared_resolver() {
+    let workspace_root = workspace_root();
+    let allowlist = path_set(TELEMETRY_ENV_READ_ALLOWLIST);
+    let mut violations = BTreeSet::new();
+
+    for file in workspace_src_files(&workspace_root, TELEMETRY_ENV_GOVERNED_CRATE_DIRS) {
+        let relative_path = relative_slash_path(&workspace_root, &file);
+        if allowlist.contains(relative_path.as_str()) {
+            continue;
+        }
+
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+        if has_direct_telemetry_environment_read(&source) {
+            violations.insert(relative_path);
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Broker, NameServer, Controller, Proxy, and MCP must delegate telemetry environment reads to the shared \
+         resolver:\n{}",
+        format_paths(&violations)
+    );
+}
+
+#[test]
+fn telemetry_environment_read_detector_catches_supported_direct_forms() {
+    for source in [
+        r#"let _ = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT");"#,
+        r#"let _ = std::env::var_os ( "ROCKETMQ_METRICS_EXPORTER" );"#,
+        r#"let _ = std::env::var_os(OTEL_EXPORTER_OTLP_PROTOCOL);"#,
+        r#"let _ = std::env::var(METRICS_ENABLED_ENV);"#,
+    ] {
+        assert!(has_direct_telemetry_environment_read(source));
+    }
+
+    assert!(!has_direct_telemetry_environment_read(
+        r#"let _ = std::env::var("ROCKETMQ_MCP_HTTP_TOKEN");"#
+    ));
+}
+
+#[test]
+fn deployment_templates_share_canonical_observability_configuration_and_endpoint_resolution() {
+    let workspace_root = workspace_root();
+    let configmaps =
+        fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/configmaps.yaml"))
+            .expect("Helm ConfigMap template should be readable");
+    let workloads = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/workloads.yaml"))
+        .expect("Helm workload template should be readable");
+    let helpers = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/_helpers.tpl"))
+        .expect("Helm helper template should be readable");
+    let manifest = fs::read_to_string(workspace_root.join("distribution/kubernetes/base/manifest.yaml"))
+        .expect("static Kubernetes manifest should be readable");
+
+    assert_eq!(
+        configmaps.matches("include \"rocketmq.observabilityConfig\"").count(),
+        5,
+        "all five service ConfigMaps must use the same canonical observability helper"
+    );
+    assert_eq!(
+        workloads
+            .matches("include \"rocketmq.observabilityOtlpEndpoint\"")
+            .count(),
+        5,
+        "all five workloads must use the same resolved OTLP endpoint as their ConfigMaps"
+    );
+    assert_eq!(
+        workloads.matches(".Values.global.observability.otlpProtocol").count(),
+        5,
+        "every injected OTLP endpoint must carry the configured gRPC protocol"
+    );
+    assert!(!configmaps.contains(".Values.global.otelEndpoint"));
+    assert!(!workloads.contains(".Values.global.otelEndpoint"));
+    for contract in [
+        "define \"rocketmq.observabilityOtlpEndpoint\"",
+        "if ne $structuredEndpoint $defaultEndpoint",
+        "else if ne $legacyEndpoint $defaultEndpoint",
+        "define \"rocketmq.observabilityConfig\"",
+        "[observability.metrics]",
+        "[observability.traces]",
+        "[observability.logs]",
+        "[observability.otlp]",
+        "[observability.prometheus]",
+    ] {
+        assert!(
+            helpers.contains(contract),
+            "missing Helm observability contract: {contract}"
+        );
+    }
+    assert_eq!(
+        manifest.matches("[observability.metrics]").count(),
+        9,
+        "the static manifest must carry canonical config for three Brokers, one NameServer, three Controllers, \
+         one Proxy, and one MCP"
+    );
+    assert!(!helpers.contains("headers ="));
+    assert!(!configmaps.contains("headers ="));
+    assert!(!manifest.contains("headers ="));
+}
+
+#[test]
+fn runtime_configuration_and_user_documentation_exclude_removed_flat_telemetry_keys() {
+    let workspace_root = workspace_root();
+    let mut violations = BTreeSet::new();
+
+    for relative_path in RUNTIME_CONFIGURATION_AND_DOCUMENTATION_PATHS {
+        let path = workspace_root.join(relative_path);
+        let mut files = Vec::new();
+        if path.is_dir() {
+            collect_migration_files(&path, &mut files);
+        } else {
+            files.push(path);
+        }
+
+        for file in files {
+            if file.starts_with(workspace_root.join("rocketmq-sre/scripts"))
+                && !file.file_name().is_some_and(|name| {
+                    name.to_string_lossy().starts_with("phase") && name.to_string_lossy().ends_with("-smoke.ps1")
+                })
+            {
+                continue;
+            }
+            let source =
+                fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+            for key in REMOVED_FLAT_TELEMETRY_KEYS {
+                if source.contains(key) {
+                    violations.insert(format!("{}: {key}", relative_slash_path(&workspace_root, &file)));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "runnable configuration, smoke scripts, and user documentation must migrate removed flat telemetry keys; \
+         rejection tests and historical inventory fixtures are intentionally outside this scan:\n{}",
         format_paths(&violations)
     );
 }
@@ -502,6 +702,44 @@ fn has_subscriber_installation(source: &str) -> bool {
     source
         .split(';')
         .any(|statement| subscriber_init_statement_installs_global_subscriber(source, statement))
+}
+
+fn collect_migration_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|error| panic!("failed to read directory {}: {error}", dir.display()));
+
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| panic!("failed to read entry in {}: {error}", dir.display()));
+        let path = entry.path();
+        if path.is_dir() {
+            collect_migration_files(&path, files);
+        } else if path.extension().is_some_and(|extension| {
+            matches!(
+                extension.to_string_lossy().as_ref(),
+                "md" | "ps1" | "toml" | "tpl" | "yaml" | "yml"
+            )
+        }) {
+            files.push(path);
+        }
+    }
+}
+
+fn has_direct_telemetry_environment_read(source: &str) -> bool {
+    let compact = source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    ["std::env::var(", "std::env::var_os("]
+        .iter()
+        .flat_map(|call| compact.match_indices(call).map(|(index, _)| index))
+        .any(|index| {
+            let end = compact[index..]
+                .find(';')
+                .map_or(compact.len(), |offset| index + offset);
+            let statement = &compact[index..end];
+            statement.contains("OTEL_") || statement.contains("ROCKETMQ_METRICS_") || statement.contains("METRICS_")
+        })
 }
 
 fn subscriber_init_statement_installs_global_subscriber(source: &str, statement: &str) -> bool {

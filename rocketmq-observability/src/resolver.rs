@@ -60,7 +60,7 @@ pub struct TelemetryEnvironmentValues {
 impl TelemetryEnvironmentValues {
     /// Reads the supported telemetry variables from the current process.
     pub fn read(spec: TelemetryEnvironmentSpec) -> Self {
-        Self::read_with(spec, std::env::var_os)
+        Self::read_with(spec, read_telemetry_environment_value)
     }
 
     fn read_with(spec: TelemetryEnvironmentSpec, mut read: impl FnMut(&'static str) -> Option<OsString>) -> Self {
@@ -76,6 +76,10 @@ impl TelemetryEnvironmentValues {
             trace_sample_ratio: spec.trace_sample_ratio_env.and_then(read),
         }
     }
+}
+
+pub(crate) fn read_telemetry_environment_value(name: &'static str) -> Option<OsString> {
+    std::env::var_os(name)
 }
 
 /// Service-specific environment variable names understood by telemetry resolution.

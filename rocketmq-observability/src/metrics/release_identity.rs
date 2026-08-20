@@ -436,11 +436,13 @@ fn validate_metrics_selection(
 }
 
 fn read_process_env(name: &'static str) -> Result<Option<String>, ProcessTelemetryConfigError> {
-    match std::env::var(name) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(ProcessTelemetryConfigError::NonUnicodeEnvironment(name)),
-    }
+    crate::resolver::read_telemetry_environment_value(name)
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| ProcessTelemetryConfigError::NonUnicodeEnvironment(name))
+        })
+        .transpose()
 }
 
 fn is_full_lowercase_commit(value: &str) -> bool {
