@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -34,8 +36,46 @@ class CandidateTransferTests(unittest.TestCase):
             imported = self.transfer.import_bundle(bundle, base / "imported")
             manifest = read_json(imported / "CANDIDATE_TRANSFER.json")
             self.assertEqual("build-control", manifest["bundle_kind"])
-            self.assertTrue((imported / "CANDIDATE_RUN.json").is_file())
-            self.assertTrue((imported / "RELEASE_SERIES.json").is_file())
+            self.assertEqual(read_json(candidate)["series_generation"], manifest["series_generation"])
+            self.assertTrue((imported / "RELEASE_SERIES_CONTROL_BUNDLE.tar").is_file())
+
+    def test_control_bundle_import_relocates_the_committed_series(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            producer_root = base / "producer"
+            series = self.series.create_series(
+                producer_root / "series", "1.0", "community-v1"
+            )
+            candidate = self.candidate.create_candidate(
+                producer_root / "candidates", "1.0.0-rc.1", "local", 1, series
+            )
+            candidate_id = read_json(candidate)["candidate_id"]
+            produced_bundle = (
+                candidate.parent / "transfer" / "CANDIDATE_BUILD_CONTROL_BUNDLE.tar"
+            )
+            self.transfer.export_build_control(candidate, produced_bundle)
+            bundle = base / "CANDIDATE_BUILD_CONTROL_BUNDLE.tar"
+            shutil.copy2(produced_bundle, bundle)
+
+            shutil.rmtree(producer_root / "series")
+            shutil.rmtree(producer_root / "candidates" / "1.0.0-rc.1" / "local" / "attempt-1")
+            worker_root = base / "isolated-worker"
+
+            imported_candidate = self.transfer.import_build_control(bundle, worker_root)
+
+            imported = read_json(imported_candidate)
+            imported_series_path = Path(imported["series_manifest"])
+            imported_series = read_json(imported_series_path)
+            self.assertEqual(candidate_id, imported["candidate_id"])
+            self.assertEqual(imported_candidate.parent, Path(imported["candidate_root"]))
+            self.assertEqual(
+                imported_candidate.resolve(),
+                Path(imported_series["head"]["candidate_manifest"]).resolve(),
+            )
+            for path in (imported_candidate, imported_series_path):
+                self.assertTrue(path.resolve().is_relative_to(worker_root.resolve()))
+            self.assertNotIn(str(producer_root.resolve()), json.dumps(imported_series))
+            self.assertNotIn(str(producer_root.resolve()), json.dumps(imported))
 
     def test_common_inputs_bundle_preserves_closed_candidate_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
