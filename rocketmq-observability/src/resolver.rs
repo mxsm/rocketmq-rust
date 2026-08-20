@@ -135,7 +135,7 @@ pub fn resolve_telemetry_values(
     spec: TelemetryEnvironmentSpec,
 ) -> Result<TelemetryResolution, ObservabilityError> {
     file.apply_to(&mut bootstrap.observability);
-    let process = ProcessTelemetryConfig::try_from_observability_and_values(
+    let process_overrides = ProcessTelemetryConfig::try_from_observability_and_values(
         service,
         &bootstrap.observability,
         environment.release_commit.as_deref(),
@@ -146,7 +146,7 @@ pub fn resolve_telemetry_values(
         environment.metrics_path.as_deref(),
     )
     .map_err(|error| ObservabilityError::invalid_config(error.to_string()))?;
-    process.apply_to(&mut bootstrap.observability);
+    process_overrides.apply_to(&mut bootstrap.observability);
     let otlp_status = apply_standard_otlp_environment_values(
         &mut bootstrap,
         environment.otlp_endpoint.as_deref(),
@@ -158,6 +158,17 @@ pub fn resolve_telemetry_values(
         environment.trace_sample_ratio.as_deref(),
     )?;
     normalize_and_validate(&bootstrap.observability)?;
+    let process = ProcessTelemetryConfig::try_from_observability_and_values(
+        service,
+        &bootstrap.observability,
+        environment.release_commit.as_deref(),
+        environment.release_nonce.as_deref(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .map_err(|error| ObservabilityError::invalid_config(error.to_string()))?;
     let prometheus_listener_addr = if bootstrap.observability.metrics.enabled
         && bootstrap.observability.metrics.exporter == crate::MetricsExporter::Prometheus
     {

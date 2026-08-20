@@ -464,5 +464,7 @@ fn standard_otlp_environment_clears_the_file_prometheus_listener() {
         resolved.bootstrap.observability.metrics.exporter,
         MetricsExporter::OtlpGrpc
     );
+    assert!(resolved.process.metrics_enabled());
+    assert_eq!(resolved.process.metrics_exporter(), MetricsExporter::OtlpGrpc);
     assert_eq!(resolved.prometheus_listener_addr, None);
 }

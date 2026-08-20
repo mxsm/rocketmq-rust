@@ -796,6 +796,14 @@ mod tests {
         assert!(observability.logs.enabled);
         assert_eq!(observability.otlp.endpoint, "http://environment-collector:4317");
         assert_eq!(observability.traces.sample_ratio, 0.4);
+
+        prepare_mcp_bootstrap_values(
+            config,
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            None,
+            &environment,
+        )
+        .expect("standard OTLP environment must produce a consistent validated handoff");
     }
 
     #[test]
