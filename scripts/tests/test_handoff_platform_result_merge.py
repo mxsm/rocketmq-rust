@@ -78,6 +78,75 @@ class HandoffPlatformResultMergeTests(unittest.TestCase):
                     manifest, bundles, root / "evidence", root / "events", root / "contexts"
                 )
 
+    def test_missing_binary_smoke_results_are_rejected(self) -> None:
+        """A forged H01 pass without six process results must not enter canonical evidence."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self._candidate(root)
+            bundles = root / "bundles"
+            for result_id, platform, target in self._platforms():
+                bundle = self._bundle(bundles / result_id, result_id, platform, target)
+                if result_id == "H01-WINDOWS":
+                    result_path = bundle / f"{result_id}.json"
+                    value = json.loads(result_path.read_text(encoding="utf-8"))
+                    value.pop("archive_smoke_results")
+                    result_path.write_text(json.dumps(value), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "binary smoke denominator"):
+                self.merger.merge_platform_results(
+                    manifest, bundles, root / "evidence", root / "events", root / "contexts"
+                )
+
+    def test_failed_or_forged_binary_smoke_is_rejected(self) -> None:
+        """A non-zero process or forged build metadata must invalidate H01 evidence."""
+
+        for mutation in ("exit-code", "metadata"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest = self._candidate(root)
+                bundles = root / "bundles"
+                for result_id, platform, target in self._platforms():
+                    bundle = self._bundle(bundles / result_id, result_id, platform, target)
+                    if result_id == "H01-LINUX":
+                        result_path = bundle / f"{result_id}.json"
+                        value = json.loads(result_path.read_text(encoding="utf-8"))
+                        broker = next(
+                            item for item in value["archive_smoke_results"] if item["component"] == "broker"
+                        )
+                        if mutation == "exit-code":
+                            broker["exit_code"] = 9
+                        else:
+                            broker["stdout"] = broker["stdout"].replace(
+                                "effective_features=", "effective_features=forged,"
+                            )
+                        result_path.write_text(json.dumps(value), encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, "binary smoke result"):
+                    self.merger.merge_platform_results(
+                        manifest, bundles, root / "evidence", root / "events", root / "contexts"
+                    )
+
+    def test_archive_path_must_match_the_target_manifest(self) -> None:
+        """A result must bind the command output to the frozen target archive path."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self._candidate(root)
+            bundles = root / "bundles"
+            for result_id, platform, target in self._platforms():
+                bundle = self._bundle(bundles / result_id, result_id, platform, target)
+                if result_id == "H01-MACOS":
+                    result_path = bundle / f"{result_id}.json"
+                    value = json.loads(result_path.read_text(encoding="utf-8"))
+                    value["archive"] = "archives/forged.tar.gz"
+                    result_path.write_text(json.dumps(value), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "archive path mismatch"):
+                self.merger.merge_platform_results(
+                    manifest, bundles, root / "evidence", root / "events", root / "contexts"
+                )
+
     @staticmethod
     def _platforms():
         return [
@@ -137,16 +206,38 @@ class HandoffPlatformResultMergeTests(unittest.TestCase):
             "attempt": 1,
             "worker_id": worker,
         }
+        layout = json.loads(
+            (ROOT / "distribution" / "release-layout.json").read_text(encoding="utf-8")
+        )
+        smoke_results = []
+        for binary in layout["binaries"]:
+            smoke_results.append(
+                {
+                    "component": binary["id"],
+                    "exit_code": 0,
+                    "stdout": (
+                        f"component={binary['id']}\n"
+                        "version=1.0.0\n"
+                        f"artifact_id=final-1.{target}.{binary['id']}\n"
+                        f"requested_features={','.join(binary['requested_features'])}\n"
+                        f"effective_features={','.join(binary['effective_features'])}\n"
+                    ),
+                }
+            )
+        extension = ".zip" if platform == "windows" else ".tar.gz"
         result = {
             "schema_version": 1,
             **identity,
             "result_id": result_id,
             "platform": platform,
             "target": target,
-            "archive_id": f"archive-{target}",
+            "archive_id": f"final-1.{target}.archive",
             "status": "passed",
             "skipped": False,
             "assertions": [{"name": "archive-install-smoke", "status": "passed"}],
+            "archive": f"archives/rocketmq-rust-1.0.0-{target}{extension}",
+            "archive_manifest": f"archives/rocketmq-rust-1.0.0-{target}.manifest.json",
+            "archive_smoke_results": smoke_results,
         }
         (root / f"{result_id}.json").write_text(json.dumps(result), encoding="utf-8")
         started = {"schema_version": 1, **identity, "route_id": result_id, "context_path": f"contexts/{worker}.json"}

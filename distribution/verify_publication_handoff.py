@@ -21,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "distribution") not in sys.path:
     sys.path.insert(0, str(ROOT / "distribution"))
 
+from release_archive_common import ArchiveError, load_layout
 from release_state import ReleaseStateError, atomic_write_json, ensure_no_digest_fields, read_json, validate_candidate
+from verify_release_archive import inspect_archive
 
 
 COPY_BUFFER_SIZE = 1024 * 1024
@@ -205,7 +207,12 @@ def _archive_member_names(path: Path) -> list[str]:
         raise HandoffVerifyError(f"invalid handoff tar: {path.name}: {error}") from error
 
 
-def _verify_package_semantics(root: Path) -> None:
+def _verify_package_semantics(
+    root: Path,
+    candidate: dict[str, Any],
+    *,
+    smoke_target: str | None,
+) -> dict[str, Any] | None:
     packages = sorted((root / "crate-packages").glob("*.crate"))
     if not packages:
         raise HandoffVerifyError("handoff contains no local crate packages")
@@ -217,12 +224,42 @@ def _verify_package_semantics(root: Path) -> None:
             name.endswith("/NOTICE") for name in names
         ):
             raise HandoffVerifyError(f"crate package legal metadata is incomplete: {package.name}")
-    for platform in ("linux", "windows", "macos"):
-        archives = [path for path in (root / "archives" / platform).iterdir() if path.is_file()]
-        if len(archives) != 1:
-            raise HandoffVerifyError(f"handoff requires exactly one {platform} service archive")
-        if not _archive_member_names(archives[0]):
-            raise HandoffVerifyError(f"handoff service archive is empty: {archives[0].name}")
+    layout = load_layout()
+    manifests = sorted((root / "archives").glob("*.manifest.json"))
+    if len(manifests) != len(layout["targets"]):
+        raise HandoffVerifyError("handoff archive manifest denominator is incomplete")
+    targets: set[str] = set()
+    smoke_result: dict[str, Any] | None = None
+    for manifest_path in manifests:
+        manifest = read_json(manifest_path)
+        target = manifest.get("target")
+        if target not in layout["targets"] or target in targets:
+            raise HandoffVerifyError(f"handoff archive target is invalid or duplicated: {target}")
+        targets.add(target)
+        archive_relative = _safe_relative(manifest.get("archive"), "handoff archive path")
+        archive = root.joinpath(*archive_relative.parts)
+        try:
+            retained_manifest, retained, results = inspect_archive(
+                candidate,
+                root,
+                archive,
+                smoke=target == smoke_target,
+            )
+        except ArchiveError as error:
+            raise HandoffVerifyError(str(error)) from error
+        if retained_manifest != manifest_path:
+            raise HandoffVerifyError(f"handoff archive manifest selection is ambiguous: {target}")
+        if target == smoke_target:
+            smoke_result = {
+                "archive": archive_relative.as_posix(),
+                "archive_id": retained["artifact_id"],
+                "manifest": manifest_path.relative_to(root).as_posix(),
+                "results": results,
+            }
+    if targets != set(layout["targets"]):
+        raise HandoffVerifyError("handoff archive target denominator changed")
+    if smoke_target is not None and smoke_result is None:
+        raise HandoffVerifyError(f"handoff has no archive for smoke target: {smoke_target}")
     charts = list((root / "helm").glob("*.tgz"))
     if len(charts) != 1 or not any(name.endswith("/Chart.yaml") for name in _archive_member_names(charts[0])):
         raise HandoffVerifyError("handoff Helm package is missing or invalid")
@@ -235,6 +272,7 @@ def _verify_package_semantics(root: Path) -> None:
     for required in (root / "legal" / "LICENSE-APACHE", root / "legal" / "NOTICE"):
         if not required.is_file() or required.stat().st_size == 0:
             raise HandoffVerifyError(f"handoff legal file is missing: {required.name}")
+    return smoke_result
 
 
 def verify_handoff(
@@ -331,7 +369,12 @@ def verify_handoff(
     for path in sorted(handoff_root.rglob("*")):
         if path.is_file() and path.name != "PUBLICATION_READY.json":
             _scan_file(path, path.relative_to(handoff_root).as_posix())
-    _verify_package_semantics(handoff_root)
+    smoke_target = PLATFORM_TARGETS[platform][1] if platform is not None else None
+    archive_smoke = _verify_package_semantics(
+        handoff_root,
+        candidate,
+        smoke_target=smoke_target,
+    )
     evidence = read_json(handoff_root / "evidence" / "EVIDENCE_INDEX.json")
     no_remote = read_json(handoff_root / "evidence" / "NO_REMOTE_PUBLICATION.json")
     if _identity(evidence) != _identity(candidate) or evidence.get("status") != "passed":
@@ -357,13 +400,17 @@ def verify_handoff(
     }
     if platform is not None:
         _expected_result, target = PLATFORM_TARGETS[platform]
-        archive = next(path for path in (handoff_root / "archives" / platform).iterdir() if path.is_file())
+        if archive_smoke is None:
+            raise HandoffVerifyError(f"handoff archive smoke result is missing: {target}")
         report.update(
             {
                 "worker_id": worker_id,
                 "platform": platform,
                 "target": target,
-                "archive_id": f"{candidate['candidate_id']}.{target}.{archive.name}",
+                "archive_id": archive_smoke["archive_id"],
+                "archive": archive_smoke["archive"],
+                "archive_manifest": archive_smoke["manifest"],
+                "archive_smoke_results": archive_smoke["results"],
                 "assertions": [
                     {"name": "source-stream-compare", "status": "passed"},
                     {"name": "archive-install-smoke", "status": "passed"},

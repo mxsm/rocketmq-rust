@@ -113,12 +113,21 @@ def _validate_manifest(candidate: dict, layout: dict, value: dict) -> None:
             raise ArchiveError(f"archive dependency closure is incomplete: {binary['id']}")
 
 
-def verify_archive(candidate_manifest: Path, archive: Path, *, smoke: bool) -> Path | None:
-    _manifest, candidate, root = load_candidate(candidate_manifest)
+def inspect_archive(
+    candidate: dict[str, object],
+    root: Path,
+    archive: Path,
+    *,
+    smoke: bool,
+) -> tuple[Path, dict, list[dict[str, object]]]:
+    """Validate one retained archive and optionally execute its packaged binaries."""
+
     layout = load_layout()
+    root = root.resolve(strict=True)
     archive = resolve_existing_file(archive, "release archive")
     manifest_path, archive_manifest = _manifest_for_archive(root, archive)
     _validate_manifest(candidate, layout, archive_manifest)
+    results: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory() as temporary:
         extracted = Path(temporary)
         _extract(archive, extracted)
@@ -132,9 +141,8 @@ def verify_archive(candidate_manifest: Path, archive: Path, *, smoke: bool) -> P
             with config.open("rb") as handle:
                 tomllib.load(handle)
         if not smoke:
-            return None
+            return manifest_path, archive_manifest, results
         suffix = target_layout(layout, archive_manifest["target"])["executable_suffix"]
-        results = []
         for binary in layout["binaries"]:
             name = binary.get("archive_binary", binary["binary"])
             executable = package_root / "bin" / f"{name}{suffix}"
@@ -163,6 +171,19 @@ def verify_archive(candidate_manifest: Path, archive: Path, *, smoke: bool) -> P
             results.append(
                 {"component": binary["id"], "exit_code": 0, "stdout": completed.stdout}
             )
+    return manifest_path, archive_manifest, results
+
+
+def verify_archive(candidate_manifest: Path, archive: Path, *, smoke: bool) -> Path | None:
+    _manifest, candidate, root = load_candidate(candidate_manifest)
+    manifest_path, archive_manifest, results = inspect_archive(
+        candidate,
+        root,
+        archive,
+        smoke=smoke,
+    )
+    if not smoke:
+        return None
     output = root / "evidence" / archive_manifest["target"] / "HOST_SMOKE.json"
     write_json(
         output,
