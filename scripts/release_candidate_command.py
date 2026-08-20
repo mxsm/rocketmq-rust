@@ -122,6 +122,7 @@ def run_command(
     event_root: Path,
     command: Sequence[str],
     portable_root: Path | None = None,
+    cwd: Path | None = None,
 ) -> int:
     require_safe_id(route_id, "route_id")
     require_safe_id(worker_id, "worker_id")
@@ -182,7 +183,7 @@ def run_command(
         }
     )
     try:
-        result = subprocess.run(list(command), check=False, env=environment)
+        result = subprocess.run(list(command), check=False, env=environment, cwd=cwd)
         exit_code = result.returncode
     except OSError as error:
         exit_code = 127
