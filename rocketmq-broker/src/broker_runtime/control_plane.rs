@@ -39,6 +39,7 @@ pub(super) fn consumer_lag_runtime_settings(policy: rocketmq_observability::Metr
 
 impl BrokerRuntime {
     pub(super) fn initialize_observability(&mut self) {
+        #[cfg(feature = "otel-metrics")]
         if !self.composition.state.telemetry_handle.metrics_enabled() {
             return;
         }

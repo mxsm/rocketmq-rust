@@ -175,8 +175,8 @@
           {
             "path": "rocketmq-tools/rocketmq-mcp/src/main.rs",
             "required_markers": [
-              "validate_mcp_security",
-              "McpApp::bootstrap_typed",
+              "prepare_mcp_bootstrap",
+              "McpApp::bootstrap_validated_typed",
               "start_lifecycle",
               "mark_ready()"
             ]
