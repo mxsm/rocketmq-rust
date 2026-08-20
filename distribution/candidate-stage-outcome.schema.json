@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/candidate-stage-outcome.schema.json",
+  "title": "RocketMQ Rust immutable candidate job outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "candidate_id", "version", "run_id", "attempt", "job_id",
+    "worker_id", "target", "status", "workflow_result", "sealed", "result_files",
+    "event_pairs", "context_files"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "job_id": {"type": "string", "minLength": 1},
+    "worker_id": {"type": "string", "minLength": 1},
+    "target": {"type": ["string", "null"], "minLength": 1},
+    "status": {"enum": ["success", "failed", "cancelled"]},
+    "workflow_result": {"enum": ["success", "failure", "cancelled", "skipped"]},
+    "sealed": {"const": true},
+    "result_files": {
+      "type": "array", "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "event_pairs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["route_id", "started", "completed"],
+        "properties": {
+          "route_id": {"type": "string", "minLength": 1},
+          "started": {"type": "string", "minLength": 1},
+          "completed": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "context_files": {
+      "type": "array", "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}
