@@ -101,6 +101,52 @@ class ReleaseLifecycleTests(unittest.TestCase):
             )
         return evidence_root
 
+    @staticmethod
+    def write_final_handoff_gate(
+        final: Path,
+        evidence_root: Path,
+        *,
+        include_results: bool = True,
+    ) -> Path:
+        candidate = read_json(final)
+        required = [
+            "H01-LINUX",
+            "H01-WINDOWS",
+            "H01-MACOS",
+            "H02-DRAFT-SEMANTIC",
+            "H03-DRAFT-NO-REMOTE",
+            "H04-FINAL-SEMANTIC",
+            "H05-FINAL-NO-REMOTE",
+        ]
+        output = evidence_root / "FINAL_HANDOFF_EVIDENCE.json"
+        value = {
+            "schema_version": 1,
+            "candidate_id": candidate["candidate_id"],
+            "version": candidate["version"],
+            "run_id": candidate["run_id"],
+            "attempt": candidate["attempt"],
+            "phase": 6,
+            "gate_stage": "final-handoff",
+            "required_result_ids": required,
+            "release_result_ids": {result_id: "passed" for result_id in required},
+            "all_required_passed": True,
+            "failed_result_ids": [],
+            "remote_publication": {"status": "not-executed"},
+        }
+        if include_results:
+            value["results"] = [
+                {
+                    "result_id": result_id,
+                    "result_kind": "check",
+                    "status": "passed",
+                    "command": ["python", "verify.py", result_id],
+                    "exit_code": 0,
+                }
+                for result_id in required
+            ]
+        write_json(output, value)
+        return output
+
     def test_two_consecutive_sealed_rcs_are_required_for_final(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -260,12 +306,14 @@ class ReleaseLifecycleTests(unittest.TestCase):
             self.lifecycle.transition_candidate(final, "ga-candidate-ready", phase=6, gate_evidence=evidence)
             marker = final.parent / "handoff/PUBLICATION_READY.json"
             handoff_evidence = self.write_publication_handoff(final, marker)
+            final_gate = self.write_final_handoff_gate(final, handoff_evidence)
 
             with self.assertRaises(self.lifecycle.LifecycleError):
                 self.lifecycle.transition_candidate(
                     final,
                     "publication-ready",
                     phase=6,
+                    gate_evidence=final_gate,
                     handoff_ready=True,
                     handoff_evidence_root=handoff_evidence,
                     publication_marker=marker,
@@ -278,6 +326,67 @@ class ReleaseLifecycleTests(unittest.TestCase):
             self.assertEqual(read_json(marker)["series_generation"], read_json(series)["generation"])
             self.assertIsNone(read_json(series)["pending_operation"])
             self.assertTrue(read_json(final)["sealed"])
+
+    def test_publication_ready_requires_final_handoff_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            for suffix in (1, 2):
+                self.make_ready(self.create_rc(root, series, suffix))
+            final = self.candidate.create_candidate(root / "candidates", "1.0.0", "final", 1, series)
+            evidence = write_gate_evidence(
+                final.parent / "gate-evidence.json", read_json(final)["candidate_id"]
+            )
+            self.lifecycle.transition_candidate(
+                final, "ga-candidate-ready", phase=6, gate_evidence=evidence
+            )
+            marker = final.parent / "handoff/PUBLICATION_READY.json"
+            handoff_evidence = self.write_publication_handoff(final, marker)
+
+            with self.assertRaisesRegex(self.lifecycle.LifecycleError, "final-handoff gate evidence"):
+                self.lifecycle.transition_candidate(
+                    final,
+                    "publication-ready",
+                    phase=6,
+                    handoff_ready=True,
+                    handoff_evidence_root=handoff_evidence,
+                    publication_marker=marker,
+                )
+
+            self.assertEqual("ga-candidate-ready", read_json(final)["state"])
+            self.assertFalse(marker.exists())
+
+    def test_publication_ready_rejects_summary_only_final_handoff_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            for suffix in (1, 2):
+                self.make_ready(self.create_rc(root, series, suffix))
+            final = self.candidate.create_candidate(root / "candidates", "1.0.0", "final", 1, series)
+            evidence = write_gate_evidence(
+                final.parent / "gate-evidence.json", read_json(final)["candidate_id"]
+            )
+            self.lifecycle.transition_candidate(
+                final, "ga-candidate-ready", phase=6, gate_evidence=evidence
+            )
+            marker = final.parent / "handoff/PUBLICATION_READY.json"
+            handoff_evidence = self.write_publication_handoff(final, marker)
+            shallow_gate = self.write_final_handoff_gate(
+                final,
+                handoff_evidence,
+                include_results=False,
+            )
+
+            with self.assertRaisesRegex(self.lifecycle.LifecycleError, "gate evidence is incomplete"):
+                self.lifecycle.transition_candidate(
+                    final,
+                    "publication-ready",
+                    phase=6,
+                    gate_evidence=shallow_gate,
+                    handoff_ready=True,
+                    handoff_evidence_root=handoff_evidence,
+                    publication_marker=marker,
+                )
 
     def test_publication_temp_marker_is_recoverable_before_candidate_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -294,12 +403,14 @@ class ReleaseLifecycleTests(unittest.TestCase):
             )
             marker = final.parent / "handoff/PUBLICATION_READY.json"
             handoff_evidence = self.write_publication_handoff(final, marker)
+            final_gate = self.write_final_handoff_gate(final, handoff_evidence)
 
             with self.assertRaises(self.lifecycle.LifecycleError):
                 self.lifecycle.transition_candidate(
                     final,
                     "publication-ready",
                     phase=6,
+                    gate_evidence=final_gate,
                     handoff_ready=True,
                     handoff_evidence_root=handoff_evidence,
                     publication_marker=marker,

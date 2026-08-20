@@ -211,6 +211,28 @@ class NoRemotePublicationGuardTests(unittest.TestCase):
             findings = self.guard.audit_handoff(handoff)
             self.assertTrue(any("remote publication command" in finding for finding in findings))
 
+    def test_handoff_no_remote_evidence_has_final_gate_result_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = create_candidate(root)
+            contexts, events = self._completed_route(candidate, root)
+            try:
+                value = self.guard.audit_no_remote_publication(
+                    candidate,
+                    phase=6,
+                    context_root=contexts,
+                    event_root=events,
+                    workflow_root=Path(__file__).resolve().parents[2] / ".github" / "workflows",
+                    output=root / "H03-DRAFT-NO-REMOTE.json",
+                    result_id="H03-DRAFT-NO-REMOTE",
+                    gate_stage="final-handoff",
+                )
+            except TypeError as error:
+                self.fail(f"no-remote result identity is unsupported: {error}")
+
+            self.assertEqual("H03-DRAFT-NO-REMOTE", value["result_id"])
+            self.assertEqual("final-handoff", value["gate_stage"])
+
 
 if __name__ == "__main__":
     unittest.main()

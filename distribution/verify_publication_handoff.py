@@ -389,6 +389,8 @@ def verify_handoff(
         "version": candidate["version"],
         "run_id": candidate["run_id"],
         "attempt": candidate["attempt"],
+        "phase": 6,
+        "gate_stage": "final-handoff",
         "result_id": result_id,
         "mode": mode,
         "status": "passed",
