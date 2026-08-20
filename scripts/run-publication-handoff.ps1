@@ -34,6 +34,14 @@ function Import-CandidateBundle {
     Invoke-Native @("python", "distribution/transfer_candidate.py", "import", "--bundle", $Bundle, "--output", $Destination)
 }
 
+function Import-CandidateControl {
+    param([string]$Bundle, [string]$Destination, [string]$Selector)
+    Invoke-Native @(
+        "python", "distribution/transfer_candidate.py", "import-build-control",
+        "--bundle", $Bundle, "--output", $Destination, "--selector-output", $Selector
+    )
+}
+
 function Invoke-CandidateRoute {
     param(
         [string]$Candidate,
@@ -63,8 +71,10 @@ if (Test-Path -LiteralPath $operationRoot) { throw "handoff operation root alrea
 $sourceImport = Join-Path $operationRoot "candidate-source"
 $controlImport = Join-Path $operationRoot "candidate-control"
 Import-CandidateBundle $sourceBundle $sourceImport
-Import-CandidateBundle $controlBundle $controlImport
-$candidate = Join-Path $controlImport "CANDIDATE_RUN.json"
+$candidateSelector = Join-Path $operationRoot "candidate-selector.json"
+Import-CandidateControl $controlBundle $controlImport $candidateSelector
+$candidateSelectorValue = Get-Content -Raw -LiteralPath $candidateSelector | ConvertFrom-Json
+$candidate = [string]$candidateSelectorValue.candidate_manifest
 $candidateValue = Get-Content -Raw -LiteralPath $candidate | ConvertFrom-Json
 $repositorySource = Join-Path $sourceImport "repository-source"
 
@@ -209,4 +219,13 @@ Invoke-CandidateRoute $retainedCandidate "H06-PUBLICATION-READY" $worker $retain
     "--handoff-evidence-root", (Join-Path $sourceImport "evidence"),
     "--current-route-id", "H06-PUBLICATION-READY", "--publication-marker", (Join-Path $final "PUBLICATION_READY.json")
 )
+$retainedValue = Get-Content -Raw -LiteralPath $retainedCandidate | ConvertFrom-Json
+$candidateControlOutput = Join-Path $retainedRoot "transfer/CANDIDATE_CONTROL_BUNDLE.tar"
+Invoke-Native @("python", "distribution/transfer_candidate.py", "export-build-control", "--candidate-manifest", $retainedCandidate, "--output", $candidateControlOutput)
+$seriesControlOutput = Join-Path (Split-Path -Parent ([string]$retainedValue.series_manifest)) "RELEASE_SERIES_CONTROL_BUNDLE.tar"
+Invoke-Native @("python", "distribution/release_series.py", "export-control", "--series-manifest", ([string]$retainedValue.series_manifest), "--output", $seriesControlOutput)
+$portableControlRoot = Join-Path $output "terminal-control"
+New-Item -ItemType Directory -Path (Join-Path $portableControlRoot "candidate"), (Join-Path $portableControlRoot "series") | Out-Null
+Copy-Item -LiteralPath $candidateControlOutput -Destination (Join-Path $portableControlRoot "candidate/CANDIDATE_CONTROL_BUNDLE.tar")
+Copy-Item -LiteralPath $seriesControlOutput -Destination (Join-Path $portableControlRoot "series/RELEASE_SERIES_CONTROL_BUNDLE.tar")
 exit 0
