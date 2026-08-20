@@ -15,6 +15,7 @@
 // limitations under the License.
 
 use clap::Parser;
+use rocketmq_mcp::app::resolve_mcp_telemetry;
 use rocketmq_mcp::app::McpApp;
 use rocketmq_mcp::config::Args;
 use rocketmq_mcp::config::McpConfig;
@@ -79,21 +80,18 @@ fn mcp_runtime_config() -> RuntimeConfig {
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
     let args = Args::parse();
     let config = McpConfig::load_with_overrides(&args)?;
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-mcp")
-            .map_err(|error| {
-                McpError::InvalidConfig(format!("invalid MCP process telemetry configuration: {error}"))
-            })?;
+    let telemetry_resolution = resolve_mcp_telemetry(&config)?;
     let security_bootstrap = SecurityBootstrapConfig::from_env()
         .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
     let validated_security = validate_mcp_security(
         &security_bootstrap,
         config.server.transport,
         &config.server.http.bind,
-        process_telemetry.prometheus_listener_addr(),
+        telemetry_resolution.prometheus_listener_addr,
         lifecycle.config().probe_bind_addr,
     )?;
-    let app = McpApp::bootstrap_typed(config, process_telemetry, validated_security, service_context).await?;
+    let app =
+        McpApp::bootstrap_resolved_typed(config, telemetry_resolution, validated_security, service_context).await?;
     log_security_bootstrap(validated_security);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
@@ -283,6 +281,51 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn file_prometheus_listener_resolution_feeds_pre_bind_security_validation() {
+        let mut config = rocketmq_mcp::config::McpConfig::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("conf")
+                .join("mcp.example.toml"),
+        )
+        .expect("example MCP config should load");
+        config.observability.metrics.exporter = Some(rocketmq_observability::MetricsExporter::Prometheus);
+        config.observability.prometheus.host = Some("0.0.0.0".to_string());
+        config.observability.prometheus.port = Some(5557);
+        config.observability.prometheus.path = Some("/metrics".to_string());
+        let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
+        bootstrap.observability.service_name = "rocketmq-mcp".to_string();
+        bootstrap.observability.node_type = "mcp".to_string();
+        bootstrap.observability.node_id = config.server.name.clone();
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-mcp",
+            bootstrap,
+            &config.observability,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+            rocketmq_observability::TelemetryEnvironmentSpec {
+                trace_sample_ratio_env: Some("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"),
+            },
+        )
+        .expect("file Prometheus telemetry should resolve");
+        let security = SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+
+        let error = validate_mcp_security(
+            &security,
+            TransportKind::Stdio,
+            "127.0.0.1:8089",
+            resolution.prometheus_listener_addr,
+            None,
+        )
+        .expect_err("public file Prometheus listener must fail before bind")
+        .to_string();
+
+        assert!(error.contains("loopback"));
+        assert!(!error.contains("0.0.0.0"));
+        assert!(!error.contains("5557"));
     }
 
     #[test]

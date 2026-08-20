@@ -42,11 +42,13 @@ pub struct Args {
     pub endpoint: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct McpConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub logging: rocketmq_observability::LoggingOverrideConfig,
+    #[serde(default)]
+    pub observability: rocketmq_observability::ObservabilityOverrides,
     pub clusters: Vec<ClusterConfig>,
     pub security: SecurityConfig,
     pub audit: AuditConfig,
@@ -859,6 +861,50 @@ mod tests {
         assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
         assert_eq!(config.logging.filter.as_deref(), Some("info"));
         assert!(config.server.log_level.is_none());
+    }
+
+    #[test]
+    fn load_preserves_file_observability_overrides() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("mcp.toml");
+        std::fs::copy(
+            example_config_path()
+                .parent()
+                .expect("example config has a parent")
+                .join("permissions.example.toml"),
+            temp.path().join("permissions.example.toml"),
+        )
+        .unwrap();
+        let mut contents = std::fs::read_to_string(example_config_path()).unwrap();
+        contents.push_str(
+            r#"
+
+[observability.traces]
+exporter = "otlp_grpc"
+sampleRatio = 0.4
+
+[observability.otlp]
+endpoint = "http://file-collector:4317"
+protocol = "grpc"
+"#,
+        );
+        std::fs::write(&config_path, contents).unwrap();
+
+        let config = McpConfig::load(&config_path).unwrap();
+
+        assert_eq!(
+            config.observability.traces.exporter,
+            Some(rocketmq_observability::TraceExporter::OtlpGrpc)
+        );
+        assert_eq!(config.observability.traces.sample_ratio, Some(0.4));
+        assert_eq!(
+            config.observability.otlp.endpoint.as_deref(),
+            Some("http://file-collector:4317")
+        );
+        assert_eq!(
+            config.observability.otlp.protocol,
+            Some(rocketmq_observability::OtlpProtocol::Grpc)
+        );
     }
 
     #[test]
