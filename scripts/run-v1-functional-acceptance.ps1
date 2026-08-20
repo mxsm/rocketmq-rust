@@ -11,6 +11,8 @@ param(
     [string]$Scenario,
     [Parameter(Mandatory = $true, ParameterSetName = 'All')]
     [switch]$AllScenarios,
+    [Parameter(ParameterSetName = 'All')]
+    [switch]$SkipInstallationScenarios,
     [string]$Matrix = 'scripts/v1-functional-test-matrix.json',
     [string]$Target
 )
@@ -23,5 +25,6 @@ switch ($PSCmdlet.ParameterSetName) {
     'Scenario' { $arguments += @('--scenario', $Scenario) }
     'All' { $arguments += '--all-scenarios' }
 }
+if ($SkipInstallationScenarios) { $arguments += '--skip-installation-scenarios' }
 & python @arguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

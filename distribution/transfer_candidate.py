@@ -8,6 +8,7 @@ import argparse
 import io
 import json
 from pathlib import Path, PurePosixPath
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -300,6 +301,64 @@ def import_build_control(
     return candidate_manifest
 
 
+def import_artifacts(bundle: Path, candidate_manifest: Path) -> Path:
+    """Restore one artifact bundle into its relocated candidate root."""
+
+    candidate_manifest = resolve_existing_file(candidate_manifest, "candidate manifest")
+    candidate = read_json(candidate_manifest)
+    validate_candidate(candidate)
+    candidate_root = Path(candidate["candidate_root"]).resolve()
+    if candidate_root != candidate_manifest.parent.resolve():
+        raise ArchiveError("candidate manifest and candidate root disagree")
+    bundle = resolve_existing_file(bundle, "candidate artifact bundle")
+    with tempfile.TemporaryDirectory(dir=candidate_root.parent) as temporary:
+        payload_root = import_bundle(bundle, Path(temporary) / "payload")
+        transfer = read_json(payload_root / "CANDIDATE_TRANSFER.json")
+        identity = (
+            transfer.get("candidate_id"),
+            transfer.get("version"),
+            transfer.get("run_id"),
+            transfer.get("attempt"),
+            transfer.get("series_generation"),
+        )
+        expected = (
+            candidate.get("candidate_id"),
+            candidate.get("version"),
+            candidate.get("run_id"),
+            candidate.get("attempt"),
+            candidate.get("series_generation"),
+        )
+        if transfer.get("bundle_kind") != "artifacts" or identity != expected:
+            raise ArchiveError("candidate artifact bundle identity does not match")
+        records = transfer.get("files")
+        if not isinstance(records, list) or not records:
+            raise ArchiveError("candidate artifact bundle has no closed file denominator")
+        copies: list[tuple[Path, Path]] = []
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {"path", "type", "size"}:
+                raise ArchiveError("candidate artifact bundle contains an invalid file record")
+            relative = require_relative_path(record.get("path"), "candidate artifact path")
+            source = resolve_existing_file(payload_root / relative, "candidate artifact payload")
+            if record.get("type") != "file" or record.get("size") != source.stat().st_size:
+                raise ArchiveError(f"candidate artifact record is inconsistent: {relative}")
+            destination = resolve_within(
+                candidate_root, candidate_root / relative, "candidate artifact destination"
+            )
+            if destination.exists():
+                if not destination.is_file() or destination.read_bytes() != source.read_bytes():
+                    raise ArchiveError(f"candidate artifact destination collides: {relative}")
+                continue
+            copies.append((source, destination))
+        for source, destination in copies:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary_destination = destination.with_name(destination.name + ".candidate-import.tmp")
+            if temporary_destination.exists():
+                raise ArchiveError(f"candidate artifact temporary destination exists: {destination}")
+            shutil.copyfile(source, temporary_destination)
+            temporary_destination.replace(destination)
+    return candidate_manifest
+
+
 def write_build_control_selector(candidate_manifest: Path, output: Path) -> Path:
     """Write the worker-local candidate selector produced by a control import."""
 
@@ -409,6 +468,9 @@ def main(argv: list[str] | None = None) -> int:
     control_import.add_argument("--output", type=Path, required=True)
     control_import.add_argument("--selector-output", type=Path, required=True)
     control_import.add_argument("--build-source-bundle", type=Path)
+    artifact_import = subcommands.add_parser("import-artifacts")
+    artifact_import.add_argument("--bundle", type=Path, required=True)
+    artifact_import.add_argument("--candidate-manifest", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "export-build-source":
@@ -426,6 +488,8 @@ def main(argv: list[str] | None = None) -> int:
                 build_source_bundle=args.build_source_bundle,
             )
             output = write_build_control_selector(candidate_manifest, args.selector_output)
+        elif args.command == "import-artifacts":
+            output = import_artifacts(args.bundle, args.candidate_manifest)
         else:
             manifest, candidate, root = load_candidate(args.candidate_manifest)
             if args.command == "export-target":
