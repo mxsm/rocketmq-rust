@@ -15,7 +15,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_mcp::app::resolve_mcp_telemetry;
+use rocketmq_mcp::app::prepare_mcp_bootstrap;
 use rocketmq_mcp::app::McpApp;
 use rocketmq_mcp::config::Args;
 use rocketmq_mcp::config::McpConfig;
@@ -28,7 +28,6 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
-use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
@@ -80,18 +79,11 @@ fn mcp_runtime_config() -> RuntimeConfig {
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
     let args = Args::parse();
     let config = McpConfig::load_with_overrides(&args)?;
-    let telemetry_resolution = resolve_mcp_telemetry(&config)?;
     let security_bootstrap = SecurityBootstrapConfig::from_env()
         .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
-    let validated_security = validate_mcp_security(
-        &security_bootstrap,
-        config.server.transport,
-        &config.server.http.bind,
-        telemetry_resolution.prometheus_listener_addr,
-        lifecycle.config().probe_bind_addr,
-    )?;
-    let app =
-        McpApp::bootstrap_resolved_typed(config, telemetry_resolution, validated_security, service_context).await?;
+    let bootstrap_handoff = prepare_mcp_bootstrap(config, &security_bootstrap, lifecycle.config().probe_bind_addr)?;
+    let validated_security = bootstrap_handoff.security_outcome();
+    let app = McpApp::bootstrap_validated_typed(bootstrap_handoff, service_context).await?;
     log_security_bootstrap(validated_security);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
@@ -145,37 +137,6 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     Ok(())
 }
 
-fn validate_mcp_security(
-    security_bootstrap: &SecurityBootstrap,
-    transport: TransportKind,
-    http_bind: &str,
-    prometheus_bind_addr: Option<std::net::SocketAddr>,
-    probe_bind_addr: Option<std::net::SocketAddr>,
-) -> Result<SecurityBootstrapOutcome, McpError> {
-    if !security_bootstrap.is_enabled() {
-        return security_bootstrap.validate(&[]).map_err(|error| {
-            McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
-        });
-    }
-    let mut listeners = Vec::with_capacity(3);
-    if transport == TransportKind::StreamableHttp {
-        listeners.push(
-            http_bind
-                .parse::<std::net::SocketAddr>()
-                .map_err(|_| McpError::InvalidConfig("server.http.bind must be a socket address".to_string()))?,
-        );
-    }
-    if let Some(prometheus_bind_addr) = prometheus_bind_addr {
-        listeners.push(prometheus_bind_addr);
-    }
-    if let Some(probe_bind_addr) = probe_bind_addr {
-        listeners.push(probe_bind_addr);
-    }
-    security_bootstrap.validate(&listeners).map_err(|error| {
-        McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
-    })
-}
-
 fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
     match outcome {
         SecurityBootstrapOutcome::Disabled => {
@@ -227,9 +188,9 @@ async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Resu
 #[cfg(test)]
 mod tests {
     use super::mcp_runtime_config;
-    use super::validate_mcp_security;
     use super::RuntimeConfig;
     use super::TransportKind;
+    use rocketmq_mcp::app::validate_mcp_security;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
     use rocketmq_security_api::SecurityBootstrapOutcome;

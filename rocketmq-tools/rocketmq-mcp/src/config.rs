@@ -42,7 +42,7 @@ pub struct Args {
     pub endpoint: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 pub struct McpConfig {
     pub server: ServerConfig,
     #[serde(default)]
@@ -57,6 +57,61 @@ pub struct McpConfig {
     pub diagnosis: DiagnosisConfig,
 }
 
+impl std::fmt::Debug for McpConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpConfig")
+            .field("server", &self.server)
+            .field("logging", &self.logging)
+            .field("observability", &ObservabilityDebugSummary::from(&self.observability))
+            .field("clusters", &self.clusters)
+            .field("security", &self.security)
+            .field("audit", &self.audit)
+            .field("cache", &self.cache)
+            .field("diagnosis", &self.diagnosis)
+            .finish()
+    }
+}
+
+struct ObservabilityDebugSummary {
+    configured: bool,
+    resource_attributes_present: bool,
+    metrics_configured: bool,
+    traces_configured: bool,
+    logs_configured: bool,
+    otlp_configured: bool,
+    prometheus_configured: bool,
+}
+
+impl std::fmt::Debug for ObservabilityDebugSummary {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ObservabilityDebugSummary")
+            .field("configured", &self.configured)
+            .field("resource_attributes_present", &self.resource_attributes_present)
+            .field("metrics_configured", &self.metrics_configured)
+            .field("traces_configured", &self.traces_configured)
+            .field("logs_configured", &self.logs_configured)
+            .field("otlp_configured", &self.otlp_configured)
+            .field("prometheus_configured", &self.prometheus_configured)
+            .finish()
+    }
+}
+
+impl From<&rocketmq_observability::ObservabilityOverrides> for ObservabilityDebugSummary {
+    fn from(overrides: &rocketmq_observability::ObservabilityOverrides) -> Self {
+        Self {
+            configured: overrides != &rocketmq_observability::ObservabilityOverrides::default(),
+            resource_attributes_present: overrides.resource_attributes.is_some(),
+            metrics_configured: overrides.metrics != rocketmq_observability::MetricsOverrides::default(),
+            traces_configured: overrides.traces != rocketmq_observability::TracesOverrides::default(),
+            logs_configured: overrides.logs != rocketmq_observability::LogsOverrides::default(),
+            otlp_configured: overrides.otlp != rocketmq_observability::OtlpOverrides::default(),
+            prometheus_configured: overrides.prometheus != rocketmq_observability::PrometheusOverrides::default(),
+        }
+    }
+}
+
 impl McpConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, McpError> {
         let requested_path = path.as_ref();
@@ -68,8 +123,11 @@ impl McpConfig {
         })?;
         let config = config::Config::builder()
             .add_source(config::File::from(path.as_path()))
-            .build()?;
-        let mut config = config.try_deserialize::<Self>()?;
+            .build()
+            .map_err(|_| McpError::InvalidConfig("MCP configuration file could not be parsed".to_string()))?;
+        let mut config = config
+            .try_deserialize::<Self>()
+            .map_err(redacted_deserialization_error)?;
         config.resolve_paths(&path)?;
         config.validate()?;
         Ok(config)
@@ -264,6 +322,27 @@ impl McpConfig {
             }
         }
         Ok(())
+    }
+}
+
+fn redacted_deserialization_error(error: config::ConfigError) -> McpError {
+    fn type_context<'a>(
+        error: &'a config::ConfigError,
+        inherited_key: Option<&'a str>,
+    ) -> Option<(Option<&'a str>, &'static str)> {
+        match error {
+            config::ConfigError::Type { expected, key, .. } => Some((key.as_deref().or(inherited_key), *expected)),
+            config::ConfigError::At { error, key, .. } => type_context(error, key.as_deref().or(inherited_key)),
+            _ => None,
+        }
+    }
+
+    match type_context(&error, None) {
+        Some((Some(key), expected)) => {
+            McpError::InvalidConfig(format!("MCP configuration value for `{key}` must be {expected}"))
+        }
+        Some((None, expected)) => McpError::InvalidConfig(format!("MCP configuration value must be {expected}")),
+        None => McpError::InvalidConfig("MCP configuration could not be deserialized".to_string()),
     }
 }
 
@@ -908,6 +987,123 @@ protocol = "grpc"
     }
 
     #[test]
+    fn observability_deserialization_errors_redact_configured_values() {
+        const ENDPOINT_SENTINEL: &str = "secret-endpoint-sentinel";
+        const HEADER_SENTINEL: &str = "secret-header-sentinel";
+        const RESOURCE_SENTINEL: &str = "secret-resource-sentinel";
+        const INVALID_TYPE_SENTINEL: &str = "secret-invalid-sample-ratio-sentinel";
+        let invalid_overrides = [
+            (
+                format!(r#"resourceAttributes = {{ resource = "{RESOURCE_SENTINEL}" }}"#),
+                format!(
+                    r#"
+
+[observability.otlp]
+endpoint = ["{ENDPOINT_SENTINEL}"]
+headers = {{ authorization = "{HEADER_SENTINEL}" }}
+"#
+                ),
+            ),
+            (
+                format!(r#"resourceAttributes = {{ resource = "{RESOURCE_SENTINEL}" }}"#),
+                format!(
+                    r#"
+
+[observability.otlp]
+endpoint = "{ENDPOINT_SENTINEL}"
+headers = "{HEADER_SENTINEL}"
+"#
+                ),
+            ),
+            (
+                format!(r#"resourceAttributes = "{RESOURCE_SENTINEL}""#),
+                format!(
+                    r#"
+
+[observability.otlp]
+endpoint = "{ENDPOINT_SENTINEL}"
+headers = {{ authorization = "{HEADER_SENTINEL}" }}
+"#
+                ),
+            ),
+            (
+                format!(r#"resourceAttributes = {{ resource = "{RESOURCE_SENTINEL}" }}"#),
+                format!(
+                    r#"
+
+[observability.metrics]
+sampleRatio = "{INVALID_TYPE_SENTINEL}"
+
+[observability.otlp]
+endpoint = "{ENDPOINT_SENTINEL}"
+headers = {{ authorization = "{HEADER_SENTINEL}" }}
+"#
+                ),
+            ),
+        ];
+
+        let mut saw_typed_key_context = false;
+        for (observability_root, invalid_override) in invalid_overrides {
+            let (_temp, config_path) = write_example_config_with(&observability_root, &invalid_override);
+            let error = McpConfig::load(&config_path).expect_err("invalid observability types must be rejected");
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+
+            saw_typed_key_context |= display.contains("observability") && display.contains("must be");
+            for output in [&display, &debug] {
+                assert!(!output.contains(ENDPOINT_SENTINEL));
+                assert!(!output.contains(HEADER_SENTINEL));
+                assert!(!output.contains(RESOURCE_SENTINEL));
+                assert!(!output.contains(INVALID_TYPE_SENTINEL));
+            }
+        }
+        assert!(
+            saw_typed_key_context,
+            "typed errors should retain their non-sensitive key context"
+        );
+    }
+
+    #[test]
+    fn config_debug_redacts_observability_and_cluster_references() {
+        const ENDPOINT_SENTINEL: &str = "secret-endpoint-sentinel";
+        const HEADER_KEY_SENTINEL: &str = "secret-header-key-sentinel";
+        const HEADER_VALUE_SENTINEL: &str = "secret-header-value-sentinel";
+        const RESOURCE_KEY_SENTINEL: &str = "secret-resource-key-sentinel";
+        const RESOURCE_VALUE_SENTINEL: &str = "secret-resource-value-sentinel";
+        const CREDENTIAL_SENTINEL: &str = "SECRET_CREDENTIAL_REFERENCE_SENTINEL";
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.observability.otlp.endpoint = Some(ENDPOINT_SENTINEL.to_string());
+        config.observability.otlp.headers = Some(std::collections::HashMap::from([(
+            HEADER_KEY_SENTINEL.to_string(),
+            HEADER_VALUE_SENTINEL.to_string(),
+        )]));
+        config.observability.resource_attributes = Some(std::collections::HashMap::from([(
+            RESOURCE_KEY_SENTINEL.to_string(),
+            RESOURCE_VALUE_SENTINEL.to_string(),
+        )]));
+        config.clusters[0].credentials = Some(ClusterCredentialReference {
+            access_key_env: Some(CREDENTIAL_SENTINEL.to_string()),
+            secret_key_env: Some(CREDENTIAL_SENTINEL.to_string()),
+            security_token_env: None,
+            file: None,
+        });
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("observability"));
+        for sentinel in [
+            ENDPOINT_SENTINEL,
+            HEADER_KEY_SENTINEL,
+            HEADER_VALUE_SENTINEL,
+            RESOURCE_KEY_SENTINEL,
+            RESOURCE_VALUE_SENTINEL,
+            CREDENTIAL_SENTINEL,
+        ] {
+            assert!(!debug.contains(sentinel));
+        }
+    }
+
+    #[test]
     fn logging_filter_accepts_legacy_alias_but_rejects_conflicts() {
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.server.log_level = Some("info".to_string());
@@ -1165,5 +1361,26 @@ protocol = "grpc"
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("conf")
             .join("mcp.example.toml")
+    }
+
+    fn write_example_config_with(observability_root: &str, extra: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            example_config_path()
+                .parent()
+                .expect("example config has a parent")
+                .join("permissions.example.toml"),
+            temp.path().join("permissions.example.toml"),
+        )
+        .unwrap();
+        let config_path = temp.path().join("mcp.toml");
+        let mut contents = std::fs::read_to_string(example_config_path()).unwrap().replacen(
+            "[observability]",
+            &format!("[observability]\n{observability_root}"),
+            1,
+        );
+        contents.push_str(extra);
+        std::fs::write(&config_path, contents).unwrap();
+        (temp, config_path)
     }
 }

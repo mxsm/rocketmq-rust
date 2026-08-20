@@ -240,7 +240,7 @@ fn service_trace_sample_ratio_environment_overrides_the_file_field() {
     let file: rocketmq_observability::ObservabilityOverrides =
         serde_yaml::from_str("traces:\n  sampleRatio: 0.25\n").unwrap();
     let environment = rocketmq_observability::TelemetryEnvironmentValues {
-        trace_sample_ratio: Some("0.75".into()),
+        trace_sample_ratio: Some("  0.75  ".into()),
         ..rocketmq_observability::TelemetryEnvironmentValues::default()
     };
 
@@ -330,12 +330,48 @@ fn shared_validation_requires_canonical_prometheus_configuration() {
 
 #[test]
 fn invalid_trace_sample_ratio_environment_reports_only_the_variable_name() {
+    for invalid_value in ["-0.1", "1.1", "NaN", "inf", "secret-value"] {
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            trace_sample_ratio: Some(invalid_value.into()),
+            ..rocketmq_observability::TelemetryEnvironmentValues::default()
+        };
+
+        let error = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-broker",
+            rocketmq_observability::TelemetryBootstrapConfig::default(),
+            &rocketmq_observability::ObservabilityOverrides::default(),
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec {
+                trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
+            },
+        )
+        .expect_err("invalid trace sample ratio should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"));
+        assert!(!message.contains(invalid_value));
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn non_utf8_trace_sample_ratio_reports_only_the_variable_name() {
+    #[cfg(unix)]
+    let invalid_value = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    };
+    #[cfg(windows)]
+    let invalid_value = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xd800])
+    };
     let environment = rocketmq_observability::TelemetryEnvironmentValues {
-        trace_sample_ratio: Some("secret-value".into()),
+        trace_sample_ratio: Some(invalid_value),
         ..rocketmq_observability::TelemetryEnvironmentValues::default()
     };
 
-    let error = rocketmq_observability::resolve_telemetry_values(
+    let message = rocketmq_observability::resolve_telemetry_values(
         "rocketmq-broker",
         rocketmq_observability::TelemetryBootstrapConfig::default(),
         &rocketmq_observability::ObservabilityOverrides::default(),
@@ -344,11 +380,10 @@ fn invalid_trace_sample_ratio_environment_reports_only_the_variable_name() {
             trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
         },
     )
-    .expect_err("invalid trace sample ratio should fail");
-    let message = error.to_string();
+    .expect_err("non-UTF-8 trace sample ratio should fail")
+    .to_string();
 
     assert!(message.contains("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"));
-    assert!(!message.contains("secret-value"));
 }
 
 #[test]

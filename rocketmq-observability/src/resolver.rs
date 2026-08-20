@@ -293,9 +293,14 @@ fn apply_optional_trace_sample_ratio(
     let value = value
         .to_str()
         .ok_or_else(|| ObservabilityError::invalid_config(format!("{environment_name} must contain valid UTF-8")))?;
-    let sample_ratio = value.parse::<f64>().map_err(|_| {
+    let sample_ratio = value.trim().parse::<f64>().map_err(|_| {
         ObservabilityError::invalid_config(format!("{environment_name} must be a floating-point number"))
     })?;
+    if !is_valid_sample_ratio(sample_ratio) {
+        return Err(ObservabilityError::invalid_config(format!(
+            "{environment_name} must be finite and between 0.0 and 1.0"
+        )));
+    }
     config.traces.sample_ratio = sample_ratio;
     Ok(true)
 }
