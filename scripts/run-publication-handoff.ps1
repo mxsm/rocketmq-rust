@@ -177,7 +177,7 @@ $final = Join-Path $output ("{0}/{1}/attempt-{2}" -f $candidateValue.version, $c
 Invoke-CandidateRoute $candidate "H04-FINAL-SEMANTIC" $worker $context $eventRoot @(
     "python", "distribution/verify_publication_handoff.py", "--handoff", $final,
     "--candidate-manifest", $candidate, "--candidate-root", $sourceImport, "--source-root", $repositorySource,
-    "--final-pre-ready", "--result-id", "H04-FINAL-SEMANTIC", "--output", (Join-Path $sourceImport "evidence/H04-FINAL-SEMANTIC.json")
+    "--final-pre-ready", "--final-read-only", "--result-id", "H04-FINAL-SEMANTIC", "--output", (Join-Path $sourceImport "evidence/H04-FINAL-SEMANTIC.json")
 )
 Invoke-CandidateRoute $candidate "H05-FINAL-NO-REMOTE" $worker $context $eventRoot @(
     "python", "scripts/no_remote_publication_guard.py", "--candidate-manifest", $candidate, "--phase", "6",
