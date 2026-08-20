@@ -4,6 +4,14 @@
     "release-preparation-aggregate": [
       "R11-aggregate-validate"
     ],
+    "full-matrix-finalizer": [
+      "prepare-common",
+      "build-linux",
+      "build-windows",
+      "build-macos",
+      "aggregate",
+      "full-matrix"
+    ],
     "handoff-draft": [
       "H01-LINUX",
       "H01-WINDOWS",

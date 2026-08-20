@@ -319,6 +319,7 @@ def build_evidence(
     required_result_ids: list[str],
     output: Path,
     required_capability_ids: list[str] | None = None,
+    release_result_ids: list[str] | None = None,
     no_remote_evidence: Path | None = None,
     event_root: Path | None = None,
     context_root: Path | None = None,
@@ -327,6 +328,16 @@ def build_evidence(
         raise EvidenceError("phase/gate_stage is outside the 1.0 candidate evidence contract")
     if not required_result_ids or len(set(required_result_ids)) != len(required_result_ids):
         raise EvidenceError("required result IDs must be a non-empty unique denominator")
+    if release_result_ids is None:
+        release_result_ids = required_result_ids
+    if (
+        not release_result_ids
+        or len(set(release_result_ids)) != len(release_result_ids)
+        or not set(release_result_ids).issubset(required_result_ids)
+    ):
+        raise EvidenceError("release result IDs must be a non-empty unique subset of required results")
+    if gate_stage != "full-matrix" and release_result_ids != required_result_ids:
+        raise EvidenceError("only the full-matrix gate may separate release and scenario result IDs")
     if gate_stage == "final-handoff" and tuple(required_result_ids) != FINAL_HANDOFF_RESULT_IDS:
         raise EvidenceError("final-handoff result denominator is not the frozen H01-H05 sequence")
     manifest = resolve_existing_file(candidate_manifest, "candidate_manifest")
@@ -402,7 +413,7 @@ def build_evidence(
         "required_result_ids": required_result_ids,
         "results": results,
         "capability_results": capability_results,
-        "release_result_ids": {result_id: "passed" for result_id in required_result_ids},
+        "release_result_ids": {result_id: "passed" for result_id in release_result_ids},
         "failed_result_ids": [],
         "all_required_passed": True,
         "remote_publication": {"status": remote_status},
@@ -424,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--phase", type=int, choices=(5, 6), required=True)
     parser.add_argument("--gate-stage", choices=("release-preparation", "full-matrix", "final-handoff"), required=True)
     parser.add_argument("--require-result-ids", required=True)
+    parser.add_argument("--release-result-ids")
     parser.add_argument("--require-capability-ids")
     parser.add_argument("--no-remote-evidence", type=Path)
     parser.add_argument("--event-root", type=Path)
@@ -438,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
             gate_stage=args.gate_stage,
             required_result_ids=_csv(args.require_result_ids),
             required_capability_ids=_csv(args.require_capability_ids) if args.require_capability_ids else None,
+            release_result_ids=_csv(args.release_result_ids) if args.release_result_ids else None,
             no_remote_evidence=args.no_remote_evidence,
             event_root=args.event_root,
             context_root=args.context_root,

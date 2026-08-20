@@ -75,7 +75,7 @@ def _load_policy(path: Path, profile: str) -> list[dict[str, Any]]:
     job_ids: list[str] = []
     normalized: list[dict[str, Any]] = []
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {"job_id", "target", "result_ids"}:
+        if not isinstance(entry, dict) or set(entry) != {"job_id", "target", "result_ids", "route_ids"}:
             raise OutcomeError("candidate outcome policy entry is invalid")
         job_id = require_safe_id(entry.get("job_id"), "job_id")
         target = entry.get("target")
@@ -91,8 +91,25 @@ def _load_policy(path: Path, profile: str) -> list[dict[str, Any]]:
         normalized_result_ids = [require_safe_id(result_id, "result_id") for result_id in result_ids]
         if len(normalized_result_ids) != len(set(normalized_result_ids)):
             raise OutcomeError(f"candidate outcome result denominator contains duplicates: {job_id}")
+        route_ids = entry.get("route_ids")
+        if (
+            not isinstance(route_ids, list)
+            or not route_ids
+            or any(not isinstance(route_id, str) for route_id in route_ids)
+        ):
+            raise OutcomeError(f"candidate outcome route denominator is invalid: {job_id}")
+        normalized_route_ids = [require_safe_id(route_id, "route_id") for route_id in route_ids]
+        if len(normalized_route_ids) != len(set(normalized_route_ids)):
+            raise OutcomeError(f"candidate outcome route denominator contains duplicates: {job_id}")
         job_ids.append(job_id)
-        normalized.append({"job_id": job_id, "target": target, "result_ids": normalized_result_ids})
+        normalized.append(
+            {
+                "job_id": job_id,
+                "target": target,
+                "result_ids": normalized_result_ids,
+                "route_ids": normalized_route_ids,
+            }
+        )
     if len(job_ids) != len(set(job_ids)):
         raise OutcomeError("candidate outcome policy contains duplicate jobs")
     return normalized
@@ -152,7 +169,7 @@ def _validate_bundle(
     candidate: dict[str, Any],
     expected: dict[str, Any],
     workflow_result: str,
-) -> tuple[dict[str, Any], list[tuple[str, Path]], list[str]]:
+) -> tuple[dict[str, Any], list[tuple[str, Path]], list[str], list[str]]:
     outcome_path = resolve_existing_file(bundle / OUTCOME_NAME, "candidate job outcome")
     outcome = read_json(outcome_path)
     _validate_payload_identity(outcome, candidate, "candidate job outcome")
@@ -256,7 +273,13 @@ def _validate_bundle(
     missing_result_ids = sorted(set(expected["result_ids"]) - set(result_ids))
     if outcome["status"] == "success" and missing_result_ids:
         raise OutcomeError(f"successful job is missing required results: {expected['job_id']}")
-    return outcome, payloads, result_ids
+    unknown_route_ids = sorted(routes - set(expected["route_ids"]))
+    if unknown_route_ids:
+        raise OutcomeError(f"candidate event route is outside the job denominator: {unknown_route_ids[0]}")
+    missing_route_ids = sorted(set(expected["route_ids"]) - routes)
+    if outcome["status"] == "success" and missing_route_ids:
+        raise OutcomeError(f"successful job is missing required routes: {expected['job_id']}")
+    return outcome, payloads, result_ids, sorted(routes)
 
 
 def _copy_payload(source: Path, destination: Path) -> None:
@@ -324,13 +347,18 @@ def collect_outcomes(
                         "expected_result_ids": entry["result_ids"],
                         "result_ids": [],
                         "missing_result_ids": entry["result_ids"],
+                        "expected_route_ids": entry["route_ids"],
+                        "route_ids": [],
+                        "missing_route_ids": entry["route_ids"],
                         "result_files": [],
                         "event_files": [],
                         "context_files": [],
                     }
                 )
                 continue
-            outcome, payloads, result_ids = _validate_bundle(bundle, candidate, entry, workflow[job_id])
+            outcome, payloads, result_ids, route_ids = _validate_bundle(
+                bundle, candidate, entry, workflow[job_id]
+            )
             copied = {"results": [], "events": [], "contexts": []}
             for relative, source in payloads:
                 category = PurePosixPath(relative).parts[0]
@@ -351,6 +379,9 @@ def collect_outcomes(
                     "expected_result_ids": entry["result_ids"],
                     "result_ids": result_ids,
                     "missing_result_ids": sorted(set(entry["result_ids"]) - set(result_ids)),
+                    "expected_route_ids": entry["route_ids"],
+                    "route_ids": route_ids,
+                    "missing_route_ids": sorted(set(entry["route_ids"]) - set(route_ids)),
                     "result_files": copied["results"],
                     "event_files": copied["events"],
                     "context_files": copied["contexts"],

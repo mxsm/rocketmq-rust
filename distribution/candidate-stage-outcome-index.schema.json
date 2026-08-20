@@ -46,6 +46,7 @@
       "required": [
         "job_id", "worker_id", "target", "status", "workflow_result",
         "expected_result_ids", "result_ids", "missing_result_ids",
+        "expected_route_ids", "route_ids", "missing_route_ids",
         "result_files", "event_files", "context_files"
       ],
       "properties": {
@@ -63,6 +64,18 @@
           "items": {"type": "string", "minLength": 1}
         },
         "missing_result_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "expected_route_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "route_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "missing_route_ids": {
           "type": "array", "uniqueItems": true,
           "items": {"type": "string", "minLength": 1}
         },
