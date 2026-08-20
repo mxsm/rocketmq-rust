@@ -13,11 +13,7 @@
 // limitations under the License.
 
 use super::*;
-impl NameServerUpdateCallback for MQClientAPIImpl {
-    fn on_name_server_address_changed(&self, namesrv_address: Option<String>) -> String {
-        namesrv_address.unwrap_or_default()
-    }
-}
+mod nameserver_callback;
 
 impl MQClientAPIImpl {
     pub fn new(
@@ -69,7 +65,6 @@ impl MQClientAPIImpl {
                 mix_all::get_ws_addr().into(),
                 client_config.unit_name.clone(),
             ))),
-            //client_remoting_processor,
             name_srv_addr: RwLock::new(None),
             callback_executor: callback_executor::ClientCallbackExecutor::new(
                 client_config.client_callback_executor_threads,
@@ -181,7 +176,6 @@ impl MQClientAPIImpl {
         ));
         *self.top_addressing.write().await = addressing;
     }
-
     pub async fn invoke(
         &self,
         broker_addr: &CheetahString,
@@ -192,7 +186,6 @@ impl MQClientAPIImpl {
             .invoke_request(Some(broker_addr), request, timeout_millis)
             .await
     }
-
     pub async fn invoke_oneway(
         &self,
         broker_addr: &CheetahString,
