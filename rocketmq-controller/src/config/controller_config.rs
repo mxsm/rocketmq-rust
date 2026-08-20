@@ -79,7 +79,7 @@ impl fmt::Display for StorageBackendType {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ControllerConfig {
     // --- shared Controller fields (existing) ---
     /// RocketMQ home directory
@@ -939,22 +939,6 @@ path = "/rocketmq"
         assert_eq!(value["observability"]["prometheus"]["host"], "127.0.0.1");
         assert_eq!(value["observability"]["prometheus"]["port"], 9464);
         assert_eq!(value["observability"]["prometheus"]["path"], "/rocketmq");
-    }
-
-    #[test]
-    fn controller_config_rejects_legacy_metrics_exporter_type() {
-        let error = parse_controller_toml("metricsExporterType = \"disable\"")
-            .expect_err("legacy metricsExporterType must be rejected");
-
-        assert!(error.to_string().contains("metricsExporterType"));
-    }
-
-    #[test]
-    fn controller_config_rejects_legacy_metrics_grpc_exporter_target() {
-        let error = parse_controller_toml("metricsGrpcExporterTarget = \"http://collector:4317\"")
-            .expect_err("legacy metricsGrpcExporterTarget must be rejected");
-
-        assert!(error.to_string().contains("metricsGrpcExporterTarget"));
     }
 
     #[test]

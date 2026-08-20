@@ -31,15 +31,49 @@
 //! rocketmq-controller --help
 //! ```
 
+use std::path::Path;
 use std::path::PathBuf;
 
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_runtime::common::parse_config_file::parse_config_file;
 use tracing::info;
 
 use crate::config::ControllerConfig;
+
+const REMOVED_CONTROLLER_TELEMETRY_KEYS: [&str; 10] = [
+    "metricsExporterType",
+    "metricsGrpcExporterTarget",
+    "metricsGrpcExporterHeader",
+    "metricGrpcExporterTimeOutInMills",
+    "metricGrpcExporterIntervalInMills",
+    "metricLoggingExporterIntervalInMills",
+    "metricsPromExporterHost",
+    "metricsPromExporterPort",
+    "metricsLabel",
+    "metricsInDelta",
+];
+
+fn parse_controller_config_file(config_path: &Path) -> RocketMQResult<ControllerConfig> {
+    let config = config::Config::builder()
+        .add_source(config::File::from(config_path))
+        .build()
+        .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+
+    for key in REMOVED_CONTROLLER_TELEMETRY_KEYS {
+        if config.get::<config::Value>(key).is_ok() {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "property",
+                value: key.to_string(),
+                reason: "removed Controller telemetry property; use [observability] instead".to_string(),
+            });
+        }
+    }
+
+    config
+        .try_deserialize()
+        .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))
+}
 
 /// RocketMQ Controller Command Line Arguments
 ///
@@ -129,7 +163,7 @@ impl ControllerCli {
 
     /// Load configuration from file
     ///
-    /// Uses the controller-owned `parse_config_file` helper, which supports multiple formats:
+    /// Uses the `config` crate, which supports multiple formats:
     /// - TOML (.toml)
     /// - JSON (.json)
     /// - YAML (.yaml, .yml)
@@ -155,8 +189,7 @@ impl ControllerCli {
         if let Some(ref config_path) = self.config_file {
             info!("Loading configuration from file: {}", config_path.display());
 
-            let loaded_config = parse_config_file(config_path.clone())
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+            let loaded_config = parse_controller_config_file(config_path)?;
 
             println!("Loaded configuration from file: {}", config_path.display());
 
@@ -258,6 +291,93 @@ pub fn parse_command_line() -> RocketMQResult<(ControllerCli, ControllerConfig)>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cli_with_config_file(config_file: PathBuf) -> ControllerCli {
+        ControllerCli {
+            config_file: Some(config_file),
+            print_config_item: false,
+            print_important_config: false,
+            log_filter: None,
+        }
+    }
+
+    #[test]
+    fn controller_config_file_preserves_logging_observability_and_defaults() {
+        let directory = tempfile::tempdir().expect("temporary Controller config directory");
+        let path = directory.path().join("controller.toml");
+        std::fs::write(
+            &path,
+            r#"
+logFilter = "info"
+controllerThreadPoolNums = 24
+
+[logging]
+filter = "info"
+reload.enabled = true
+
+[observability.metrics]
+exporter = "prometheus"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 9464
+path = "/rocketmq"
+"#,
+        )
+        .expect("write Controller configuration");
+
+        let config = cli_with_config_file(path.clone())
+            .load_config(ControllerConfig::default())
+            .expect("Controller-owned and logging configuration should share one file");
+        let logging: rocketmq_observability::LoggingOverrides =
+            rocketmq_runtime::common::parse_config_file::parse_config_file(path)
+                .expect("logging overrides should load from the same file");
+
+        assert_eq!(config.controller_thread_pool_nums, 24);
+        assert_eq!(config.node_id, 1);
+        assert_eq!(config.controller_type, "Raft");
+        assert_eq!(
+            config.observability.metrics.exporter,
+            Some(rocketmq_observability::MetricsExporter::Prometheus)
+        );
+        assert_eq!(config.observability.prometheus.host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(config.observability.prometheus.port, Some(9464));
+        assert_eq!(config.observability.prometheus.path.as_deref(), Some("/rocketmq"));
+        assert_eq!(logging.log_filter.as_deref(), Some("info"));
+        assert_eq!(logging.logging.filter.as_deref(), Some("info"));
+        assert!(logging.logging.reload.enabled);
+    }
+
+    #[test]
+    fn controller_config_file_rejects_every_removed_telemetry_key() {
+        let directory = tempfile::tempdir().expect("temporary Controller config directory");
+        let path = directory.path().join("controller.toml");
+
+        for (key, value) in [
+            ("metricsExporterType", "\"disable\""),
+            ("metricsGrpcExporterTarget", "\"http://collector:4317\""),
+            ("metricsGrpcExporterHeader", "\"key:value\""),
+            ("metricGrpcExporterTimeOutInMills", "3000"),
+            ("metricGrpcExporterIntervalInMills", "60000"),
+            ("metricLoggingExporterIntervalInMills", "10000"),
+            ("metricsPromExporterHost", "\"127.0.0.1\""),
+            ("metricsPromExporterPort", "9464"),
+            ("metricsLabel", "\"cluster:test\""),
+            ("metricsInDelta", "false"),
+        ] {
+            std::fs::write(
+                &path,
+                format!("{key} = {value}\n\n[observability.metrics]\nexporter = \"disable\"\n"),
+            )
+            .expect("write legacy Controller configuration");
+
+            let error = cli_with_config_file(path.clone())
+                .load_config(ControllerConfig::default())
+                .expect_err("every removed telemetry key must be rejected");
+
+            assert!(error.to_string().contains(key), "error must identify {key}: {error}");
+        }
+    }
 
     #[test]
     fn test_cli_parse_log_filter_override() {
