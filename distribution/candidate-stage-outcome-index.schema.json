@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/candidate-stage-outcome-index.schema.json",
+  "title": "RocketMQ Rust candidate job outcome index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "candidate_id", "version", "run_id", "attempt", "profile",
+    "expected_job_ids", "jobs", "failed_job_ids", "all_required_passed", "remote_publication"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "profile": {"type": "string", "minLength": 1},
+    "expected_job_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/job"}
+    },
+    "failed_job_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "all_required_passed": {"type": "boolean"},
+    "remote_publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {"status": {"const": "not-executed"}}
+    }
+  },
+  "$defs": {
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id", "worker_id", "target", "status", "workflow_result",
+        "expected_result_ids", "result_ids", "missing_result_ids",
+        "result_files", "event_files", "context_files"
+      ],
+      "properties": {
+        "job_id": {"type": "string", "minLength": 1},
+        "worker_id": {"type": ["string", "null"]},
+        "target": {"type": ["string", "null"]},
+        "status": {"enum": ["success", "failed", "cancelled", "missing-worker"]},
+        "workflow_result": {"enum": ["success", "failure", "cancelled", "skipped"]},
+        "expected_result_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "result_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "missing_result_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "result_files": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "event_files": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "context_files": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    }
+  }
+}
