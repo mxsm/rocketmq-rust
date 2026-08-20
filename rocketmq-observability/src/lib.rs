@@ -70,6 +70,7 @@ pub use exporter::outage::*;
 pub use exporter_types::LogExporterType;
 pub use exporter_types::MetricsExporterType;
 pub use exporter_types::TraceExporterType;
+pub use handle::MetricsRuntimePolicy;
 #[cfg(feature = "otel-metrics")]
 pub use handle::ReleaseIdentityRegistrationError;
 pub use handle::TelemetryHandle;

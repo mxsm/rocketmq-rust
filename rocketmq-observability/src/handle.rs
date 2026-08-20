@@ -116,6 +116,45 @@ impl TracePolicy {
     }
 }
 
+/// Immutable, non-sensitive metrics settings captured from the final resolved configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MetricsRuntimePolicy {
+    /// Whether this handle may record metrics.
+    pub enabled: bool,
+    /// Fraction of sampled Broker metric operations.
+    pub sample_ratio: f64,
+    /// Export and dependent snapshot refresh cadence in milliseconds.
+    pub export_interval_millis: u64,
+    /// Maximum cardinality and bounded Broker metric work.
+    pub cardinality_limit: usize,
+}
+
+impl MetricsRuntimePolicy {
+    fn from_config(config: &ObservabilityConfig) -> Self {
+        Self {
+            enabled: config.enabled && config.metrics.enabled,
+            sample_ratio: config.metrics.sample_ratio,
+            export_interval_millis: config.metrics.export_interval_millis,
+            cardinality_limit: config.metrics.cardinality_limit,
+        }
+    }
+
+    const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            sample_ratio: 0.0,
+            export_interval_millis: 0,
+            cardinality_limit: 0,
+        }
+    }
+}
+
+impl Default for MetricsRuntimePolicy {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 #[derive(Clone)]
 enum HandleBackend {
     Noop,
@@ -124,7 +163,7 @@ enum HandleBackend {
 
 struct ActiveHandle {
     state: AtomicU8,
-    metrics_enabled: bool,
+    metrics_runtime_policy: MetricsRuntimePolicy,
     trace_policy: TracePolicy,
     metric_label_policy: MetricLabelPolicy,
     #[cfg(feature = "otel-metrics")]
@@ -193,7 +232,7 @@ impl TelemetryHandle {
         Self {
             backend: HandleBackend::Active(Arc::new(ActiveHandle {
                 state: AtomicU8::new(TelemetryState::Active as u8),
-                metrics_enabled: config.metrics.enabled,
+                metrics_runtime_policy: MetricsRuntimePolicy::from_config(config),
                 trace_policy: TracePolicy::from_config(config),
                 metric_label_policy: MetricLabelPolicy::new(
                     config.metrics.cardinality_limit,
@@ -211,7 +250,7 @@ impl TelemetryHandle {
         Self {
             backend: HandleBackend::Active(Arc::new(ActiveHandle {
                 state: AtomicU8::new(TelemetryState::Active as u8),
-                metrics_enabled: config.metrics.enabled,
+                metrics_runtime_policy: MetricsRuntimePolicy::from_config(config),
                 trace_policy: TracePolicy::from_config(config),
                 metric_label_policy: MetricLabelPolicy::new(
                     config.metrics.cardinality_limit,
@@ -240,9 +279,18 @@ impl TelemetryHandle {
     /// Returns whether this active runtime currently enables metrics.
     #[must_use]
     pub fn metrics_enabled(&self) -> bool {
+        self.metrics_runtime_policy().enabled
+    }
+
+    /// Returns final metrics runtime policy while the telemetry lifecycle is active.
+    ///
+    /// No-op, closing, and closed handles return a disabled policy so surviving clones cannot
+    /// continue metrics work after their runtime owner begins shutdown.
+    #[must_use]
+    pub fn metrics_runtime_policy(&self) -> MetricsRuntimePolicy {
         match &self.backend {
-            HandleBackend::Active(inner) => self.is_active() && inner.metrics_enabled,
-            HandleBackend::Noop => false,
+            HandleBackend::Active(inner) if self.is_active() => inner.metrics_runtime_policy,
+            HandleBackend::Noop | HandleBackend::Active(_) => MetricsRuntimePolicy::disabled(),
         }
     }
 

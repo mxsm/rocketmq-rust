@@ -475,6 +475,51 @@ fn broker_runtime_observability_registration_uses_injected_handle_metrics_policy
         .expect("test telemetry should shut down");
 }
 
+#[cfg(feature = "otel-metrics")]
+#[test]
+fn broker_metrics_sampling_uses_resolved_runtime_policy() {
+    let policy = rocketmq_observability::MetricsRuntimePolicy {
+        enabled: true,
+        sample_ratio: 0.125,
+        export_interval_millis: 1_250,
+        cardinality_limit: 7,
+    };
+
+    let sampling = super::composition::broker_metrics_sampling_config(policy);
+
+    assert!((sampling.sample_ratio - 0.125).abs() < f64::EPSILON);
+}
+
+#[cfg(feature = "otel-metrics")]
+#[test]
+fn consumer_lag_refresh_uses_resolved_export_interval() {
+    let policy = rocketmq_observability::MetricsRuntimePolicy {
+        enabled: true,
+        sample_ratio: 0.125,
+        export_interval_millis: 1_250,
+        cardinality_limit: 7,
+    };
+
+    let (refresh_interval, _) = super::control_plane::consumer_lag_runtime_settings(policy);
+
+    assert_eq!(refresh_interval, Duration::from_millis(1_250));
+}
+
+#[cfg(feature = "otel-metrics")]
+#[test]
+fn consumer_lag_work_bound_uses_resolved_cardinality_limit() {
+    let policy = rocketmq_observability::MetricsRuntimePolicy {
+        enabled: true,
+        sample_ratio: 0.125,
+        export_interval_millis: 1_250,
+        cardinality_limit: 7,
+    };
+
+    let (_, cardinality_limit) = super::control_plane::consumer_lag_runtime_settings(policy);
+
+    assert_eq!(cardinality_limit, 7);
+}
+
 #[test]
 fn build_auth_config_maps_signature_algorithm() {
     let broker_config = BrokerConfig {

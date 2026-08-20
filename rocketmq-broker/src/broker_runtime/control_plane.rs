@@ -29,6 +29,14 @@ impl BrokerControlPlane {
     }
 }
 
+#[cfg(feature = "otel-metrics")]
+pub(super) fn consumer_lag_runtime_settings(policy: rocketmq_observability::MetricsRuntimePolicy) -> (Duration, usize) {
+    (
+        Duration::from_millis(policy.export_interval_millis.max(1)),
+        policy.cardinality_limit,
+    )
+}
+
 impl BrokerRuntime {
     pub(super) fn initialize_observability(&mut self) {
         if !self.composition.state.telemetry_handle.metrics_enabled() {
@@ -228,17 +236,15 @@ impl BrokerRuntime {
                 return;
             };
             let broker_config = self.composition.state.broker_config();
+            let (refresh_interval, cardinality_limit) =
+                consumer_lag_runtime_settings(self.composition.state.telemetry_handle.metrics_runtime_policy());
             let consumer_lag_snapshot = Arc::new(ConsumerLagSnapshotService::new(
                 self.composition.state.consumer_offset_manager_handle(),
                 self.composition.state.consumer_manager.clone_shared_state(),
                 pop_processor,
                 broker_config.enable_notify_before_pop_calculate_lag,
+                cardinality_limit,
             ));
-            let refresh_interval = Duration::from_millis(
-                rocketmq_observability::ObservabilityConfig::default()
-                    .metrics
-                    .export_interval_millis,
-            );
             let refresh_snapshot = Arc::clone(&consumer_lag_snapshot);
             let schedule_result = self
                 .lifecycle
