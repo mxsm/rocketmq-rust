@@ -376,6 +376,18 @@ fn telemetry_environment_read_detector_catches_supported_direct_forms() {
         r#"use std::env as process_env; let _ = process_env::var("ROCKETMQ_METRICS_ENABLED");"#,
         r#"use std::env; let _ = env::vars_os().find(|(key, _)| key == "OTEL_EXPORTER_OTLP_PROTOCOL");"#,
         r#"use std::env::vars; let _ = vars().find(|(key, _)| key == "ROCKETMQ_METRICS_PATH");"#,
+        r#"// Copyright header
+use std::env;
+let _ = env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT");"#,
+        r#"fn read() { use std::env; let _ = env::var("ROCKETMQ_METRICS_ENABLED"); }"#,
+        r#"use std::{env as process_env}; let _ = process_env::var_os("OTEL_EXPORTER_OTLP_PROTOCOL");"#,
+        r#"use std::env::{var_os, vars_os}; let _ = var_os("ROCKETMQ_METRICS_PATH");"#,
+        r#"use std::env::{vars_os}; let _ = vars_os();"#,
+        r#"use std::env::var_os as read_env; let _ = read_env(OTEL_EXPORTER_OTLP_ENDPOINT);"#,
+        r#"use crate::METRICS_EXPORTER_ENV as EXPORTER_ENV; use std::env::var_os; let _ = var_os(EXPORTER_ENV);"#,
+        r#"let values = std::env::vars_os(); let _ = values.filter(|(key, _)| key == "OTEL_EXPORTER_OTLP_ENDPOINT");"#,
+        r#"let _ = std::env::var("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO");"#,
+        r#"let _ = std::env::var("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO");"#,
     ] {
         assert!(
             has_direct_telemetry_environment_read(source),
@@ -386,6 +398,10 @@ fn telemetry_environment_read_detector_catches_supported_direct_forms() {
     for source in [
         r#"let _ = std::env::var("ROCKETMQ_MCP_HTTP_TOKEN");"#,
         r#"use std::env; let _ = env::var_os("MY_METRICS_DEBUG");"#,
+        r#"let _ = std::env::var("MY_OTEL_DEBUG");"#,
+        r#"let _ = std::env::var("MY_ROCKETMQ_METRICS_DEBUG");"#,
+        r#"use std::env; let _ = env::var("NAMESRV_ADDR");"#,
+        r#"let _ = std::env::var_os(CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV);"#,
     ] {
         assert!(
             !has_direct_telemetry_environment_read(source),
@@ -960,7 +976,6 @@ fn contains_removed_config_key(source: &str, key: &str) -> bool {
 }
 
 fn has_direct_telemetry_environment_read(source: &str) -> bool {
-    const ENV_FUNCTIONS: &[&str] = &["var", "var_os", "vars", "vars_os"];
     const TELEMETRY_ENV_CONSTANTS: &[&str] = &[
         "METRICS_ENABLED_ENV",
         "METRICS_EXPORTER_ENV",
@@ -970,62 +985,308 @@ fn has_direct_telemetry_environment_read(source: &str) -> bool {
         "OTEL_EXPORTER_OTLP_PROTOCOL",
     ];
 
-    let compact = source
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
+    let tokens = lex_rust_boundary_tokens(source);
+    let mut modules = BTreeSet::new();
+    let mut value_functions = BTreeSet::new();
+    let mut iterator_functions = BTreeSet::new();
+    let mut telemetry_constants = TELEMETRY_ENV_CONSTANTS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<BTreeSet<_>>();
 
-    let mut namespaces = BTreeSet::from(["std::env".to_string()]);
-    let mut imported_functions = BTreeSet::new();
-    for statement in compact.split(';') {
-        let Some(import) = statement.strip_prefix("usestd::env") else {
+    for (path, alias) in rust_use_bindings(&tokens) {
+        if path_is(&path, &["std", "env"]) {
+            modules.insert(alias);
+            continue;
+        }
+        if path.len() >= 3 && path[path.len() - 3] == "std" && path[path.len() - 2] == "env" {
+            match path.last().map(String::as_str) {
+                Some("var" | "var_os") => {
+                    value_functions.insert(alias);
+                }
+                Some("vars" | "vars_os") => {
+                    iterator_functions.insert(alias);
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if path
+            .last()
+            .is_some_and(|name| TELEMETRY_ENV_CONSTANTS.contains(&name.as_str()))
+        {
+            telemetry_constants.insert(alias);
+        }
+    }
+
+    for index in 0..tokens.len() {
+        let Some((function, open_parenthesis)) =
+            environment_call_at(&tokens, index, &modules, &value_functions, &iterator_functions)
+        else {
             continue;
         };
-        if import.is_empty() {
-            namespaces.insert("env".to_string());
-        } else if let Some(alias) = import.strip_prefix("as") {
-            namespaces.insert(alias.to_string());
-        } else if let Some(function) = import.strip_prefix("::") {
-            let (function, alias) = function.split_once("as").unwrap_or((function, function));
-            if ENV_FUNCTIONS.contains(&function) {
-                imported_functions.insert(alias.to_string());
-            }
+        if matches!(function, "vars" | "vars_os") {
+            return true;
+        }
+        if telemetry_environment_argument(&tokens, open_parenthesis, &telemetry_constants) {
+            return true;
         }
     }
 
-    let mut calls = BTreeSet::new();
-    for namespace in namespaces {
-        for function in ENV_FUNCTIONS {
-            calls.insert(format!("{namespace}::{function}("));
-        }
-    }
-    for function in imported_functions {
-        calls.insert(format!("{function}("));
-    }
-
-    calls
-        .iter()
-        .flat_map(|call| compact.match_indices(call).map(|(index, _)| index))
-        .any(|index| {
-            let end = compact[index..]
-                .find(';')
-                .map_or(compact.len(), |offset| index + offset);
-            let statement = &compact[index..end];
-            statement.contains("OTEL_")
-                || statement.contains("ROCKETMQ_METRICS_")
-                || TELEMETRY_ENV_CONSTANTS
-                    .iter()
-                    .any(|identifier| contains_ascii_identifier(statement, identifier))
-        })
+    false
 }
 
-fn contains_ascii_identifier(source: &str, identifier: &str) -> bool {
-    source.match_indices(identifier).any(|(start, _)| {
-        let before = source[..start].chars().next_back();
-        let after = source[start + identifier.len()..].chars().next();
-        !before.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
-            && !after.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
-    })
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RustBoundaryToken {
+    Identifier(String),
+    StringLiteral(String),
+    DoubleColon,
+    LeftParenthesis,
+    RightParenthesis,
+    LeftBrace,
+    RightBrace,
+    Comma,
+    Semicolon,
+}
+
+fn lex_rust_boundary_tokens(source: &str) -> Vec<RustBoundaryToken> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+        } else if bytes[index..].starts_with(b"//") {
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+        } else if bytes[index..].starts_with(b"/*") {
+            index += 2;
+            let mut depth = 1;
+            while index < bytes.len() && depth > 0 {
+                if bytes[index..].starts_with(b"/*") {
+                    depth += 1;
+                    index += 2;
+                } else if bytes[index..].starts_with(b"*/") {
+                    depth -= 1;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+        } else if bytes[index] == b'r' && raw_string_hashes(bytes, index).is_some() {
+            let hashes = raw_string_hashes(bytes, index).expect("raw string prefix was just checked");
+            index += 2 + hashes;
+            let content_start = index;
+            while index < bytes.len()
+                && !(bytes[index] == b'"'
+                    && bytes
+                        .get(index + 1..index + 1 + hashes)
+                        .is_some_and(|closing_hashes| closing_hashes.iter().all(|byte| *byte == b'#')))
+            {
+                index += 1;
+            }
+            tokens.push(RustBoundaryToken::StringLiteral(
+                String::from_utf8_lossy(&bytes[content_start..index]).into_owned(),
+            ));
+            index = (index + 1 + hashes).min(bytes.len());
+        } else if bytes[index] == b'"' {
+            index += 1;
+            let mut value = String::new();
+            while index < bytes.len() && bytes[index] != b'"' {
+                if bytes[index] == b'\\' && index + 1 < bytes.len() {
+                    index += 1;
+                }
+                value.push(bytes[index] as char);
+                index += 1;
+            }
+            index = (index + 1).min(bytes.len());
+            tokens.push(RustBoundaryToken::StringLiteral(value));
+        } else if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_') {
+                index += 1;
+            }
+            tokens.push(RustBoundaryToken::Identifier(
+                String::from_utf8_lossy(&bytes[start..index]).into_owned(),
+            ));
+        } else if bytes[index..].starts_with(b"::") {
+            tokens.push(RustBoundaryToken::DoubleColon);
+            index += 2;
+        } else {
+            let token = match bytes[index] {
+                b'(' => Some(RustBoundaryToken::LeftParenthesis),
+                b')' => Some(RustBoundaryToken::RightParenthesis),
+                b'{' => Some(RustBoundaryToken::LeftBrace),
+                b'}' => Some(RustBoundaryToken::RightBrace),
+                b',' => Some(RustBoundaryToken::Comma),
+                b';' => Some(RustBoundaryToken::Semicolon),
+                _ => None,
+            };
+            tokens.extend(token);
+            index += 1;
+        }
+    }
+    tokens
+}
+
+fn raw_string_hashes(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    while bytes.get(index) == Some(&b'#') {
+        index += 1;
+    }
+    (bytes.get(index) == Some(&b'"')).then_some(index - start - 1)
+}
+
+fn rust_use_bindings(tokens: &[RustBoundaryToken]) -> Vec<(Vec<String>, String)> {
+    let mut bindings = Vec::new();
+    let mut cursor = 0;
+    while cursor < tokens.len() {
+        if token_identifier(tokens.get(cursor)) == Some("use") {
+            cursor += 1;
+            parse_rust_use_tree(tokens, &mut cursor, &[], &mut bindings);
+        } else {
+            cursor += 1;
+        }
+    }
+    bindings
+}
+
+fn parse_rust_use_tree(
+    tokens: &[RustBoundaryToken],
+    cursor: &mut usize,
+    prefix: &[String],
+    bindings: &mut Vec<(Vec<String>, String)>,
+) {
+    let mut path = prefix.to_vec();
+    while let Some(identifier) = token_identifier(tokens.get(*cursor)) {
+        if identifier == "as" {
+            break;
+        }
+        path.push(identifier.to_string());
+        *cursor += 1;
+        if !matches!(tokens.get(*cursor), Some(RustBoundaryToken::DoubleColon)) {
+            break;
+        }
+        *cursor += 1;
+        if matches!(tokens.get(*cursor), Some(RustBoundaryToken::LeftBrace)) {
+            *cursor += 1;
+            while !matches!(tokens.get(*cursor), None | Some(RustBoundaryToken::RightBrace)) {
+                parse_rust_use_tree(tokens, cursor, &path, bindings);
+                if matches!(tokens.get(*cursor), Some(RustBoundaryToken::Comma)) {
+                    *cursor += 1;
+                }
+            }
+            if matches!(tokens.get(*cursor), Some(RustBoundaryToken::RightBrace)) {
+                *cursor += 1;
+            }
+            return;
+        }
+    }
+
+    let alias = if token_identifier(tokens.get(*cursor)) == Some("as") {
+        *cursor += 1;
+        let alias = token_identifier(tokens.get(*cursor)).map(str::to_string);
+        *cursor += usize::from(alias.is_some());
+        alias
+    } else {
+        path.last().cloned()
+    };
+    if let Some(alias) = alias {
+        bindings.push((path, alias));
+    }
+}
+
+fn environment_call_at<'a>(
+    tokens: &'a [RustBoundaryToken],
+    index: usize,
+    modules: &BTreeSet<String>,
+    value_functions: &BTreeSet<String>,
+    iterator_functions: &BTreeSet<String>,
+) -> Option<(&'a str, usize)> {
+    let first = token_identifier(tokens.get(index))?;
+    if matches!(tokens.get(index + 1), Some(RustBoundaryToken::LeftParenthesis))
+        && (value_functions.contains(first) || iterator_functions.contains(first))
+    {
+        return Some((first, index + 1));
+    }
+    if modules.contains(first)
+        && matches!(tokens.get(index + 1), Some(RustBoundaryToken::DoubleColon))
+        && matches!(tokens.get(index + 3), Some(RustBoundaryToken::LeftParenthesis))
+    {
+        let function = token_identifier(tokens.get(index + 2))?;
+        if matches!(function, "var" | "var_os" | "vars" | "vars_os") {
+            return Some((function, index + 3));
+        }
+    }
+    if first == "std"
+        && matches!(tokens.get(index + 1), Some(RustBoundaryToken::DoubleColon))
+        && token_identifier(tokens.get(index + 2)) == Some("env")
+        && matches!(tokens.get(index + 3), Some(RustBoundaryToken::DoubleColon))
+        && matches!(tokens.get(index + 5), Some(RustBoundaryToken::LeftParenthesis))
+    {
+        let function = token_identifier(tokens.get(index + 4))?;
+        if matches!(function, "var" | "var_os" | "vars" | "vars_os") {
+            return Some((function, index + 5));
+        }
+    }
+    None
+}
+
+fn telemetry_environment_argument(
+    tokens: &[RustBoundaryToken],
+    open_parenthesis: usize,
+    telemetry_constants: &BTreeSet<String>,
+) -> bool {
+    let mut depth = 0;
+    let end = (open_parenthesis + 1..tokens.len())
+        .find(|index| match tokens[*index] {
+            RustBoundaryToken::LeftParenthesis | RustBoundaryToken::LeftBrace => {
+                depth += 1;
+                false
+            }
+            RustBoundaryToken::RightParenthesis | RustBoundaryToken::RightBrace if depth > 0 => {
+                depth -= 1;
+                false
+            }
+            RustBoundaryToken::RightParenthesis | RustBoundaryToken::Comma if depth == 0 => true,
+            _ => false,
+        })
+        .unwrap_or(tokens.len());
+    let argument = &tokens[open_parenthesis + 1..end];
+    if let [RustBoundaryToken::StringLiteral(name)] = argument {
+        return name.starts_with("OTEL_")
+            || name.starts_with("ROCKETMQ_METRICS_")
+            || matches!(
+                name.as_str(),
+                "ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO" | "ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"
+            );
+    }
+    let is_path = argument.iter().enumerate().all(|(index, token)| {
+        matches!(
+            (index % 2, token),
+            (0, RustBoundaryToken::Identifier(_)) | (1, RustBoundaryToken::DoubleColon)
+        )
+    });
+    is_path
+        && argument
+            .iter()
+            .rev()
+            .find_map(|token| token_identifier(Some(token)))
+            .is_some_and(|identifier| telemetry_constants.contains(identifier))
+}
+
+fn token_identifier(token: Option<&RustBoundaryToken>) -> Option<&str> {
+    match token {
+        Some(RustBoundaryToken::Identifier(identifier)) => Some(identifier),
+        _ => None,
+    }
+}
+
+fn path_is(path: &[String], expected: &[&str]) -> bool {
+    path.iter().map(String::as_str).eq(expected.iter().copied())
 }
 
 fn cargo_feature_names(manifest: &str) -> BTreeSet<&str> {
