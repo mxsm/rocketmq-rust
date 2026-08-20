@@ -1056,7 +1056,6 @@ fn legal_in_sync_ack_offset(runtime: &HARuntimeInfo) -> u64 {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::env;
     use std::fs;
     use std::sync::Arc;
     use std::time::SystemTime;
@@ -1180,7 +1179,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_timer_checkpoint_response_returns_encoded_checkpoint_snapshot() {
-        let temp_dir = env::temp_dir().join(format!("rmq-rust-timer-checkpoint-{}", current_millis()));
+        let temp_dir = std::env::temp_dir().join(format!("rmq-rust-timer-checkpoint-{}", current_millis()));
         let _ = fs::remove_dir_all(&temp_dir);
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig {

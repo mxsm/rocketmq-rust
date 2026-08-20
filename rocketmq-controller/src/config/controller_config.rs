@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -303,9 +302,9 @@ fn unknown_update_key(key: &str) -> RocketMQError {
 impl Default for ControllerConfig {
     fn default() -> Self {
         // Get ROCKETMQ_HOME from environment variable or use current directory
-        let rocketmq_home = env::var(ROCKETMQ_HOME_ENV)
+        let rocketmq_home = std::env::var(ROCKETMQ_HOME_ENV)
             .ok()
-            .or_else(|| env::var("rocketmq.home.dir").ok())
+            .or_else(|| std::env::var("rocketmq.home.dir").ok())
             .unwrap_or_else(EnvUtils::get_rocketmq_home);
 
         // Get user home directory

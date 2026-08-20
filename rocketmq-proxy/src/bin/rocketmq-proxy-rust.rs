@@ -14,7 +14,6 @@
 
 #![recursion_limit = "256"]
 
-use std::env;
 use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
@@ -473,7 +472,7 @@ struct Args {
 
 impl Args {
     fn parse() -> ProxyResult<Self> {
-        Self::parse_from(env::args())
+        Self::parse_from(std::env::args())
     }
 
     fn parse_from<I, S>(args: I) -> ProxyResult<Self>

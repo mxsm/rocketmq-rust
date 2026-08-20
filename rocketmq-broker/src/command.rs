@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -232,7 +231,7 @@ impl Args {
             return addr.clone();
         }
 
-        if let Ok(addr) = env::var("NAMESRV_ADDR") {
+        if let Ok(addr) = std::env::var("NAMESRV_ADDR") {
             if !addr.is_empty() {
                 return addr;
             }
@@ -253,7 +252,7 @@ impl Args {
         }
 
         // Try ROCKETMQ_HOME/conf/broker.toml
-        if let Ok(rocketmq_home) = env::var("ROCKETMQ_HOME") {
+        if let Ok(rocketmq_home) = std::env::var("ROCKETMQ_HOME") {
             let config_path = PathBuf::from(&rocketmq_home).join("conf").join("broker.toml");
             if config_path.exists() && config_path.is_file() {
                 info!(

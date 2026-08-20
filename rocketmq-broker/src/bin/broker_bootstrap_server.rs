@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
 use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -446,7 +445,7 @@ fn resolve_startup_log_filter(
 fn apply_command_line_args(raw_config: &mut RawBrokerConfig, args: &Args) {
     // Apply name server address only if explicitly provided via command line or env
     // Otherwise, keep the value from config file
-    if args.namesrv_addr.is_some() || env::var("NAMESRV_ADDR").is_ok() {
+    if args.namesrv_addr.is_some() || std::env::var("NAMESRV_ADDR").is_ok() {
         let namesrv_addr = args.get_namesrv_addr();
         raw_config.set_name_server_addresses(namesrv_addr);
         info!(

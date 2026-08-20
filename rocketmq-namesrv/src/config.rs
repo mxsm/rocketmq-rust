@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::env;
 
 use cheetah_string::CheetahString;
 use rocketmq_auth::AuthConfig;
@@ -505,7 +504,7 @@ mod defaults {
     use super::*;
 
     pub fn rocketmq_home() -> String {
-        env::var(ROCKETMQ_HOME_PROPERTY).unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
+        std::env::var(ROCKETMQ_HOME_PROPERTY).unwrap_or_else(|_| std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
     }
 
     pub fn kv_config_path() -> String {
@@ -1542,7 +1541,6 @@ pub fn is_tls_config_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::env;
 
     use super::*;
     use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
@@ -1554,7 +1552,8 @@ mod tests {
 
         assert_eq!(
             config.rocketmq_home,
-            env::var(ROCKETMQ_HOME_PROPERTY).unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
+            std::env::var(ROCKETMQ_HOME_PROPERTY)
+                .unwrap_or_else(|_| std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
         );
         assert_eq!(
             config.kv_config_path,

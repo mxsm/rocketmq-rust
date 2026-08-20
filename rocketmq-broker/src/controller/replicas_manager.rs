@@ -855,7 +855,6 @@ fn delete_metadata_file(path: &Path) -> RocketMQResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::time::Duration;
 
     use super::*;
@@ -875,7 +874,7 @@ mod tests {
 
     fn message_store_config_with_identity_path(suffix: &str) -> MessageStoreConfig {
         let mut config = MessageStoreConfig::default();
-        let path = env::temp_dir().join(format!("rocketmq-rust-controller-mode-{}-{}", suffix, current_millis()));
+        let path = std::env::temp_dir().join(format!("rocketmq-rust-controller-mode-{}-{}", suffix, current_millis()));
         config.store_path_broker_identity = Some(path.to_string_lossy().into_owned().into());
         config
     }

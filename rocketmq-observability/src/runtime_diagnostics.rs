@@ -19,7 +19,6 @@
 //! are configured. Plain HTTP on a non-loopback listener additionally requires
 //! an explicit development-only opt-in.
 
-use std::env;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::Component;
@@ -112,8 +111,8 @@ impl RuntimeDiagnosticsEndpointConfig {
         let bind_addr = optional_env(RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV)?;
         let token_file = optional_env(RUNTIME_DIAGNOSTICS_TOKEN_FILE_ENV)?;
         let (Some(bind_addr), Some(token_file)) = (bind_addr, token_file) else {
-            if env::var_os(RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV).is_some()
-                || env::var_os(RUNTIME_DIAGNOSTICS_TOKEN_FILE_ENV).is_some()
+            if std::env::var_os(RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV).is_some()
+                || std::env::var_os(RUNTIME_DIAGNOSTICS_TOKEN_FILE_ENV).is_some()
             {
                 return Err(ObservabilityError::invalid_config(
                     "runtime diagnostics bind address and token-file reference must be configured together",
@@ -437,7 +436,7 @@ fn validate_token_path(path: &Path) -> Result<(), ObservabilityError> {
 }
 
 fn optional_env(name: &'static str) -> Result<Option<String>, ObservabilityError> {
-    let Some(value) = env::var_os(name) else {
+    let Some(value) = std::env::var_os(name) else {
         return Ok(None);
     };
     value
