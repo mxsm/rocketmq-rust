@@ -140,6 +140,152 @@ pub struct PrometheusConfig {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservabilityOverrides {
+    pub environment: Option<String>,
+    pub service_instance_id: Option<String>,
+    pub resource_attributes: Option<HashMap<String, String>>,
+    pub metrics: MetricsOverrides,
+    pub traces: TracesOverrides,
+    pub logs: LogsOverrides,
+    pub otlp: OtlpOverrides,
+    pub prometheus: PrometheusOverrides,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsOverrides {
+    pub exporter: Option<MetricsExporter>,
+    pub export_interval_millis: Option<u64>,
+    pub export_timeout_millis: Option<u64>,
+    pub cardinality_limit: Option<usize>,
+    pub sample_ratio: Option<f64>,
+    pub topic_label_enabled: Option<bool>,
+    pub consumer_group_label_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct TracesOverrides {
+    pub exporter: Option<TraceExporter>,
+    pub sample_ratio: Option<f64>,
+    pub propagate_context: Option<bool>,
+    pub record_message_id: Option<bool>,
+    pub record_message_keys: Option<bool>,
+    pub record_body_size: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogsOverrides {
+    pub exporter: Option<LogsExporter>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct OtlpOverrides {
+    pub endpoint: Option<String>,
+    pub protocol: Option<OtlpProtocol>,
+    pub headers: Option<HashMap<String, String>>,
+    pub timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrometheusOverrides {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub path: Option<String>,
+}
+
+impl ObservabilityOverrides {
+    pub fn apply_to(&self, target: &mut ObservabilityConfig) {
+        if let Some(environment) = &self.environment {
+            target.environment = environment.clone();
+        }
+        if let Some(service_instance_id) = &self.service_instance_id {
+            target.service_instance_id = service_instance_id.clone();
+        }
+        if let Some(resource_attributes) = &self.resource_attributes {
+            target.resource_attributes = resource_attributes.clone();
+        }
+
+        if let Some(exporter) = self.metrics.exporter {
+            target.metrics.exporter = exporter;
+            target.metrics.enabled = exporter.is_enabled();
+        }
+        if let Some(export_interval_millis) = self.metrics.export_interval_millis {
+            target.metrics.export_interval_millis = export_interval_millis;
+        }
+        if let Some(export_timeout_millis) = self.metrics.export_timeout_millis {
+            target.metrics.export_timeout_millis = export_timeout_millis;
+        }
+        if let Some(cardinality_limit) = self.metrics.cardinality_limit {
+            target.metrics.cardinality_limit = cardinality_limit;
+        }
+        if let Some(sample_ratio) = self.metrics.sample_ratio {
+            target.metrics.sample_ratio = sample_ratio;
+        }
+        if let Some(topic_label_enabled) = self.metrics.topic_label_enabled {
+            target.metrics.topic_label_enabled = topic_label_enabled;
+        }
+        if let Some(consumer_group_label_enabled) = self.metrics.consumer_group_label_enabled {
+            target.metrics.consumer_group_label_enabled = consumer_group_label_enabled;
+        }
+
+        if let Some(exporter) = self.traces.exporter {
+            target.traces.exporter = exporter;
+            target.traces.enabled = !matches!(exporter, TraceExporter::Disable);
+        }
+        if let Some(sample_ratio) = self.traces.sample_ratio {
+            target.traces.sample_ratio = sample_ratio;
+        }
+        if let Some(propagate_context) = self.traces.propagate_context {
+            target.traces.propagate_context = propagate_context;
+        }
+        if let Some(record_message_id) = self.traces.record_message_id {
+            target.traces.record_message_id = record_message_id;
+        }
+        if let Some(record_message_keys) = self.traces.record_message_keys {
+            target.traces.record_message_keys = record_message_keys;
+        }
+        if let Some(record_body_size) = self.traces.record_body_size {
+            target.traces.record_body_size = record_body_size;
+        }
+
+        if let Some(exporter) = self.logs.exporter {
+            target.logs.exporter = exporter;
+            target.logs.enabled = !matches!(exporter, LogsExporter::Disable);
+        }
+
+        if let Some(endpoint) = &self.otlp.endpoint {
+            target.otlp.endpoint = endpoint.clone();
+        }
+        if let Some(protocol) = self.otlp.protocol {
+            target.otlp.protocol = protocol;
+        }
+        if let Some(headers) = &self.otlp.headers {
+            target.otlp.headers = headers.clone();
+        }
+        if let Some(timeout_millis) = self.otlp.timeout_millis {
+            target.otlp.timeout_millis = timeout_millis;
+        }
+
+        if let Some(host) = &self.prometheus.host {
+            target.prometheus.host = host.clone();
+        }
+        if let Some(port) = self.prometheus.port {
+            target.prometheus.port = port;
+        }
+        if let Some(path) = &self.prometheus.path {
+            target.prometheus.path = path.clone();
+        }
+
+        target.enabled = target.metrics.enabled || target.traces.enabled || target.logs.enabled;
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricsExporter {
