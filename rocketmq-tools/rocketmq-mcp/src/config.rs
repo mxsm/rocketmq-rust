@@ -326,6 +326,19 @@ impl McpConfig {
 }
 
 fn redacted_deserialization_error(error: config::ConfigError) -> McpError {
+    fn redacted_key(key: &str) -> &str {
+        for protected_path in ["observability.otlp.headers", "observability.resourceAttributes"] {
+            if key == protected_path
+                || key
+                    .strip_prefix(protected_path)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+            {
+                return protected_path;
+            }
+        }
+        key
+    }
+
     fn type_context<'a>(
         error: &'a config::ConfigError,
         inherited_key: Option<&'a str>,
@@ -339,6 +352,7 @@ fn redacted_deserialization_error(error: config::ConfigError) -> McpError {
 
     match type_context(&error, None) {
         Some((Some(key), expected)) => {
+            let key = redacted_key(key);
             McpError::InvalidConfig(format!("MCP configuration value for `{key}` must be {expected}"))
         }
         Some((None, expected)) => McpError::InvalidConfig(format!("MCP configuration value must be {expected}")),
@@ -1061,6 +1075,47 @@ headers = {{ authorization = "{HEADER_SENTINEL}" }}
             saw_typed_key_context,
             "typed errors should retain their non-sensitive key context"
         );
+    }
+
+    #[test]
+    fn nested_observability_map_type_errors_redact_custom_keys() {
+        const HEADER_KEY_SENTINEL: &str = "secret-header-key-sentinel";
+        const RESOURCE_KEY_SENTINEL: &str = "secret-resource-key-sentinel";
+        const INVALID_VALUE_SENTINEL: &str = "secret-nested-value-sentinel";
+        let cases = [
+            (
+                String::new(),
+                format!(
+                    r#"
+
+[observability.otlp]
+headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
+"#
+                ),
+                "observability.otlp.headers",
+                HEADER_KEY_SENTINEL,
+            ),
+            (
+                format!(r#"resourceAttributes = {{ "{RESOURCE_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}"#),
+                String::new(),
+                "observability.resourceAttributes",
+                RESOURCE_KEY_SENTINEL,
+            ),
+        ];
+
+        for (observability_root, nested_override, expected_path, key_sentinel) in cases {
+            let (_temp, config_path) = write_example_config_with(&observability_root, &nested_override);
+            let error = McpConfig::load(&config_path).expect_err("non-string observability map values must fail");
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+
+            assert!(display.contains(expected_path));
+            assert!(display.contains("must be"));
+            for output in [&display, &debug] {
+                assert!(!output.contains(key_sentinel));
+                assert!(!output.contains(INVALID_VALUE_SENTINEL));
+            }
+        }
     }
 
     #[test]

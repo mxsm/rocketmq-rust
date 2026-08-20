@@ -795,15 +795,17 @@ mod tests {
     fn mcp_trace_sample_ratio_environment_overrides_file_and_redacts_invalid_values() {
         let mut config = example_config();
         config.observability.traces.sample_ratio = Some(0.4);
-        let environment = rocketmq_observability::TelemetryEnvironmentValues {
-            trace_sample_ratio: Some("  0.25  ".into()),
-            ..Default::default()
-        };
-        let resolution =
-            resolve_mcp_telemetry_values(&config, &environment).expect("MCP trace sample ratio should resolve");
-        assert_eq!(resolution.bootstrap.observability.traces.sample_ratio, 0.25);
+        for (environment_value, expected) in [("0", 0.0), ("  1.0  ", 1.0)] {
+            let environment = rocketmq_observability::TelemetryEnvironmentValues {
+                trace_sample_ratio: Some(environment_value.into()),
+                ..Default::default()
+            };
+            let resolution = resolve_mcp_telemetry_values(&config, &environment)
+                .expect("MCP boundary trace sample ratio should resolve");
+            assert_eq!(resolution.bootstrap.observability.traces.sample_ratio, expected);
+        }
 
-        for invalid_value in ["-0.1", "1.1", "NaN", "inf", "secret-sample-ratio-sentinel"] {
+        for invalid_value in ["-0.1", "1.1", "NaN", "inf"] {
             let invalid_environment = rocketmq_observability::TelemetryEnvironmentValues {
                 trace_sample_ratio: Some(invalid_value.into()),
                 ..Default::default()
@@ -813,6 +815,21 @@ mod tests {
                 .to_string();
             assert!(error.contains("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"));
             assert!(!error.contains(invalid_value));
+        }
+
+        for invalid_value in ["", "   ", "secret-sample-ratio-sentinel"] {
+            let invalid_environment = rocketmq_observability::TelemetryEnvironmentValues {
+                trace_sample_ratio: Some(invalid_value.into()),
+                ..Default::default()
+            };
+            let error = resolve_mcp_telemetry_values(&config, &invalid_environment)
+                .expect_err("empty or non-numeric MCP trace sample ratio should fail")
+                .to_string();
+            assert_eq!(
+                error,
+                "invalid configuration: invalid MCP telemetry configuration: invalid observability config: \
+                 ROCKETMQ_MCP_TRACE_SAMPLE_RATIO must be a floating-point number"
+            );
         }
     }
 
