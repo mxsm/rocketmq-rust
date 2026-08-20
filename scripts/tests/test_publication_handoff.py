@@ -10,6 +10,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 
@@ -159,6 +160,64 @@ class PublicationHandoffTests(unittest.TestCase):
             )
             self.assertEqual("passed", report["status"])
 
+    def test_platform_verification_executes_manifest_archive_binaries(self) -> None:
+        """A missing archive smoke call must not be reported as a passed H01 result."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            draft = self.builder.build_draft(
+                fixture["candidate_manifest"],
+                fixture["candidate_root"],
+                fixture["source_root"],
+                fixture["output_root"],
+                SOURCE_MAP,
+            )
+            target = "x86_64-unknown-linux-gnu"
+            layout = json.loads(
+                (ROOT / "distribution" / "release-layout.json").read_text(encoding="utf-8")
+            )
+            binaries = {
+                entry.get("archive_binary", entry["binary"]): entry for entry in layout["binaries"]
+            }
+
+            def version_result(command, **_kwargs):
+                binary = binaries[Path(command[0]).name]
+                return mock.Mock(
+                    returncode=0,
+                    stdout=(
+                        f"component={binary['id']}\n"
+                        "version=1.0.0\n"
+                        f"artifact_id=final-1.{target}.{binary['id']}\n"
+                        f"requested_features={','.join(binary['requested_features'])}\n"
+                        f"effective_features={','.join(binary['effective_features'])}\n"
+                    ),
+                    stderr="",
+                )
+
+            with mock.patch("subprocess.run", side_effect=version_result):
+                report = self.verifier.verify_handoff(
+                    draft,
+                    fixture["candidate_manifest"],
+                    fixture["candidate_root"],
+                    fixture["source_root"],
+                    mode="draft-pre-ready",
+                    result_id="H01-LINUX",
+                    platform="linux",
+                    worker_id="handoff-linux",
+                )
+
+            self.assertIn("archive_smoke_results", report)
+            self.assertEqual(
+                ["admin", "broker", "controller", "namesrv", "proxy", "store-inspect"],
+                sorted(result["component"] for result in report["archive_smoke_results"]),
+            )
+            self.assertTrue(
+                all(result["exit_code"] == 0 for result in report["archive_smoke_results"])
+            )
+            self.assertTrue(
+                all("version=1.0.0" in result["stdout"] for result in report["archive_smoke_results"])
+            )
+
     @staticmethod
     def _add_tar(path: Path, files: dict[str, bytes]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -186,15 +245,7 @@ class PublicationHandoffTests(unittest.TestCase):
             json.dumps({"schema_version": 1, "remote_publication": "not-executed"}), encoding="utf-8"
         )
 
-        archive_payload = {"rocketmq-rust/README.md": b"local archive\n"}
-        if nested_secret:
-            archive_payload["rocketmq-rust/private.pem"] = b"-----BEGIN PRIVATE KEY-----\nsecret\n"
-        cls._add_tar(candidate_root / "archives" / "linux" / "rocketmq-rust.tar.gz", archive_payload)
-        cls._add_tar(candidate_root / "archives" / "macos" / "rocketmq-rust.tar.gz", archive_payload)
-        windows = candidate_root / "archives" / "windows" / "rocketmq-rust.zip"
-        windows.parent.mkdir(parents=True)
-        with zipfile.ZipFile(windows, "w") as archive:
-            archive.writestr("rocketmq-rust/README.md", "local archive\n")
+        cls._add_release_archives(candidate_root, nested_secret=nested_secret)
 
         for service in ("namesrv", "broker", "controller", "proxy"):
             oci = candidate_root / "oci" / service
@@ -311,6 +362,67 @@ class PublicationHandoffTests(unittest.TestCase):
             "source_root": source_root,
             "output_root": output_root,
         }
+
+    @classmethod
+    def _add_release_archives(cls, candidate_root: Path, *, nested_secret: bool) -> None:
+        layout = json.loads(
+            (ROOT / "distribution" / "release-layout.json").read_text(encoding="utf-8")
+        )
+        package_root = "rocketmq-rust-1.0.0"
+        for target, target_spec in layout["targets"].items():
+            suffix = target_spec["executable_suffix"]
+            files: dict[str, bytes] = {}
+            binary_records = []
+            for binary in layout["binaries"]:
+                name = binary.get("archive_binary", binary["binary"])
+                files[f"bin/{name}{suffix}"] = b"fixture executable\n"
+                binary_records.append(
+                    {
+                        "component": binary["id"],
+                        "requested_features": binary["requested_features"],
+                        "effective_features": binary["effective_features"],
+                        "required_dependencies": binary.get("required_dependencies", []),
+                    }
+                )
+            for service in layout["configs"]:
+                files[f"conf/{service}.toml"] = b"[service]\n"
+            if nested_secret and target == "x86_64-unknown-linux-gnu":
+                files["private.pem"] = b"-----BEGIN PRIVATE KEY-----\nsecret\n"
+            inventory = [
+                {"path": path, "type": "directory", "size": 0}
+                for path in ("bin", "conf")
+            ] + [
+                {"path": path, "type": "file", "size": len(content)}
+                for path, content in files.items()
+            ]
+            inventory.sort(key=lambda item: item["path"])
+            archive_name = f"rocketmq-rust-1.0.0-{target}"
+            archive_path = candidate_root / "archives" / (
+                f"{archive_name}.zip" if target_spec["archive_format"] == "zip" else f"{archive_name}.tar.gz"
+            )
+            payload = {f"{package_root}/{path}": content for path, content in files.items()}
+            if target_spec["archive_format"] == "zip":
+                with zipfile.ZipFile(archive_path, "w") as archive:
+                    for path, content in payload.items():
+                        archive.writestr(path, content)
+            else:
+                cls._add_tar(archive_path, payload)
+            manifest = {
+                "schema_version": 1,
+                "candidate_id": "final-1",
+                "version": "1.0.0",
+                "run_id": "run-1",
+                "attempt": 1,
+                "target": target,
+                "artifact_id": f"final-1.{target}.archive",
+                "archive": f"archives/{archive_path.name}",
+                "files": inventory,
+                "binaries": binary_records,
+                "remote_publication": "not-executed",
+            }
+            (candidate_root / "archives" / f"{archive_name}.manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
 
 
 if __name__ == "__main__":

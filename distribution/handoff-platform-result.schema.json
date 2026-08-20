@@ -15,6 +15,9 @@
     "platform",
     "target",
     "archive_id",
+    "archive",
+    "archive_manifest",
+    "archive_smoke_results",
     "status",
     "skipped",
     "assertions"
@@ -30,6 +33,23 @@
     "platform": { "enum": ["linux", "windows", "macos"] },
     "target": { "type": "string", "minLength": 1 },
     "archive_id": { "type": "string", "minLength": 1 },
+    "archive": { "type": "string", "minLength": 1 },
+    "archive_manifest": { "type": "string", "minLength": 1 },
+    "archive_smoke_results": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component", "exit_code", "stdout"],
+        "properties": {
+          "component": { "type": "string", "minLength": 1 },
+          "exit_code": { "const": 0 },
+          "stdout": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "status": { "const": "passed" },
     "skipped": { "const": false },
     "assertions": { "type": "array", "minItems": 1 },

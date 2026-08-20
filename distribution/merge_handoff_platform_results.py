@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "distribution") not in sys.path:
     sys.path.insert(0, str(ROOT / "distribution"))
 
+from release_archive_common import artifact_id, load_layout, require_relative_path
 from release_state import ReleaseStateError, atomic_write_json, ensure_no_digest_fields, read_json, validate_candidate
 
 
@@ -60,6 +61,47 @@ def _load_one(root: Path, result_id: str, candidate: dict[str, Any]) -> dict[str
         or any(item.get("status") != "passed" for item in result["assertions"] if isinstance(item, dict))
     ):
         raise PlatformMergeError(f"platform result is incomplete or not passed: {result_id}")
+    if result.get("archive_id") != artifact_id(candidate, target, "archive"):
+        raise PlatformMergeError(f"platform archive identity mismatch: {result_id}")
+    layout = load_layout()
+    extension = ".zip" if layout["targets"][target]["archive_format"] == "zip" else ".tar.gz"
+    expected_paths = {
+        "archive": f"archives/rocketmq-rust-{candidate['version']}-{target}{extension}",
+        "archive_manifest": f"archives/rocketmq-rust-{candidate['version']}-{target}.manifest.json",
+    }
+    for field in ("archive", "archive_manifest"):
+        try:
+            relative = require_relative_path(result.get(field), f"platform {field}")
+        except ReleaseStateError as error:
+            raise PlatformMergeError(str(error)) from error
+        if not relative.parts or relative.parts[0] != "archives":
+            raise PlatformMergeError(f"platform {field} is outside the archive layout: {result_id}")
+        if relative.as_posix() != expected_paths[field]:
+            raise PlatformMergeError(f"platform archive path mismatch: {result_id}:{field}")
+    smoke_results = result.get("archive_smoke_results")
+    expected_components = {entry["id"]: entry for entry in layout["binaries"]}
+    if not isinstance(smoke_results, list) or len(smoke_results) != len(expected_components):
+        raise PlatformMergeError(f"platform binary smoke denominator is incomplete: {result_id}")
+    components = {
+        entry.get("component"): entry for entry in smoke_results if isinstance(entry, dict)
+    }
+    if set(components) != set(expected_components) or len(components) != len(smoke_results):
+        raise PlatformMergeError(f"platform binary smoke denominator is invalid: {result_id}")
+    for component, binary in expected_components.items():
+        entry = components[component]
+        stdout = entry.get("stdout")
+        required_output = {
+            f"version={candidate['version']}",
+            f"artifact_id={artifact_id(candidate, target, component)}",
+            f"requested_features={','.join(binary['requested_features'])}",
+            f"effective_features={','.join(binary['effective_features'])}",
+        }
+        if (
+            entry.get("exit_code") != 0
+            or not isinstance(stdout, str)
+            or any(value not in stdout for value in required_output)
+        ):
+            raise PlatformMergeError(f"platform binary smoke result is invalid: {result_id}:{component}")
     worker = result.get("worker_id")
     if not isinstance(worker, str) or not worker:
         raise PlatformMergeError(f"platform result has no worker identity: {result_id}")

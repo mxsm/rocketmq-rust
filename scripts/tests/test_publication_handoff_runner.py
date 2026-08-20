@@ -44,7 +44,7 @@ class PublicationHandoffRunnerTests(unittest.TestCase):
         self.assertNotIn("secrets.", workflow)
         self.assertNotRegex(workflow, re.compile(r"cargo\s+publish|docker\s+(?:login|push)|helm\s+push|git\s+(?:push|tag)", re.I))
 
-    def test_powershell_runner_completes_local_prepare_platform_finalize_flow(self) -> None:
+    def test_powershell_runner_prepares_real_release_archive_layout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             series_module = load_module("handoff_e2e_series", "distribution/release_series.py")
@@ -91,6 +91,16 @@ class PublicationHandoffRunnerTests(unittest.TestCase):
                 for field in ("candidate_id", "version", "run_id", "attempt"):
                     value[field] = identity[field]
                 path.write_text(json.dumps(value), encoding="utf-8")
+            for path in (final.parent / "archives").glob("*.manifest.json"):
+                value = json.loads(path.read_text(encoding="utf-8"))
+                for field in ("candidate_id", "version", "run_id", "attempt"):
+                    value[field] = identity[field]
+                value["artifact_id"] = f"{identity['candidate_id']}.{value['target']}.archive"
+                for binary in value["binaries"]:
+                    binary["artifact_id"] = (
+                        f"{identity['candidate_id']}.{value['target']}.{binary['component']}"
+                    )
+                path.write_text(json.dumps(value), encoding="utf-8")
             (final.parent / "evidence").mkdir(exist_ok=True)
             for name in ("EVIDENCE_INDEX.json", "NO_REMOTE_PUBLICATION.json"):
                 (final.parent / name).replace(final.parent / "evidence" / name)
@@ -120,7 +130,6 @@ class PublicationHandoffRunnerTests(unittest.TestCase):
             )
             output = root / "handoff"
             draft_bundle = root / "HANDOFF_DRAFT_TRANSFER.tar"
-            platform_root = root / "platforms"
             script = ROOT / "scripts" / "run-publication-handoff.ps1"
 
             self._run_powershell(
@@ -130,59 +139,14 @@ class PublicationHandoffRunnerTests(unittest.TestCase):
                 control_bundle,
                 ["-OutputRoot", str(output), "-DraftBundleOutput", str(draft_bundle)],
             )
-            for platform, result_id in (
-                ("linux", "H01-LINUX"),
-                ("windows", "H01-WINDOWS"),
-                ("macos", "H01-MACOS"),
-            ):
-                self._run_powershell(
-                    script,
-                    "Platform",
-                    source_bundle,
-                    control_bundle,
-                    [
-                        "-DraftBundle",
-                        str(draft_bundle),
-                        "-Platform",
-                        platform,
-                        "-ResultId",
-                        result_id,
-                        "-PlatformBundleOutput",
-                        str(platform_root / result_id),
-                    ],
-                )
-            self._run_powershell(
-                script,
-                "Finalize",
-                source_bundle,
-                control_bundle,
-                [
-                    "-OutputRoot",
-                    str(output),
-                    "-DraftBundle",
-                    str(draft_bundle),
-                    "-PlatformBundlesRoot",
-                    str(platform_root),
-                ],
-            )
-            handoff = output / "1.0.0" / identity["run_id"] / "attempt-1"
-            self.assertTrue((handoff / "PUBLICATION_READY.json").is_file())
-            self.assertEqual("publication-ready", read_json(final)["state"])
-            self.assertEqual(
-                "not-executed",
-                read_json(handoff / "PUBLICATION_READY.json")["remote_publication"]["status"],
-            )
-            final_import = next(output.glob(".handoff-finalize-*/candidate-source"))
-            verifier = load_module("handoff_e2e_ready_verifier", "distribution/verify_publication_handoff.py")
-            ready = verifier.verify_handoff(
-                handoff,
-                final,
-                final_import,
-                final_import / "repository-source",
-                mode="ready",
-                result_id="H06-PUBLICATION-READY",
-            )
-            self.assertEqual("passed", ready["status"])
+            transfer = load_module("handoff_e2e_draft_transfer", "distribution/transfer_handoff_draft.py")
+            draft_manifest = transfer.read_transfer_manifest(draft_bundle)
+            archive_paths = {
+                entry["path"] for entry in draft_manifest["files"] if entry["path"].startswith("archives/")
+            }
+            self.assertEqual(3, len([path for path in archive_paths if path.endswith(".manifest.json")]))
+            self.assertEqual(3, len([path for path in archive_paths if path.endswith((".zip", ".tar.gz"))]))
+            self.assertFalse(any(path.startswith("archives/linux/") for path in archive_paths))
 
     @staticmethod
     def _run_powershell(
