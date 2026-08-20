@@ -536,7 +536,11 @@ where
     }
 
     pub(crate) fn consumer_lag_targets(&self) -> Vec<ConsumerLagTarget> {
-        self.consumer_lag_targets_with_limit(self.broker_config.metrics_cardinality_limit)
+        self.consumer_lag_targets_with_limit(
+            rocketmq_observability::ObservabilityConfig::default()
+                .metrics
+                .cardinality_limit,
+        )
     }
 
     fn consumer_lag_targets_with_limit(&self, limit: usize) -> Vec<ConsumerLagTarget> {

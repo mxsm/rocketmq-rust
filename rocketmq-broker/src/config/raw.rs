@@ -17,6 +17,7 @@ use cheetah_string::CheetahString;
 use config::Config;
 use config::File;
 use rocketmq_observability::LoggingOverrides;
+use rocketmq_observability::ObservabilityOverrides;
 use rocketmq_observability::ReloadConfig;
 use rocketmq_store::MessageStoreConfig;
 use serde::Deserialize;
@@ -26,9 +27,9 @@ use super::error::BrokerConfigError;
 
 /// Deserialization-only representation of one canonical broker configuration file.
 ///
-/// The canonical schema has explicit `[broker]`, `[store]`, and `[logging]`
-/// sections. This type cannot be passed to the running broker; callers must
-/// validate it into [`super::validated::ValidatedBrokerConfig`].
+/// The canonical schema has explicit `[broker]`, `[store]`, `[logging]`, and
+/// `[observability]` sections. This type cannot be passed to the running broker;
+/// callers must validate it into [`super::validated::ValidatedBrokerConfig`].
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct RawBrokerConfig {
@@ -36,6 +37,7 @@ pub struct RawBrokerConfig {
     store: MessageStoreConfig,
     logging: RawLoggingConfig,
     log_filter: Option<String>,
+    observability: ObservabilityOverrides,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -170,10 +172,17 @@ impl RawBrokerConfig {
         self.broker.namesrv_addr = Some(addresses.into());
     }
 
-    pub(crate) fn into_normalized_parts(mut self) -> (BrokerConfig, MessageStoreConfig, LoggingOverrides) {
+    pub(crate) fn into_normalized_parts(
+        mut self,
+    ) -> (
+        BrokerConfig,
+        MessageStoreConfig,
+        LoggingOverrides,
+        ObservabilityOverrides,
+    ) {
         normalize_config_parts(&mut self.broker, &mut self.store);
         let logging = self.logging_overrides();
-        (self.broker, self.store, logging)
+        (self.broker, self.store, logging, self.observability)
     }
 }
 

@@ -1098,9 +1098,7 @@ impl BrokerRuntime {
                 broker_config.broker_identity.broker_cluster_name.to_string(),
                 broker_config.broker_identity.get_canonical_name(),
             )),
-            crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(
-                broker_config.metrics_sample_ratio,
-            ),
+            crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::default(),
         )
         .map(Arc::new);
         #[cfg(feature = "otel-metrics")]

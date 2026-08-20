@@ -160,12 +160,19 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
         return Ok(());
     }
 
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-broker")
-            .context("failed to validate Broker release identity and metrics configuration")?;
     let mut bootstrap_config = build_broker_telemetry_bootstrap_config(broker_config);
-    process_telemetry.apply_to(&mut bootstrap_config.observability);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
+    let telemetry_resolution = rocketmq_observability::resolve_telemetry_from_env(
+        "rocketmq-broker",
+        bootstrap_config,
+        validated_config.observability(),
+        rocketmq_observability::TelemetryEnvironmentSpec {
+            trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
+        },
+    )
+    .context("failed to resolve Broker telemetry configuration")?;
+    let process_telemetry = telemetry_resolution.process;
+    let bootstrap_config = telemetry_resolution.bootstrap;
 
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
@@ -181,8 +188,6 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, logging_overrides, environment_filter.as_deref())
         .context("failed to resolve broker log filter")?;
-    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
-        .context("failed to apply standard OTLP environment to broker telemetry")?;
     let telemetry_guard =
         rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
             .context("failed to initialize broker telemetry bootstrap")?;
@@ -666,7 +671,7 @@ mod tests {
             ha_listen_address: IpAddr::from([127, 0, 0, 1]),
             ..MessageStoreConfig::default()
         };
-        let mut observability = build_broker_telemetry_bootstrap_config(&broker).observability;
+        let observability = build_broker_telemetry_bootstrap_config(&broker).observability;
 
         validate_broker_security(
             &security,
@@ -681,12 +686,21 @@ mod tests {
         assert!(validate_broker_security(&security, &broker, &store, &observability, None).is_err());
         store.ha_listen_address = IpAddr::from([127, 0, 0, 1]);
 
-        broker.metrics_exporter_type = rocketmq_observability::MetricsExporterType::Prom;
-        broker.metrics_prom_exporter_host = "0.0.0.0".into();
-        observability = build_broker_telemetry_bootstrap_config(&broker).observability;
-        assert!(validate_broker_security(&security, &broker, &store, &observability, None).is_err());
-        broker.metrics_exporter_type = rocketmq_observability::MetricsExporterType::Disable;
-        observability = build_broker_telemetry_bootstrap_config(&broker).observability;
+        let prometheus_overrides = rocketmq_observability::ObservabilityOverrides {
+            metrics: rocketmq_observability::MetricsOverrides {
+                exporter: Some(rocketmq_observability::MetricsExporter::Prometheus),
+                ..Default::default()
+            },
+            prometheus: rocketmq_observability::PrometheusOverrides {
+                host: Some("0.0.0.0".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let prometheus_observability =
+            rocketmq_broker::build_broker_telemetry_bootstrap_config_with_overrides(&broker, &prometheus_overrides)
+                .observability;
+        assert!(validate_broker_security(&security, &broker, &store, &prometheus_observability, None).is_err());
 
         broker.broker_server_config.bind_address = "0.0.0.0".to_string();
         assert!(validate_broker_security(&security, &broker, &store, &observability, None).is_err());
@@ -694,20 +708,27 @@ mod tests {
 
     #[test]
     fn broker_release_identity_config_is_applied_before_bootstrap() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-broker",
-                Some("0123456789abcdef0123456789abcdef01234567"),
-                Some("rollout-07"),
-                Some("true"),
-                Some("prometheus"),
-                Some("127.0.0.1:5557"),
-                Some("/metrics"),
-            )
-            .expect("valid Broker process telemetry");
-        let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&BrokerConfig::default());
-
-        process_telemetry.apply_to(&mut bootstrap_config.observability);
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            release_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            release_nonce: Some("rollout-07".into()),
+            metrics_enabled: Some("true".into()),
+            metrics_exporter: Some("prometheus".into()),
+            metrics_bind_addr: Some("127.0.0.1:5557".into()),
+            metrics_path: Some("/metrics".into()),
+            ..Default::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-broker",
+            build_broker_telemetry_bootstrap_config(&BrokerConfig::default()),
+            &rocketmq_observability::ObservabilityOverrides::default(),
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec {
+                trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
+            },
+        )
+        .expect("valid Broker process telemetry");
+        let process_telemetry = resolution.process;
+        let bootstrap_config = resolution.bootstrap;
 
         assert_eq!(process_telemetry.release_identity().service(), "rocketmq-broker");
         assert!(bootstrap_config.observability.enabled);

@@ -314,28 +314,47 @@ fn next_controller_test_temp_id() -> u64 {
 
 #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
 #[test]
-fn build_broker_observability_config_maps_otlp_settings() {
-    let broker_config = BrokerConfig {
-        metrics_exporter_type: rocketmq_observability::MetricsExporterType::OtlpGrpc,
-        trace_exporter_type: rocketmq_observability::TraceExporterType::OtlpGrpc,
-        log_exporter_type: rocketmq_observability::LogExporterType::OtlpGrpc,
-        observability_environment: "prod".into(),
-        observability_service_instance_id: "broker-a-0".into(),
-        observability_resource_attributes: "zone:az-a,rack:rack-1".into(),
-        otlp_exporter_endpoint: "http://collector:4317".into(),
-        otlp_exporter_headers: "authorization:Bearer token,tenant:rocketmq".into(),
-        otlp_exporter_timeout_millis: 1_500,
-        metrics_cardinality_limit: 64,
-        metrics_sample_ratio: 0.25,
-        metrics_topic_label_enabled: false,
-        metrics_consumer_group_label_enabled: true,
-        trace_record_message_id: true,
-        trace_record_message_keys: true,
-        trace_record_body_size: false,
+fn build_broker_observability_config_applies_file_overrides() {
+    let overrides = rocketmq_observability::ObservabilityOverrides {
+        environment: Some("prod".to_string()),
+        service_instance_id: Some("broker-a-0".to_string()),
+        resource_attributes: Some(HashMap::from([
+            ("zone".to_string(), "az-a".to_string()),
+            ("rack".to_string(), "rack-1".to_string()),
+        ])),
+        metrics: rocketmq_observability::MetricsOverrides {
+            exporter: Some(rocketmq_observability::MetricsExporter::OtlpGrpc),
+            export_timeout_millis: Some(1_500),
+            cardinality_limit: Some(64),
+            sample_ratio: Some(0.25),
+            topic_label_enabled: Some(false),
+            consumer_group_label_enabled: Some(true),
+            ..Default::default()
+        },
+        traces: rocketmq_observability::TracesOverrides {
+            exporter: Some(rocketmq_observability::TraceExporter::OtlpGrpc),
+            record_message_id: Some(true),
+            record_message_keys: Some(true),
+            record_body_size: Some(false),
+            ..Default::default()
+        },
+        logs: rocketmq_observability::LogsOverrides {
+            exporter: Some(rocketmq_observability::LogsExporter::OtlpGrpc),
+        },
+        otlp: rocketmq_observability::OtlpOverrides {
+            endpoint: Some("http://collector:4317".to_string()),
+            headers: Some(HashMap::from([
+                ("authorization".to_string(), "Bearer token".to_string()),
+                ("tenant".to_string(), "rocketmq".to_string()),
+            ])),
+            timeout_millis: Some(1_500),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
-    let config = build_broker_observability_config(&broker_config);
+    let config =
+        build_broker_telemetry_bootstrap_config_with_overrides(&BrokerConfig::default(), &overrides).observability;
 
     assert!(config.enabled);
     assert!(config.metrics.enabled);
@@ -369,7 +388,6 @@ fn build_broker_observability_config_maps_otlp_settings() {
 fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
     let broker_config = BrokerConfig {
         store_path_root_dir: "target/broker-telemetry-bootstrap".into(),
-        log_exporter_type: rocketmq_observability::LogExporterType::Log,
         ..Default::default()
     };
 
@@ -379,8 +397,8 @@ fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
         config.observability.subscriber_install_policy,
         rocketmq_observability::SubscriberInstallPolicy::Required
     );
-    assert!(config.observability.enabled);
-    assert!(config.observability.logs.enabled);
+    assert!(!config.observability.enabled);
+    assert!(!config.observability.logs.enabled);
     assert!(config.logging.enabled);
     assert_eq!(config.logging.filter, "info");
     assert!(config.logging.console.enabled);
@@ -396,16 +414,24 @@ fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
 
 #[test]
 fn broker_bootstrap_accepts_standard_otlp_environment_values() {
-    let mut config = build_broker_telemetry_bootstrap_config(&BrokerConfig::default());
-
-    let status = rocketmq_observability::apply_standard_otlp_environment_values(
-        &mut config,
-        Some(std::ffi::OsStr::new("http://collector:4317")),
-        Some(std::ffi::OsStr::new("grpc")),
+    let environment = rocketmq_observability::TelemetryEnvironmentValues {
+        otlp_endpoint: Some("http://collector:4317".into()),
+        otlp_protocol: Some("grpc".into()),
+        ..Default::default()
+    };
+    let resolution = rocketmq_observability::resolve_telemetry_values(
+        "rocketmq-broker",
+        build_broker_telemetry_bootstrap_config(&BrokerConfig::default()),
+        &rocketmq_observability::ObservabilityOverrides::default(),
+        &environment,
+        rocketmq_observability::TelemetryEnvironmentSpec {
+            trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
+        },
     )
-    .expect("valid standard OTLP environment should apply");
+    .expect("valid standard OTLP environment should resolve");
+    let config = resolution.bootstrap;
 
-    assert_eq!(status, rocketmq_observability::StandardOtlpEnvironmentStatus::Applied);
+    assert!(resolution.environment_applied);
     assert_eq!(config.observability.service_name, "rocketmq-broker");
     assert_eq!(
         config.observability.metrics.exporter,
@@ -419,6 +445,34 @@ fn broker_bootstrap_accepts_standard_otlp_environment_values() {
         config.observability.logs.exporter,
         rocketmq_observability::LogsExporter::OtlpGrpc
     );
+}
+
+#[cfg(feature = "otel-metrics")]
+#[test]
+fn broker_runtime_observability_registration_uses_injected_handle_metrics_policy() {
+    let mut telemetry_config = rocketmq_observability::ObservabilityConfig {
+        enabled: true,
+        ..rocketmq_observability::ObservabilityConfig::default()
+    };
+    telemetry_config.metrics.enabled = true;
+    telemetry_config.metrics.exporter = rocketmq_observability::MetricsExporter::Log;
+    let telemetry_guard =
+        rocketmq_observability::init_observability(&telemetry_config).expect("log metrics telemetry should initialize");
+    let telemetry_handle = telemetry_guard.handle();
+    assert!(telemetry_handle.metrics_enabled());
+
+    let mut runtime = BrokerRuntime::new_with_validated_config_and_telemetry(
+        Arc::new(ValidatedBrokerConfig::default()),
+        crate::test_service_context("broker-final-metrics-policy"),
+        telemetry_handle,
+    );
+    runtime.initialize_observability();
+
+    assert!(runtime.composition.state.observability_metrics_initialized);
+    telemetry_guard
+        .shutdown()
+        .into_result()
+        .expect("test telemetry should shut down");
 }
 
 #[test]

@@ -25,7 +25,6 @@ pub enum ConfigSection {
     Storage,
     Security,
     Resources,
-    Telemetry,
 }
 
 impl fmt::Display for ConfigSection {
@@ -37,7 +36,6 @@ impl fmt::Display for ConfigSection {
             Self::Storage => "storage",
             Self::Security => "security",
             Self::Resources => "resources",
-            Self::Telemetry => "telemetry",
         };
         formatter.write_str(name)
     }

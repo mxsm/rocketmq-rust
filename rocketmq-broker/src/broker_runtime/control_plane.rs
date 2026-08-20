@@ -31,17 +31,7 @@ impl BrokerControlPlane {
 
 impl BrokerRuntime {
     pub(super) fn initialize_observability(&mut self) {
-        let broker_config = self.composition.state.broker_config();
-        let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
-        if let Err(error) = rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config) {
-            warn!("Failed to apply broker OTLP environment: {error}");
-            #[cfg(feature = "otel-metrics")]
-            return;
-        }
-        #[cfg(feature = "otel-metrics")]
-        let config = &bootstrap_config.observability;
-        #[cfg(feature = "otel-metrics")]
-        if !config.enabled {
+        if !self.composition.state.telemetry_handle.metrics_enabled() {
             return;
         }
 
@@ -244,7 +234,11 @@ impl BrokerRuntime {
                 pop_processor,
                 broker_config.enable_notify_before_pop_calculate_lag,
             ));
-            let refresh_interval = Duration::from_millis(broker_config.metrics_export_interval_millis.max(1));
+            let refresh_interval = Duration::from_millis(
+                rocketmq_observability::ObservabilityConfig::default()
+                    .metrics
+                    .export_interval_millis,
+            );
             let refresh_snapshot = Arc::clone(&consumer_lag_snapshot);
             let schedule_result = self
                 .lifecycle

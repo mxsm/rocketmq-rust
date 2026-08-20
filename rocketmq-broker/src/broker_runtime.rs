@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 #[cfg(feature = "rocksdb_store")]
 use std::collections::HashSet;
 use std::future::Future;
@@ -505,60 +504,26 @@ pub fn build_broker_telemetry_bootstrap_config(
     }
 }
 
+/// Builds the Broker telemetry defaults and applies one canonical file override section.
+#[must_use]
+pub fn build_broker_telemetry_bootstrap_config_with_overrides(
+    broker_config: &BrokerConfig,
+    file: &rocketmq_observability::ObservabilityOverrides,
+) -> rocketmq_observability::TelemetryBootstrapConfig {
+    let mut config = build_broker_telemetry_bootstrap_config(broker_config);
+    file.apply_to(&mut config.observability);
+    config
+}
+
 fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_observability::ObservabilityConfig {
-    let metrics_enabled = broker_config.metrics_exporter_type.is_enable();
-    let traces_enabled = broker_config.trace_exporter_type.is_enable();
-    let logs_enabled = broker_config.log_exporter_type.is_enable();
-    let mut config = rocketmq_observability::ObservabilityConfig {
-        enabled: metrics_enabled || traces_enabled || logs_enabled,
+    rocketmq_observability::ObservabilityConfig {
         service_name: "rocketmq-broker".to_string(),
         service_namespace: "rocketmq".to_string(),
         cluster: broker_config.broker_identity.broker_cluster_name.to_string(),
         node_type: "broker".to_string(),
         node_id: broker_config.broker_identity.get_canonical_name(),
         ..rocketmq_observability::ObservabilityConfig::default()
-    };
-
-    config.environment = broker_config.observability_environment.to_string();
-    config.service_instance_id = broker_config.observability_service_instance_id.to_string();
-    config.resource_attributes = parse_observability_key_values(&broker_config.observability_resource_attributes);
-    config.metrics.enabled = metrics_enabled;
-    config.metrics.exporter = match broker_config.metrics_exporter_type {
-        rocketmq_observability::MetricsExporterType::Disable => rocketmq_observability::MetricsExporter::Disable,
-        rocketmq_observability::MetricsExporterType::OtlpGrpc => rocketmq_observability::MetricsExporter::OtlpGrpc,
-        rocketmq_observability::MetricsExporterType::Prom => rocketmq_observability::MetricsExporter::Prometheus,
-        rocketmq_observability::MetricsExporterType::Log => rocketmq_observability::MetricsExporter::Log,
-    };
-    config.metrics.export_interval_millis = broker_config.metrics_export_interval_millis;
-    config.metrics.export_timeout_millis = broker_config.otlp_exporter_timeout_millis;
-    config.metrics.cardinality_limit = broker_config.metrics_cardinality_limit;
-    config.metrics.sample_ratio = broker_config.metrics_sample_ratio;
-    config.metrics.topic_label_enabled = broker_config.metrics_topic_label_enabled;
-    config.metrics.consumer_group_label_enabled = broker_config.metrics_consumer_group_label_enabled;
-    config.otlp.endpoint = broker_config.otlp_exporter_endpoint.to_string();
-    config.otlp.headers = parse_observability_key_values(&broker_config.otlp_exporter_headers);
-    config.otlp.timeout_millis = broker_config.otlp_exporter_timeout_millis;
-    config.prometheus.host = broker_config.metrics_prom_exporter_host.to_string();
-    config.prometheus.port = broker_config.metrics_prom_exporter_port;
-    config.prometheus.path = broker_config.metrics_prom_exporter_path.to_string();
-    config.traces.enabled = traces_enabled;
-    config.traces.exporter = match broker_config.trace_exporter_type {
-        rocketmq_observability::TraceExporterType::Disable => rocketmq_observability::TraceExporter::Disable,
-        rocketmq_observability::TraceExporterType::OtlpGrpc => rocketmq_observability::TraceExporter::OtlpGrpc,
-        rocketmq_observability::TraceExporterType::Log => rocketmq_observability::TraceExporter::Log,
-    };
-    config.traces.sample_ratio = broker_config.trace_sample_ratio;
-    config.traces.propagate_context = broker_config.trace_propagate_context;
-    config.traces.record_message_id = broker_config.trace_record_message_id;
-    config.traces.record_message_keys = broker_config.trace_record_message_keys;
-    config.traces.record_body_size = broker_config.trace_record_body_size;
-    config.logs.enabled = logs_enabled;
-    config.logs.exporter = match broker_config.log_exporter_type {
-        rocketmq_observability::LogExporterType::Disable => rocketmq_observability::LogsExporter::Disable,
-        rocketmq_observability::LogExporterType::OtlpGrpc => rocketmq_observability::LogsExporter::OtlpGrpc,
-        rocketmq_observability::LogExporterType::Log => rocketmq_observability::LogsExporter::Log,
-    };
-    config
+    }
 }
 
 fn build_broker_logging_config(broker_config: &BrokerConfig) -> rocketmq_observability::LoggingConfig {
@@ -569,21 +534,6 @@ fn build_broker_logging_config(broker_config: &BrokerConfig) -> rocketmq_observa
         .into_owned();
     config.file.file_name_prefix = "rocketmq-broker".to_string();
     config
-}
-
-fn parse_observability_key_values(values: &CheetahString) -> HashMap<String, String> {
-    values
-        .as_str()
-        .split(',')
-        .filter_map(|entry| {
-            let (key, value) = entry.split_once(':')?;
-            let key = key.trim();
-            if key.is_empty() {
-                return None;
-            }
-            Some((key.to_string(), value.trim().to_string()))
-        })
-        .collect()
 }
 
 #[cfg(feature = "rocksdb_store")]
