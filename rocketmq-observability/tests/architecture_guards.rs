@@ -453,6 +453,7 @@ fn helm_defaults_keep_file_signal_selection_authoritative() {
     let workspace_root = workspace_root();
     let values = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/values.yaml"))
         .expect("Helm values should be readable");
+    let parsed_values: serde_yaml::Value = serde_yaml::from_str(&values).expect("Helm values should be valid YAML");
     let helpers = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/_helpers.tpl"))
         .expect("Helm helpers should be readable");
 
@@ -463,6 +464,11 @@ fn helm_defaults_keep_file_signal_selection_authoritative() {
             "default {exporter} must be disabled"
         );
     }
+    assert_eq!(
+        parsed_values["metrics"]["enabled"],
+        serde_yaml::Value::Bool(false),
+        "stock images do not expose Prometheus, so metrics services must be opt-in"
+    );
 
     assert!(helpers.contains("define \"rocketmq.releaseIdentityEnv\""));
     assert!(helpers.contains("define \"rocketmq.observabilityEnvironmentOverrides\""));
@@ -480,6 +486,11 @@ fn helm_file_and_compatibility_modes_keep_effective_precedence() {
             .expect("Helm values schema should be readable"),
     )
     .expect("Helm values schema should be valid JSON");
+    let production_profile: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(workspace_root.join("distribution/config/production-feature-profile.json"))
+            .expect("production feature profile should be readable"),
+    )
+    .expect("production feature profile should be valid JSON");
     let helpers = fs::read_to_string(workspace_root.join("distribution/helm/rocketmq-rust/templates/_helpers.tpl"))
         .expect("Helm helpers should be readable");
     let configmaps =
@@ -496,6 +507,27 @@ fn helm_file_and_compatibility_modes_keep_effective_precedence() {
     assert!(observability_schema["required"]
         .as_array()
         .is_some_and(|required| required.iter().any(|field| field == "environmentOverridesEnabled")));
+    assert_eq!(
+        observability_schema["properties"]["metricsExporter"]["enum"],
+        serde_json::json!(["disable", "otlp_grpc", "log"]),
+        "the stock Helm chart must advertise only exporters compiled into every production image"
+    );
+    for (service, contract) in production_profile["services"]
+        .as_object()
+        .expect("production services should be an object")
+    {
+        for feature_set in ["features", "resolved_features"] {
+            let features = contract[feature_set]
+                .as_array()
+                .unwrap_or_else(|| panic!("{service}.{feature_set} should be an array"));
+            assert!(
+                !features
+                    .iter()
+                    .any(|feature| feature == "prometheus" || feature == "metrics-prometheus"),
+                "stock {service} images must not claim direct Prometheus without a chart-wide capability decision"
+            );
+        }
+    }
 
     let release_identity = helm_template_definition(&helpers, "rocketmq.releaseIdentityEnv");
     assert!(release_identity.contains("ROCKETMQ_RELEASE_COMMIT"));
@@ -526,7 +558,7 @@ fn helm_file_and_compatibility_modes_keep_effective_precedence() {
     ] {
         assert!(
             file_config.contains(mapping),
-            "all-disabled, Prometheus-only, and mixed-signal modes require independent file exporter mapping: {mapping}"
+            "all-disabled, OTLP, log, and mixed-signal modes require independent file exporter mapping: {mapping}"
         );
     }
     assert!(file_config.contains("include \"rocketmq.observabilityOtlpEndpoint\""));
@@ -659,6 +691,19 @@ fn website_documents_each_services_actual_observability_features() {
             .join("rocketmq-website/i18n/zh-CN/docusaurus-plugin-content-docs/current/configuration/observability.md"),
     )
     .expect("Chinese observability guide should be readable");
+    for (language, guide) in [("English", &english), ("Chinese", &chinese)] {
+        for stock_chart_contract in [
+            "global.observability.metricsExporter",
+            "`disable`",
+            "`otlp_grpc`",
+            "`log`",
+        ] {
+            assert!(
+                guide.contains(stock_chart_contract),
+                "{language} observability guide omits stock Helm contract `{stock_chart_contract}`"
+            );
+        }
+    }
     let contracts = [
         (
             "Broker",
@@ -757,14 +802,31 @@ fn core_services_install_telemetry_before_business_lifecycle() {
         let source =
             fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         let install = source
-            .find("install_global_with_filter")
-            .unwrap_or_else(|| panic!("{relative_path} must install the shared telemetry subscriber"));
+            .find("install_global_with_filter_and_service_context")
+            .unwrap_or_else(|| panic!("{relative_path} must install telemetry with its service context"));
         let lifecycle = source
             .find("lifecycle.start")
             .unwrap_or_else(|| panic!("{relative_path} must start an owned business lifecycle"));
         assert!(
             install < lifecycle,
             "{relative_path} must install telemetry before starting the business lifecycle"
+        );
+        let diagnostics_start = source
+            .find("start_runtime_diagnostics_endpoint_from_env_with_telemetry")
+            .unwrap_or_else(|| panic!("{relative_path} must start protected runtime diagnostics"));
+        let diagnostics_error_path = &source[diagnostics_start..];
+        let rollback_end = diagnostics_error_path
+            .find("return Err")
+            .unwrap_or_else(|| panic!("{relative_path} diagnostics startup failure must return an error"));
+        let diagnostics_rollback = &diagnostics_error_path[..rollback_end];
+        assert!(
+            diagnostics_rollback
+                .contains("shutdown_with_service_context(&service_context, request.deadline.remaining())"),
+            "{relative_path} must use contextual telemetry cleanup after diagnostics startup failure"
+        );
+        assert!(
+            !diagnostics_rollback.contains("shutdown_with_timeout(request.deadline.remaining())"),
+            "{relative_path} diagnostics startup failure must not bypass the telemetry service context"
         );
         for field in [
             "service =",

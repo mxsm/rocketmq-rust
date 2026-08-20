@@ -42,7 +42,7 @@ maintenance:
   sha256: 951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee
 
 metrics:
-  enabled: true
+  enabled: false
   port: 5557
   path: /metrics
   service:

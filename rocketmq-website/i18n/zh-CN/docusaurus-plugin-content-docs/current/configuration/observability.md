@@ -178,7 +178,14 @@ Helm chart 默认把 `global.observability.environmentOverridesEnabled` 设为
 `false`。此模式始终注入 release identity 环境变量，但不会注入
 `ROCKETMQ_METRICS_*`、`OTEL_EXPORTER_OTLP_ENDPOINT` 或
 `OTEL_EXPORTER_OTLP_PROTOCOL`，因此 ConfigMap 中的结构化文件选择可以真实
-控制全部关闭、仅 Prometheus 及混合信号配置。
+控制全部关闭、OTLP、日志及混合信号配置。
+
+stock Helm chart 的 `global.observability.metricsExporter` 仅接受
+`disable`、`otlp_grpc` 和 `log`，并默认关闭 metrics Service。当前生产镜像并未
+为五类服务一致编译直接 Prometheus 导出器，因此 stock 全局 schema 刻意不提供
+`prometheus` 选项。若服务使用对应 feature 自定义编译（目前为 Broker 或
+Controller），仍可在该服务的文件配置中选择直接 Prometheus；此类部署需要在
+stock 全局选择器之外自行配置并暴露对应工作负载。
 
 只有需要保留旧版环境变量驱动的部署行为时，才应显式开启该选项：
 

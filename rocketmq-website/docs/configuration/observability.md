@@ -186,8 +186,17 @@ The Helm chart defaults
 always injects release identity variables, but does not inject
 `ROCKETMQ_METRICS_*`, `OTEL_EXPORTER_OTLP_ENDPOINT`, or
 `OTEL_EXPORTER_OTLP_PROTOCOL`. The ConfigMap's structured file selection is
-therefore effective for all-disabled, Prometheus-only, and mixed-signal
+therefore effective for all-disabled, OTLP, log, and mixed-signal
 configurations.
+
+The stock chart accepts only `disable`, `otlp_grpc`, and `log` for
+`global.observability.metricsExporter`, and metrics Services are disabled by
+default. Its production images do not compile the direct Prometheus exporter
+consistently across all five services, so `prometheus` is intentionally not a
+stock global schema option. Direct Prometheus remains available through a
+service's file configuration when that service is custom-built with the
+corresponding feature (currently Broker or Controller); such a deployment must
+configure and expose the custom workload outside the stock global selector.
 
 Set the flag to `true` only while preserving the previous environment-driven
 deployment behavior:

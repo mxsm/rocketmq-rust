@@ -377,12 +377,15 @@ impl McpApp {
                 rocketmq_observability::metrics::runtime::RuntimeLifecycleReason::Internal
             },
         );
-        let telemetry = self
-            .telemetry
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .map(|guard| guard.shutdown_with_timeout(deadline.remaining()));
+        let telemetry_guard = self.telemetry.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let telemetry = match telemetry_guard {
+            Some(guard) => Some(
+                guard
+                    .shutdown_with_service_context(&self.service_context, deadline.remaining())
+                    .await,
+            ),
+            None => None,
+        };
         McpShutdownReport {
             audit,
             runtime,
@@ -727,6 +730,28 @@ mod tests {
                 .join("mcp.example.toml"),
         )
         .expect("example MCP config should load")
+    }
+
+    #[test]
+    fn normal_shutdown_uses_service_context_for_telemetry_cleanup() {
+        let source = include_str!("app.rs");
+        let shutdown_start = source
+            .find("pub async fn shutdown_with_deadline")
+            .expect("MCP app should expose bounded shutdown");
+        let shutdown_end = source[shutdown_start..]
+            .find("fn start_background_services")
+            .map(|offset| shutdown_start + offset)
+            .expect("MCP app shutdown should precede background service startup");
+        let shutdown = &source[shutdown_start..shutdown_end];
+
+        assert!(
+            shutdown.contains("shutdown_with_service_context(&self.service_context, deadline.remaining())"),
+            "MCP telemetry cleanup must use the same service context that owns Prometheus work"
+        );
+        assert!(
+            !shutdown.contains("shutdown_with_timeout(deadline.remaining())"),
+            "normal shutdown must not bypass the telemetry service context"
+        );
     }
 
     #[test]

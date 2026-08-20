@@ -251,7 +251,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "controller telemetry cleanup after diagnostics startup failure was unhealthy");

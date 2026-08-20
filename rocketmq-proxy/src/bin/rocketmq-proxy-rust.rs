@@ -171,12 +171,15 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to resolve proxy log filter: {error}"),
         })?;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone()).map_err(
-            |error| ProxyError::Transport {
-                message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
-            },
-        )?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .map_err(|error| ProxyError::Transport {
+        message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
+    })?;
     register_proxy_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
@@ -209,7 +212,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "proxy telemetry cleanup after diagnostics startup failure was unhealthy");

@@ -187,9 +187,13 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, logging_overrides, environment_filter.as_deref())
         .context("failed to resolve broker log filter")?;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
-            .context("failed to initialize broker telemetry bootstrap")?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .context("failed to initialize broker telemetry bootstrap")?;
     register_broker_release_identity(&process_telemetry, &telemetry_guard.handle())?;
     log_telemetry_bootstrap(
         &bootstrap_config,
@@ -225,7 +229,8 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "broker telemetry cleanup after diagnostics startup failure was unhealthy");
