@@ -111,12 +111,14 @@ def _transfer_manifest(bundle: Path, expected_kind: str, candidate: dict) -> dic
             value.get("version"),
             value.get("run_id"),
             value.get("attempt"),
+            value.get("series_generation"),
         )
         expected = (
             candidate["candidate_id"],
             candidate["version"],
             candidate["run_id"],
             candidate["attempt"],
+            candidate["series_generation"],
         )
         if identity != expected:
             raise PreparationError(f"{expected_kind} bundle candidate identity does not match")

@@ -7,11 +7,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
-import tarfile
+import tempfile
 from typing import Any, Sequence
 
 
@@ -31,6 +30,7 @@ from release_state import (
 )
 from capture_candidate_execution_context import capture_context
 from collect_candidate_stage_outcomes import _load_policy
+from transfer_candidate import import_build_control
 
 
 class CandidateLifecycleError(ReleaseStateError):
@@ -169,64 +169,52 @@ def _validate_candidate_control(bundle: Path, candidate_manifest: Path, series_m
     series = read_json(resolve_existing_file(series_manifest, "release series"))
     validate_candidate(candidate)
     validate_series(series)
-    try:
-        with tarfile.open(resolve_existing_file(bundle, "candidate control bundle"), "r") as archive:
-            members = archive.getmembers()
-            names = [member.name for member in members]
-            expected_names = {
-                "CANDIDATE_TRANSFER.json",
-                "payload/CANDIDATE_RUN.json",
-                "payload/RELEASE_SERIES.json",
-            }
-            if set(names) != expected_names or len(names) != len(expected_names):
-                raise CandidateLifecycleError("candidate control bundle members are not closed")
-            for member in members:
-                if not member.isfile() or member.issym() or member.islnk():
-                    raise CandidateLifecycleError("candidate control bundle contains an unsafe member")
-            control_file = archive.extractfile("CANDIDATE_TRANSFER.json")
-            candidate_file = archive.extractfile("payload/CANDIDATE_RUN.json")
-            series_file = archive.extractfile("payload/RELEASE_SERIES.json")
-            if control_file is None or candidate_file is None or series_file is None:
-                raise CandidateLifecycleError("candidate control bundle is unreadable")
-            control = json.loads(control_file.read())
-            archived_candidate = json.loads(candidate_file.read())
-            archived_series = json.loads(series_file.read())
-    except (tarfile.TarError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise CandidateLifecycleError(f"candidate control bundle is invalid: {error}") from error
-    identity = (
-        control.get("candidate_id"),
-        control.get("version"),
-        control.get("run_id"),
-        control.get("attempt"),
-    )
-    expected_identity = (
-        candidate["candidate_id"],
-        candidate["version"],
-        candidate["run_id"],
-        candidate["attempt"],
-    )
-    files = control.get("files")
-    expected_files = {
-        "CANDIDATE_RUN.json": candidate_manifest.stat().st_size,
-        "RELEASE_SERIES.json": series_manifest.stat().st_size,
+    with tempfile.TemporaryDirectory() as temporary:
+        imported_manifest = import_build_control(bundle, Path(temporary) / "control")
+        archived_candidate = read_json(imported_manifest)
+        archived_series = read_json(Path(archived_candidate["series_manifest"]))
+
+    candidate_path_fields = {"candidate_root", "series_manifest", "parent_manifest"}
+    comparable_candidate = {
+        key: value for key, value in candidate.items() if key not in candidate_path_fields
     }
-    actual_files = (
-        {item.get("path"): item.get("size") for item in files if isinstance(item, dict)}
-        if isinstance(files, list)
-        else {}
+    comparable_archived_candidate = {
+        key: value
+        for key, value in archived_candidate.items()
+        if key not in candidate_path_fields
+    }
+
+    def comparable_entry(entry: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in entry.items()
+            if key not in {"candidate_manifest", "parent_manifest"}
+        }
+
+    series_fields = {
+        key: value for key, value in series.items() if key not in {"entries", "head"}
+    }
+    archived_series_fields = {
+        key: value
+        for key, value in archived_series.items()
+        if key not in {"entries", "head"}
+    }
+    series_entries = [comparable_entry(entry) for entry in series["entries"]]
+    archived_entries = [comparable_entry(entry) for entry in archived_series["entries"]]
+    series_head = comparable_entry(series["head"]) if series["head"] is not None else None
+    archived_head = (
+        comparable_entry(archived_series["head"])
+        if archived_series["head"] is not None
+        else None
     )
     if (
-        control.get("schema_version") != 1
-        or control.get("bundle_kind") != "build-control"
-        or identity != expected_identity
-        or not isinstance(files, list)
-        or len(files) != len(expected_files)
-        or actual_files != expected_files
-        or archived_candidate != candidate
-        or archived_series != series
+        comparable_archived_candidate != comparable_candidate
+        or archived_series_fields != series_fields
+        or archived_entries != series_entries
+        or archived_head != series_head
     ):
         raise CandidateLifecycleError("candidate control bundle does not match committed state")
-    for value in (control, archived_candidate, archived_series):
+    for value in (archived_candidate, archived_series):
         ensure_no_digest_fields(value)
 
 

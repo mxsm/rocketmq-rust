@@ -50,6 +50,18 @@ class ReleaseBinaryBuildTests(unittest.TestCase):
         for forbidden in ("gh release", "cargo publish", "docker push", "helm push"):
             self.assertNotIn(forbidden, source)
 
+    def test_candidate_workflow_executes_the_real_preparation_pipeline(self) -> None:
+        workflow = ROOT / ".github" / "workflows" / "release-candidate.yml"
+        source = workflow.read_text(encoding="utf-8")
+
+        self.assertNotIn("--help", source)
+        self.assertIn("-Mode PrepareCommon", source)
+        self.assertIn("-Mode Target", source)
+        self.assertIn("-Mode Aggregate", source)
+        self.assertIn("import-build-control", source)
+        self.assertIn("actions/upload-artifact@v7", source)
+        self.assertIn("actions/download-artifact@v7", source)
+
 
 if __name__ == "__main__":
     unittest.main()

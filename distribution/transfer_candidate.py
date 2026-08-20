@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tarfile
+import tempfile
 from typing import Any
 
 
@@ -19,7 +20,9 @@ if str(ROOT / "distribution") not in sys.path:
     sys.path.insert(0, str(ROOT / "distribution"))
 
 from release_archive_common import ArchiveError, load_candidate, require_relative_path
+from release_series import export_control_bundle, import_control_bundle
 from release_state import (
+    atomic_write_json,
     ReleaseStateError,
     ensure_no_digest_fields,
     read_json,
@@ -113,6 +116,7 @@ def _write_bundle(
         "version": candidate["version"],
         "run_id": candidate["run_id"],
         "attempt": candidate["attempt"],
+        "series_generation": candidate["series_generation"],
         "files": manifest_records,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +202,6 @@ def export_build_control(candidate_manifest: Path, output: Path) -> Path:
     output = resolve_within(root, output, "candidate transfer output")
     if output.exists():
         raise ArchiveError(f"candidate transfer bundle already exists: {output}")
-    records = [("CANDIDATE_RUN.json", manifest)]
     series = candidate.get("series_manifest")
     if not isinstance(series, str):
         raise ArchiveError("candidate has no release-series manifest")
@@ -214,8 +217,110 @@ def export_build_control(candidate_manifest: Path, output: Path) -> Path:
         or head.get("ordinal") != candidate["ordinal"]
     ):
         raise ArchiveError("candidate and release series are not at one committed generation")
-    records.append(("RELEASE_SERIES.json", series_path))
-    return _write_bundle(candidate, bundle_kind="build-control", output=output, records=records)
+    with tempfile.TemporaryDirectory() as temporary:
+        portable_series = Path(temporary) / "RELEASE_SERIES_CONTROL_BUNDLE.tar"
+        export_control_bundle(series_path, portable_series)
+        return _write_bundle(
+            candidate,
+            bundle_kind="build-control",
+            output=output,
+            records=[("RELEASE_SERIES_CONTROL_BUNDLE.tar", portable_series)],
+        )
+
+
+def import_build_control(
+    bundle: Path, output: Path, *, build_source_bundle: Path | None = None
+) -> Path:
+    """Import one committed candidate generation into a worker-local root."""
+
+    bundle = resolve_existing_file(bundle, "build control bundle")
+    output = output.resolve()
+    if output.exists():
+        raise ArchiveError(f"build control import already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        payload_root = import_bundle(bundle, Path(temporary) / "payload")
+        transfer = read_json(payload_root / "CANDIDATE_TRANSFER.json")
+        if transfer.get("bundle_kind") != "build-control":
+            raise ArchiveError("candidate transfer bundle is not build-control state")
+        records = transfer.get("files")
+        if records != [
+            {
+                "path": "RELEASE_SERIES_CONTROL_BUNDLE.tar",
+                "type": "file",
+                "size": (payload_root / "RELEASE_SERIES_CONTROL_BUNDLE.tar").stat().st_size,
+            }
+        ]:
+            raise ArchiveError("build control bundle has an invalid payload denominator")
+        generation = transfer.get("series_generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+            raise ArchiveError("build control bundle has an invalid series generation")
+        series_manifest = import_control_bundle(
+            payload_root / "RELEASE_SERIES_CONTROL_BUNDLE.tar",
+            output,
+            expected_generation=generation,
+        )
+    series = read_json(series_manifest)
+    head = series.get("head")
+    if not isinstance(head, dict):
+        raise ArchiveError("build control release series has no current candidate")
+    candidate_manifest = resolve_existing_file(
+        Path(head.get("candidate_manifest", "")), "build control candidate manifest"
+    )
+    candidate = read_json(candidate_manifest)
+    validate_candidate(candidate)
+    identity = (
+        candidate.get("candidate_id"),
+        candidate.get("version"),
+        candidate.get("run_id"),
+        candidate.get("attempt"),
+        candidate.get("series_generation"),
+    )
+    expected = (
+        transfer.get("candidate_id"),
+        transfer.get("version"),
+        transfer.get("run_id"),
+        transfer.get("attempt"),
+        generation,
+    )
+    if identity != expected:
+        raise ArchiveError("imported build control candidate identity does not match")
+    if (
+        Path(candidate["candidate_root"]).resolve() != candidate_manifest.parent.resolve()
+        or Path(candidate["series_manifest"]).resolve() != series_manifest.resolve()
+        or candidate["ordinal"] != head.get("ordinal")
+    ):
+        raise ArchiveError("imported build control ownership is inconsistent")
+    if build_source_bundle is not None:
+        source = resolve_existing_file(build_source_bundle, "build source bundle")
+        if candidate.get("build_source_bundle") is None:
+            raise ArchiveError("build control candidate has no canonical source bundle")
+        candidate["build_source_bundle"] = str(source)
+        atomic_write_json(candidate_manifest, candidate)
+    return candidate_manifest
+
+
+def write_build_control_selector(candidate_manifest: Path, output: Path) -> Path:
+    """Write the worker-local candidate selector produced by a control import."""
+
+    candidate_manifest = resolve_existing_file(candidate_manifest, "candidate manifest")
+    candidate = read_json(candidate_manifest)
+    validate_candidate(candidate)
+    output = output.resolve()
+    atomic_write_json(
+        output,
+        {
+            "schema_version": 1,
+            "candidate_id": candidate["candidate_id"],
+            "version": candidate["version"],
+            "run_id": candidate["run_id"],
+            "attempt": candidate["attempt"],
+            "series_generation": candidate["series_generation"],
+            "candidate_manifest": str(candidate_manifest),
+            "candidate_root": str(candidate_manifest.parent),
+        },
+    )
+    return output
 
 
 def _safe_member(member: tarfile.TarInfo) -> PurePosixPath:
@@ -299,6 +404,11 @@ def main(argv: list[str] | None = None) -> int:
     imported.add_argument("--bundle", type=Path, required=True)
     imported.add_argument("--output", type=Path, required=True)
     imported.add_argument("--payload-only", action="store_true")
+    control_import = subcommands.add_parser("import-build-control")
+    control_import.add_argument("--bundle", type=Path, required=True)
+    control_import.add_argument("--output", type=Path, required=True)
+    control_import.add_argument("--selector-output", type=Path, required=True)
+    control_import.add_argument("--build-source-bundle", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "export-build-source":
@@ -309,6 +419,13 @@ def main(argv: list[str] | None = None) -> int:
             output = export_build_control(args.candidate_manifest, args.output)
         elif args.command == "import":
             output = import_bundle(args.bundle, args.output, include_manifest=not args.payload_only)
+        elif args.command == "import-build-control":
+            candidate_manifest = import_build_control(
+                args.bundle,
+                args.output,
+                build_source_bundle=args.build_source_bundle,
+            )
+            output = write_build_control_selector(candidate_manifest, args.selector_output)
         else:
             manifest, candidate, root = load_candidate(args.candidate_manifest)
             if args.command == "export-target":
