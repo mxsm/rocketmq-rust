@@ -383,6 +383,7 @@ let _ = env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT");"#,
         r#"use std::{env as process_env};"#,
         r#"use std::env::{var_os, vars_os};"#,
         r#"use std::env::var_os as read_env;"#,
+        r#"use std as process_std; let _ = process_std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT");"#,
         r#"use crate::METRICS_EXPORTER_ENV as EXPORTER_ENV; let _ = std::env::var_os(EXPORTER_ENV);"#,
         r#"let values = std::env::vars_os(); let _ = values.filter(|(key, _)| key == "OTEL_EXPORTER_OTLP_ENDPOINT");"#,
         r#"let read_env = std::env::var_os; let _ = read_env("NAMESRV_ADDR");"#,
@@ -390,6 +391,9 @@ let _ = env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT");"#,
 const ENDPOINT_ALIAS: &str = ENDPOINT;
 let selected = ENDPOINT_ALIAS;
 let _ = std::env::var_os(selected);"#,
+        r#"const ENV_NAME: &str = ((METRICS_ENABLED_ENV));
+let selected = (((ENV_NAME)));
+let _ = std::env::var((selected));"#,
         r#"let _ = std::env::var("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO");"#,
         r#"let _ = std::env::var("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO");"#,
     ] {
@@ -409,6 +413,8 @@ let _ = std::env::var_os(selected);"#,
         r#"let marker = '\x4f'; let _ = std::env::var("NAMESRV_ADDR");"#,
         r#"let marker = '\u{4f}'; let _ = std::env::var("ROCKETMQ_HOME");"#,
         r#"let _ = std::env::var_os(CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV);"#,
+        r#"use {std::io, crate::env}; let _ = std::env::var("NAMESRV_ADDR");"#,
+        r#"use std::io as env; let _ = std::env::var("ROCKETMQ_HOME");"#,
     ] {
         assert!(
             !has_direct_telemetry_environment_read(source),
@@ -420,6 +426,24 @@ let _ = std::env::var_os(selected);"#,
         assert!(
             lex_rust_boundary_tokens(source).is_empty(),
             "character literal contents must not become boundary tokens: {source}"
+        );
+    }
+
+    for source in [
+        r#""OTEL_EXPORTER_\
+  OTLP_ENDPOINT""#,
+        "\"OTEL_EXPORTER_\\\r\n  OTLP_ENDPOINT\"",
+    ] {
+        assert_eq!(
+            lex_rust_boundary_tokens(source),
+            vec![RustBoundaryToken::StringLiteral(
+                "OTEL_EXPORTER_OTLP_ENDPOINT".to_string()
+            )],
+            "cooked string continuations must follow Rust escape semantics"
+        );
+        assert!(
+            has_direct_telemetry_environment_read(&format!("let _ = std::env::var({source});")),
+            "continued telemetry environment names must remain detectable"
         );
     }
 }
@@ -1036,16 +1060,50 @@ fn contains_std_env_import(tokens: &[RustBoundaryToken]) -> bool {
             .iter()
             .position(|token| matches!(token, RustBoundaryToken::Semicolon))
             .map_or(tokens.len(), |offset| cursor + offset);
-        let mut saw_std = false;
-        for token in &tokens[cursor + 1..end] {
-            match token_identifier(Some(token)) {
-                Some("std") => saw_std = true,
-                Some("env") if saw_std => return true,
-                _ => {}
-            }
+        if use_tree_contains_std_env_import(&tokens[cursor + 1..end]) {
+            return true;
         }
         cursor = end.saturating_add(1);
     }
+    false
+}
+
+fn use_tree_contains_std_env_import(tokens: &[RustBoundaryToken]) -> bool {
+    let mut group_prefixes: Vec<Vec<&str>> = Vec::new();
+    let mut path = Vec::new();
+    let mut alias_target = false;
+
+    for token in tokens {
+        match token {
+            RustBoundaryToken::Identifier(identifier) if identifier == "as" => {
+                if path == ["std"] {
+                    return true;
+                }
+                alias_target = true;
+            }
+            RustBoundaryToken::Identifier(_) if alias_target => {
+                alias_target = false;
+            }
+            RustBoundaryToken::Identifier(identifier) if identifier != "self" => {
+                path.push(identifier.as_str());
+                if path.starts_with(&["std", "env"]) {
+                    return true;
+                }
+            }
+            RustBoundaryToken::LeftBrace => group_prefixes.push(path.clone()),
+            RustBoundaryToken::Comma => {
+                path = group_prefixes.last().cloned().unwrap_or_default();
+                alias_target = false;
+            }
+            RustBoundaryToken::RightBrace => {
+                group_prefixes.pop();
+                path = group_prefixes.last().cloned().unwrap_or_default();
+                alias_target = false;
+            }
+            _ => {}
+        }
+    }
+
     false
 }
 
@@ -1198,6 +1256,18 @@ fn lex_escaped_string(bytes: &[u8], index: &mut usize) -> String {
         }
         *index += 1;
         match bytes[*index] {
+            b'\n' => {
+                *index += 1;
+                while bytes.get(*index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+                    *index += 1;
+                }
+            }
+            b'\r' if bytes.get(*index + 1) == Some(&b'\n') => {
+                *index += 2;
+                while bytes.get(*index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+                    *index += 1;
+                }
+            }
             b'x' if *index + 2 < bytes.len() => {
                 if let (Some(high), Some(low)) = (hex_digit(bytes[*index + 1]), hex_digit(bytes[*index + 2])) {
                     value.push((high * 16 + low) as char);
@@ -1315,6 +1385,7 @@ fn telemetry_environment_argument(
 }
 
 fn tokens_resolve_to_telemetry_name(tokens: &[RustBoundaryToken], telemetry_names: &BTreeSet<String>) -> bool {
+    let tokens = strip_balanced_outer_parentheses(tokens);
     if let [RustBoundaryToken::StringLiteral(name)] = tokens {
         return name.starts_with("OTEL_")
             || name.starts_with("ROCKETMQ_METRICS_")
@@ -1335,6 +1406,30 @@ fn tokens_resolve_to_telemetry_name(tokens: &[RustBoundaryToken], telemetry_name
             .rev()
             .find_map(|token| token_identifier(Some(token)))
             .is_some_and(|identifier| telemetry_names.contains(identifier))
+}
+
+fn strip_balanced_outer_parentheses(mut tokens: &[RustBoundaryToken]) -> &[RustBoundaryToken] {
+    while matches!(tokens.first(), Some(RustBoundaryToken::LeftParenthesis))
+        && matches!(tokens.last(), Some(RustBoundaryToken::RightParenthesis))
+    {
+        let mut depth = 0;
+        let closing = tokens.iter().enumerate().find_map(|(index, token)| match token {
+            RustBoundaryToken::LeftParenthesis => {
+                depth += 1;
+                None
+            }
+            RustBoundaryToken::RightParenthesis => {
+                depth -= 1;
+                (depth == 0).then_some(index)
+            }
+            _ => None,
+        });
+        if closing != Some(tokens.len() - 1) {
+            break;
+        }
+        tokens = &tokens[1..tokens.len() - 1];
+    }
+    tokens
 }
 
 fn token_identifier(token: Option<&RustBoundaryToken>) -> Option<&str> {
