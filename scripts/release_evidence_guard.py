@@ -192,6 +192,7 @@ def _normalize_handoff_result(
             or value.get("mode") != expected_mode
             or value.get("remote_publication", {}).get("status") != "not-executed"
             or value.get("secret_scan", {}).get("status") != "passed"
+            or (result_id == "H04-FINAL-SEMANTIC" and value.get("read_only_verified") is not True)
         ):
             raise EvidenceError(f"handoff semantic result is incomplete: {result_id}")
         if isinstance(result_id, str) and result_id.startswith("H01-"):

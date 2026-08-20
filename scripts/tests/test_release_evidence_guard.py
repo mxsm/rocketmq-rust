@@ -358,6 +358,8 @@ class ReleaseEvidenceGuardTests(unittest.TestCase):
                         ],
                     }
                 )
+            elif result_id == "H04-FINAL-SEMANTIC":
+                value["read_only_verified"] = True
         write_json(root / f"{result_id}.json", value)
 
     @staticmethod

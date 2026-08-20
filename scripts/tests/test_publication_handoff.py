@@ -131,6 +131,159 @@ class PublicationHandoffTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already exists"):
                 self.builder.finalize_draft(final.with_name(f".{final.name}.staging"))
 
+    def test_final_cli_requires_an_explicit_read_only_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            draft = self.builder.build_draft(
+                fixture["candidate_manifest"],
+                fixture["candidate_root"],
+                fixture["source_root"],
+                fixture["output_root"],
+                SOURCE_MAP,
+            )
+            final = self.builder.finalize_draft(draft)
+            output = Path(directory) / "H04-FINAL-SEMANTIC.json"
+
+            exit_code = self.verifier.main(
+                [
+                    "--handoff",
+                    str(final),
+                    "--candidate-manifest",
+                    str(fixture["candidate_manifest"]),
+                    "--candidate-root",
+                    str(fixture["candidate_root"]),
+                    "--source-root",
+                    str(fixture["source_root"]),
+                    "--final-pre-ready",
+                    "--result-id",
+                    "H04-FINAL-SEMANTIC",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(1, exit_code)
+            self.assertFalse(output.exists())
+
+    def test_final_read_only_rejects_an_output_inside_the_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            draft = self.builder.build_draft(
+                fixture["candidate_manifest"],
+                fixture["candidate_root"],
+                fixture["source_root"],
+                fixture["output_root"],
+                SOURCE_MAP,
+            )
+            final = self.builder.finalize_draft(draft)
+            output = final / "evidence" / "H04-FINAL-SEMANTIC.json"
+
+            exit_code = self.verifier.main(
+                [
+                    "--handoff",
+                    str(final),
+                    "--candidate-manifest",
+                    str(fixture["candidate_manifest"]),
+                    "--candidate-root",
+                    str(fixture["candidate_root"]),
+                    "--source-root",
+                    str(fixture["source_root"]),
+                    "--final-pre-ready",
+                    "--final-read-only",
+                    "--result-id",
+                    "H04-FINAL-SEMANTIC",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(1, exit_code)
+            self.assertFalse(output.exists())
+
+    def test_final_read_only_detects_same_size_mutation_during_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            draft = self.builder.build_draft(
+                fixture["candidate_manifest"],
+                fixture["candidate_root"],
+                fixture["source_root"],
+                fixture["output_root"],
+                SOURCE_MAP,
+            )
+            final = self.builder.finalize_draft(draft)
+            output = Path(directory) / "H04-FINAL-SEMANTIC.json"
+            original = self.verifier._verify_package_semantics
+
+            def mutate_after_semantic_scan(*args, **kwargs):
+                result = original(*args, **kwargs)
+                notice = final / "legal" / "NOTICE"
+                notice.write_bytes(b"X" * notice.stat().st_size)
+                return result
+
+            with mock.patch.object(
+                self.verifier,
+                "_verify_package_semantics",
+                side_effect=mutate_after_semantic_scan,
+            ):
+                exit_code = self.verifier.main(
+                    [
+                        "--handoff",
+                        str(final),
+                        "--candidate-manifest",
+                        str(fixture["candidate_manifest"]),
+                        "--candidate-root",
+                        str(fixture["candidate_root"]),
+                        "--source-root",
+                        str(fixture["source_root"]),
+                        "--final-pre-ready",
+                        "--final-read-only",
+                        "--result-id",
+                        "H04-FINAL-SEMANTIC",
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertFalse(output.exists())
+
+    def test_final_read_only_external_output_records_the_verified_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            draft = self.builder.build_draft(
+                fixture["candidate_manifest"],
+                fixture["candidate_root"],
+                fixture["source_root"],
+                fixture["output_root"],
+                SOURCE_MAP,
+            )
+            final = self.builder.finalize_draft(draft)
+            output = Path(directory) / "candidate-evidence" / "H04-FINAL-SEMANTIC.json"
+
+            exit_code = self.verifier.main(
+                [
+                    "--handoff",
+                    str(final),
+                    "--candidate-manifest",
+                    str(fixture["candidate_manifest"]),
+                    "--candidate-root",
+                    str(fixture["candidate_root"]),
+                    "--source-root",
+                    str(fixture["source_root"]),
+                    "--final-pre-ready",
+                    "--final-read-only",
+                    "--result-id",
+                    "H04-FINAL-SEMANTIC",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertIn("read_only_verified", result)
+            self.assertIs(result["read_only_verified"], True)
+
     def test_refresh_evidence_closes_the_three_platform_cut(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = self._fixture(Path(directory))

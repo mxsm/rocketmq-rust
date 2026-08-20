@@ -11,8 +11,10 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import sys
 import tarfile
+import tempfile
 from typing import Any, BinaryIO
 import zipfile
 
@@ -98,6 +100,60 @@ def _inventory(root: Path) -> list[dict[str, Any]]:
         elif not path.is_file() and not path.is_dir():
             raise HandoffVerifyError(f"handoff contains an unsupported file type: {path}")
     return records
+
+
+def _closed_file_inventory(root: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise HandoffVerifyError(f"handoff contains a symbolic link: {path}")
+        if path.is_file():
+            records.append(
+                {
+                    "path": path.relative_to(root).as_posix(),
+                    "type": "file",
+                    "size": path.stat().st_size,
+                }
+            )
+        elif not path.is_dir():
+            raise HandoffVerifyError(f"handoff contains an unsupported file type: {path}")
+    return records
+
+
+def _copy_read_only_snapshot(root: Path, snapshot: Path) -> list[dict[str, Any]]:
+    before = _closed_file_inventory(root)
+    for record in before:
+        relative = PurePosixPath(record["path"])
+        source = root.joinpath(*relative.parts)
+        destination = snapshot.joinpath(*relative.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    if _closed_file_inventory(root) != before:
+        raise HandoffVerifyError("final handoff changed while creating the read-only snapshot")
+    for record in before:
+        relative = PurePosixPath(record["path"])
+        if not _stream_equal(
+            root.joinpath(*relative.parts),
+            snapshot.joinpath(*relative.parts),
+        ):
+            raise HandoffVerifyError(f"final handoff changed during snapshot: {relative}")
+    return before
+
+
+def _verify_read_only_snapshot(
+    root: Path,
+    snapshot: Path,
+    expected: list[dict[str, Any]],
+) -> None:
+    if _closed_file_inventory(root) != expected:
+        raise HandoffVerifyError("final handoff inventory changed during verification")
+    for record in expected:
+        relative = PurePosixPath(record["path"])
+        if not _stream_equal(
+            root.joinpath(*relative.parts),
+            snapshot.joinpath(*relative.parts),
+        ):
+            raise HandoffVerifyError(f"final handoff content changed during verification: {relative}")
 
 
 def _scan_bytes(payload: bytes, label: str) -> None:
@@ -434,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--draft-pre-ready", action="store_true")
     modes.add_argument("--final-pre-ready", action="store_true")
     modes.add_argument("--ready", action="store_true")
+    parser.add_argument("--final-read-only", action="store_true")
     parser.add_argument("--result-id", required=True)
     parser.add_argument("--platform", choices=tuple(PLATFORM_TARGETS))
     parser.add_argument("--worker-id")
@@ -441,18 +498,48 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     mode = "draft-pre-ready" if args.draft_pre_ready else "final-pre-ready" if args.final_pre_ready else "ready"
     try:
+        if args.final_pre_ready != args.final_read_only:
+            raise HandoffVerifyError("--final-pre-ready requires --final-read-only and vice versa")
+        if args.final_read_only:
+            handoff_root = args.handoff.resolve(strict=True)
+            try:
+                args.output.resolve().relative_to(handoff_root)
+            except ValueError:
+                pass
+            else:
+                raise HandoffVerifyError("final-read-only evidence output must be outside the handoff")
         if args.output.exists():
             raise HandoffVerifyError("handoff verification output already exists")
-        report = verify_handoff(
-            args.handoff,
-            args.candidate_manifest,
-            args.candidate_root,
-            args.source_root,
-            mode=mode,
-            result_id=args.result_id,
-            platform=args.platform,
-            worker_id=args.worker_id,
-        )
+        if args.final_read_only:
+            with tempfile.TemporaryDirectory(
+                prefix=".handoff-read-only-",
+                dir=handoff_root.parent,
+            ) as temporary:
+                snapshot = Path(temporary)
+                inventory = _copy_read_only_snapshot(handoff_root, snapshot)
+                report = verify_handoff(
+                    handoff_root,
+                    args.candidate_manifest,
+                    args.candidate_root,
+                    args.source_root,
+                    mode=mode,
+                    result_id=args.result_id,
+                    platform=args.platform,
+                    worker_id=args.worker_id,
+                )
+                _verify_read_only_snapshot(handoff_root, snapshot, inventory)
+                report["read_only_verified"] = True
+        else:
+            report = verify_handoff(
+                args.handoff,
+                args.candidate_manifest,
+                args.candidate_root,
+                args.source_root,
+                mode=mode,
+                result_id=args.result_id,
+                platform=args.platform,
+                worker_id=args.worker_id,
+            )
         atomic_write_json(args.output, report)
     except (HandoffVerifyError, OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         print(f"PUBLICATION_HANDOFF_VERIFY_FAILED detail={error}", file=sys.stderr)
