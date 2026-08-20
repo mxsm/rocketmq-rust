@@ -18,6 +18,7 @@ use crate::metrics::release_identity::ReleaseIdentityError;
 use crate::metrics::release_identity::ValidatedReleaseIdentity;
 use crate::MetricsExporter;
 use crate::ObservabilityConfig;
+use std::ffi::OsStr;
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
@@ -177,6 +178,73 @@ fn prometheus_values_enable_observability_and_apply_listener() {
 }
 
 #[test]
+fn absent_process_values_preserve_file_metrics_configuration() {
+    let mut base = ObservabilityConfig::default();
+    base.metrics.enabled = true;
+    base.metrics.exporter = MetricsExporter::Prometheus;
+    base.prometheus.host = "0.0.0.0".to_owned();
+    base.prometheus.port = 9464;
+    base.prometheus.path = "/rocketmq".to_owned();
+
+    let process = ProcessTelemetryConfig::try_from_observability_and_values(
+        "rocketmq-broker",
+        &base,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("missing process values should preserve file metrics");
+
+    assert!(process.metrics_enabled());
+    assert_eq!(process.metrics_exporter(), MetricsExporter::Prometheus);
+    assert_eq!(process.prometheus_host(), "0.0.0.0");
+    assert_eq!(process.prometheus_port(), 9464);
+    assert_eq!(process.prometheus_path(), "/rocketmq");
+}
+
+#[test]
+fn explicit_metrics_disable_normalizes_the_final_exporter() {
+    let mut base = ObservabilityConfig::default();
+    base.metrics.enabled = true;
+    base.metrics.exporter = MetricsExporter::Prometheus;
+
+    let process = ProcessTelemetryConfig::try_from_observability_and_values(
+        "rocketmq-broker",
+        &base,
+        None,
+        None,
+        Some(OsStr::new("false")),
+        Some(OsStr::new("otlp_grpc")),
+        None,
+        None,
+    )
+    .expect("explicit metrics disable should normalize the exporter");
+
+    assert!(!process.metrics_enabled());
+    assert_eq!(process.metrics_exporter(), MetricsExporter::Disable);
+}
+
+#[test]
+fn explicit_metrics_enable_requires_a_non_disabled_final_exporter() {
+    assert!(matches!(
+        ProcessTelemetryConfig::try_from_observability_and_values(
+            "rocketmq-broker",
+            &ObservabilityConfig::default(),
+            None,
+            None,
+            Some(OsStr::new("true")),
+            None,
+            None,
+            None,
+        ),
+        Err(ProcessTelemetryConfigError::InconsistentMetricsSelection)
+    ));
+}
+
+#[test]
 fn explicit_invalid_process_values_fail_closed() {
     let parse = |enabled, exporter, bind, path| {
         ProcessTelemetryConfig::try_from_values(
@@ -200,10 +268,6 @@ fn explicit_invalid_process_values_fail_closed() {
     );
     assert_eq!(
         parse(Some("true"), Some("disable"), None, None),
-        Err(ProcessTelemetryConfigError::InconsistentMetricsSelection)
-    );
-    assert_eq!(
-        parse(Some("false"), Some("prometheus"), None, None),
         Err(ProcessTelemetryConfigError::InconsistentMetricsSelection)
     );
     assert_eq!(

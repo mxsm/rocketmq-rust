@@ -14,12 +14,8 @@
 
 use std::ffi::OsStr;
 
-use crate::LogsExporter;
-use crate::MetricsExporter;
 use crate::ObservabilityError;
-use crate::OtlpProtocol;
 use crate::TelemetryBootstrapConfig;
-use crate::TraceExporter;
 
 pub const OTEL_EXPORTER_OTLP_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 pub const OTEL_EXPORTER_OTLP_PROTOCOL: &str = "OTEL_EXPORTER_OTLP_PROTOCOL";
@@ -62,42 +58,7 @@ pub fn apply_standard_otlp_environment_values(
     endpoint: Option<&OsStr>,
     protocol: Option<&OsStr>,
 ) -> Result<StandardOtlpEnvironmentStatus, ObservabilityError> {
-    let Some(endpoint) = endpoint else {
-        return Ok(StandardOtlpEnvironmentStatus::Unchanged);
-    };
-    let endpoint = endpoint.to_str().ok_or_else(|| {
-        ObservabilityError::invalid_config(format!("{OTEL_EXPORTER_OTLP_ENDPOINT} must contain valid UTF-8"))
-    })?;
-    let endpoint = endpoint.trim();
-    if endpoint.is_empty() {
-        return Ok(StandardOtlpEnvironmentStatus::Unchanged);
-    }
-
-    let protocol = protocol.ok_or_else(|| {
-        ObservabilityError::invalid_config(format!(
-            "{OTEL_EXPORTER_OTLP_PROTOCOL} must be set to grpc when {OTEL_EXPORTER_OTLP_ENDPOINT} is configured"
-        ))
-    })?;
-    let protocol = protocol.to_str().ok_or_else(|| {
-        ObservabilityError::invalid_config(format!("{OTEL_EXPORTER_OTLP_PROTOCOL} must contain valid UTF-8"))
-    })?;
-    if protocol != "grpc" {
-        return Err(ObservabilityError::invalid_config(format!(
-            "{OTEL_EXPORTER_OTLP_PROTOCOL} must be exactly grpc"
-        )));
-    }
-
-    config.observability.enabled = true;
-    config.observability.metrics.enabled = true;
-    config.observability.metrics.exporter = MetricsExporter::OtlpGrpc;
-    config.observability.traces.enabled = true;
-    config.observability.traces.exporter = TraceExporter::OtlpGrpc;
-    config.observability.logs.enabled = true;
-    config.observability.logs.exporter = LogsExporter::OtlpGrpc;
-    config.observability.otlp.endpoint = endpoint.to_owned();
-    config.observability.otlp.protocol = OtlpProtocol::Grpc;
-
-    Ok(StandardOtlpEnvironmentStatus::Applied)
+    crate::resolver::apply_standard_otlp_environment_values(config, endpoint, protocol)
 }
 
 #[cfg(test)]
@@ -107,6 +68,10 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
+    use crate::LogsExporter;
+    use crate::MetricsExporter;
+    use crate::OtlpProtocol;
+    use crate::TraceExporter;
 
     #[test]
     fn missing_or_blank_endpoint_preserves_existing_configuration() {

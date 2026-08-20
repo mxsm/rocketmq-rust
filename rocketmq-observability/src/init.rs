@@ -14,6 +14,7 @@
 
 #[cfg(feature = "otel-logs")]
 use crate::config::LogsExporter;
+#[cfg(any(feature = "otel-metrics", feature = "prometheus"))]
 use crate::config::MetricsExporter;
 use crate::config::ObservabilityConfig;
 use crate::config::SubscriberInstallPolicy;
@@ -380,7 +381,7 @@ fn init_telemetry_providers_inner(
     config: &ObservabilityConfig,
     #[cfg_attr(not(feature = "prometheus"), allow(unused_variables))] prometheus_task_owner_available: bool,
 ) -> Result<TelemetryProviderGuard, ObservabilityError> {
-    validate_config(config)?;
+    crate::normalize_and_validate(config)?;
 
     if !config.enabled {
         return Ok(TelemetryProviderGuard::from_config(config));
@@ -512,38 +513,6 @@ pub(crate) fn enforce_subscriber_install_policy(
 
 fn subscriber_install_required(config: &ObservabilityConfig) -> bool {
     config.traces.enabled || config.logs.enabled
-}
-
-fn validate_config(config: &ObservabilityConfig) -> Result<(), ObservabilityError> {
-    if !(0.0..=1.0).contains(&config.traces.sample_ratio) {
-        return Err(ObservabilityError::invalid_config(format!(
-            "trace sample_ratio must be between 0.0 and 1.0, got {}",
-            config.traces.sample_ratio
-        )));
-    }
-
-    if config.metrics.cardinality_limit == 0 {
-        return Err(ObservabilityError::invalid_config(
-            "metrics cardinality_limit must be greater than 0",
-        ));
-    }
-
-    if config.metrics.enabled
-        && matches!(config.metrics.exporter, MetricsExporter::Prometheus)
-        && config.prometheus.path.trim().is_empty()
-    {
-        return Err(ObservabilityError::invalid_config(
-            "prometheus.path must not be empty when Prometheus metrics are enabled",
-        ));
-    }
-
-    if crate::status::uses_otlp(config) && config.otlp.protocol != crate::config::OtlpProtocol::Grpc {
-        return Err(ObservabilityError::invalid_config(
-            "only OTLP gRPC is implemented; set observability.otlp.protocol to grpc",
-        ));
-    }
-
-    Ok(())
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -792,6 +761,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MetricsExporter;
 
     #[test]
     fn disabled_config_returns_noop_guard() {
@@ -820,6 +790,50 @@ mod tests {
         config.traces.sample_ratio = 1.1;
 
         let error = init_observability(&config).expect_err("invalid sample ratio should fail");
+
+        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn non_finite_metrics_sample_ratio_is_rejected() {
+        let mut config = ObservabilityConfig::default();
+        config.metrics.sample_ratio = f64::NAN;
+
+        let error = init_observability(&config).expect_err("non-finite metrics sample ratio should fail");
+
+        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn zero_telemetry_durations_are_rejected() {
+        let mut configs = Vec::new();
+        let mut export_interval = ObservabilityConfig::default();
+        export_interval.metrics.export_interval_millis = 0;
+        configs.push(export_interval);
+        let mut export_timeout = ObservabilityConfig::default();
+        export_timeout.metrics.export_timeout_millis = 0;
+        configs.push(export_timeout);
+        let mut otlp_timeout = ObservabilityConfig::default();
+        otlp_timeout.otlp.timeout_millis = 0;
+        configs.push(otlp_timeout);
+
+        for config in configs {
+            let error = init_observability(&config).expect_err("zero telemetry duration should fail");
+            assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        }
+    }
+
+    #[test]
+    fn blank_otlp_endpoint_is_rejected_when_an_otlp_exporter_is_enabled() {
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.metrics.enabled = true;
+        config.metrics.exporter = MetricsExporter::OtlpGrpc;
+        config.otlp.endpoint = "  ".to_owned();
+
+        let error = init_observability(&config).expect_err("blank OTLP endpoint should fail");
 
         assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
     }

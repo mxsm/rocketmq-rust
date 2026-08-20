@@ -14,6 +14,7 @@
 
 //! Validated, low-cardinality release identity metrics.
 
+use std::ffi::OsStr;
 use std::net::SocketAddr;
 #[cfg(feature = "otel-metrics")]
 use std::sync::atomic::AtomicBool;
@@ -28,9 +29,6 @@ const MAX_STABLE_LABEL_LEN: usize = 63;
 const GIT_COMMIT_LEN: usize = 40;
 const DEFAULT_LOCAL_COMMIT: &str = "0000000000000000000000000000000000000000";
 const DEFAULT_LOCAL_NONCE: &str = "local";
-const DEFAULT_PROMETHEUS_BIND_ADDR: &str = "127.0.0.1:5557";
-const DEFAULT_PROMETHEUS_PATH: &str = "/metrics";
-const MAX_PROMETHEUS_PATH_LEN: usize = 128;
 
 /// Environment variable carrying the exact source revision.
 pub const RELEASE_COMMIT_ENV: &str = "ROCKETMQ_RELEASE_COMMIT";
@@ -155,8 +153,8 @@ impl ProcessTelemetryConfig {
     /// default. An explicit all-zero runtime commit is rejected, and an
     /// explicit runtime commit must match a real embedded build commit. Other
     /// missing values select `local` nonce, disabled metrics, loopback binding,
-    /// and `/metrics`. An explicitly enabled exporter must be non-disabled,
-    /// while a disabled metrics setting must use the disabled exporter.
+    /// and `/metrics`. An explicitly enabled exporter must be non-disabled;
+    /// explicitly disabling metrics normalizes the exporter to `Disable`.
     ///
     /// # Errors
     ///
@@ -176,23 +174,79 @@ impl ProcessTelemetryConfig {
         bind_addr: Option<&str>,
         path: Option<&str>,
     ) -> Result<Self, ProcessTelemetryConfigError> {
+        Self::try_from_observability_and_values(
+            service,
+            &crate::ObservabilityConfig::default(),
+            commit.map(OsStr::new),
+            nonce.map(OsStr::new),
+            metrics_enabled.map(OsStr::new),
+            exporter.map(OsStr::new),
+            bind_addr.map(OsStr::new),
+            path.map(OsStr::new),
+        )
+    }
+
+    /// Parses process telemetry inputs over an existing observability base.
+    ///
+    /// Missing metrics values preserve the corresponding base configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessTelemetryConfigError`] when an explicitly supplied
+    /// value is non-Unicode or otherwise invalid.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the seven explicit process-root inputs"
+    )]
+    pub fn try_from_observability_and_values(
+        service: impl Into<String>,
+        base: &crate::ObservabilityConfig,
+        commit: Option<&OsStr>,
+        nonce: Option<&OsStr>,
+        metrics_enabled: Option<&OsStr>,
+        exporter: Option<&OsStr>,
+        bind_addr: Option<&OsStr>,
+        path: Option<&OsStr>,
+    ) -> Result<Self, ProcessTelemetryConfigError> {
+        let commit = os_value(RELEASE_COMMIT_ENV, commit)?;
+        let nonce = os_value(RELEASE_NONCE_ENV, nonce)?;
+        let metrics_enabled_value = os_value(METRICS_ENABLED_ENV, metrics_enabled)?;
+        let exporter = os_value(METRICS_EXPORTER_ENV, exporter)?;
+        let bind_addr = os_value(METRICS_BIND_ADDR_ENV, bind_addr)?;
+        let path = os_value(METRICS_PATH_ENV, path)?;
+
         let commit = resolve_release_commit(commit, option_env!("ROCKETMQ_BUILD_COMMIT"))?;
         let release_identity =
             ValidatedReleaseIdentity::try_new(service, commit, nonce.unwrap_or(DEFAULT_LOCAL_NONCE))?;
-        let metrics_enabled = parse_metrics_enabled(metrics_enabled)?;
-        let metrics_exporter = parse_metrics_exporter(exporter)?;
+        let metrics_enabled = match metrics_enabled_value {
+            Some(value) => parse_metrics_enabled(Some(value))?,
+            None => base.metrics.enabled,
+        };
+        let mut metrics_exporter = match exporter {
+            Some(value) => parse_metrics_exporter(Some(value))?,
+            None => base.metrics.exporter,
+        };
+        if metrics_enabled_value == Some("false") {
+            metrics_exporter = crate::MetricsExporter::Disable;
+        }
         validate_metrics_selection(metrics_enabled, metrics_exporter)?;
 
-        let bind_addr = bind_addr.unwrap_or(DEFAULT_PROMETHEUS_BIND_ADDR);
-        let bind_addr = bind_addr
-            .parse::<SocketAddr>()
-            .map_err(|_| ProcessTelemetryConfigError::InvalidPrometheusBindAddress)?;
+        let bind_addr = match bind_addr {
+            Some(value) => value
+                .parse::<SocketAddr>()
+                .map_err(|_| ProcessTelemetryConfigError::InvalidPrometheusBindAddress)?,
+            None => SocketAddr::new(
+                crate::resolver::parse_prometheus_host(&base.prometheus.host)
+                    .ok_or(ProcessTelemetryConfigError::InvalidPrometheusBindAddress)?,
+                base.prometheus.port,
+            ),
+        };
         if bind_addr.port() == 0 {
             return Err(ProcessTelemetryConfigError::InvalidPrometheusBindAddress);
         }
 
-        let prometheus_path = path.unwrap_or(DEFAULT_PROMETHEUS_PATH);
-        if !is_canonical_metrics_path(prometheus_path) {
+        let prometheus_path = path.unwrap_or(&base.prometheus.path);
+        if !crate::resolver::is_canonical_prometheus_path(prometheus_path) {
             return Err(ProcessTelemetryConfigError::InvalidPrometheusPath);
         }
 
@@ -282,10 +336,18 @@ impl ProcessTelemetryConfig {
         config.prometheus.host.clone_from(&self.prometheus_host);
         config.prometheus.port = self.prometheus_port;
         config.prometheus.path.clone_from(&self.prometheus_path);
-        if self.metrics_enabled {
-            config.enabled = true;
-        }
+        config.enabled = config.metrics.enabled || config.traces.enabled || config.logs.enabled;
     }
+}
+
+fn os_value<'a>(name: &'static str, value: Option<&'a OsStr>) -> Result<Option<&'a str>, ProcessTelemetryConfigError> {
+    value
+        .map(|value| {
+            value
+                .to_str()
+                .ok_or(ProcessTelemetryConfigError::NonUnicodeEnvironment(name))
+        })
+        .transpose()
 }
 
 /// Failure while validating process telemetry inputs.
@@ -371,21 +433,6 @@ fn validate_metrics_selection(
     } else {
         Err(ProcessTelemetryConfigError::InconsistentMetricsSelection)
     }
-}
-
-fn is_canonical_metrics_path(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_PROMETHEUS_PATH_LEN
-        && value.starts_with('/')
-        && (value == "/"
-            || value
-                .split('/')
-                .skip(1)
-                .all(|segment| !segment.is_empty() && segment != "." && segment != ".."))
-        && value
-            .as_bytes()
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'_' | b'.'))
 }
 
 fn read_process_env(name: &'static str) -> Result<Option<String>, ProcessTelemetryConfigError> {
