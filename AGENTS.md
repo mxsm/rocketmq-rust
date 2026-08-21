@@ -71,8 +71,9 @@
   module-wide `allow(warnings)` or broad Clippy-group suppression.
 - Prefer native `async fn` methods in traits. `#[allow(async_fn_in_trait)]` is permitted when required by the
   lint for an intentional public async trait API; do not add `#[async_trait]`.
-- Treat roughly 500 lines as a module review signal and avoid extending high-touch modules beyond roughly 800
-  lines without a strong local reason. Do not split unrelated legacy modules solely to meet a number.
+- Treat roughly 500 lines of code as a module review signal and avoid extending high-touch modules beyond roughly
+  800 lines of code without a strong local reason. For this guideline, exclude comments, attributes/annotations,
+  blank lines, and `use` imports. Do not split unrelated legacy modules solely to meet a number.
 - Keep comments focused on invariants, ordering, error handling, protocol compatibility, or concurrency assumptions; do not restate the code.
 
 ### Errors, unsafe code, async ownership, and tracing
