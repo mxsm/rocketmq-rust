@@ -24,3 +24,27 @@ pub struct DeleteSubscriptionGroupListRequestBody {
     #[serde(default)]
     pub clean_offset: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscription_group_body_defaults_clean_offset_to_false() {
+        let body: DeleteSubscriptionGroupListRequestBody =
+            serde_json::from_str(r#"{"groupNameList":["GroupA","GroupB"]}"#).expect("decode group list");
+
+        assert_eq!(
+            vec![
+                CheetahString::from_static_str("GroupA"),
+                CheetahString::from_static_str("GroupB")
+            ],
+            body.group_name_list
+        );
+        assert!(!body.clean_offset);
+        assert_eq!(
+            r#"{"groupNameList":["GroupA","GroupB"],"cleanOffset":false}"#,
+            serde_json::to_string(&body).expect("encode group list")
+        );
+    }
+}

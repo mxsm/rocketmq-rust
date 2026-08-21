@@ -22,3 +22,22 @@ use serde::Serialize;
 pub struct DeleteTopicListRequestBody {
     pub topic_list: Vec<CheetahString>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_list_body_uses_java_wire_field() {
+        let body = DeleteTopicListRequestBody {
+            topic_list: vec![
+                CheetahString::from_static_str("TopicA"),
+                CheetahString::from_static_str("TopicB"),
+            ],
+        };
+
+        let encoded = serde_json::to_string(&body).expect("encode topic list");
+        assert_eq!(r#"{"topicList":["TopicA","TopicB"]}"#, encoded);
+        assert_eq!(body, serde_json::from_str(&encoded).expect("decode topic list"));
+    }
+}
