@@ -23,7 +23,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.31.0",
+    "lucide-react": "^1.32.0",
     "oidc-client-ts": "^3.3.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
