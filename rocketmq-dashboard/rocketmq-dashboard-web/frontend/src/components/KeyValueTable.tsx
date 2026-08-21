@@ -1,6 +1,7 @@
 import { Copy, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import EmptyState from './EmptyState';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/Dialog';
 
 export interface KeyValueRow {
   key: string;
@@ -12,8 +13,35 @@ interface KeyValueTableProps {
   emptyTitle: string;
 }
 
+interface JsonValue {
+  formatted: string;
+  summary: string;
+}
+
+function parseJsonValue(value: string): JsonValue | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== 'object') return null;
+
+    if (Array.isArray(parsed)) {
+      return {
+        formatted: JSON.stringify(parsed, null, 2),
+        summary: `JSON array · ${parsed.length} ${parsed.length === 1 ? 'item' : 'items'}`
+      };
+    }
+
+    return {
+      formatted: JSON.stringify(parsed, null, 2),
+      summary: `JSON object · ${Object.keys(parsed).length} ${Object.keys(parsed).length === 1 ? 'field' : 'fields'}`
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function KeyValueTable({ rows, emptyTitle }: KeyValueTableProps) {
   const [query, setQuery] = useState('');
+  const [jsonDetail, setJsonDetail] = useState<(JsonValue & { key: string }) | null>(null);
 
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -38,19 +66,43 @@ export default function KeyValueTable({ rows, emptyTitle }: KeyValueTableProps) 
         <EmptyState title={emptyTitle} />
       ) : (
         <div className="kv-list">
-          {filteredRows.map((row) => (
-            <div className="kv-row" key={row.key}>
-              <div className="kv-key" title={row.key}>
-                {row.key}
+          {filteredRows.map((row) => {
+            const jsonValue = parseJsonValue(row.value);
+
+            return (
+              <div className="kv-row" key={row.key}>
+                <div className="kv-key" title={row.key}>
+                  {row.key}
+                </div>
+                <div className="kv-value" title={jsonValue ? undefined : row.value}>
+                  {jsonValue ? (
+                    <button
+                      type="button"
+                      className="kv-json-button"
+                      aria-label={`View JSON for ${row.key}`}
+                      onClick={() => setJsonDetail({ key: row.key, ...jsonValue })}
+                    >
+                      {jsonValue.summary}
+                    </button>
+                  ) : row.value}
+                </div>
+                <button type="button" className="icon-button" title="Copy row" onClick={() => copyRow(row)}>
+                  <Copy size={14} aria-hidden="true" />
+                </button>
               </div>
-              <code className="kv-value">{row.value}</code>
-              <button type="button" className="icon-button" title="Copy row" onClick={() => copyRow(row)}>
-                <Copy size={14} aria-hidden="true" />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+      <Dialog open={jsonDetail !== null} onOpenChange={(open) => { if (!open) setJsonDetail(null); }}>
+        <DialogContent className="kv-json-dialog">
+          <DialogHeader>
+            <DialogTitle>{jsonDetail?.key ?? 'JSON value'}</DialogTitle>
+            <DialogDescription>{jsonDetail?.summary ?? 'Formatted JSON value'}</DialogDescription>
+          </DialogHeader>
+          {jsonDetail ? <pre className="kv-json-preview">{jsonDetail.formatted}</pre> : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

@@ -20,6 +20,8 @@ import { Label } from '../../components/ui/Label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
 import type {
   ConsumerConfigView,
+  ConsumerConfigTarget,
+  ConsumerConfigValue,
   ConsumerConnectionItem,
   ConsumerConnectionView,
   ConsumerProgressQueue,
@@ -326,22 +328,30 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
                   {config.inconsistentFields.length} fields differ across brokers.
                 </div>
               ) : null}
-              <dl className="entity-description-grid">
-                <div><dt>Effective retry queues</dt><dd>{config.effective?.retryQueueNums ?? '-'}</dd></div>
-                <div><dt>Effective max retries</dt><dd>{config.effective?.retryMaxTimes ?? '-'}</dd></div>
-                <div><dt>Consume timeout</dt><dd>{config.effective?.consumeTimeoutMinute ?? '-'}</dd></div>
-                <div><dt>Consume enabled</dt><dd>{config.effective?.consumeEnable ?? false ? 'Yes' : 'No'}</dd></div>
-              </dl>
-              {config.targets.map((target) => (
-                <section key={target.brokerName} className="consumer-resource-section">
-                  <h3>{target.brokerName}</h3>
-                  {target.error ? <div className="notice notice-danger" role="alert">{target.error}</div> : null}
-                  {target.config ? <pre className="consumer-config-json">{JSON.stringify(target.config, null, 2)}</pre> : null}
-                  {target.subscriptionTopics.length > 0 ? (
-                    <p>Subscriptions: {target.subscriptionTopics.join(', ')}</p>
-                  ) : null}
-                </section>
-              ))}
+              <section className="consumer-configuration-summary" aria-labelledby="effective-configuration-heading">
+                <header className="consumer-configuration-heading">
+                  <div>
+                    <h3 id="effective-configuration-heading">Effective settings</h3>
+                    <p>The values currently shared across the selected brokers.</p>
+                  </div>
+                  <span className="consumer-configuration-count">{config.targets.length} broker{config.targets.length === 1 ? '' : 's'}</span>
+                </header>
+                <dl className="entity-description-grid">
+                  <div><dt>Effective retry queues</dt><dd>{config.effective?.retryQueueNums ?? '-'}</dd></div>
+                  <div><dt>Effective max retries</dt><dd>{config.effective?.retryMaxTimes ?? '-'}</dd></div>
+                  <div><dt>Consume timeout</dt><dd>{config.effective?.consumeTimeoutMinute ?? '-'}</dd></div>
+                  <div><dt>Consume enabled</dt><dd>{config.effective?.consumeEnable ?? false ? 'Yes' : 'No'}</dd></div>
+                </dl>
+              </section>
+              <section className="consumer-configuration-targets" aria-labelledby="broker-configuration-heading">
+                <header className="consumer-configuration-heading">
+                  <div>
+                    <h3 id="broker-configuration-heading">Broker settings</h3>
+                    <p>Review the per-broker behavior before making a configuration change.</p>
+                  </div>
+                </header>
+                {config.targets.map((target) => <ConsumerConfigurationTargetCard key={target.brokerName} target={target} />)}
+              </section>
             </>
           ) : null}
         </TabsContent>
@@ -420,4 +430,143 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
 function formatTimestamp(value: number): string {
   if (!value) return '-';
   return new Date(value).toLocaleString();
+}
+
+interface ConsumerConfigurationTargetCardProps {
+  target: ConsumerConfigTarget;
+}
+
+function ConsumerConfigurationTargetCard({ target }: ConsumerConfigurationTargetCardProps) {
+  const retryPolicy = describeRetryPolicy(target.config?.groupRetryPolicyJson);
+
+  return (
+    <article className="consumer-configuration-target">
+      <header className="consumer-configuration-target-header">
+        <div>
+          <h4>{target.brokerName}</h4>
+          {target.brokerAddress ? <code>{target.brokerAddress}</code> : null}
+        </div>
+        <StatusBadge
+          status={target.error ? 'Unavailable' : target.config ? 'Configured' : 'Not reported'}
+          tone={target.error ? 'danger' : target.config ? 'success' : 'neutral'}
+        />
+      </header>
+      {target.error ? <div className="notice notice-danger" role="alert">{target.error}</div> : null}
+      {target.config ? (
+        <>
+          <div className="consumer-configuration-groups">
+            <ConsumerConfigurationGroup title="Consumption" fields={consumptionFields(target.config)} />
+            <ConsumerConfigurationGroup title="Retry and routing" fields={retryAndRoutingFields(target.config)} />
+          </div>
+          <details className="consumer-retry-policy">
+            <summary>
+              <span>Retry policy</span>
+              <span>{retryPolicy.summary}</span>
+            </summary>
+            <pre>{retryPolicy.content}</pre>
+          </details>
+        </>
+      ) : (
+        <p className="consumer-configuration-unavailable">No configuration was reported by this broker.</p>
+      )}
+      {target.subscriptionTopics.length > 0 ? (
+        <section className="consumer-configuration-subscriptions" aria-label={`Subscriptions on ${target.brokerName}`}>
+          <h5>Subscriptions</h5>
+          <div>
+            {target.subscriptionTopics.map((topic) => <span key={topic} className="consumer-configuration-topic">{topic}</span>)}
+          </div>
+        </section>
+      ) : null}
+      {target.attributes.length > 0 ? (
+        <details className="consumer-configuration-attributes">
+          <summary>Additional attributes · {target.attributes.length}</summary>
+          <dl>
+            {target.attributes.map((attribute) => (
+              <div key={attribute.key}>
+                <dt>{attribute.key}</dt>
+                <dd title={attribute.value}>{attribute.value || '-'}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
+    </article>
+  );
+}
+
+interface ConsumerConfigurationGroupProps {
+  title: string;
+  fields: ConsumerConfigurationField[];
+}
+
+interface ConsumerConfigurationField {
+  label: string;
+  value: string | number;
+  mono?: boolean;
+}
+
+function ConsumerConfigurationGroup({ title, fields }: ConsumerConfigurationGroupProps) {
+  return (
+    <section className="consumer-configuration-group">
+      <h5>{title}</h5>
+      <dl className="consumer-configuration-field-grid">
+        {fields.map((field) => (
+          <div key={field.label}>
+            <dt>{field.label}</dt>
+            <dd className={field.mono ? 'mono' : undefined}>{field.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function consumptionFields(config: ConsumerConfigValue): ConsumerConfigurationField[] {
+  return [
+    { label: 'Consume enabled', value: config.consumeEnable ? 'Yes' : 'No' },
+    { label: 'Start from minimum offset', value: config.consumeFromMinEnable ? 'Yes' : 'No' },
+    { label: 'Broadcast consumption', value: config.consumeBroadcastEnable ? 'Yes' : 'No' },
+    { label: 'Orderly consumption', value: config.consumeMessageOrderly ? 'Yes' : 'No' },
+    { label: 'Notify consumer IDs changed', value: config.notifyConsumerIdsChangedEnable ? 'Yes' : 'No' }
+  ];
+}
+
+function retryAndRoutingFields(config: ConsumerConfigValue): ConsumerConfigurationField[] {
+  return [
+    { label: 'Retry queues', value: config.retryQueueNums },
+    { label: 'Maximum retries', value: config.retryMaxTimes },
+    { label: 'Consume timeout', value: `${config.consumeTimeoutMinute} min` },
+    { label: 'Broker ID', value: config.brokerId, mono: true },
+    { label: 'Slow consumer broker', value: config.whichBrokerWhenConsumeSlowly, mono: true },
+    { label: 'Group system flag', value: config.groupSysFlag, mono: true }
+  ];
+}
+
+function describeRetryPolicy(value: string | undefined): { summary: string; content: string } {
+  if (!value) return { summary: 'No policy reported', content: 'No retry policy was reported.' };
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    const policy = isRecord(parsed) && isRecord(parsed.retryPolicy) ? parsed.retryPolicy : undefined;
+    const type = readString(policy?.type) ?? readString(isRecord(parsed) ? parsed.type : undefined);
+    const intervals = Array.isArray(policy?.next) ? policy.next.length : undefined;
+    const summary = [type, intervals === undefined ? undefined : `${intervals} retry intervals`]
+      .filter((part): part is string => Boolean(part))
+      .join(' · ');
+
+    return {
+      summary: summary || 'Configured JSON policy',
+      content: JSON.stringify(parsed, null, 2)
+    };
+  } catch {
+    return { summary: 'Raw policy value', content: value };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }

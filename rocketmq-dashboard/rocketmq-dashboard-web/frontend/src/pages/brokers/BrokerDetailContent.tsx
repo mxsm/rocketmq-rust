@@ -175,7 +175,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
 
   return (
     <div className="broker-detail-content">
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as BrokerDetailTab)}>
+      <Tabs className="broker-detail-tabs" value={activeTab} onValueChange={(value) => setActiveTab(value as BrokerDetailTab)}>
         <TabsList aria-label="Broker detail sections">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="runtime">Runtime</TabsTrigger>
@@ -200,7 +200,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
           ) : null}
         </TabsContent>
 
-        <TabsContent value="runtime">
+        <TabsContent className="broker-detail-fill-tab" value="runtime">
           <section className="broker-detail-section">
             <div className="broker-detail-section-heading">
               <div>
@@ -215,7 +215,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
           </section>
         </TabsContent>
 
-        <TabsContent value="configuration">
+        <TabsContent className="broker-detail-fill-tab" value="configuration">
           <section className="broker-detail-section">
             <div className="broker-detail-section-heading">
               <div>
