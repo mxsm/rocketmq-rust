@@ -14,7 +14,6 @@
 
 #![recursion_limit = "256"]
 
-use std::env;
 use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
@@ -141,16 +140,27 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         return Ok(());
     }
 
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-proxy")
-            .map_err(|error| ProxyError::Transport {
-            message: format!("invalid Proxy process telemetry configuration: {error}"),
-        })?;
+    let mut telemetry_bootstrap = build_proxy_telemetry_bootstrap_config();
+    telemetry_bootstrap.logging.reload = logging_overrides.logging.reload;
+    let rocketmq_observability::TelemetryResolution {
+        bootstrap: bootstrap_config,
+        process: process_telemetry,
+        prometheus_listener_addr,
+        ..
+    } = rocketmq_observability::resolve_telemetry_from_env(
+        "rocketmq-proxy",
+        telemetry_bootstrap,
+        &config.observability,
+        rocketmq_observability::TelemetryEnvironmentSpec::default(),
+    )
+    .map_err(|error| ProxyError::Transport {
+        message: format!("failed to resolve Proxy telemetry configuration: {error}"),
+    })?;
     let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(proxy_security_error)?;
     let validated_security = validate_proxy_security(
         &security_bootstrap,
         &config,
-        process_telemetry.prometheus_listener_addr(),
+        prometheus_listener_addr,
         lifecycle.config().probe_bind_addr,
     )?;
 
@@ -161,19 +171,15 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to resolve proxy log filter: {error}"),
         })?;
-    let mut bootstrap_config = build_proxy_telemetry_bootstrap_config(&config, &process_telemetry);
-    bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config).map_err(|error| {
-        ProxyError::Transport {
-            message: format!("failed to apply standard OTLP environment to proxy telemetry: {error}"),
-        }
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .map_err(|error| ProxyError::Transport {
+        message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
     })?;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone()).map_err(
-            |error| ProxyError::Transport {
-                message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
-            },
-        )?;
     register_proxy_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
@@ -206,7 +212,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "proxy telemetry cleanup after diagnostics startup failure was unhealthy");
@@ -350,10 +357,7 @@ fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
     }
 }
 
-fn build_proxy_telemetry_bootstrap_config(
-    _config: &ProxyConfig,
-    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-) -> rocketmq_observability::TelemetryBootstrapConfig {
+fn build_proxy_telemetry_bootstrap_config() -> rocketmq_observability::TelemetryBootstrapConfig {
     let mut observability = rocketmq_observability::ObservabilityConfig {
         service_name: "rocketmq-proxy".to_string(),
         service_namespace: "rocketmq".to_string(),
@@ -362,7 +366,6 @@ fn build_proxy_telemetry_bootstrap_config(
         ..rocketmq_observability::ObservabilityConfig::default()
     };
     observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
-    process_telemetry.apply_to(&mut observability);
 
     let mut logging = rocketmq_observability::LoggingConfig::default();
     logging.file.file_name_prefix = "rocketmq-proxy".to_string();
@@ -374,7 +377,7 @@ fn register_proxy_release_identity(
     telemetry_guard: &rocketmq_observability::TelemetryRuntimeGuard,
     process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
 ) -> ProxyResult<()> {
-    if !process_telemetry.metrics_enabled() {
+    if !telemetry_guard.handle().metrics_enabled() {
         return Ok(());
     }
 
@@ -396,7 +399,7 @@ fn register_proxy_release_identity(
 
     #[cfg(not(feature = "observability"))]
     {
-        let _ = telemetry_guard;
+        let _ = (telemetry_guard, process_telemetry);
         Err(ProxyError::Transport {
             message: "Proxy metrics require the `observability` Cargo feature".to_string(),
         })
@@ -426,21 +429,23 @@ fn load_logging_overrides(path: Option<&std::path::Path>) -> ProxyResult<rocketm
     let Some(path) = path else {
         return Ok(rocketmq_observability::LoggingOverrides::default());
     };
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("proxy config");
     let config = config::Config::builder()
         .add_source(config::File::from(path))
         .build()
         .map_err(|error| RocketMQError::ConfigParseFailed {
             key: "proxy.logging",
-            reason: format!("failed to build logging config {file_name}: {error}"),
+            reason: format!(
+                "failed to build proxy logging configuration: {}",
+                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
+            ),
         })?;
     config.try_deserialize().map_err(|error| {
         RocketMQError::ConfigParseFailed {
             key: "proxy.logging",
-            reason: format!("failed to deserialize logging config {file_name}: {error}"),
+            reason: format!(
+                "failed to deserialize proxy logging configuration: {}",
+                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
+            ),
         }
         .into()
     })
@@ -473,7 +478,7 @@ struct Args {
 
 impl Args {
     fn parse() -> ProxyResult<Self> {
-        Self::parse_from(env::args())
+        Self::parse_from(std::env::args())
     }
 
     fn parse_from<I, S>(args: I) -> ProxyResult<Self>
@@ -675,18 +680,7 @@ mod tests {
 
     #[test]
     fn proxy_telemetry_bootstrap_uses_required_logging_defaults() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-proxy",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("local Proxy process telemetry");
-        let config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default(), &process_telemetry);
+        let config = build_proxy_telemetry_bootstrap_config();
 
         assert_eq!(config.observability.service_name, "rocketmq-proxy");
         assert_eq!(
@@ -701,26 +695,96 @@ mod tests {
     }
 
     #[test]
-    fn proxy_bootstrap_accepts_standard_otlp_environment_values() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-proxy",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("local Proxy process telemetry");
-        let mut config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default(), &process_telemetry);
+    fn proxy_telemetry_bootstrap_resolves_environment_over_file_without_losing_file_trace_ratio() {
+        let proxy_config = ProxyConfig {
+            observability: rocketmq_observability::ObservabilityOverrides {
+                traces: rocketmq_observability::TracesOverrides {
+                    exporter: Some(rocketmq_observability::TraceExporter::OtlpGrpc),
+                    sample_ratio: Some(0.1),
+                    ..Default::default()
+                },
+                otlp: rocketmq_observability::OtlpOverrides {
+                    endpoint: Some("http://file-collector:4317".to_string()),
+                    protocol: Some(rocketmq_observability::OtlpProtocol::Grpc),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..ProxyConfig::default()
+        };
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://env-collector:4317".into()),
+            otlp_protocol: Some("grpc".into()),
+            ..Default::default()
+        };
 
-        rocketmq_observability::apply_standard_otlp_environment_values(
-            &mut config,
-            Some(std::ffi::OsStr::new("http://collector:4317")),
-            Some(std::ffi::OsStr::new("grpc")),
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-proxy",
+            build_proxy_telemetry_bootstrap_config(),
+            &proxy_config.observability,
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
         )
-        .expect("valid standard OTLP environment should apply");
+        .expect("Proxy telemetry precedence should resolve");
+
+        assert_eq!(
+            resolution.bootstrap.observability.otlp.endpoint,
+            "http://env-collector:4317"
+        );
+        assert_eq!(resolution.bootstrap.observability.traces.sample_ratio, 0.1);
+    }
+
+    #[test]
+    fn proxy_telemetry_bootstrap_preserves_file_only_metrics_selection() {
+        let proxy_config = ProxyConfig {
+            observability: rocketmq_observability::ObservabilityOverrides {
+                metrics: rocketmq_observability::MetricsOverrides {
+                    exporter: Some(rocketmq_observability::MetricsExporter::Prometheus),
+                    ..Default::default()
+                },
+                prometheus: rocketmq_observability::PrometheusOverrides {
+                    host: Some("127.0.0.1".to_string()),
+                    port: Some(5557),
+                    path: Some("/metrics".to_string()),
+                },
+                ..Default::default()
+            },
+            ..ProxyConfig::default()
+        };
+
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-proxy",
+            build_proxy_telemetry_bootstrap_config(),
+            &proxy_config.observability,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
+        )
+        .expect("file-only Proxy metrics should resolve");
+
+        assert!(resolution.bootstrap.observability.metrics.enabled);
+        assert!(resolution.process.metrics_enabled());
+        assert_eq!(
+            resolution.prometheus_listener_addr,
+            Some(std::net::SocketAddr::from(([127, 0, 0, 1], 5557)))
+        );
+    }
+
+    #[test]
+    fn proxy_bootstrap_accepts_standard_otlp_environment_values() {
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://collector:4317".into()),
+            otlp_protocol: Some("grpc".into()),
+            ..Default::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-proxy",
+            build_proxy_telemetry_bootstrap_config(),
+            &rocketmq_observability::ObservabilityOverrides::default(),
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
+        )
+        .expect("valid standard OTLP environment should resolve");
+        let config = resolution.bootstrap;
 
         assert!(config.observability.enabled);
         assert_eq!(config.observability.service_name, "rocketmq-proxy");

@@ -100,16 +100,6 @@ isProcessReadEvent = false
 notifyBrokerRoleChanged = true
 scanInactiveMasterInterval = 5000
 raftScanWaitTimeoutMs = 1000
-metricsExporterType = "disable"
-metricsGrpcExporterTarget = ""
-metricsGrpcExporterHeader = ""
-metricGrpcExporterTimeOutInMills = 3000
-metricGrpcExporterIntervalInMills = 60000
-metricLoggingExporterIntervalInMills = 10000
-metricsPromExporterPort = 5557
-metricsPromExporterHost = ""
-metricsLabel = ""
-metricsInDelta = false
 configBlackList = "configBlackList;configStorePath"
 
 nodeId = 1
@@ -124,7 +114,27 @@ enableElectUncleanMasterLocal = false
 [[raftPeers]]
 id = 1
 addr = "127.0.0.1:60110"
+
+[observability.metrics]
+exporter = "disable"
+
+[observability.traces]
+exporter = "disable"
+
+[observability.logs]
+exporter = "disable"
+
+[observability.otlp]
+endpoint = "http://127.0.0.1:4317"
+protocol = "grpc"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"
 ```
+
+旧版扁平 telemetry 字段已经删除。Controller 只能通过结构化的 `[observability]` 配置段设置可观测性；实际存在的运行时环境变量会覆盖对应文件值。
 
 多节点 Controller 集群中，每个节点应使用独立的 `nodeId`、`listenAddr` 和 `storagePath`，所有节点共享相同的
 `raftPeers` 列表。`listenAddr` 是面向 Broker 的 remoting 端点；每个 `raftPeers.addr` 是对外通告的 OpenRaft

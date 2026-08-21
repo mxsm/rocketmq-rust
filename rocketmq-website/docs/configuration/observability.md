@@ -5,211 +5,242 @@ title: Observability
 
 # RocketMQ Rust Observability
 
-RocketMQ Rust observability is centered in the `rocketmq-observability` crate.
-The crate is disabled by default and each signal is enabled by Cargo feature
-and broker configuration.
+Broker, NameServer, Controller, Proxy, and RocketMQ MCP use one canonical
+`observability` file section. The shared resolver merges service defaults,
+file values, and only environment variables that are actually present.
 
-## Signals
+## Activation model
 
-| Signal | Broker feature | Exporters |
+A signal runs only when both gates are open:
+
+| Gate | Requirement |
+| --- | --- |
+| Build time | Compile the service with the feature for that signal and exporter. |
+| Runtime | Select a non-`disable` exporter in `observability` or through a supported environment override. |
+
+Feature names differ by service and must be selected from that service's
+`Cargo.toml`:
+
+| Service | Convenience feature | Signal and exporter features |
 | --- | --- | --- |
-| Metrics | `otel-metrics`, `otlp-metrics`, `prometheus` | disable, OTLP gRPC, Prometheus, log |
-| Traces | `otel-traces`, `otlp-traces` | disable, OTLP gRPC, log |
-| Logs | `otel-logs`, `otlp-logs` | disable, OTLP gRPC, log |
+| Broker | `observability` enables metrics and traces | `otel-metrics`, `otlp-metrics`, `prometheus`, `metrics-prometheus`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| NameServer | `observability` enables metrics and traces | `otel-metrics`, `otlp-metrics`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| Controller | None | `metrics`, `metrics-otlp`, `metrics-prometheus`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| Proxy | `observability` enables metrics only | `otlp-metrics`, `otel-traces`, `otlp-traces`, `otel-logs`, `otlp-logs` |
+| MCP | `observability` enables metrics and traces | `otlp` adds OTLP metrics, traces, and logs |
 
-The convenience `observability` feature enables metrics and traces. Logs are
-kept separate so applications can opt in explicitly.
+In particular, Controller does not define an `observability` convenience
+feature. OTLP logs remain an explicit build-time choice. Examples:
 
-## Broker Configuration
+```bash
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
+```
 
-Broker observability uses the existing broker config model with camelCase
-fields. A copyable fragment is kept with the existing examples at
+Enabling a Cargo feature does not enable export by itself, and selecting an
+exporter at runtime cannot add code that was not compiled.
+
+## Precedence
+
+Resolution is deterministic from lowest to highest precedence:
+
+| Priority | Source | Behavior |
+| --- | --- | --- |
+| 1 | Service defaults | Signals are disabled and listeners are local-only. |
+| 2 | File `[observability]` section | Only fields present in the file replace defaults. |
+| 3 | Present environment variables | Only variables that exist replace the matching resolved fields. |
+
+A missing environment variable never supplies a fallback override. For example,
+if `ROCKETMQ_METRICS_ENABLED` is absent, the file's metrics exporter remains
+effective.
+
+## Complete TOML example
+
+All file keys use camelCase. Empty maps are valid and avoid putting credentials
+in an ordinary configuration file.
+
+```toml
+[observability]
+environment = "production"
+serviceInstanceId = "broker-a-0"
+resourceAttributes = { "deployment.zone" = "az-a", "deployment.rack" = "rack-1" }
+
+[observability.metrics]
+exporter = "otlp_grpc"
+exportIntervalMillis = 5000
+exportTimeoutMillis = 3000
+cardinalityLimit = 10000
+sampleRatio = 1.0
+topicLabelEnabled = true
+consumerGroupLabelEnabled = true
+
+[observability.traces]
+exporter = "otlp_grpc"
+sampleRatio = 0.01
+propagateContext = true
+recordMessageId = false
+recordMessageKeys = false
+recordBodySize = true
+
+[observability.logs]
+exporter = "otlp_grpc"
+
+[observability.otlp]
+endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
+protocol = "grpc"
+headers = {}
+timeoutMillis = 3000
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"
+```
+
+## Complete YAML example
+
+Broker's canonical YAML shape is the same nested schema:
+
+```yaml
+observability:
+  environment: production
+  serviceInstanceId: broker-a-0
+  resourceAttributes:
+    deployment.zone: az-a
+    deployment.rack: rack-1
+  metrics:
+    exporter: otlp_grpc
+    exportIntervalMillis: 5000
+    exportTimeoutMillis: 3000
+    cardinalityLimit: 10000
+    sampleRatio: 1.0
+    topicLabelEnabled: true
+    consumerGroupLabelEnabled: true
+  traces:
+    exporter: otlp_grpc
+    sampleRatio: 0.01
+    propagateContext: true
+    recordMessageId: false
+    recordMessageKeys: false
+    recordBodySize: true
+  logs:
+    exporter: otlp_grpc
+  otlp:
+    endpoint: http://otel-collector.observability.svc.cluster.local:4317
+    protocol: grpc
+    headers: {}
+    timeoutMillis: 3000
+  prometheus:
+    host: 127.0.0.1
+    port: 5557
+    path: /metrics
+```
+
+The copyable Broker example is
 `rocketmq-example/examples/broker_observability.yaml`.
 
-```yaml
-metricsExporterType: otlp_grpc
-metricsExportIntervalMillis: 5000
-metricsCardinalityLimit: 10000
-metricsTopicLabelEnabled: true
-metricsConsumerGroupLabelEnabled: true
-otlpExporterEndpoint: http://127.0.0.1:4317
-otlpExporterHeaders: authorization:Bearer token,tenant:rocketmq
-otlpExporterTimeoutMillis: 3000
-traceExporterType: otlp_grpc
-traceSampleRatio: 0.01
-tracePropagateContext: true
-traceRecordMessageId: false
-traceRecordMessageKeys: false
-traceRecordBodySize: true
-logExporterType: otlp_grpc
-observabilityEnvironment: dev
-observabilityServiceInstanceId: broker-a-0
-observabilityResourceAttributes: zone:az-a,rack:rack-1
-```
+## Exporters and file fields
 
-Valid exporter values:
-
-| Field | Values |
+| Signal | Exporter values |
 | --- | --- |
-| `metricsExporterType` | `disable`, `otlp_grpc`, `prom`, `log` |
-| `traceExporterType` | `disable`, `otlp_grpc`, `log` |
-| `logExporterType` | `disable`, `otlp_grpc`, `log` |
+| Metrics | `disable`, `otlp_grpc`, `prometheus`, `log` |
+| Traces | `disable`, `otlp_grpc`, `log` |
+| Logs | `disable`, `otlp_grpc`, `log` |
 
-OTLP settings are shared by metrics, traces, and logs. Header and resource
-attribute values use comma-separated `key:value` pairs.
+`otlp` is shared by all OTLP signals. Only OTLP gRPC is currently
+implemented, so an active OTLP exporter requires `protocol = "grpc"`.
+`prometheus` configures the direct metrics listener.
 
-## Metrics
+## Environment mapping
 
-Broker metrics are recorded through `BrokerMetricsManager` and delegated to
-`rocketmq-observability` when metrics are enabled.
+| Environment variable | Resolved setting |
+| --- | --- |
+| `ROCKETMQ_METRICS_ENABLED` | Enables or disables the final metrics selection. |
+| `ROCKETMQ_METRICS_EXPORTER` | `observability.metrics.exporter` |
+| `ROCKETMQ_METRICS_BIND_ADDR` | `observability.prometheus.host` and `port` |
+| `ROCKETMQ_METRICS_PATH` | `observability.prometheus.path` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `observability.otlp.endpoint`; a non-empty value switches metrics, traces, and logs to OTLP gRPC. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Must be exactly `grpc` when the standard endpoint variable is non-empty. |
+| `ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO` | Broker `observability.traces.sampleRatio` |
+| `ROCKETMQ_MCP_TRACE_SAMPLE_RATIO` | MCP `observability.traces.sampleRatio` |
 
-| Metric | Type | Unit | Meaning |
-| --- | --- | --- | --- |
-| `rocketmq_messages_in_total` | counter | messages | Messages accepted by the broker |
-| `rocketmq_messages_out_total` | counter | messages | Messages delivered from the broker |
-| `rocketmq_throughput_in_total` | counter | bytes | Incoming broker throughput |
-| `rocketmq_throughput_out_total` | counter | bytes | Outgoing broker throughput |
-| `rocketmq_message_size` | histogram | bytes | Message body size distribution |
-| `rocketmq_send_message_latency` | histogram | ms | Send-message processing latency |
-| `rocketmq_metrics_label_dropped_total` | counter | labels | Labels normalized by the cardinality guard |
+A missing or blank standard OTLP endpoint leaves the file configuration
+unchanged. A non-empty endpoint without `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`
+fails startup.
 
-Safe low-cardinality labels include `cluster`, `node_type`, `node_id`,
-`topic`, `consumer_group`, and `invocation_status`. Do not add message IDs,
-trace IDs, offsets, request IDs, or transaction IDs as metric labels.
+`ROCKETMQ_RELEASE_COMMIT` and `ROCKETMQ_RELEASE_NONCE` remain build/process
+identity inputs and are not file fields. A deployment may retain
+`OTEL_SERVICE_NAME`, but this resolver deliberately ignores it. Each service
+composition root owns `service_name`, `service_namespace`, `node_type`, and
+`node_id`; file and environment input cannot change them.
 
-Broker label cardinality is controlled through:
+## Migration from flat service fields
+
+Broker and Controller no longer accept their legacy flat telemetry fields.
+Remove those fields and migrate their values into the nested
+`[observability]` sections. Do not configure both forms: the structured
+configuration is the only file interface.
+
+The Helm chart defaults
+`global.observability.environmentOverridesEnabled` to `false`. In this mode it
+always injects release identity variables, but does not inject
+`ROCKETMQ_METRICS_*`, `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_PROTOCOL`. The ConfigMap's structured file selection is
+therefore effective for all-disabled, OTLP, log, and mixed-signal
+configurations.
+
+The stock chart accepts only `disable`, `otlp_grpc`, and `log` for
+`global.observability.metricsExporter`, and metrics Services are disabled by
+default. Its production images do not compile the direct Prometheus exporter
+consistently across all five services, so `prometheus` is intentionally not a
+stock global schema option. Direct Prometheus remains available through a
+service's file configuration when that service is custom-built with the
+corresponding feature (currently Broker or Controller); such a deployment must
+configure and expose the custom workload outside the stock global selector.
+
+Set the flag to `true` only while preserving the previous environment-driven
+deployment behavior:
 
 ```yaml
-metricsCardinalityLimit: 10000
-metricsTopicLabelEnabled: true
-metricsConsumerGroupLabelEnabled: true
+global:
+  observability:
+    environmentOverridesEnabled: true
 ```
 
-When the topic or consumer group limit is exceeded, the label value is
-normalized to `other`, and `rocketmq_metrics_label_dropped_total` is incremented
-with the low-cardinality `label_key` attribute.
+Compatibility mode injects the metrics variables and the resolved OTLP
+endpoint with `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. These present environment
+variables take precedence over ConfigMap values. Both the ConfigMap and the
+compatibility variables use the same structured/legacy endpoint alias
+resolution.
 
-## Local Collector
+## Validation and secret handling
 
-OpenTelemetry Collector and Prometheus config files live in the existing
-distribution config directory:
+The resolver fails closed for invalid sample ratios, zero intervals or limits,
+non-canonical Prometheus paths, invalid listener addresses, blank active OTLP
+endpoints, and unsupported OTLP protocols. Errors name the field and constraint
+but do not include endpoint, header, or resource-attribute values. Startup logs
+also avoid printing those raw values.
+
+Do not place authorization headers or tokens in a Kubernetes ConfigMap. Keep
+`headers = {}` in public examples and provide sensitive configuration through
+a restricted secret-backed file or the collector's authentication mechanism.
+Never use message IDs, trace IDs, offsets, request IDs, or transaction IDs as
+metric labels.
+
+## Signal notes
+
+- Topic and consumer-group labels are bounded by `cardinalityLimit`; overflow
+  values are normalized to `other`.
+- Trace message IDs and keys are disabled by default because they are
+  high-cardinality. Body-size recording stores only the size.
+- W3C `traceparent`, `tracestate`, and `baggage` properties carry trace
+  context.
+- The direct Prometheus endpoint defaults to
+  `http://127.0.0.1:5557/metrics`.
+
+Local collector examples remain under `distribution/config`:
 
 ```bash
 otelcol-contrib --config distribution/config/otel-collector-observability.yaml
 prometheus --config.file=distribution/config/prometheus-observability.yaml
-```
-
-The local Collector config accepts OTLP gRPC on `4317`, OTLP HTTP on `4318`,
-exports metrics to Prometheus on `9464`, and writes metrics, traces, and logs to
-the Collector debug exporter. The provided Prometheus config scrapes
-`127.0.0.1:9464`.
-
-## Prometheus
-
-Use OTLP metrics from the broker to the OpenTelemetry Collector, then scrape
-the Collector Prometheus exporter:
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features otlp-metrics
-```
-
-The broker can also expose `/metrics` directly:
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
-curl http://127.0.0.1:5557/metrics
-```
-
-Direct exporter config:
-
-```yaml
-metricsExporterType: prom
-metricsPromExporterHost: 127.0.0.1
-metricsPromExporterPort: 5557
-metricsPromExporterPath: /metrics
-```
-
-Import the Grafana dashboard from
-`distribution/config/grafana-rocketmq-broker-dashboard.json` and select a
-Prometheus data source.
-
-## Tracing
-
-Tracing uses `tracing`, `tracing-opentelemetry`, and standard W3C trace context
-propagation through RocketMQ message properties.
-
-```yaml
-traceExporterType: otlp_grpc
-traceSampleRatio: 0.01
-tracePropagateContext: true
-traceRecordMessageId: false
-traceRecordMessageKeys: false
-traceRecordBodySize: true
-```
-
-`traceRecordMessageId` and `traceRecordMessageKeys` stay disabled by default to
-avoid recording high-cardinality fields. `traceRecordBodySize` is enabled by
-default because it records only the payload size.
-
-| Config | Span attribute |
-| --- | --- |
-| `traceRecordMessageId` | `messaging.message.id` |
-| `traceRecordMessageKeys` | `messaging.rocketmq.message.keys` |
-| `traceRecordBodySize` | `messaging.message.body.size` |
-
-Current span names:
-
-| Span | Scope |
-| --- | --- |
-| `RocketMQ PRODUCER SEND` | Producer send path |
-| `RocketMQ BROKER RECEIVE_SEND` | Broker send-message request processing |
-| `RocketMQ STORE APPEND` | Store append path |
-| `RocketMQ CONSUMER PROCESS` | Consumer listener execution |
-
-Consumer ACK, retry, and DLQ outcomes are recorded as span events.
-
-Context propagation uses these message properties:
-
-| Property | Purpose |
-| --- | --- |
-| `traceparent` | W3C trace parent |
-| `tracestate` | W3C trace state |
-| `baggage` | W3C baggage |
-
-`traceSampleRatio` accepts values from `0.0` to `1.0`.
-
-## Logs
-
-Logs are bridged from `tracing` to OpenTelemetry logs with
-`opentelemetry-appender-tracing`. The bridge can attach logs to the current
-trace/span context when tracing is active in the same subscriber.
-
-```yaml
-logExporterType: otlp_grpc
-```
-
-Use `logExporterType: log` for local debugging. Use `disable` to leave logs out
-of the OpenTelemetry pipeline.
-
-For correlated traces and logs, run the broker with both trace and log features:
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-traces,otlp-logs"
-```
-
-The local Collector config includes a logs pipeline that writes to the debug
-exporter.
-
-## Example Commands
-
-Metrics through OTLP:
-
-```bash
-cargo run -p rocketmq-observability --example broker_metrics --features otlp-metrics
-```
-
-Broker with OTLP metrics, traces, and logs:
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
 ```

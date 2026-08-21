@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fmt;
 
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ObservabilityConfig {
     pub enabled: bool,
@@ -36,6 +37,30 @@ pub struct ObservabilityConfig {
     pub prometheus: PrometheusConfig,
     pub subscriber_install_policy: SubscriberInstallPolicy,
     pub resource_attributes: HashMap<String, String>,
+}
+
+impl fmt::Debug for ObservabilityConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservabilityConfig")
+            .field("enabled", &self.enabled)
+            .field("service_name", &self.service_name)
+            .field("service_namespace", &self.service_namespace)
+            .field("service_instance_id_configured", &!self.service_instance_id.is_empty())
+            .field("service_version", &self.service_version)
+            .field("environment", &self.environment)
+            .field("cluster", &self.cluster)
+            .field("node_type", &self.node_type)
+            .field("node_id", &self.node_id)
+            .field("metrics", &self.metrics)
+            .field("traces", &self.traces)
+            .field("logs", &self.logs)
+            .field("otlp", &self.otlp)
+            .field("prometheus", &self.prometheus)
+            .field("subscriber_install_policy", &self.subscriber_install_policy)
+            .field("resource_attributes_count", &self.resource_attributes.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -123,7 +148,7 @@ pub struct LogsConfig {
     pub exporter: LogsExporter,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OtlpConfig {
     pub endpoint: String,
@@ -132,12 +157,206 @@ pub struct OtlpConfig {
     pub timeout_millis: u64,
 }
 
+impl fmt::Debug for OtlpConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OtlpConfig")
+            .field("endpoint_configured", &!self.endpoint.is_empty())
+            .field("protocol", &self.protocol)
+            .field("headers_count", &self.headers.len())
+            .field("timeout_millis", &self.timeout_millis)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PrometheusConfig {
     pub host: String,
     pub port: u16,
     pub path: String,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservabilityOverrides {
+    pub environment: Option<String>,
+    pub service_instance_id: Option<String>,
+    pub resource_attributes: Option<HashMap<String, String>>,
+    pub metrics: MetricsOverrides,
+    pub traces: TracesOverrides,
+    pub logs: LogsOverrides,
+    pub otlp: OtlpOverrides,
+    pub prometheus: PrometheusOverrides,
+}
+
+impl fmt::Debug for ObservabilityOverrides {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservabilityOverrides")
+            .field("environment_configured", &self.environment.is_some())
+            .field("service_instance_id_configured", &self.service_instance_id.is_some())
+            .field(
+                "resource_attributes_count",
+                &self.resource_attributes.as_ref().map(HashMap::len),
+            )
+            .field("metrics", &self.metrics)
+            .field("traces", &self.traces)
+            .field("logs", &self.logs)
+            .field("otlp", &self.otlp)
+            .field("prometheus", &self.prometheus)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsOverrides {
+    pub exporter: Option<MetricsExporter>,
+    pub export_interval_millis: Option<u64>,
+    pub export_timeout_millis: Option<u64>,
+    pub cardinality_limit: Option<usize>,
+    pub sample_ratio: Option<f64>,
+    pub topic_label_enabled: Option<bool>,
+    pub consumer_group_label_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct TracesOverrides {
+    pub exporter: Option<TraceExporter>,
+    pub sample_ratio: Option<f64>,
+    pub propagate_context: Option<bool>,
+    pub record_message_id: Option<bool>,
+    pub record_message_keys: Option<bool>,
+    pub record_body_size: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogsOverrides {
+    pub exporter: Option<LogsExporter>,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct OtlpOverrides {
+    pub endpoint: Option<String>,
+    pub protocol: Option<OtlpProtocol>,
+    pub headers: Option<HashMap<String, String>>,
+    pub timeout_millis: Option<u64>,
+}
+
+impl fmt::Debug for OtlpOverrides {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OtlpOverrides")
+            .field("endpoint_configured", &self.endpoint.is_some())
+            .field("protocol", &self.protocol)
+            .field("headers_count", &self.headers.as_ref().map(HashMap::len))
+            .field("timeout_millis", &self.timeout_millis)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrometheusOverrides {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub path: Option<String>,
+}
+
+impl ObservabilityOverrides {
+    /// Applies only explicitly configured file fields to a service-owned base.
+    ///
+    /// Omitted fields preserve the base value, configured maps replace their
+    /// base maps, and each signal exporter determines that signal's enabled
+    /// state. Service identity fields are intentionally not part of this type.
+    pub fn apply_to(&self, target: &mut ObservabilityConfig) {
+        if let Some(environment) = &self.environment {
+            target.environment = environment.clone();
+        }
+        if let Some(service_instance_id) = &self.service_instance_id {
+            target.service_instance_id = service_instance_id.clone();
+        }
+        if let Some(resource_attributes) = &self.resource_attributes {
+            target.resource_attributes = resource_attributes.clone();
+        }
+
+        if let Some(exporter) = self.metrics.exporter {
+            target.metrics.exporter = exporter;
+            target.metrics.enabled = exporter.is_enabled();
+        }
+        if let Some(export_interval_millis) = self.metrics.export_interval_millis {
+            target.metrics.export_interval_millis = export_interval_millis;
+        }
+        if let Some(export_timeout_millis) = self.metrics.export_timeout_millis {
+            target.metrics.export_timeout_millis = export_timeout_millis;
+        }
+        if let Some(cardinality_limit) = self.metrics.cardinality_limit {
+            target.metrics.cardinality_limit = cardinality_limit;
+        }
+        if let Some(sample_ratio) = self.metrics.sample_ratio {
+            target.metrics.sample_ratio = sample_ratio;
+        }
+        if let Some(topic_label_enabled) = self.metrics.topic_label_enabled {
+            target.metrics.topic_label_enabled = topic_label_enabled;
+        }
+        if let Some(consumer_group_label_enabled) = self.metrics.consumer_group_label_enabled {
+            target.metrics.consumer_group_label_enabled = consumer_group_label_enabled;
+        }
+
+        if let Some(exporter) = self.traces.exporter {
+            target.traces.exporter = exporter;
+            target.traces.enabled = !matches!(exporter, TraceExporter::Disable);
+        }
+        if let Some(sample_ratio) = self.traces.sample_ratio {
+            target.traces.sample_ratio = sample_ratio;
+        }
+        if let Some(propagate_context) = self.traces.propagate_context {
+            target.traces.propagate_context = propagate_context;
+        }
+        if let Some(record_message_id) = self.traces.record_message_id {
+            target.traces.record_message_id = record_message_id;
+        }
+        if let Some(record_message_keys) = self.traces.record_message_keys {
+            target.traces.record_message_keys = record_message_keys;
+        }
+        if let Some(record_body_size) = self.traces.record_body_size {
+            target.traces.record_body_size = record_body_size;
+        }
+
+        if let Some(exporter) = self.logs.exporter {
+            target.logs.exporter = exporter;
+            target.logs.enabled = !matches!(exporter, LogsExporter::Disable);
+        }
+
+        if let Some(endpoint) = &self.otlp.endpoint {
+            target.otlp.endpoint = endpoint.clone();
+        }
+        if let Some(protocol) = self.otlp.protocol {
+            target.otlp.protocol = protocol;
+        }
+        if let Some(headers) = &self.otlp.headers {
+            target.otlp.headers = headers.clone();
+        }
+        if let Some(timeout_millis) = self.otlp.timeout_millis {
+            target.otlp.timeout_millis = timeout_millis;
+        }
+
+        if let Some(host) = &self.prometheus.host {
+            target.prometheus.host = host.clone();
+        }
+        if let Some(port) = self.prometheus.port {
+            target.prometheus.port = port;
+        }
+        if let Some(path) = &self.prometheus.path {
+            target.prometheus.path = path.clone();
+        }
+
+        target.enabled = target.metrics.enabled || target.traces.enabled || target.logs.enabled;
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -353,6 +572,74 @@ impl Default for PrometheusConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ENDPOINT_CANARY: &str = "https://collector.invalid:4317/v1/traces?token=ENDPOINT_CANARY";
+    const HEADER_KEY_CANARY: &str = "x-header-key-canary";
+    const HEADER_VALUE_CANARY: &str = "Bearer HEADER_VALUE_CANARY";
+    const RESOURCE_KEY_CANARY: &str = "resource.key.canary";
+    const RESOURCE_VALUE_CANARY: &str = "RESOURCE_VALUE_CANARY";
+
+    fn assert_sensitive_debug_values_are_absent(output: &str) {
+        for canary in [
+            ENDPOINT_CANARY,
+            HEADER_KEY_CANARY,
+            HEADER_VALUE_CANARY,
+            RESOURCE_KEY_CANARY,
+            RESOURCE_VALUE_CANARY,
+        ] {
+            assert!(!output.contains(canary), "Debug output exposed {canary}: {output}");
+        }
+    }
+
+    #[test]
+    fn observability_config_debug_redacts_otlp_and_resource_values() {
+        let mut config = ObservabilityConfig::default();
+        config.otlp.endpoint = ENDPOINT_CANARY.to_string();
+        config
+            .otlp
+            .headers
+            .insert(HEADER_KEY_CANARY.to_string(), HEADER_VALUE_CANARY.to_string());
+        config
+            .resource_attributes
+            .insert(RESOURCE_KEY_CANARY.to_string(), RESOURCE_VALUE_CANARY.to_string());
+
+        let otlp_debug = format!("{:?}", config.otlp);
+        let config_debug = format!("{config:?}");
+
+        assert_sensitive_debug_values_are_absent(&otlp_debug);
+        assert_sensitive_debug_values_are_absent(&config_debug);
+        assert!(otlp_debug.contains("endpoint_configured"));
+        assert!(otlp_debug.contains("headers_count"));
+        assert!(config_debug.contains("resource_attributes_count"));
+    }
+
+    #[test]
+    fn observability_overrides_debug_redacts_otlp_and_resource_values() {
+        let overrides = ObservabilityOverrides {
+            resource_attributes: Some(HashMap::from([(
+                RESOURCE_KEY_CANARY.to_string(),
+                RESOURCE_VALUE_CANARY.to_string(),
+            )])),
+            otlp: OtlpOverrides {
+                endpoint: Some(ENDPOINT_CANARY.to_string()),
+                headers: Some(HashMap::from([(
+                    HEADER_KEY_CANARY.to_string(),
+                    HEADER_VALUE_CANARY.to_string(),
+                )])),
+                ..OtlpOverrides::default()
+            },
+            ..ObservabilityOverrides::default()
+        };
+
+        let otlp_debug = format!("{:?}", overrides.otlp);
+        let overrides_debug = format!("{overrides:?}");
+
+        assert_sensitive_debug_values_are_absent(&otlp_debug);
+        assert_sensitive_debug_values_are_absent(&overrides_debug);
+        assert!(otlp_debug.contains("endpoint_configured"));
+        assert!(otlp_debug.contains("headers_count"));
+        assert!(overrides_debug.contains("resource_attributes_count"));
+    }
 
     #[test]
     fn default_config_is_disabled_and_local_only() {

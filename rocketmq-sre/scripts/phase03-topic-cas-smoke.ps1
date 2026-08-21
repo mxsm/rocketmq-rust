@@ -141,7 +141,6 @@ namesrvAddr = "127.0.0.1:$NameServerPort"
 autoCreateTopicEnable = false
 authenticationEnabled = false
 authorizationEnabled = false
-metricsExporterType = "disable"
 
 [broker.brokerServerConfig]
 bindAddress = "127.0.0.1"
@@ -161,6 +160,9 @@ mappedFileSizeConsumeQueueExt = 65536
 maxHashSlotNum = 1000
 maxIndexNum = 4000
 timerWheelEnable = false
+
+[observability.metrics]
+exporter = "disable"
 "@
 [IO.File]::WriteAllText($brokerConfigPath, $brokerConfig, [Text.UTF8Encoding]::new($false))
 

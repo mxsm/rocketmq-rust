@@ -15,6 +15,7 @@
 // limitations under the License.
 
 use clap::Parser;
+use rocketmq_mcp::app::prepare_mcp_bootstrap;
 use rocketmq_mcp::app::McpApp;
 use rocketmq_mcp::config::Args;
 use rocketmq_mcp::config::McpConfig;
@@ -27,7 +28,6 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
-use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
@@ -79,21 +79,11 @@ fn mcp_runtime_config() -> RuntimeConfig {
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
     let args = Args::parse();
     let config = McpConfig::load_with_overrides(&args)?;
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-mcp")
-            .map_err(|error| {
-                McpError::InvalidConfig(format!("invalid MCP process telemetry configuration: {error}"))
-            })?;
     let security_bootstrap = SecurityBootstrapConfig::from_env()
         .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
-    let validated_security = validate_mcp_security(
-        &security_bootstrap,
-        config.server.transport,
-        &config.server.http.bind,
-        process_telemetry.prometheus_listener_addr(),
-        lifecycle.config().probe_bind_addr,
-    )?;
-    let app = McpApp::bootstrap_typed(config, process_telemetry, validated_security, service_context).await?;
+    let bootstrap_handoff = prepare_mcp_bootstrap(config, &security_bootstrap, lifecycle.config().probe_bind_addr)?;
+    let validated_security = bootstrap_handoff.security_outcome();
+    let app = McpApp::bootstrap_validated_typed(bootstrap_handoff, service_context).await?;
     log_security_bootstrap(validated_security);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
@@ -147,37 +137,6 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     Ok(())
 }
 
-fn validate_mcp_security(
-    security_bootstrap: &SecurityBootstrap,
-    transport: TransportKind,
-    http_bind: &str,
-    prometheus_bind_addr: Option<std::net::SocketAddr>,
-    probe_bind_addr: Option<std::net::SocketAddr>,
-) -> Result<SecurityBootstrapOutcome, McpError> {
-    if !security_bootstrap.is_enabled() {
-        return security_bootstrap.validate(&[]).map_err(|error| {
-            McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
-        });
-    }
-    let mut listeners = Vec::with_capacity(3);
-    if transport == TransportKind::StreamableHttp {
-        listeners.push(
-            http_bind
-                .parse::<std::net::SocketAddr>()
-                .map_err(|_| McpError::InvalidConfig("server.http.bind must be a socket address".to_string()))?,
-        );
-    }
-    if let Some(prometheus_bind_addr) = prometheus_bind_addr {
-        listeners.push(prometheus_bind_addr);
-    }
-    if let Some(probe_bind_addr) = probe_bind_addr {
-        listeners.push(probe_bind_addr);
-    }
-    security_bootstrap.validate(&listeners).map_err(|error| {
-        McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
-    })
-}
-
 fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
     match outcome {
         SecurityBootstrapOutcome::Disabled => {
@@ -229,9 +188,9 @@ async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Resu
 #[cfg(test)]
 mod tests {
     use super::mcp_runtime_config;
-    use super::validate_mcp_security;
     use super::RuntimeConfig;
     use super::TransportKind;
+    use rocketmq_mcp::app::validate_mcp_security;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
     use rocketmq_security_api::SecurityBootstrapOutcome;
@@ -283,6 +242,51 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn file_prometheus_listener_resolution_feeds_pre_bind_security_validation() {
+        let mut config = rocketmq_mcp::config::McpConfig::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("conf")
+                .join("mcp.example.toml"),
+        )
+        .expect("example MCP config should load");
+        config.observability.metrics.exporter = Some(rocketmq_observability::MetricsExporter::Prometheus);
+        config.observability.prometheus.host = Some("0.0.0.0".to_string());
+        config.observability.prometheus.port = Some(5557);
+        config.observability.prometheus.path = Some("/metrics".to_string());
+        let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
+        bootstrap.observability.service_name = "rocketmq-mcp".to_string();
+        bootstrap.observability.node_type = "mcp".to_string();
+        bootstrap.observability.node_id = config.server.name.clone();
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-mcp",
+            bootstrap,
+            &config.observability,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+            rocketmq_observability::TelemetryEnvironmentSpec {
+                trace_sample_ratio_env: Some("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"),
+            },
+        )
+        .expect("file Prometheus telemetry should resolve");
+        let security = SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+
+        let error = validate_mcp_security(
+            &security,
+            TransportKind::Stdio,
+            "127.0.0.1:8089",
+            resolution.prometheus_listener_addr,
+            None,
+        )
+        .expect_err("public file Prometheus listener must fail before bind")
+        .to_string();
+
+        assert!(error.contains("loopback"));
+        assert!(!error.contains("0.0.0.0"));
+        assert!(!error.contains("5557"));
     }
 
     #[test]

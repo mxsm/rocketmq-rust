@@ -19,6 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_auth::AuthConfig as RocketmqAuthConfig;
 use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::ObservabilityOverrides;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -235,7 +236,7 @@ impl ProxyAuthConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
     pub mode: ProxyMode,
@@ -250,6 +251,7 @@ pub struct ProxyConfig {
     pub session: SessionConfig,
     pub settings: SettingsConfig,
     pub auth: ProxyAuthConfig,
+    pub observability: ObservabilityOverrides,
 }
 
 impl Default for ProxyConfig {
@@ -267,6 +269,7 @@ impl Default for ProxyConfig {
             session: SessionConfig::default(),
             settings: SettingsConfig::default(),
             auth: ProxyAuthConfig::default(),
+            observability: ObservabilityOverrides::default(),
         }
     }
 }
@@ -292,22 +295,21 @@ impl ProxyConfig {
         let builder = config::Config::builder().add_source(config::File::from(path));
         let config = builder
             .build()
-            .map_err(|error| proxy_config_parse_failed("build", path, error))?;
+            .map_err(|error| proxy_config_parse_failed("build", error))?;
 
         config
             .try_deserialize()
-            .map_err(|error| proxy_config_parse_failed("deserialize", path, error).into())
+            .map_err(|error| proxy_config_parse_failed("deserialize", error).into())
     }
 }
 
-fn proxy_config_parse_failed(stage: &'static str, path: &Path, error: config::ConfigError) -> RocketMQError {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("proxy config");
+fn proxy_config_parse_failed(stage: &'static str, error: config::ConfigError) -> RocketMQError {
     RocketMQError::ConfigParseFailed {
         key: "proxy.config",
-        reason: format!("failed to {stage} proxy config {file_name}: {error}"),
+        reason: format!(
+            "failed to {stage} proxy configuration: {}",
+            rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
+        ),
     }
 }
 
@@ -464,6 +466,49 @@ enableAclRpcHookForClusterMode: true
     }
 
     #[test]
+    fn proxy_config_deserializes_observability_overrides_without_changing_other_defaults() {
+        let config: ProxyConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+observability:
+  traces:
+    exporter: otlp_grpc
+    sampleRatio: 0.1
+  otlp:
+    endpoint: http://file-collector:4317
+    protocol: grpc
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .expect("proxy observability YAML should build")
+            .try_deserialize()
+            .expect("proxy observability YAML should deserialize");
+        let defaults = ProxyConfig::default();
+
+        assert_eq!(
+            config.observability.traces.exporter,
+            Some(rocketmq_observability::TraceExporter::OtlpGrpc)
+        );
+        assert_eq!(config.observability.traces.sample_ratio, Some(0.1));
+        assert_eq!(
+            config.observability.otlp.endpoint.as_deref(),
+            Some("http://file-collector:4317")
+        );
+        assert_eq!(
+            config.observability.otlp.protocol,
+            Some(rocketmq_observability::OtlpProtocol::Grpc)
+        );
+        assert_eq!(config.mode, defaults.mode);
+        assert_eq!(config.grpc, defaults.grpc);
+        assert_eq!(config.remoting, defaults.remoting);
+        assert_eq!(config.runtime, defaults.runtime);
+        assert_eq!(config.session, defaults.session);
+        assert_eq!(config.settings, defaults.settings);
+        assert_eq!(config.auth, defaults.auth);
+    }
+
+    #[test]
     fn proxy_config_load_missing_file_uses_config_parse_error() {
         let path = unique_proxy_config_path("missing");
 
@@ -481,6 +526,37 @@ enableAclRpcHookForClusterMode: true
         let _ = std::fs::remove_file(path);
 
         assert_proxy_config_parse_error(error, "deserialize");
+    }
+
+    #[test]
+    fn proxy_config_load_errors_redact_observability_values() {
+        for (source, canary) in [
+            (
+                "[observability.otlp]\nheaders = \"PROXY_HEADER_CANARY\"\n",
+                "PROXY_HEADER_CANARY",
+            ),
+            (
+                "[observability]\nresourceAttributes = \"PROXY_RESOURCE_CANARY\"\n",
+                "PROXY_RESOURCE_CANARY",
+            ),
+            (
+                "[observability.otlp]\nendpoint = \"https://collector.invalid?token=PROXY_ENDPOINT_CANARY\" trailing\n",
+                "PROXY_ENDPOINT_CANARY",
+            ),
+        ] {
+            let path = unique_proxy_toml_config_path("redaction");
+            std::fs::write(&path, source).expect("write invalid proxy config");
+
+            let error = ProxyConfig::load_from_file(&path).expect_err("invalid observability configuration must fail");
+            let _ = std::fs::remove_file(path);
+
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(
+                    !output.contains(canary),
+                    "Proxy configuration error exposed sensitive input: {output}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -504,6 +580,10 @@ enableAclRpcHookForClusterMode: true
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("rocketmq-proxy-{name}-{nonce}.yaml"))
+    }
+
+    fn unique_proxy_toml_config_path(name: &str) -> std::path::PathBuf {
+        unique_proxy_config_path(name).with_extension("toml")
     }
 
     fn assert_proxy_config_parse_error(error: crate::error::ProxyError, expected_stage: &str) {

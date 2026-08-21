@@ -25,3 +25,11 @@ filter = "info"
 
 [logging.reload]
 enabled = true
+
+[observability.metrics]
+exporter = "prometheus"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 9464
+path = "/rocketmq"

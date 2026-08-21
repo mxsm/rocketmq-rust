@@ -5,206 +5,225 @@ title: 可观测性
 
 # RocketMQ Rust 可观测性
 
-RocketMQ Rust 的可观测性能力集中在 `rocketmq-observability` crate 中。
-该 crate 默认关闭，每类信号都需要通过 Cargo feature 和 Broker 配置启用。
+Broker、NameServer、Controller、Proxy 和 RocketMQ MCP 使用统一的
+`observability` 文件配置段。共享解析器按顺序合并服务默认值、文件值以及
+实际存在的环境变量。
 
-## 信号
+## 启用模型
 
-| 信号 | Broker feature | 导出器 |
+每类信号只有在以下两个门槛同时满足时才会运行：
+
+| 门槛 | 要求 |
+| --- | --- |
+| 构建时 | 使用对应信号及导出器的 feature 编译服务。 |
+| 运行时 | 在 `observability` 中或通过受支持的环境变量覆盖选择非 `disable` 导出器。 |
+
+不同服务的 feature 名称并不完全相同，必须以对应服务的 `Cargo.toml` 为准：
+
+| Service | 便捷 feature | 信号及导出器 feature |
 | --- | --- | --- |
-| 指标 | `otel-metrics`, `otlp-metrics`, `prometheus` | disable, OTLP gRPC, Prometheus, log |
-| 链路追踪 | `otel-traces`, `otlp-traces` | disable, OTLP gRPC, log |
-| 日志 | `otel-logs`, `otlp-logs` | disable, OTLP gRPC, log |
+| Broker | `observability` 启用 metrics 和 traces | `otel-metrics`、`otlp-metrics`、`prometheus`、`metrics-prometheus`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| NameServer | `observability` 启用 metrics 和 traces | `otel-metrics`、`otlp-metrics`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| Controller | 无 | `metrics`、`metrics-otlp`、`metrics-prometheus`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| Proxy | `observability` 仅启用 metrics | `otlp-metrics`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
+| MCP | `observability` 启用 metrics 和 traces | `otlp` 同时加入 OTLP metrics、traces 和 logs |
 
-便捷 feature `observability` 会启用指标和链路追踪。日志保持独立，
-应用可以按需显式启用。
+特别需要注意，Controller 没有定义 `observability` 便捷 feature。OTLP logs
+仍然需要在构建时显式选择。例如：
 
-## Broker 配置
+```bash
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
+```
 
-Broker 可观测性配置沿用现有 Broker 配置模型，字段使用 camelCase。
-可复制的配置片段放在现有示例目录：
+仅启用 Cargo feature 不会自动启用导出；运行时选择导出器也无法加入编译时未包含的代码。
+
+## 优先级
+
+解析优先级从低到高固定如下：
+
+| 优先级 | 来源 | 行为 |
+| --- | --- | --- |
+| 1 | 服务默认值 | 所有信号默认关闭，监听地址默认仅限本机。 |
+| 2 | 文件 `[observability]` 配置段 | 只有文件中实际存在的字段会替换默认值。 |
+| 3 | 实际存在的环境变量 | 只有已设置的环境变量会替换对应的已解析字段。 |
+
+缺失的环境变量不会产生默认覆盖。例如，未设置
+`ROCKETMQ_METRICS_ENABLED` 时，文件中的 metrics 导出器保持有效。
+
+## 完整 TOML 示例
+
+所有文件字段都使用 camelCase。空映射是有效配置，可避免把凭据写入普通配置文件。
+
+```toml
+[observability]
+environment = "production"
+serviceInstanceId = "broker-a-0"
+resourceAttributes = { "deployment.zone" = "az-a", "deployment.rack" = "rack-1" }
+
+[observability.metrics]
+exporter = "otlp_grpc"
+exportIntervalMillis = 5000
+exportTimeoutMillis = 3000
+cardinalityLimit = 10000
+sampleRatio = 1.0
+topicLabelEnabled = true
+consumerGroupLabelEnabled = true
+
+[observability.traces]
+exporter = "otlp_grpc"
+sampleRatio = 0.01
+propagateContext = true
+recordMessageId = false
+recordMessageKeys = false
+recordBodySize = true
+
+[observability.logs]
+exporter = "otlp_grpc"
+
+[observability.otlp]
+endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
+protocol = "grpc"
+headers = {}
+timeoutMillis = 3000
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"
+```
+
+## 完整 YAML 示例
+
+Broker 的规范 YAML 结构使用相同的嵌套 schema：
+
+```yaml
+observability:
+  environment: production
+  serviceInstanceId: broker-a-0
+  resourceAttributes:
+    deployment.zone: az-a
+    deployment.rack: rack-1
+  metrics:
+    exporter: otlp_grpc
+    exportIntervalMillis: 5000
+    exportTimeoutMillis: 3000
+    cardinalityLimit: 10000
+    sampleRatio: 1.0
+    topicLabelEnabled: true
+    consumerGroupLabelEnabled: true
+  traces:
+    exporter: otlp_grpc
+    sampleRatio: 0.01
+    propagateContext: true
+    recordMessageId: false
+    recordMessageKeys: false
+    recordBodySize: true
+  logs:
+    exporter: otlp_grpc
+  otlp:
+    endpoint: http://otel-collector.observability.svc.cluster.local:4317
+    protocol: grpc
+    headers: {}
+    timeoutMillis: 3000
+  prometheus:
+    host: 127.0.0.1
+    port: 5557
+    path: /metrics
+```
+
+可复制的 Broker 示例位于
 `rocketmq-example/examples/broker_observability.yaml`。
 
-```yaml
-metricsExporterType: otlp_grpc
-metricsExportIntervalMillis: 5000
-metricsCardinalityLimit: 10000
-metricsTopicLabelEnabled: true
-metricsConsumerGroupLabelEnabled: true
-otlpExporterEndpoint: http://127.0.0.1:4317
-otlpExporterHeaders: authorization:Bearer token,tenant:rocketmq
-otlpExporterTimeoutMillis: 3000
-traceExporterType: otlp_grpc
-traceSampleRatio: 0.01
-tracePropagateContext: true
-traceRecordMessageId: false
-traceRecordMessageKeys: false
-traceRecordBodySize: true
-logExporterType: otlp_grpc
-observabilityEnvironment: dev
-observabilityServiceInstanceId: broker-a-0
-observabilityResourceAttributes: zone:az-a,rack:rack-1
-```
+## 导出器和文件字段
 
-有效的导出器取值：
-
-| 字段 | 取值 |
+| 信号 | 导出器取值 |
 | --- | --- |
-| `metricsExporterType` | `disable`, `otlp_grpc`, `prom`, `log` |
-| `traceExporterType` | `disable`, `otlp_grpc`, `log` |
-| `logExporterType` | `disable`, `otlp_grpc`, `log` |
+| Metrics | `disable`、`otlp_grpc`、`prometheus`、`log` |
+| Traces | `disable`、`otlp_grpc`、`log` |
+| Logs | `disable`、`otlp_grpc`、`log` |
 
-OTLP 设置由指标、链路追踪和日志共享。Header 和资源属性使用逗号分隔的
-`key:value` 键值对。
+`otlp` 由所有 OTLP 信号共享。目前只实现了 OTLP gRPC，因此启用 OTLP
+导出器时必须设置 `protocol = "grpc"`。`prometheus` 用于配置直接 metrics
+监听器。
 
-## 指标
+## 环境变量映射
 
-Broker 指标通过 `BrokerMetricsManager` 记录，在启用指标时委托给
-`rocketmq-observability`。
+| 环境变量 | 解析后的设置 |
+| --- | --- |
+| `ROCKETMQ_METRICS_ENABLED` | 启用或关闭最终的 metrics 选择。 |
+| `ROCKETMQ_METRICS_EXPORTER` | `observability.metrics.exporter` |
+| `ROCKETMQ_METRICS_BIND_ADDR` | `observability.prometheus.host` 和 `port` |
+| `ROCKETMQ_METRICS_PATH` | `observability.prometheus.path` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `observability.otlp.endpoint`；非空值会把 metrics、traces 和 logs 切换到 OTLP gRPC。 |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | 标准 endpoint 环境变量非空时，该值必须严格为 `grpc`。 |
+| `ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO` | Broker 的 `observability.traces.sampleRatio` |
+| `ROCKETMQ_MCP_TRACE_SAMPLE_RATIO` | MCP 的 `observability.traces.sampleRatio` |
 
-| 指标 | 类型 | 单位 | 含义 |
-| --- | --- | --- | --- |
-| `rocketmq_messages_in_total` | counter | messages | Broker 接收的消息数 |
-| `rocketmq_messages_out_total` | counter | messages | Broker 投递出的消息数 |
-| `rocketmq_throughput_in_total` | counter | bytes | Broker 入站吞吐量 |
-| `rocketmq_throughput_out_total` | counter | bytes | Broker 出站吞吐量 |
-| `rocketmq_message_size` | histogram | bytes | 消息体大小分布 |
-| `rocketmq_send_message_latency` | histogram | ms | 发送消息处理延迟 |
-| `rocketmq_metrics_label_dropped_total` | counter | labels | 被基数保护归一化的标签数 |
+标准 OTLP endpoint 缺失或为空时，文件配置保持不变。endpoint 非空但未同时
+设置 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` 时，服务会启动失败。
 
-安全的低基数标签包括 `cluster`、`node_type`、`node_id`、`topic`、
-`consumer_group` 和 `invocation_status`。不要把消息 ID、trace ID、offset、
-request ID 或事务 ID 加入指标标签。
+`ROCKETMQ_RELEASE_COMMIT` 和 `ROCKETMQ_RELEASE_NONCE` 仍然属于构建及
+进程身份输入，不是文件字段。部署可以保留 `OTEL_SERVICE_NAME`，但本解析器
+会特意忽略它。每个服务的组合根负责设置 `service_name`、`service_namespace`、
+`node_type` 和 `node_id`；文件及环境变量均无法修改这些字段。
 
-Broker 标签基数通过以下配置控制：
+## 从扁平服务字段迁移
+
+Broker 和 Controller 已不再接受旧版扁平 telemetry 字段。请删除这些字段，
+并将其值迁移到嵌套的 `[observability]` 配置段。不得同时配置两种形式：
+结构化配置是唯一的文件配置接口。
+
+Helm chart 默认把 `global.observability.environmentOverridesEnabled` 设为
+`false`。此模式始终注入 release identity 环境变量，但不会注入
+`ROCKETMQ_METRICS_*`、`OTEL_EXPORTER_OTLP_ENDPOINT` 或
+`OTEL_EXPORTER_OTLP_PROTOCOL`，因此 ConfigMap 中的结构化文件选择可以真实
+控制全部关闭、OTLP、日志及混合信号配置。
+
+stock Helm chart 的 `global.observability.metricsExporter` 仅接受
+`disable`、`otlp_grpc` 和 `log`，并默认关闭 metrics Service。当前生产镜像并未
+为五类服务一致编译直接 Prometheus 导出器，因此 stock 全局 schema 刻意不提供
+`prometheus` 选项。若服务使用对应 feature 自定义编译（目前为 Broker 或
+Controller），仍可在该服务的文件配置中选择直接 Prometheus；此类部署需要在
+stock 全局选择器之外自行配置并暴露对应工作负载。
+
+只有需要保留旧版环境变量驱动的部署行为时，才应显式开启该选项：
 
 ```yaml
-metricsCardinalityLimit: 10000
-metricsTopicLabelEnabled: true
-metricsConsumerGroupLabelEnabled: true
+global:
+  observability:
+    environmentOverridesEnabled: true
 ```
 
-当 topic 或 consumer group 超过限制时，标签值会被归一化为 `other`，
-同时 `rocketmq_metrics_label_dropped_total` 会带着低基数 `label_key`
-属性递增。
+兼容模式会注入 metrics 环境变量及解析后的 OTLP endpoint，并同时设置
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`。这些实际存在的环境变量优先级高于
+ConfigMap 值。ConfigMap 与兼容环境变量使用同一套新旧 endpoint alias
+解析结果。
 
-## 本地 Collector
+## 校验和敏感信息处理
 
-OpenTelemetry Collector 和 Prometheus 配置文件放在现有的 distribution
-配置目录中：
+解析器对以下配置采用关闭式失败：无效采样率、值为零的间隔或限制、非规范
+Prometheus 路径、无效监听地址、启用 OTLP 时 endpoint 为空，以及不受支持的
+OTLP 协议。错误只包含字段名和约束，不包含 endpoint、header 或资源属性的值。
+启动日志同样不会输出这些原始值。
+
+不得在 Kubernetes ConfigMap 中保存 authorization header 或 token。公开示例
+应保留 `headers = {}`，敏感配置应通过受限的 Secret 后端文件或 Collector
+认证机制提供。不得把消息 ID、trace ID、偏移量、request ID 或事务 ID 用作
+metrics 标签。
+
+## 信号说明
+
+- 主题和消费者组标签受 `cardinalityLimit` 限制；超出限制的值会归一化为
+  `other`。
+- Trace 的消息 ID 和 key 默认关闭，因为它们具有高基数。消息体大小只记录大小。
+- W3C `traceparent`、`tracestate` 和 `baggage` 属性用于传递 trace context。
+- 直接 Prometheus endpoint 默认为
+  `http://127.0.0.1:5557/metrics`。
+
+本地 Collector 示例位于 `distribution/config`：
 
 ```bash
 otelcol-contrib --config distribution/config/otel-collector-observability.yaml
 prometheus --config.file=distribution/config/prometheus-observability.yaml
-```
-
-本地 Collector 配置会在 `4317` 接收 OTLP gRPC，在 `4318` 接收 OTLP HTTP，
-在 `9464` 暴露 Prometheus 指标，并把指标、链路追踪和日志写入 Collector
-debug exporter。提供的 Prometheus 配置会抓取 `127.0.0.1:9464`。
-
-## Prometheus
-
-可以让 Broker 通过 OTLP 将指标发送到 OpenTelemetry Collector，再由
-Prometheus 抓取 Collector 的 Prometheus exporter：
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features otlp-metrics
-```
-
-Broker 也可以直接暴露 `/metrics`：
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
-curl http://127.0.0.1:5557/metrics
-```
-
-直接导出器配置：
-
-```yaml
-metricsExporterType: prom
-metricsPromExporterHost: 127.0.0.1
-metricsPromExporterPort: 5557
-metricsPromExporterPath: /metrics
-```
-
-从 `distribution/config/grafana-rocketmq-broker-dashboard.json` 导入 Grafana
-dashboard，并选择 Prometheus 数据源。
-
-## 链路追踪
-
-链路追踪使用 `tracing`、`tracing-opentelemetry`，并通过 RocketMQ 消息属性
-传播标准 W3C trace context。
-
-```yaml
-traceExporterType: otlp_grpc
-traceSampleRatio: 0.01
-tracePropagateContext: true
-traceRecordMessageId: false
-traceRecordMessageKeys: false
-traceRecordBodySize: true
-```
-
-`traceRecordMessageId` 和 `traceRecordMessageKeys` 默认保持关闭，以避免记录
-高基数字段。`traceRecordBodySize` 默认开启，因为它只记录 payload 大小。
-
-| 配置 | Span 属性 |
-| --- | --- |
-| `traceRecordMessageId` | `messaging.message.id` |
-| `traceRecordMessageKeys` | `messaging.rocketmq.message.keys` |
-| `traceRecordBodySize` | `messaging.message.body.size` |
-
-当前 span 名称：
-
-| Span | 范围 |
-| --- | --- |
-| `RocketMQ PRODUCER SEND` | Producer 发送路径 |
-| `RocketMQ BROKER RECEIVE_SEND` | Broker 发送消息请求处理 |
-| `RocketMQ STORE APPEND` | Store 追加路径 |
-| `RocketMQ CONSUMER PROCESS` | Consumer listener 执行 |
-
-Consumer ACK、retry 和 DLQ 结果会记录为 span event。
-
-Context propagation 使用以下消息属性：
-
-| 属性 | 用途 |
-| --- | --- |
-| `traceparent` | W3C trace parent |
-| `tracestate` | W3C trace state |
-| `baggage` | W3C baggage |
-
-`traceSampleRatio` 接受 `0.0` 到 `1.0` 之间的值。
-
-## 日志
-
-日志通过 `opentelemetry-appender-tracing` 从 `tracing` 桥接到 OpenTelemetry
-logs。当 tracing 在同一个 subscriber 中启用时，该桥接可以把日志关联到当前
-trace/span context。
-
-```yaml
-logExporterType: otlp_grpc
-```
-
-本地调试可以使用 `logExporterType: log`。使用 `disable` 可以让日志不进入
-OpenTelemetry pipeline。
-
-如果需要关联链路追踪和日志，请同时启用 trace 和 log feature 运行 Broker：
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-traces,otlp-logs"
-```
-
-本地 Collector 配置包含日志 pipeline，会将日志写入 debug exporter。
-
-## 示例命令
-
-通过 OTLP 导出指标：
-
-```bash
-cargo run -p rocketmq-observability --example broker_metrics --features otlp-metrics
-```
-
-Broker 同时启用 OTLP 指标、链路追踪和日志：
-
-```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
 ```

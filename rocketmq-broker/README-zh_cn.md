@@ -170,8 +170,7 @@ brokerId = 0
 | `storeType` | Message store 后端。默认是 `LocalFile`；`RocksDB` 需要启用 `rocksdb_store` feature。 |
 | `authConfigPath` / `aclFile` | Broker auth 元数据路径和 Java 风格 ACL 文件位置。 |
 | `authenticationEnabled` / `authorizationEnabled` | 通过 `rocketmq-auth` 启用 broker 认证和授权检查。 |
-| `metricsExporterType` | Metrics exporter：`disable`、`otlp_grpc`、`prom` 或 `log`。 |
-| `traceExporterType` / `logExporterType` | Trace/log exporter：`disable`、`otlp_grpc` 或 `log`。 |
+| `observability` | 统一的 metrics、traces、logs、OTLP 与 Prometheus 文件配置。 |
 
 认证配置示例：
 
@@ -187,11 +186,17 @@ signatureAlgorithm = "HmacSHA1"
 Prometheus metrics 示例：
 
 ```toml
-metricsExporterType = "prom"
-metricsPromExporterHost = "127.0.0.1"
-metricsPromExporterPort = 5557
-metricsPromExporterPath = "/metrics"
+[observability.metrics]
+exporter = "prometheus"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"
 ```
+
+旧版扁平 telemetry 字段已经删除，只能使用结构化的 `[observability]`
+配置段。实际存在的运行时环境变量会覆盖对应文件值。
 
 启用 `tieredstore` feature 时，分层存储当前要求 `storeType = "LocalFile"`。
 

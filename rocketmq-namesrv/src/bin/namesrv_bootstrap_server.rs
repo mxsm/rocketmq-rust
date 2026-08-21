@@ -43,8 +43,6 @@ use rocketmq_namesrv::config::DEFAULT_NAMESRV_LISTEN_PORT;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::security::NameServerTransportPolicy;
 use rocketmq_namesrv::NamesrvConfig;
-#[cfg(feature = "embedded-controller")]
-use rocketmq_observability::MetricsExporterType;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
@@ -175,9 +173,17 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         );
     }
 
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-namesrv")
-            .context("invalid NameServer process telemetry configuration")?;
+    let mut telemetry_bootstrap = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+    telemetry_bootstrap.logging.reload = logging_overrides.logging.reload;
+    let telemetry_resolution = rocketmq_observability::resolve_telemetry_from_env(
+        "rocketmq-namesrv",
+        telemetry_bootstrap,
+        &namesrv_config.observability,
+        rocketmq_observability::TelemetryEnvironmentSpec::default(),
+    )
+    .context("failed to resolve NameServer telemetry configuration")?;
+    let process_telemetry = telemetry_resolution.process;
+    let bootstrap_config = telemetry_resolution.bootstrap;
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
     let validated_security = validate_namesrv_security(
@@ -185,7 +191,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &namesrv_config,
         &server_config,
         controller_config.as_ref(),
-        process_telemetry.prometheus_listener_addr(),
+        telemetry_resolution.prometheus_listener_addr,
         lifecycle.config().probe_bind_addr,
     )
     .context("NameServer security bootstrap failed before listener bind")?;
@@ -193,13 +199,13 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve namesrv log filter")?;
-    let mut bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
-    bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
-        .context("failed to apply standard OTLP environment to namesrv telemetry")?;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
-            .context("failed to initialize namesrv telemetry bootstrap")?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .context("failed to initialize namesrv telemetry bootstrap")?;
     register_namesrv_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
@@ -231,7 +237,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "namesrv telemetry cleanup after diagnostics startup failure was unhealthy");
@@ -337,6 +344,11 @@ fn validate_namesrv_security(
         {
             security_bootstrap.validate(&[]).map_err(anyhow::Error::from)?
         }
+        Err(SecurityBootstrapError::DevelopmentListenerNotLoopback) => {
+            bail!(
+                "allowInsecurePublicListener is required for a non-loopback NameServer listener in the development-insecure profile"
+            );
+        }
         Err(error) => return Err(error.into()),
     };
 
@@ -415,7 +427,6 @@ fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
 
 fn build_namesrv_telemetry_bootstrap_config(
     namesrv_config: &NamesrvConfig,
-    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
 ) -> rocketmq_observability::TelemetryBootstrapConfig {
     let mut observability = rocketmq_observability::ObservabilityConfig {
         service_name: "rocketmq-namesrv".to_string(),
@@ -425,7 +436,6 @@ fn build_namesrv_telemetry_bootstrap_config(
         ..rocketmq_observability::ObservabilityConfig::default()
     };
     observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
-    process_telemetry.apply_to(&mut observability);
 
     let mut logging = rocketmq_observability::LoggingConfig::default();
     logging.file.directory = service_log_directory(namesrv_config.rocketmq_home.as_str());
@@ -529,8 +539,20 @@ fn parse_and_merge_config(
     if let Some(config_file) = args.config_file.clone() {
         let config = Config::builder()
             .add_source(config::File::from(config_file.as_path()))
-            .build()?
-            .try_deserialize::<RuntimeTransportOverrides>()?;
+            .build()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to build NameServer transport configuration: {}",
+                    parse_config_file::render_safe_config_error(&error)
+                )
+            })?
+            .try_deserialize::<RuntimeTransportOverrides>()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to deserialize NameServer transport configuration: {}",
+                    parse_config_file::render_safe_config_error(&error)
+                )
+            })?;
         apply_runtime_transport_overrides(&mut server_config, &mut tokio_client_config, config)?;
         apply_tls_properties_from_file(&mut server_config, config_file)?;
     }
@@ -802,16 +824,6 @@ struct ControllerConfigOverrides {
     is_process_read_event: Option<bool>,
     notify_broker_role_changed: Option<bool>,
     scan_inactive_master_interval: Option<u64>,
-    metrics_exporter_type: Option<String>,
-    metrics_grpc_exporter_target: Option<String>,
-    metrics_grpc_exporter_header: Option<String>,
-    metric_grpc_exporter_time_out_in_mills: Option<u64>,
-    metric_grpc_exporter_interval_in_mills: Option<u64>,
-    metric_logging_exporter_interval_in_mills: Option<u64>,
-    metrics_prom_exporter_port: Option<u16>,
-    metrics_prom_exporter_host: Option<String>,
-    metrics_label: Option<String>,
-    metrics_in_delta: Option<bool>,
     config_black_list: Option<String>,
     node_id: Option<u64>,
     listen_addr: Option<SocketAddr>,
@@ -831,8 +843,19 @@ fn load_controller_config(config_file: Option<PathBuf>, namesrv_config: &Namesrv
     if let Some(config_file) = config_file {
         let cfg = Config::builder()
             .add_source(config::File::from(config_file.as_path()))
-            .build()?;
-        let overrides = cfg.try_deserialize::<ControllerConfigOverrides>()?;
+            .build()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to build embedded Controller configuration: {}",
+                    parse_config_file::render_safe_config_error(&error)
+                )
+            })?;
+        let overrides = cfg.try_deserialize::<ControllerConfigOverrides>().map_err(|error| {
+            anyhow::anyhow!(
+                "failed to deserialize embedded Controller configuration: {}",
+                parse_config_file::render_safe_config_error(&error)
+            )
+        })?;
         apply_controller_config_overrides(&mut controller_config, overrides)?;
     }
 
@@ -883,38 +906,6 @@ fn apply_controller_config_overrides(
     }
     if let Some(scan_inactive_master_interval) = overrides.scan_inactive_master_interval {
         controller_config.scan_inactive_master_interval = scan_inactive_master_interval;
-    }
-    if let Some(metrics_exporter_type) = overrides.metrics_exporter_type {
-        controller_config.metrics_exporter_type = metrics_exporter_type
-            .parse::<MetricsExporterType>()
-            .map_err(|_| anyhow::anyhow!("invalid metricsExporterType: {}", metrics_exporter_type))?;
-    }
-    if let Some(metrics_grpc_exporter_target) = overrides.metrics_grpc_exporter_target {
-        controller_config.metrics_grpc_exporter_target = metrics_grpc_exporter_target;
-    }
-    if let Some(metrics_grpc_exporter_header) = overrides.metrics_grpc_exporter_header {
-        controller_config.metrics_grpc_exporter_header = metrics_grpc_exporter_header;
-    }
-    if let Some(metric_grpc_exporter_time_out_in_mills) = overrides.metric_grpc_exporter_time_out_in_mills {
-        controller_config.metric_grpc_exporter_time_out_in_mills = metric_grpc_exporter_time_out_in_mills;
-    }
-    if let Some(metric_grpc_exporter_interval_in_mills) = overrides.metric_grpc_exporter_interval_in_mills {
-        controller_config.metric_grpc_exporter_interval_in_mills = metric_grpc_exporter_interval_in_mills;
-    }
-    if let Some(metric_logging_exporter_interval_in_mills) = overrides.metric_logging_exporter_interval_in_mills {
-        controller_config.metric_logging_exporter_interval_in_mills = metric_logging_exporter_interval_in_mills;
-    }
-    if let Some(metrics_prom_exporter_port) = overrides.metrics_prom_exporter_port {
-        controller_config.metrics_prom_exporter_port = metrics_prom_exporter_port;
-    }
-    if let Some(metrics_prom_exporter_host) = overrides.metrics_prom_exporter_host {
-        controller_config.metrics_prom_exporter_host = metrics_prom_exporter_host;
-    }
-    if let Some(metrics_label) = overrides.metrics_label {
-        controller_config.metrics_label = metrics_label;
-    }
-    if let Some(metrics_in_delta) = overrides.metrics_in_delta {
-        controller_config.metrics_in_delta = metrics_in_delta;
     }
     if let Some(config_black_list) = overrides.config_black_list {
         controller_config.config_black_list = config_black_list;
@@ -1127,6 +1118,61 @@ mod tests {
     }
 
     #[test]
+    fn development_security_rejects_file_prometheus_listener_without_exposing_the_listener() {
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+        let server = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+        let namesrv = NamesrvConfig {
+            allow_insecure_public_listener: false,
+            observability: rocketmq_observability::ObservabilityOverrides {
+                metrics: rocketmq_observability::MetricsOverrides {
+                    exporter: Some(rocketmq_observability::MetricsExporter::Prometheus),
+                    ..Default::default()
+                },
+                prometheus: rocketmq_observability::PrometheusOverrides {
+                    host: Some("0.0.0.0".to_string()),
+                    port: Some(5557),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..NamesrvConfig::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-namesrv",
+            build_namesrv_telemetry_bootstrap_config(&namesrv),
+            &namesrv.observability,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
+        )
+        .expect("file Prometheus listener should resolve");
+        assert_eq!(
+            resolution.prometheus_listener_addr,
+            Some(SocketAddr::from(([0, 0, 0, 0], 5557)))
+        );
+
+        let error = validate_namesrv_security(
+            &security,
+            &namesrv,
+            &server,
+            None,
+            resolution.prometheus_listener_addr,
+            None,
+        )
+        .expect_err("a public file Prometheus listener must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("allowInsecurePublicListener"));
+        assert!(message.contains("development-insecure"));
+        assert!(!message.contains("0.0.0.0"));
+        assert!(!message.contains("5557"));
+    }
+
+    #[test]
     fn secure_profile_requires_tls_authentication_and_authorization() {
         let root = tempfile::tempdir().expect("temporary security root");
         let security = secure_bootstrap(root.path());
@@ -1175,19 +1221,7 @@ mod tests {
             rocketmq_home: "target/namesrv-telemetry-bootstrap".to_string(),
             ..NamesrvConfig::default()
         };
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-namesrv",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("local NameServer process telemetry");
-
-        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
+        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
 
         assert_eq!(config.observability.service_name, "rocketmq-namesrv");
         assert_eq!(
@@ -1206,25 +1240,20 @@ mod tests {
 
     #[test]
     fn namesrv_bootstrap_accepts_standard_otlp_environment_values() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-namesrv",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("local NameServer process telemetry");
-        let mut config = build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default(), &process_telemetry);
-
-        rocketmq_observability::apply_standard_otlp_environment_values(
-            &mut config,
-            Some(std::ffi::OsStr::new("http://collector:4317")),
-            Some(std::ffi::OsStr::new("grpc")),
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://collector:4317".into()),
+            otlp_protocol: Some("grpc".into()),
+            ..Default::default()
+        };
+        let resolution = rocketmq_observability::resolve_telemetry_values(
+            "rocketmq-namesrv",
+            build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default()),
+            &rocketmq_observability::ObservabilityOverrides::default(),
+            &environment,
+            rocketmq_observability::TelemetryEnvironmentSpec::default(),
         )
-        .expect("valid standard OTLP environment should apply");
+        .expect("valid standard OTLP environment should resolve");
+        let config = resolution.bootstrap;
 
         assert!(config.observability.enabled);
         assert_eq!(config.observability.service_name, "rocketmq-namesrv");

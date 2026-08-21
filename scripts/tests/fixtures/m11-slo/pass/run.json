@@ -2,7 +2,7 @@
   "schema_version": 1,
   "milestone": "M11-12",
   "execution_unit": "R24",
-  "policy_sha256": "a4e0f24d360bcbeceeba8750a669bf2dc355bc8e822a1b53d653937795b03ab4",
+  "policy_sha256": "c3c9b5dc245fa781e949ce2cf286500d97eb18a312b8192a7a49494ed04fffb6",
   "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
   "candidate_images": {
     "broker": "registry.example.invalid/rocketmq/broker@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -97,8 +97,8 @@
     "distribution/config/grafana-architecture-production-readiness.json": "b586879abcf204d2cbf06c049fe21e0bfef10d1dadb67488a6c5ee91eab8ac70",
     "distribution/config/prometheus-architecture-production-readiness-alerts.yaml": "44bfcbb119343fd848fe7c32ffaeab235eee960c2ec3ad2130b31493893f4646",
     "rocketmq-doc/en/architecture-production-readiness-runbook.md": "e75c7a668d83c48cbe65c2f57b1d2511ddc0102405403604b37c946cce289cbb",
-    "distribution/kubernetes/fault-matrix-policy.json": "96aa7c3dbce82626cc80e6120d9752331d65071597a6c76525146f37a48a9bcb",
-    "scripts/telemetry-semantic-registry.json": "408bd367d003cec63ce8695ca0888cfc460c36656337b29fa831a5587a4ccfb1"
+    "distribution/kubernetes/fault-matrix-policy.json": "784b62d98195b75af72ebdaccf50450ef039a83b2e649591bb4a151b0836906e",
+    "scripts/telemetry-semantic-registry.json": "1b12ccb9a8e511e4e62fdd5b86a9db96ae95a1588b945b91040bed5b1ea40f61"
   },
   "artifacts": [
     {

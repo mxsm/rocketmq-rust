@@ -77,6 +77,47 @@ fn metric_label_policy_uses_config_and_keeps_runtime_budgets_isolated() {
 }
 
 #[cfg(feature = "otel-metrics")]
+#[test]
+fn metrics_runtime_policy_reports_final_config_and_is_lifecycle_gated() {
+    let mut config = rocketmq_observability::ObservabilityConfig {
+        enabled: true,
+        ..rocketmq_observability::ObservabilityConfig::default()
+    };
+    config.metrics.enabled = true;
+    config.metrics.sample_ratio = 0.125;
+    config.metrics.export_interval_millis = 1_250;
+    config.metrics.cardinality_limit = 7;
+
+    let guard = rocketmq_observability::init_observability(&config).expect("metrics runtime policy should initialize");
+    let handle = guard.handle();
+    let policy = handle.metrics_runtime_policy();
+
+    assert!(policy.enabled);
+    assert!((policy.sample_ratio - 0.125).abs() < f64::EPSILON);
+    assert_eq!(policy.export_interval_millis, 1_250);
+    assert_eq!(policy.cardinality_limit, 7);
+    assert!(handle.metrics_enabled());
+
+    guard
+        .shutdown()
+        .into_result()
+        .expect("metrics runtime should shut down");
+
+    let closed = handle.metrics_runtime_policy();
+    assert!(!closed.enabled);
+    assert_eq!(closed.sample_ratio, 0.0);
+    assert_eq!(closed.export_interval_millis, 0);
+    assert_eq!(closed.cardinality_limit, 0);
+    assert!(!handle.metrics_enabled());
+
+    let noop = TelemetryHandle::noop().metrics_runtime_policy();
+    assert!(!noop.enabled);
+    assert_eq!(noop.sample_ratio, 0.0);
+    assert_eq!(noop.export_interval_millis, 0);
+    assert_eq!(noop.cardinality_limit, 0);
+}
+
+#[cfg(feature = "otel-metrics")]
 mod metrics {
     use opentelemetry::metrics::Meter;
     use opentelemetry::metrics::MeterProvider;
@@ -163,6 +204,36 @@ mod metrics {
         assert_eq!(clone.state(), TelemetryState::Closed);
         assert!(!handle.child(BROKER_METER_SCOPE).is_active());
         assert!(!clone.child(STORE_METER_SCOPE).is_active());
+    }
+
+    #[cfg(feature = "otel-traces")]
+    #[test]
+    fn metrics_enabled_reports_final_policy_and_lifecycle() {
+        let mut trace_only_config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        trace_only_config.traces.enabled = true;
+
+        let trace_only_guard = init_observability(&trace_only_config).expect("trace-only runtime should initialize");
+        let metrics_guard = init_observability(&metrics_config()).expect("metrics runtime should initialize");
+        let trace_only_handle = trace_only_guard.handle();
+        let metrics_handle = metrics_guard.handle();
+
+        assert!(!trace_only_handle.metrics_enabled());
+        assert!(metrics_handle.metrics_enabled());
+
+        trace_only_guard
+            .shutdown()
+            .into_result()
+            .expect("trace-only runtime should shut down");
+        metrics_guard
+            .shutdown()
+            .into_result()
+            .expect("metrics runtime should shut down");
+
+        assert!(!trace_only_handle.metrics_enabled());
+        assert!(!metrics_handle.metrics_enabled());
     }
 
     #[test]

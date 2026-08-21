@@ -6,6 +6,26 @@ transport = "stdio"
 [logging]
 filter = "info"
 
+# Telemetry signals remain disabled until an exporter is selected below or a
+# supported environment variable is present. Copy the commented OTLP example
+# and build with `--features otlp` to export remotely.
+[observability]
+# environment = "production"
+#
+# [observability.metrics]
+# exporter = "otlp_grpc"
+#
+# [observability.traces]
+# exporter = "otlp_grpc"
+# sampleRatio = 0.01
+#
+# [observability.logs]
+# exporter = "otlp_grpc"
+#
+# [observability.otlp]
+# endpoint = "http://otel-collector:4317"
+# protocol = "grpc"
+
 [server.stdio]
 log_to_stderr = true
 

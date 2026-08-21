@@ -1,35 +1,40 @@
-# Broker observability config fragment.
-# Merge these fields into a complete BrokerConfig YAML file.
+# Canonical Broker observability config fragment.
+# Merge these sections into a complete RawBrokerConfig YAML file.
 
 brokerIdentity:
   brokerName: broker-a
   brokerClusterName: DefaultCluster
   brokerId: 0
 
-metricsExporterType: otlp_grpc
-metricsExportIntervalMillis: 5000
-metricsCardinalityLimit: 10000
-metricsTopicLabelEnabled: true
-metricsConsumerGroupLabelEnabled: true
-
-otlpExporterEndpoint: http://127.0.0.1:4317
-otlpExporterHeaders: authorization:Bearer token,tenant:rocketmq
-otlpExporterTimeoutMillis: 3000
-
-traceExporterType: otlp_grpc
-traceSampleRatio: 0.01
-tracePropagateContext: true
-traceRecordMessageId: false
-traceRecordMessageKeys: false
-traceRecordBodySize: true
-
-logExporterType: otlp_grpc
-
-observabilityEnvironment: dev
-observabilityServiceInstanceId: broker-a-0
-observabilityResourceAttributes: zone:az-a,rack:rack-1
-
-# Direct Prometheus exporter settings. Used when metricsExporterType is prom.
-metricsPromExporterHost: 127.0.0.1
-metricsPromExporterPort: 5557
-metricsPromExporterPath: /metrics
+observability:
+  environment: dev
+  serviceInstanceId: broker-a-0
+  resourceAttributes:
+    deployment.zone: az-a
+    deployment.rack: rack-1
+  metrics:
+    exporter: otlp_grpc
+    exportIntervalMillis: 5000
+    exportTimeoutMillis: 3000
+    cardinalityLimit: 10000
+    sampleRatio: 1.0
+    topicLabelEnabled: true
+    consumerGroupLabelEnabled: true
+  traces:
+    exporter: otlp_grpc
+    sampleRatio: 0.01
+    propagateContext: true
+    recordMessageId: false
+    recordMessageKeys: false
+    recordBodySize: true
+  logs:
+    exporter: otlp_grpc
+  otlp:
+    endpoint: http://127.0.0.1:4317
+    protocol: grpc
+    headers: {}
+    timeoutMillis: 3000
+  prometheus:
+    host: 127.0.0.1
+    port: 5557
+    path: /metrics

@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_observability::LoggingOverrides;
+use rocketmq_observability::ObservabilityOverrides;
 use rocketmq_store::MessageStoreConfig;
 
 use super::broker_config::BrokerConfig;
@@ -52,6 +53,7 @@ pub struct ValidatedBrokerConfig {
     broker: Arc<BrokerConfig>,
     store: Arc<MessageStoreConfig>,
     logging: LoggingOverrides,
+    observability: ObservabilityOverrides,
     sections: ValidatedConfigSections,
 }
 
@@ -64,6 +66,7 @@ impl ValidatedBrokerConfig {
         mut broker: BrokerConfig,
         mut store: MessageStoreConfig,
         logging: LoggingOverrides,
+        observability: ObservabilityOverrides,
     ) -> Result<Self, BrokerConfigError> {
         normalize_config_parts(&mut broker, &mut store);
         let sections = ValidatedConfigSections::validate(&broker, &store)?;
@@ -71,16 +74,27 @@ impl ValidatedBrokerConfig {
             broker: Arc::new(broker),
             store: Arc::new(store),
             logging,
+            observability,
             sections,
         })
     }
 
     pub(crate) fn with_broker_candidate(&self, broker: BrokerConfig) -> Result<Self, BrokerConfigError> {
-        Self::normalize_and_validate(broker, self.store.as_ref().clone(), self.logging.clone())
+        Self::normalize_and_validate(
+            broker,
+            self.store.as_ref().clone(),
+            self.logging.clone(),
+            self.observability.clone(),
+        )
     }
 
     pub(crate) fn with_store_candidate(&self, store: MessageStoreConfig) -> Result<Self, BrokerConfigError> {
-        Self::normalize_and_validate(self.broker.as_ref().clone(), store, self.logging.clone())
+        Self::normalize_and_validate(
+            self.broker.as_ref().clone(),
+            store,
+            self.logging.clone(),
+            self.observability.clone(),
+        )
     }
 
     pub(crate) fn with_candidates(
@@ -88,7 +102,7 @@ impl ValidatedBrokerConfig {
         broker: BrokerConfig,
         store: MessageStoreConfig,
     ) -> Result<Self, BrokerConfigError> {
-        Self::normalize_and_validate(broker, store, self.logging.clone())
+        Self::normalize_and_validate(broker, store, self.logging.clone(), self.observability.clone())
     }
 
     #[must_use]
@@ -125,6 +139,11 @@ impl ValidatedBrokerConfig {
     }
 
     #[must_use]
+    pub fn observability(&self) -> &ObservabilityOverrides {
+        &self.observability
+    }
+
+    #[must_use]
     pub fn sections(&self) -> &ValidatedConfigSections {
         &self.sections
     }
@@ -134,8 +153,8 @@ impl TryFrom<RawBrokerConfig> for ValidatedBrokerConfig {
     type Error = BrokerConfigError;
 
     fn try_from(raw: RawBrokerConfig) -> Result<Self, Self::Error> {
-        let (broker, store, logging) = raw.into_normalized_parts();
-        Self::normalize_and_validate(broker, store, logging)
+        let (broker, store, logging, observability) = raw.into_normalized_parts();
+        Self::normalize_and_validate(broker, store, logging, observability)
     }
 }
 

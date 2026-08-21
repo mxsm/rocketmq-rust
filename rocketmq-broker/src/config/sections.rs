@@ -18,8 +18,6 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
-use rocketmq_observability::MetricsExporterType;
-use rocketmq_observability::TraceExporterType;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetLimit;
@@ -260,36 +258,6 @@ impl ResourceConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct TelemetryConfig {
-    metrics_exporter: MetricsExporterType,
-    trace_exporter: TraceExporterType,
-    metrics_sample_ratio: f64,
-    trace_sample_ratio: f64,
-}
-
-impl TelemetryConfig {
-    #[must_use]
-    pub const fn metrics_exporter(&self) -> MetricsExporterType {
-        self.metrics_exporter
-    }
-
-    #[must_use]
-    pub const fn trace_exporter(&self) -> TraceExporterType {
-        self.trace_exporter
-    }
-
-    #[must_use]
-    pub const fn metrics_sample_ratio(&self) -> f64 {
-        self.metrics_sample_ratio
-    }
-
-    #[must_use]
-    pub const fn trace_sample_ratio(&self) -> f64 {
-        self.trace_sample_ratio
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct ValidatedConfigSections {
     identity: IdentityConfig,
     network: NetworkConfig,
@@ -297,7 +265,6 @@ pub struct ValidatedConfigSections {
     storage: StorageConfig,
     security: SecurityConfig,
     resources: ResourceConfig,
-    telemetry: TelemetryConfig,
 }
 
 impl ValidatedConfigSections {
@@ -308,7 +275,6 @@ impl ValidatedConfigSections {
         let storage = validate_storage(broker, store)?;
         let security = validate_security(broker)?;
         let resources = validate_resources(broker, store)?;
-        let telemetry = validate_telemetry(broker)?;
 
         Ok(Self {
             identity,
@@ -317,7 +283,6 @@ impl ValidatedConfigSections {
             storage,
             security,
             resources,
-            telemetry,
         })
     }
 
@@ -349,11 +314,6 @@ impl ValidatedConfigSections {
     #[must_use]
     pub fn resources(&self) -> &ResourceConfig {
         &self.resources
-    }
-
-    #[must_use]
-    pub fn telemetry(&self) -> &TelemetryConfig {
-        &self.telemetry
     }
 }
 
@@ -868,78 +828,6 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
     })
 }
 
-fn validate_telemetry(broker: &BrokerConfig) -> Result<TelemetryConfig, BrokerConfigError> {
-    validate_ratio("broker.metricsSampleRatio", broker.metrics_sample_ratio)?;
-    validate_ratio("broker.traceSampleRatio", broker.trace_sample_ratio)?;
-    if broker.metrics_export_interval_millis == 0 {
-        return Err(BrokerConfigError::invalid(
-            ConfigSection::Telemetry,
-            "broker.metricsExportIntervalMillis",
-            "must be greater than zero",
-        ));
-    }
-    if broker.metrics_cardinality_limit == 0 {
-        return Err(BrokerConfigError::invalid(
-            ConfigSection::Telemetry,
-            "broker.metricsCardinalityLimit",
-            "must be greater than zero",
-        ));
-    }
-    if broker.metrics_exporter_type == MetricsExporterType::Prom {
-        broker.metrics_prom_exporter_host.parse::<IpAddr>().map_err(|error| {
-            BrokerConfigError::invalid(
-                ConfigSection::Telemetry,
-                "broker.metricsPromExporterHost",
-                format!("must be an IP address: {error}"),
-            )
-        })?;
-        if broker.metrics_prom_exporter_port == 0 {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::Telemetry,
-                "broker.metricsPromExporterPort",
-                "must be greater than zero",
-            ));
-        }
-        if !broker.metrics_prom_exporter_path.starts_with('/') {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::Telemetry,
-                "broker.metricsPromExporterPath",
-                "must start with '/'",
-            ));
-        }
-    }
-    if broker.metrics_exporter_type == MetricsExporterType::OtlpGrpc
-        || broker.trace_exporter_type == TraceExporterType::OtlpGrpc
-    {
-        validate_otlp_endpoint("broker.otlpExporterEndpoint", broker.otlp_exporter_endpoint.as_str())?;
-        if broker.otlp_exporter_timeout_millis == 0 {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::Telemetry,
-                "broker.otlpExporterTimeoutMillis",
-                "must be greater than zero",
-            ));
-        }
-    }
-
-    Ok(TelemetryConfig {
-        metrics_exporter: broker.metrics_exporter_type,
-        trace_exporter: broker.trace_exporter_type,
-        metrics_sample_ratio: broker.metrics_sample_ratio,
-        trace_sample_ratio: broker.trace_sample_ratio,
-    })
-}
-
-fn validate_ratio(field: &'static str, value: f64) -> Result<(), BrokerConfigError> {
-    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-        return Err(BrokerConfigError::invalid(
-            ConfigSection::Telemetry,
-            field,
-            "must be finite and between 0.0 and 1.0",
-        ));
-    }
-    Ok(())
-}
-
 fn validated_port(section: ConfigSection, field: &'static str, port: u32) -> Result<u16, BrokerConfigError> {
     let port = u16::try_from(port).map_err(|_| BrokerConfigError::invalid(section, field, "must fit a TCP port"))?;
     if port == 0 {
@@ -1009,23 +897,6 @@ fn validate_endpoint(section: ConfigSection, field: &'static str, endpoint: &str
         ));
     }
     Ok(())
-}
-
-fn validate_otlp_endpoint(field: &'static str, endpoint: &str) -> Result<(), BrokerConfigError> {
-    let endpoint = endpoint.trim();
-    let authority = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .and_then(|remainder| remainder.split('/').next())
-        .filter(|authority| !authority.is_empty())
-        .ok_or_else(|| {
-            BrokerConfigError::invalid(
-                ConfigSection::Telemetry,
-                field,
-                "must be an http:// or https:// endpoint with an explicit port",
-            )
-        })?;
-    validate_endpoint(ConfigSection::Telemetry, field, authority)
 }
 
 #[cfg(test)]

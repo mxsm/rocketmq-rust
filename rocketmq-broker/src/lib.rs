@@ -20,6 +20,7 @@
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 pub use broker_runtime::build_broker_telemetry_bootstrap_config;
+pub use broker_runtime::build_broker_telemetry_bootstrap_config_with_overrides;
 pub use lifecycle::BrokerReadiness;
 pub use lifecycle::BrokerStartupError;
 pub use lifecycle::Configured;

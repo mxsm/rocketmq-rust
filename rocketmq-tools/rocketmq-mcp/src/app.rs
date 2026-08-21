@@ -27,20 +27,46 @@ static LEGACY_TELEMETRY_GUARD: std::sync::OnceLock<
     std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>,
 > = std::sync::OnceLock::new();
 
-const OTLP_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
-const OTLP_PROTOCOL_ENV: &str = "OTEL_EXPORTER_OTLP_PROTOCOL";
-const TRACE_SAMPLE_RATIO_ENV: &str = "ROCKETMQ_MCP_TRACE_SAMPLE_RATIO";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct OtlpEnvironment {
-    endpoint: String,
-}
-
 #[derive(Debug, Clone)]
 pub struct McpShutdownReport {
     pub audit: AuditDrainReport,
     pub runtime: Option<rocketmq_runtime::ShutdownReport>,
     pub telemetry: Option<rocketmq_observability::TelemetryShutdownReport>,
+}
+
+/// Opaque proof that MCP telemetry and every final process listener passed the
+/// pre-bind security boundary.
+///
+/// The fields are private so callers cannot replace the resolved telemetry,
+/// process identity, or security outcome after validation.
+pub struct ValidatedMcpBootstrap {
+    config: McpConfig,
+    telemetry_resolution: rocketmq_observability::TelemetryResolution,
+    security_outcome: rocketmq_security_api::SecurityBootstrapOutcome,
+}
+
+impl std::fmt::Debug for ValidatedMcpBootstrap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ValidatedMcpBootstrap")
+            .field("security_outcome", &self.security_outcome)
+            .field(
+                "telemetry_enabled",
+                &self.telemetry_resolution.bootstrap.observability.enabled,
+            )
+            .field(
+                "prometheus_listener_present",
+                &self.telemetry_resolution.prometheus_listener_addr.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl ValidatedMcpBootstrap {
+    /// Returns the non-sensitive security outcome for startup logging.
+    pub const fn security_outcome(&self) -> rocketmq_security_api::SecurityBootstrapOutcome {
+        self.security_outcome
+    }
 }
 
 impl McpShutdownReport {
@@ -137,10 +163,33 @@ impl McpApp {
     pub async fn bootstrap_typed(
         config: McpConfig,
         process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-        _security_bootstrap: rocketmq_security_api::SecurityBootstrapOutcome,
+        security_bootstrap: rocketmq_security_api::SecurityBootstrapOutcome,
         service_context: rocketmq_runtime::ChildServiceContext,
     ) -> Result<Self, crate::error::McpError> {
-        let telemetry = init_tracing_typed(&config, &process_telemetry, &service_context).await?;
+        let telemetry_resolution = resolve_mcp_telemetry(&config)?;
+        ensure_process_telemetry_matches(&process_telemetry, &telemetry_resolution.process)?;
+        let handoff = prepare_mcp_bootstrap_from_validated_outcome(config, telemetry_resolution, security_bootstrap)?;
+        Self::bootstrap_validated_typed(handoff, service_context).await
+    }
+
+    /// Initializes MCP from an opaque handoff created only after shared
+    /// telemetry resolution and pre-bind security validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed MCP error when telemetry, guards, adapters, or
+    /// background services cannot be initialized.
+    pub async fn bootstrap_validated_typed(
+        handoff: ValidatedMcpBootstrap,
+        service_context: rocketmq_runtime::ChildServiceContext,
+    ) -> Result<Self, crate::error::McpError> {
+        let ValidatedMcpBootstrap {
+            config,
+            telemetry_resolution,
+            security_outcome: _,
+        } = handoff;
+        let rocketmq_observability::TelemetryResolution { bootstrap, process, .. } = telemetry_resolution;
+        let telemetry = init_resolved_tracing_typed(&config, bootstrap, &process, &service_context).await?;
         rocketmq_observability::metrics::runtime::record_lifecycle(
             rocketmq_runtime::RuntimeComponent::Mcp,
             rocketmq_observability::metrics::runtime::RuntimeLifecycleState::Starting,
@@ -328,12 +377,15 @@ impl McpApp {
                 rocketmq_observability::metrics::runtime::RuntimeLifecycleReason::Internal
             },
         );
-        let telemetry = self
-            .telemetry
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .map(|guard| guard.shutdown_with_timeout(deadline.remaining()));
+        let telemetry_guard = self.telemetry.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let telemetry = match telemetry_guard {
+            Some(guard) => Some(
+                guard
+                    .shutdown_with_service_context(&self.service_context, deadline.remaining())
+                    .await,
+            ),
+            None => None,
+        };
         McpShutdownReport {
             audit,
             runtime,
@@ -356,6 +408,17 @@ pub async fn init_tracing_typed(
     process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
     service_context: &rocketmq_runtime::ChildServiceContext,
 ) -> Result<rocketmq_observability::TelemetryRuntimeGuard, crate::error::McpError> {
+    let rocketmq_observability::TelemetryResolution { bootstrap, process, .. } = resolve_mcp_telemetry(config)?;
+    ensure_process_telemetry_matches(process_telemetry, &process)?;
+    init_resolved_tracing_typed(config, bootstrap, &process, service_context).await
+}
+
+async fn init_resolved_tracing_typed(
+    config: &McpConfig,
+    bootstrap: rocketmq_observability::TelemetryBootstrapConfig,
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+    service_context: &rocketmq_runtime::ChildServiceContext,
+) -> Result<rocketmq_observability::TelemetryRuntimeGuard, crate::error::McpError> {
     let environment_filter = rocketmq_observability::read_rust_log()
         .map_err(|source| crate::error::McpError::infrastructure("read MCP RUST_LOG", source))?;
     let resolved_filter = rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
@@ -365,8 +428,6 @@ pub async fn init_tracing_typed(
         ..rocketmq_observability::LogFilterInputs::default()
     })
     .map_err(|source| crate::error::McpError::infrastructure("resolve MCP tracing filter", source))?;
-    let mut bootstrap = build_mcp_telemetry_bootstrap_config(config, process_telemetry);
-    configure_otlp_from_environment(&mut bootstrap)?;
     let guard = rocketmq_observability::install_global_with_filter_and_service_context(
         &bootstrap,
         resolved_filter.clone(),
@@ -403,19 +464,200 @@ pub async fn init_tracing_typed(
     Ok(guard)
 }
 
-fn build_mcp_telemetry_bootstrap_config(
-    config: &McpConfig,
-    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-) -> rocketmq_observability::TelemetryBootstrapConfig {
+fn build_mcp_telemetry_bootstrap_config(config: &McpConfig) -> rocketmq_observability::TelemetryBootstrapConfig {
     let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
     bootstrap.observability.service_name = "rocketmq-mcp".to_string();
     bootstrap.observability.service_namespace = "rocketmq".to_string();
     bootstrap.observability.node_type = "mcp".to_string();
     bootstrap.observability.node_id = config.server.name.clone();
     bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
-    process_telemetry.apply_to(&mut bootstrap.observability);
     bootstrap.logging.reload = config.logging.reload;
     bootstrap
+}
+
+fn mcp_telemetry_environment_spec() -> rocketmq_observability::TelemetryEnvironmentSpec {
+    rocketmq_observability::TelemetryEnvironmentSpec {
+        trace_sample_ratio_env: Some("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"),
+    }
+}
+
+fn ensure_process_telemetry_matches(
+    supplied: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+    resolved: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+) -> Result<(), crate::error::McpError> {
+    if supplied != resolved {
+        return Err(crate::error::McpError::InvalidConfig(
+            "MCP process telemetry input must match the unified telemetry resolution".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mcp_telemetry_resolution(
+    config: &McpConfig,
+    resolution: &rocketmq_observability::TelemetryResolution,
+) -> Result<(), crate::error::McpError> {
+    let observability = &resolution.bootstrap.observability;
+    if observability.service_name != "rocketmq-mcp"
+        || observability.service_namespace != "rocketmq"
+        || observability.node_type != "mcp"
+        || observability.node_id != config.server.name
+        || observability.subscriber_install_policy != rocketmq_observability::SubscriberInstallPolicy::Required
+        || resolution.process.release_identity().service() != "rocketmq-mcp"
+        || observability.metrics.enabled != resolution.process.metrics_enabled()
+        || observability.metrics.exporter != resolution.process.metrics_exporter()
+        || observability.prometheus.host != resolution.process.prometheus_host()
+        || observability.prometheus.port != resolution.process.prometheus_port()
+        || observability.prometheus.path != resolution.process.prometheus_path()
+        || observability.enabled
+            != (observability.metrics.enabled || observability.traces.enabled || observability.logs.enabled)
+    {
+        return Err(crate::error::McpError::InvalidConfig(
+            "resolved MCP telemetry identity must match the service-owned identity".to_string(),
+        ));
+    }
+    let expected_listener = (observability.metrics.enabled
+        && observability.metrics.exporter == rocketmq_observability::MetricsExporter::Prometheus)
+        .then(|| resolution.process.prometheus_listener_addr())
+        .flatten();
+    if resolution.prometheus_listener_addr != expected_listener {
+        return Err(crate::error::McpError::InvalidConfig(
+            "resolved MCP telemetry listener must match the validated process configuration".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves MCP telemetry and validates every final HTTP, Prometheus, and probe
+/// listener before returning an opaque startup handoff.
+///
+/// # Errors
+///
+/// Returns a redacted invalid-configuration error when telemetry resolution,
+/// listener parsing, or security validation fails.
+pub fn prepare_mcp_bootstrap(
+    config: McpConfig,
+    security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
+    probe_bind_addr: Option<std::net::SocketAddr>,
+) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+    let telemetry_resolution = resolve_mcp_telemetry(&config)?;
+    prepare_mcp_bootstrap_from_resolution(config, security_bootstrap, probe_bind_addr, telemetry_resolution)
+}
+
+fn prepare_mcp_bootstrap_from_resolution(
+    config: McpConfig,
+    security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
+    probe_bind_addr: Option<std::net::SocketAddr>,
+    telemetry_resolution: rocketmq_observability::TelemetryResolution,
+) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+    validate_mcp_telemetry_resolution(&config, &telemetry_resolution)?;
+    let security_outcome = validate_mcp_security(
+        security_bootstrap,
+        config.server.transport,
+        &config.server.http.bind,
+        telemetry_resolution.prometheus_listener_addr,
+        probe_bind_addr,
+    )?;
+    Ok(ValidatedMcpBootstrap {
+        config,
+        telemetry_resolution,
+        security_outcome,
+    })
+}
+
+fn prepare_mcp_bootstrap_from_validated_outcome(
+    config: McpConfig,
+    telemetry_resolution: rocketmq_observability::TelemetryResolution,
+    security_outcome: rocketmq_security_api::SecurityBootstrapOutcome,
+) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+    validate_mcp_telemetry_resolution(&config, &telemetry_resolution)?;
+    Ok(ValidatedMcpBootstrap {
+        config,
+        telemetry_resolution,
+        security_outcome,
+    })
+}
+
+/// Validates the final MCP listener set against the resolved security profile.
+///
+/// # Errors
+///
+/// Returns a redacted invalid-configuration error when an HTTP listener is
+/// malformed or any listener violates the configured security profile.
+pub fn validate_mcp_security(
+    security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
+    transport: TransportKind,
+    http_bind: &str,
+    prometheus_bind_addr: Option<std::net::SocketAddr>,
+    probe_bind_addr: Option<std::net::SocketAddr>,
+) -> Result<rocketmq_security_api::SecurityBootstrapOutcome, crate::error::McpError> {
+    if !security_bootstrap.is_enabled() {
+        return security_bootstrap.validate(&[]).map_err(|error| {
+            crate::error::McpError::InvalidConfig(format!(
+                "MCP security bootstrap failed before listener bind: {error}"
+            ))
+        });
+    }
+    let mut listeners = Vec::with_capacity(3);
+    if transport == TransportKind::StreamableHttp {
+        listeners.push(http_bind.parse::<std::net::SocketAddr>().map_err(|_| {
+            crate::error::McpError::InvalidConfig("server.http.bind must be a socket address".to_string())
+        })?);
+    }
+    if let Some(prometheus_bind_addr) = prometheus_bind_addr {
+        listeners.push(prometheus_bind_addr);
+    }
+    if let Some(probe_bind_addr) = probe_bind_addr {
+        listeners.push(probe_bind_addr);
+    }
+    security_bootstrap.validate(&listeners).map_err(|error| {
+        crate::error::McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
+    })
+}
+
+/// Resolves MCP telemetry from service defaults, file overrides, and present
+/// process environment variables.
+///
+/// # Errors
+///
+/// Returns a redacted invalid-configuration error when a present environment
+/// value or the merged telemetry configuration is invalid.
+pub fn resolve_mcp_telemetry(
+    config: &McpConfig,
+) -> Result<rocketmq_observability::TelemetryResolution, crate::error::McpError> {
+    rocketmq_observability::resolve_telemetry_from_env(
+        "rocketmq-mcp",
+        build_mcp_telemetry_bootstrap_config(config),
+        &config.observability,
+        mcp_telemetry_environment_spec(),
+    )
+    .map_err(|error| crate::error::McpError::InvalidConfig(format!("invalid MCP telemetry configuration: {error}")))
+}
+
+#[cfg(test)]
+fn resolve_mcp_telemetry_values(
+    config: &McpConfig,
+    environment: &rocketmq_observability::TelemetryEnvironmentValues,
+) -> Result<rocketmq_observability::TelemetryResolution, crate::error::McpError> {
+    rocketmq_observability::resolve_telemetry_values(
+        "rocketmq-mcp",
+        build_mcp_telemetry_bootstrap_config(config),
+        &config.observability,
+        environment,
+        mcp_telemetry_environment_spec(),
+    )
+    .map_err(|error| crate::error::McpError::InvalidConfig(format!("invalid MCP telemetry configuration: {error}")))
+}
+
+#[cfg(test)]
+fn prepare_mcp_bootstrap_values(
+    config: McpConfig,
+    security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
+    probe_bind_addr: Option<std::net::SocketAddr>,
+    environment: &rocketmq_observability::TelemetryEnvironmentValues,
+) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+    let telemetry_resolution = resolve_mcp_telemetry_values(&config, environment)?;
+    prepare_mcp_bootstrap_from_resolution(config, security_bootstrap, probe_bind_addr, telemetry_resolution)
 }
 
 fn register_mcp_release_identity(
@@ -451,75 +693,6 @@ fn register_mcp_release_identity(
     }
 }
 
-fn configure_otlp_from_environment(
-    bootstrap: &mut rocketmq_observability::TelemetryBootstrapConfig,
-) -> Result<(), crate::error::McpError> {
-    let endpoint = read_utf8_environment(OTLP_ENDPOINT_ENV)?;
-    let protocol = read_utf8_environment(OTLP_PROTOCOL_ENV)?;
-    let trace_sample_ratio = read_utf8_environment(TRACE_SAMPLE_RATIO_ENV)?;
-    if let Some(sample_ratio) = resolve_trace_sample_ratio(trace_sample_ratio.as_deref())? {
-        bootstrap.observability.traces.sample_ratio = sample_ratio;
-    }
-    let Some(otlp) = resolve_otlp_environment(endpoint.as_deref(), protocol.as_deref())? else {
-        return Ok(());
-    };
-
-    bootstrap.observability.enabled = true;
-    bootstrap.observability.metrics.enabled = true;
-    bootstrap.observability.metrics.exporter = rocketmq_observability::MetricsExporter::OtlpGrpc;
-    bootstrap.observability.traces.enabled = true;
-    bootstrap.observability.traces.exporter = rocketmq_observability::TraceExporter::OtlpGrpc;
-    bootstrap.observability.logs.enabled = true;
-    bootstrap.observability.logs.exporter = rocketmq_observability::LogsExporter::OtlpGrpc;
-    bootstrap.observability.otlp.endpoint = otlp.endpoint;
-    bootstrap.observability.otlp.protocol = rocketmq_observability::OtlpProtocol::Grpc;
-    Ok(())
-}
-
-fn read_utf8_environment(name: &'static str) -> Result<Option<String>, crate::error::McpError> {
-    match std::env::var(name) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(crate::error::McpError::InvalidConfig(format!(
-            "{name} must contain valid UTF-8"
-        ))),
-    }
-}
-
-fn resolve_otlp_environment(
-    endpoint: Option<&str>,
-    protocol: Option<&str>,
-) -> Result<Option<OtlpEnvironment>, crate::error::McpError> {
-    let Some(endpoint) = endpoint.map(str::trim).filter(|endpoint| !endpoint.is_empty()) else {
-        return Ok(None);
-    };
-    if protocol.map(str::trim) != Some("grpc") {
-        return Err(crate::error::McpError::InvalidConfig(format!(
-            "{OTLP_PROTOCOL_ENV} must be `grpc` when {OTLP_ENDPOINT_ENV} is configured"
-        )));
-    }
-    Ok(Some(OtlpEnvironment {
-        endpoint: endpoint.to_string(),
-    }))
-}
-
-fn resolve_trace_sample_ratio(value: Option<&str>) -> Result<Option<f64>, crate::error::McpError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let sample_ratio = value.trim().parse::<f64>().map_err(|_| {
-        crate::error::McpError::InvalidConfig(format!(
-            "{TRACE_SAMPLE_RATIO_ENV} must be a finite number between 0.0 and 1.0"
-        ))
-    })?;
-    if !sample_ratio.is_finite() || !(0.0..=1.0).contains(&sample_ratio) {
-        return Err(crate::error::McpError::InvalidConfig(format!(
-            "{TRACE_SAMPLE_RATIO_ENV} must be a finite number between 0.0 and 1.0"
-        )));
-    }
-    Ok(Some(sample_ratio))
-}
-
 #[deprecated(since = "1.0.0", note = "use init_tracing_typed")]
 pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
     let environment_filter = rocketmq_observability::read_rust_log()?;
@@ -530,10 +703,11 @@ pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
             legacy_config: config.server.log_level.as_deref(),
             ..rocketmq_observability::LogFilterInputs::default()
         })?;
-    let process_telemetry =
-        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-mcp")?;
-    let mut bootstrap = build_mcp_telemetry_bootstrap_config(config, &process_telemetry);
-    configure_otlp_from_environment(&mut bootstrap).map_err(anyhow::Error::new)?;
+    let rocketmq_observability::TelemetryResolution {
+        bootstrap,
+        process: process_telemetry,
+        ..
+    } = resolve_mcp_telemetry(config).map_err(anyhow::Error::new)?;
     let guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter)?;
     register_mcp_release_identity(&guard, &process_telemetry).map_err(anyhow::Error::new)?;
     *LEGACY_TELEMETRY_GUARD
@@ -545,46 +719,292 @@ pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_otlp_environment;
-    use super::resolve_trace_sample_ratio;
+    use super::prepare_mcp_bootstrap_from_resolution;
+    use super::prepare_mcp_bootstrap_values;
+    use super::resolve_mcp_telemetry_values;
+
+    fn example_config() -> crate::config::McpConfig {
+        crate::config::McpConfig::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("conf")
+                .join("mcp.example.toml"),
+        )
+        .expect("example MCP config should load")
+    }
 
     #[test]
-    fn otlp_environment_is_disabled_without_a_non_empty_endpoint() {
-        assert_eq!(resolve_otlp_environment(None, None).unwrap(), None);
-        assert_eq!(
-            resolve_otlp_environment(Some("  "), Some("http/protobuf")).unwrap(),
-            None
+    fn normal_shutdown_uses_service_context_for_telemetry_cleanup() {
+        let source = include_str!("app.rs");
+        let shutdown_start = source
+            .find("pub async fn shutdown_with_deadline")
+            .expect("MCP app should expose bounded shutdown");
+        let shutdown_end = source[shutdown_start..]
+            .find("fn start_background_services")
+            .map(|offset| shutdown_start + offset)
+            .expect("MCP app shutdown should precede background service startup");
+        let shutdown = &source[shutdown_start..shutdown_end];
+
+        assert!(
+            shutdown.contains("shutdown_with_service_context(&self.service_context, deadline.remaining())"),
+            "MCP telemetry cleanup must use the same service context that owns Prometheus work"
+        );
+        assert!(
+            !shutdown.contains("shutdown_with_timeout(deadline.remaining())"),
+            "normal shutdown must not bypass the telemetry service context"
         );
     }
 
     #[test]
-    fn otlp_environment_accepts_only_explicit_grpc() {
-        let resolved = resolve_otlp_environment(Some(" http://otel-collector:4317 "), Some("grpc"))
-            .unwrap()
-            .expect("OTLP should be enabled");
+    fn file_observability_is_preserved_without_environment_values() {
+        let mut config = example_config();
+        config.observability.traces.exporter = Some(rocketmq_observability::TraceExporter::OtlpGrpc);
+        config.observability.traces.sample_ratio = Some(0.4);
+        config.observability.otlp.endpoint = Some("http://file-collector:4317".to_string());
+        config.observability.otlp.protocol = Some(rocketmq_observability::OtlpProtocol::Grpc);
 
-        assert_eq!(resolved.endpoint, "http://otel-collector:4317");
-        assert!(resolve_otlp_environment(Some("http://otel-collector:4317"), None).is_err());
-        assert!(resolve_otlp_environment(Some("http://otel-collector:4317"), Some("http/protobuf")).is_err());
+        let resolution =
+            resolve_mcp_telemetry_values(&config, &rocketmq_observability::TelemetryEnvironmentValues::default())
+                .expect("file-only telemetry should resolve");
+
+        assert!(resolution.bootstrap.observability.traces.enabled);
+        assert_eq!(resolution.bootstrap.observability.traces.sample_ratio, 0.4);
+        assert_eq!(
+            resolution.bootstrap.observability.otlp.endpoint,
+            "http://file-collector:4317"
+        );
     }
 
     #[test]
-    fn trace_sample_ratio_preserves_the_production_default_without_an_override() {
-        assert_eq!(resolve_trace_sample_ratio(None).unwrap(), None);
+    fn standard_otlp_environment_overrides_file_and_enables_all_signals() {
+        let mut config = example_config();
+        config.observability.traces.exporter = Some(rocketmq_observability::TraceExporter::OtlpGrpc);
+        config.observability.traces.sample_ratio = Some(0.4);
+        config.observability.otlp.endpoint = Some("http://file-collector:4317".to_string());
+        config.observability.otlp.protocol = Some(rocketmq_observability::OtlpProtocol::Grpc);
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://environment-collector:4317".into()),
+            otlp_protocol: Some("grpc".into()),
+            ..Default::default()
+        };
+
+        let resolution =
+            resolve_mcp_telemetry_values(&config, &environment).expect("standard OTLP environment should resolve");
+
+        let observability = resolution.bootstrap.observability;
+        assert!(observability.metrics.enabled);
+        assert!(observability.traces.enabled);
+        assert!(observability.logs.enabled);
+        assert_eq!(observability.otlp.endpoint, "http://environment-collector:4317");
+        assert_eq!(observability.traces.sample_ratio, 0.4);
+
+        prepare_mcp_bootstrap_values(
+            config,
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            None,
+            &environment,
+        )
+        .expect("standard OTLP environment must produce a consistent validated handoff");
     }
 
     #[test]
-    fn trace_sample_ratio_accepts_only_finite_values_in_the_unit_interval() {
-        assert_eq!(resolve_trace_sample_ratio(Some(" 1.0 ")).unwrap(), Some(1.0));
-        assert_eq!(resolve_trace_sample_ratio(Some("0")).unwrap(), Some(0.0));
-        assert_eq!(resolve_trace_sample_ratio(Some("0.25")).unwrap(), Some(0.25));
+    fn invalid_standard_otlp_environment_is_redacted() {
+        let config = example_config();
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            otlp_endpoint: Some("http://secret-endpoint-sentinel:4317".into()),
+            otlp_protocol: Some("secret-protocol-sentinel".into()),
+            ..Default::default()
+        };
 
-        for invalid in ["", "-0.1", "1.1", "NaN", "inf", "secret-sentinel"] {
-            let error = resolve_trace_sample_ratio(Some(invalid)).unwrap_err().to_string();
+        let error = resolve_mcp_telemetry_values(&config, &environment)
+            .expect_err("unsupported protocol should fail")
+            .to_string();
+
+        assert!(error.contains("OTEL_EXPORTER_OTLP_PROTOCOL"));
+        assert!(!error.contains("secret-endpoint-sentinel"));
+        assert!(!error.contains("secret-protocol-sentinel"));
+    }
+
+    #[test]
+    fn mcp_trace_sample_ratio_environment_overrides_file_and_redacts_invalid_values() {
+        let mut config = example_config();
+        config.observability.traces.sample_ratio = Some(0.4);
+        for (environment_value, expected) in [("0", 0.0), ("  1.0  ", 1.0)] {
+            let environment = rocketmq_observability::TelemetryEnvironmentValues {
+                trace_sample_ratio: Some(environment_value.into()),
+                ..Default::default()
+            };
+            let resolution = resolve_mcp_telemetry_values(&config, &environment)
+                .expect("MCP boundary trace sample ratio should resolve");
+            assert_eq!(resolution.bootstrap.observability.traces.sample_ratio, expected);
+        }
+
+        for invalid_value in ["-0.1", "1.1", "NaN", "inf"] {
+            let invalid_environment = rocketmq_observability::TelemetryEnvironmentValues {
+                trace_sample_ratio: Some(invalid_value.into()),
+                ..Default::default()
+            };
+            let error = resolve_mcp_telemetry_values(&config, &invalid_environment)
+                .expect_err("invalid MCP trace sample ratio should fail")
+                .to_string();
             assert!(error.contains("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"));
-            if !invalid.is_empty() {
-                assert!(!error.contains(invalid));
-            }
+            assert!(!error.contains(invalid_value));
+        }
+
+        for invalid_value in ["", "   ", "secret-sample-ratio-sentinel"] {
+            let invalid_environment = rocketmq_observability::TelemetryEnvironmentValues {
+                trace_sample_ratio: Some(invalid_value.into()),
+                ..Default::default()
+            };
+            let error = resolve_mcp_telemetry_values(&config, &invalid_environment)
+                .expect_err("empty or non-numeric MCP trace sample ratio should fail")
+                .to_string();
+            assert_eq!(
+                error,
+                "invalid configuration: invalid MCP telemetry configuration: invalid observability config: \
+                 ROCKETMQ_MCP_TRACE_SAMPLE_RATIO must be a floating-point number"
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn non_utf8_mcp_trace_sample_ratio_is_redacted() {
+        #[cfg(unix)]
+        let invalid_value = {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(vec![0xff])
+        };
+        #[cfg(windows)]
+        let invalid_value = {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[0xd800])
+        };
+        let environment = rocketmq_observability::TelemetryEnvironmentValues {
+            trace_sample_ratio: Some(invalid_value),
+            ..Default::default()
+        };
+
+        let error = resolve_mcp_telemetry_values(&example_config(), &environment)
+            .expect_err("non-UTF-8 MCP trace sample ratio should fail")
+            .to_string();
+
+        assert!(error.contains("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"));
+    }
+
+    #[test]
+    fn validated_handoff_rejects_tampered_resolution_parts() {
+        let config = example_config();
+        let environment = rocketmq_observability::TelemetryEnvironmentValues::default();
+
+        let mut listener_tampered = resolve_mcp_telemetry_values(&config, &environment).unwrap();
+        listener_tampered.prometheus_listener_addr = Some("127.0.0.1:5557".parse().unwrap());
+        assert!(prepare_mcp_bootstrap_from_resolution(
+            config.clone(),
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            None,
+            listener_tampered,
+        )
+        .is_err());
+
+        let mut process_tampered = resolve_mcp_telemetry_values(&config, &environment).unwrap();
+        process_tampered.process =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-mcp",
+                None,
+                None,
+                Some("true"),
+                Some("log"),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(prepare_mcp_bootstrap_from_resolution(
+            config.clone(),
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            None,
+            process_tampered,
+        )
+        .is_err());
+
+        let mut bootstrap_tampered = resolve_mcp_telemetry_values(&config, &environment).unwrap();
+        bootstrap_tampered.bootstrap.observability.enabled = true;
+        assert!(prepare_mcp_bootstrap_from_resolution(
+            config.clone(),
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            None,
+            bootstrap_tampered,
+        )
+        .is_err());
+
+        let mut identity_tampered = resolve_mcp_telemetry_values(&config, &environment).unwrap();
+        identity_tampered.bootstrap.observability.service_name = "not-rocketmq-mcp".to_string();
+        let error = prepare_mcp_bootstrap_from_resolution(
+            config,
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            None,
+            identity_tampered,
+        )
+        .expect_err("tampered service identity must not produce a validated handoff")
+        .to_string();
+        assert!(!error.contains("not-rocketmq-mcp"));
+    }
+
+    #[test]
+    fn validated_handoff_requires_final_listener_security_validation() {
+        let mut config = example_config();
+        config.observability.metrics.exporter = Some(rocketmq_observability::MetricsExporter::Prometheus);
+        config.observability.prometheus.host = Some("0.0.0.0".to_string());
+        config.observability.prometheus.port = Some(5557);
+        let security =
+            rocketmq_security_api::SecurityBootstrap::Enabled(rocketmq_security_api::SecurityBootstrapConfig::new(
+                rocketmq_security_api::SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+            ));
+
+        let error = prepare_mcp_bootstrap_values(
+            config,
+            &security,
+            None,
+            &rocketmq_observability::TelemetryEnvironmentValues::default(),
+        )
+        .expect_err("public file listener must prevent validated handoff construction")
+        .to_string();
+
+        assert!(error.contains("loopback"));
+        assert!(!error.contains("0.0.0.0"));
+        assert!(!error.contains("5557"));
+    }
+
+    #[test]
+    fn app_debug_redacts_observability_values() {
+        const ENDPOINT_SENTINEL: &str = "secret-app-endpoint-sentinel";
+        const HEADER_SENTINEL: &str = "secret-app-header-sentinel";
+        const RESOURCE_SENTINEL: &str = "secret-app-resource-sentinel";
+        let mut config = example_config();
+        config.observability.otlp.endpoint = Some(ENDPOINT_SENTINEL.to_string());
+        config.observability.otlp.headers = Some(std::collections::HashMap::from([(
+            "authorization".to_string(),
+            HEADER_SENTINEL.to_string(),
+        )]));
+        config.observability.resource_attributes = Some(std::collections::HashMap::from([(
+            "deployment.secret".to_string(),
+            RESOURCE_SENTINEL.to_string(),
+        )]));
+        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            "mcp-app-debug-redaction-test",
+        ))
+        .unwrap();
+        let app = super::McpApp::new(
+            config,
+            owner.root_context().component("mcp-app"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .unwrap();
+
+        let debug = format!("{app:?}");
+
+        assert!(debug.contains("observability"));
+        for sentinel in [ENDPOINT_SENTINEL, HEADER_SENTINEL, RESOURCE_SENTINEL] {
+            assert!(!debug.contains(sentinel));
         }
     }
 }

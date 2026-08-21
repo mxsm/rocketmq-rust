@@ -24,7 +24,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -1400,7 +1399,7 @@ impl Controller for OpenRaftController {
 /// Returns a typed configuration error when `ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR`
 /// is non-UTF-8 or not a socket address.
 pub fn resolve_controller_raft_bind_addr(fallback: SocketAddr) -> RocketMQResult<SocketAddr> {
-    let Some(raw) = env::var_os(CONTROLLER_RAFT_BIND_ADDR_ENV) else {
+    let Some(raw) = std::env::var_os(CONTROLLER_RAFT_BIND_ADDR_ENV) else {
         return Ok(fallback);
     };
     let raw = raw.into_string().map_err(|_| {

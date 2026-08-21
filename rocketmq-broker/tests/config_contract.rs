@@ -17,6 +17,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
+use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::config::error::BrokerConfigError;
 use rocketmq_broker::config::error::ConfigSection;
@@ -53,6 +54,49 @@ fn load_inline_config(source: &str) -> Result<RawBrokerConfig, Box<BrokerConfigE
     file.write_all(source.as_bytes())
         .expect("write temporary configuration");
     RawBrokerConfig::load(file.path()).map_err(Box::new)
+}
+
+fn assert_broker_config_error_redacts(error: &BrokerConfigError, canary: &str) {
+    for output in [error.to_string(), format!("{error:?}")] {
+        assert!(
+            !output.contains(canary),
+            "broker configuration error exposed sensitive input: {output}"
+        );
+    }
+    assert!(
+        std::error::Error::source(error).is_none(),
+        "raw config::ConfigError must not remain in the public source chain"
+    );
+    if let BrokerConfigError::Load { source, .. } = error {
+        for output in [source.to_string(), format!("{source:?}")] {
+            assert!(
+                !output.contains(canary),
+                "Broker Load source exposed sensitive input: {output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn broker_config_load_errors_redact_observability_values() {
+    for (source, canary) in [
+        (
+            "[observability.otlp]\nheaders = \"BROKER_HEADER_CANARY\"\n",
+            "BROKER_HEADER_CANARY",
+        ),
+        (
+            "[observability]\nresourceAttributes = \"BROKER_RESOURCE_CANARY\"\n",
+            "BROKER_RESOURCE_CANARY",
+        ),
+        (
+            "[observability.otlp]\nendpoint = \"https://collector.invalid?token=BROKER_ENDPOINT_CANARY\" trailing\n",
+            "BROKER_ENDPOINT_CANARY",
+        ),
+    ] {
+        let error = load_inline_config(source).expect_err("invalid observability configuration must fail");
+
+        assert_broker_config_error_redacts(&error, canary);
+    }
 }
 
 #[test]
@@ -94,10 +138,15 @@ fn canonical_fixture_crosses_the_raw_and_validated_boundary() {
     assert!(sections.security().authentication_enabled());
     assert!(sections.security().authorization_enabled());
     assert!(sections.resources().max_client_events() > 0);
-    assert!((0.0..=1.0).contains(&sections.telemetry().metrics_sample_ratio()));
-    assert!(!sections.telemetry().trace_exporter().is_enable());
     assert_eq!(validated.logging().logging.filter.as_deref(), Some("info"));
     assert!(validated.logging().logging.reload.enabled);
+    assert_eq!(
+        validated.observability().metrics.exporter,
+        Some(rocketmq_observability::MetricsExporter::Prometheus)
+    );
+    assert_eq!(validated.observability().prometheus.host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(validated.observability().prometheus.port, Some(9464));
+    assert_eq!(validated.observability().prometheus.path.as_deref(), Some("/rocketmq"));
     assert_eq!(validated.store().max_recovery_commit_log_files, 30);
     assert_eq!(validated.store().flush_consume_queue_least_pages, 2);
 }
@@ -178,6 +227,48 @@ fn compatibility_profile_is_rejected_as_an_unknown_field() {
         .expect_err("removed profile key must fail before validation");
 
     assert!(error.to_string().contains("compatibilityProfile"));
+}
+
+#[test]
+fn environment_prometheus_endpoint_overrides_canonical_file_values() {
+    let raw = RawBrokerConfig::load(fixture("valid.toml")).expect("canonical fixture should deserialize");
+    let validated = ValidatedBrokerConfig::try_from(raw).expect("canonical fixture should validate");
+    let environment = rocketmq_observability::TelemetryEnvironmentValues {
+        release_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+        release_nonce: Some("broker-config-contract".into()),
+        metrics_enabled: Some("true".into()),
+        metrics_exporter: Some("prometheus".into()),
+        metrics_bind_addr: Some("127.0.0.2:9564".into()),
+        metrics_path: Some("/environment".into()),
+        ..Default::default()
+    };
+
+    let resolution = rocketmq_observability::resolve_telemetry_values(
+        "rocketmq-broker",
+        build_broker_telemetry_bootstrap_config(validated.broker()),
+        validated.observability(),
+        &environment,
+        rocketmq_observability::TelemetryEnvironmentSpec {
+            trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
+        },
+    )
+    .expect("environment values should override the canonical file section");
+
+    assert_eq!(resolution.bootstrap.observability.prometheus.host, "127.0.0.2");
+    assert_eq!(resolution.bootstrap.observability.prometheus.port, 9564);
+    assert_eq!(resolution.bootstrap.observability.prometheus.path, "/environment");
+    assert_eq!(
+        resolution.prometheus_listener_addr,
+        Some("127.0.0.2:9564".parse().expect("literal socket address"))
+    );
+}
+
+#[test]
+fn legacy_flat_observability_key_is_rejected_during_deserialization() {
+    let error = load_inline_config("[broker]\nmetricsExporterType = \"prom\"\n")
+        .expect_err("legacy flat observability keys must not coexist with the canonical section");
+
+    assert!(error.to_string().contains("metricsExporterType"));
 }
 
 #[test]
@@ -315,15 +406,6 @@ fn every_validated_section_rejects_an_invalid_candidate() {
     assert_invalid_section(
         ValidatedBrokerConfig::try_from_parts(broker, MessageStoreConfig::default()),
         ConfigSection::Resources,
-    );
-
-    let broker = BrokerConfig {
-        trace_sample_ratio: 1.5,
-        ..BrokerConfig::default()
-    };
-    assert_invalid_section(
-        ValidatedBrokerConfig::try_from_parts(broker, MessageStoreConfig::default()),
-        ConfigSection::Telemetry,
     );
 }
 

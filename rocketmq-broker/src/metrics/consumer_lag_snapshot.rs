@@ -41,6 +41,7 @@ pub(crate) struct ConsumerLagSnapshotService<MS: BrokerReadWriteStore> {
     consumers: ConsumerManager,
     pop_processor: Arc<PopMessageProcessor<MS>>,
     notify_before_pop_calculate_lag: bool,
+    cardinality_limit: usize,
     refresh_timeout: Duration,
     current: ArcSwap<Vec<ConsumerLagObservation>>,
 }
@@ -51,12 +52,14 @@ impl<MS: BrokerReadWriteStore> ConsumerLagSnapshotService<MS> {
         consumers: ConsumerManager,
         pop_processor: Arc<PopMessageProcessor<MS>>,
         notify_before_pop_calculate_lag: bool,
+        cardinality_limit: usize,
     ) -> Self {
         Self {
             offsets,
             consumers,
             pop_processor,
             notify_before_pop_calculate_lag,
+            cardinality_limit,
             refresh_timeout: POP_REFRESH_TIMEOUT,
             // Fail closed until the owned refresh task has sampled POP state.
             current: ArcSwap::from_pointee(Vec::new()),
@@ -70,7 +73,7 @@ impl<MS: BrokerReadWriteStore> ConsumerLagSnapshotService<MS> {
     pub(crate) async fn refresh(&self) {
         let pop_processor = &self.pop_processor;
 
-        let targets = self.offsets.consumer_lag_targets();
+        let targets = self.offsets.consumer_lag_targets(self.cardinality_limit);
         let pop_targets = targets
             .iter()
             .filter(|target| self.is_pop_consumer(target))

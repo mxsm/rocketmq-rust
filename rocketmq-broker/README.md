@@ -174,8 +174,7 @@ Common operational fields:
 | `storeType` | Message-store backend. `LocalFile` is the default; `RocksDB` requires the `rocksdb_store` feature. |
 | `authConfigPath` / `aclFile` | Broker auth metadata path and Java-style ACL file location. |
 | `authenticationEnabled` / `authorizationEnabled` | Enable broker authentication and authorization checks through `rocketmq-auth`. |
-| `metricsExporterType` | Metrics exporter: `disable`, `otlp_grpc`, `prom`, or `log`. |
-| `traceExporterType` / `logExporterType` | Trace/log exporters: `disable`, `otlp_grpc`, or `log`. |
+| `observability` | Canonical metrics, traces, logs, OTLP, and Prometheus file configuration. |
 
 Authentication example:
 
@@ -191,11 +190,18 @@ signatureAlgorithm = "HmacSHA1"
 Prometheus metrics example:
 
 ```toml
-metricsExporterType = "prom"
-metricsPromExporterHost = "127.0.0.1"
-metricsPromExporterPort = 5557
-metricsPromExporterPath = "/metrics"
+[observability.metrics]
+exporter = "prometheus"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"
 ```
+
+The legacy flat telemetry fields have been removed. Use only the structured
+`[observability]` sections. Runtime environment variables, when present,
+override matching file values.
 
 Tiered storage currently requires `storeType = "LocalFile"` when the `tieredstore` feature is enabled.
 

@@ -103,16 +103,6 @@ isProcessReadEvent = false
 notifyBrokerRoleChanged = true
 scanInactiveMasterInterval = 5000
 raftScanWaitTimeoutMs = 1000
-metricsExporterType = "disable"
-metricsGrpcExporterTarget = ""
-metricsGrpcExporterHeader = ""
-metricGrpcExporterTimeOutInMills = 3000
-metricGrpcExporterIntervalInMills = 60000
-metricLoggingExporterIntervalInMills = 10000
-metricsPromExporterPort = 5557
-metricsPromExporterHost = ""
-metricsLabel = ""
-metricsInDelta = false
 configBlackList = "configBlackList;configStorePath"
 
 nodeId = 1
@@ -127,7 +117,27 @@ enableElectUncleanMasterLocal = false
 [[raftPeers]]
 id = 1
 addr = "127.0.0.1:60110"
+
+[observability.metrics]
+exporter = "disable"
+
+[observability.traces]
+exporter = "disable"
+
+[observability.logs]
+exporter = "disable"
+
+[observability.otlp]
+endpoint = "http://127.0.0.1:4317"
+protocol = "grpc"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 5557
+path = "/metrics"
 ```
+
+The legacy flat telemetry fields have been removed. Configure Controller observability only through the structured `[observability]` sections; present runtime environment variables override matching file values.
 
 For a multi-node controller cluster, each node should use its own `nodeId`, `listenAddr`, and `storagePath`, while all
 nodes share the same `raftPeers` list. `listenAddr` is the broker-facing remoting endpoint; each `raftPeers.addr` is the

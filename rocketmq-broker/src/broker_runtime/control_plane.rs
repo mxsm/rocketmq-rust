@@ -29,19 +29,18 @@ impl BrokerControlPlane {
     }
 }
 
+#[cfg(feature = "otel-metrics")]
+pub(super) fn consumer_lag_runtime_settings(policy: rocketmq_observability::MetricsRuntimePolicy) -> (Duration, usize) {
+    (
+        Duration::from_millis(policy.export_interval_millis.max(1)),
+        policy.cardinality_limit,
+    )
+}
+
 impl BrokerRuntime {
     pub(super) fn initialize_observability(&mut self) {
-        let broker_config = self.composition.state.broker_config();
-        let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
-        if let Err(error) = rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config) {
-            warn!("Failed to apply broker OTLP environment: {error}");
-            #[cfg(feature = "otel-metrics")]
-            return;
-        }
         #[cfg(feature = "otel-metrics")]
-        let config = &bootstrap_config.observability;
-        #[cfg(feature = "otel-metrics")]
-        if !config.enabled {
+        if !self.composition.state.telemetry_handle.metrics_enabled() {
             return;
         }
 
@@ -238,13 +237,15 @@ impl BrokerRuntime {
                 return;
             };
             let broker_config = self.composition.state.broker_config();
+            let (refresh_interval, cardinality_limit) =
+                consumer_lag_runtime_settings(self.composition.state.telemetry_handle.metrics_runtime_policy());
             let consumer_lag_snapshot = Arc::new(ConsumerLagSnapshotService::new(
                 self.composition.state.consumer_offset_manager_handle(),
                 self.composition.state.consumer_manager.clone_shared_state(),
                 pop_processor,
                 broker_config.enable_notify_before_pop_calculate_lag,
+                cardinality_limit,
             ));
-            let refresh_interval = Duration::from_millis(broker_config.metrics_export_interval_millis.max(1));
             let refresh_snapshot = Arc::clone(&consumer_lag_snapshot);
             let schedule_result = self
                 .lifecycle

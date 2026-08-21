@@ -59,6 +59,8 @@ data:
     enabled = true
 
 {{- end }}
+{{ include "rocketmq.observabilityConfig" $ | indent 4 }}
+
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
@@ -88,6 +90,8 @@ data:
     configStorePath = "/var/lib/rocketmq/namesrv/namesrv.properties"
     needWaitForService = false
     listenPort = 9876
+
+{{ include "rocketmq.observabilityConfig" . | indent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -113,16 +117,6 @@ data:
     notifyBrokerRoleChanged = true
     scanInactiveMasterInterval = 5000
     raftScanWaitTimeoutMs = 1000
-    metricsExporterType = "disable"
-    metricsGrpcExporterTarget = ""
-    metricsGrpcExporterHeader = ""
-    metricGrpcExporterTimeOutInMills = 3000
-    metricGrpcExporterIntervalInMills = 60000
-    metricLoggingExporterIntervalInMills = 10000
-    metricsPromExporterPort = 5557
-    metricsPromExporterHost = ""
-    metricsLabel = ""
-    metricsInDelta = false
     configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = {{ add $ordinal 1 }}
     listenAddr = "0.0.0.0:60109"
@@ -165,6 +159,8 @@ data:
     addr = "{{ index $.Values.services.controller.peerServiceClusterIPs $peer }}:60109"
 {{- end }}
 {{- end }}
+
+{{ include "rocketmq.observabilityConfig" $ | indent 4 }}
 {{- end }}
 ---
 apiVersion: v1
@@ -197,6 +193,8 @@ data:
     aclFile = "/var/run/secrets/rocketmq/proxy-acl.yml"
     aclFileWatchEnabled = true
     signatureAlgorithm = "HmacSHA256"
+
+{{ include "rocketmq.observabilityConfig" . | indent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -273,6 +271,8 @@ data:
     [diagnosis]
     consumer_lag_policy_profile = "production-default"
     consumer_lag_threshold = 1000
+
+{{ include "rocketmq.observabilityConfig" . | indent 4 }}
   permissions.toml: |-
     [roles.read_only]
     allowed_clusters = ["*"]

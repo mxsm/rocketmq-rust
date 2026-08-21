@@ -459,7 +459,14 @@ impl ControllerManager {
             ));
         }
         let config = ControllerConfigHandle::new(config);
-        info!("Creating controller manager with config: {:?}", config.snapshot());
+        let config_snapshot = config.snapshot();
+        info!(
+            node_id = config_snapshot.node_id,
+            listen_port = config_snapshot.listen_addr.port(),
+            raft_peer_count = config_snapshot.raft_peers.len(),
+            security_enabled,
+            "Creating controller manager"
+        );
 
         // Initialize heartbeat manager
         let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(
@@ -1334,6 +1341,14 @@ mod tests {
     use std::net::SocketAddr;
 
     use super::*;
+
+    #[test]
+    fn controller_manager_does_not_log_the_full_configuration() {
+        let source = include_str!("controller_manager.rs");
+        let full_config_log = ["Creating controller manager with config: ", "{:?}"].concat();
+
+        assert!(!source.contains(&full_config_log));
+    }
     use crate::typ::Node;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;

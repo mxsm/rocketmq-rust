@@ -42,7 +42,7 @@ pub(crate) fn controller_metrics_config(config: &ControllerConfig) -> Controller
         listen_addr: config.listen_addr.to_string(),
         controller_type: config.controller_type.clone(),
         node_id: config.node_id.to_string(),
-        metrics_label: config.metrics_label.clone(),
+        metrics_label: String::new(),
         storage_path: config.storage_path.clone(),
         controller_store_path: config.controller_store_path.clone(),
         cardinality_limit: 10_000,

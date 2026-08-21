@@ -15,7 +15,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use thiserror::Error;
+use rocketmq_runtime::common::parse_config_file::RedactedConfigError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfigSection {
@@ -25,7 +25,6 @@ pub enum ConfigSection {
     Storage,
     Security,
     Resources,
-    Telemetry,
 }
 
 impl fmt::Display for ConfigSection {
@@ -37,47 +36,80 @@ impl fmt::Display for ConfigSection {
             Self::Storage => "storage",
             Self::Security => "security",
             Self::Resources => "resources",
-            Self::Telemetry => "telemetry",
         };
         formatter.write_str(name)
     }
 }
 
-#[derive(Debug, Error)]
 pub enum BrokerConfigError {
-    #[error("failed to load broker configuration from {path}: {source}")]
     Load {
         path: PathBuf,
-        #[source]
-        source: config::ConfigError,
+        source: RedactedConfigError,
     },
 
-    #[error("invalid {section} configuration `{field}`: {message}")]
     Invalid {
         section: ConfigSection,
         field: &'static str,
         message: String,
     },
 
-    #[error("broker configuration fields require restart: {fields}")]
-    RestartRequired { fields: String },
+    RestartRequired {
+        fields: String,
+    },
 
-    #[error("unsupported broker configuration keys: {keys}")]
-    UnsupportedKeys { keys: String },
+    UnsupportedKeys {
+        keys: String,
+    },
 
-    #[error("broker configuration `{key}` expects {expected}, got `{value}`")]
     InvalidProperty {
         key: String,
         value: String,
         expected: &'static str,
     },
 
-    #[error("configuration generation conflict: expected {expected}, actual {actual}")]
-    GenerationConflict { expected: u64, actual: u64 },
+    GenerationConflict {
+        expected: u64,
+        actual: u64,
+    },
 
-    #[error("configuration generation counter is exhausted")]
     GenerationExhausted,
 }
+
+impl fmt::Display for BrokerConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load { source, .. } => write!(formatter, "failed to load broker configuration: {source}"),
+            Self::Invalid {
+                section,
+                field,
+                message,
+            } => write!(formatter, "invalid {section} configuration `{field}`: {message}"),
+            Self::RestartRequired { fields } => {
+                write!(formatter, "broker configuration fields require restart: {fields}")
+            }
+            Self::UnsupportedKeys { keys } => write!(formatter, "unsupported broker configuration keys: {keys}"),
+            Self::InvalidProperty { key, value, expected } => write!(
+                formatter,
+                "broker configuration `{key}` expects {expected}, got `{value}`"
+            ),
+            Self::GenerationConflict { expected, actual } => {
+                write!(
+                    formatter,
+                    "configuration generation conflict: expected {expected}, actual {actual}"
+                )
+            }
+            Self::GenerationExhausted => formatter.write_str("configuration generation counter is exhausted"),
+        }
+    }
+}
+
+impl fmt::Debug for BrokerConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for BrokerConfigError {}
 
 impl BrokerConfigError {
     pub(crate) fn invalid(section: ConfigSection, field: &'static str, message: impl Into<String>) -> Self {

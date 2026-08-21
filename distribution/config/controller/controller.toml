@@ -10,7 +10,9 @@ electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "./work/controller/storage"
 storageBackend = "RocksDB"
-metricsExporterType = "disable"
+
+[observability.metrics]
+exporter = "disable"
 
 [[raftPeers]]
 id = 1

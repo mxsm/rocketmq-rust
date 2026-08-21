@@ -21,6 +21,13 @@ use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerReadStore;
 
+#[cfg(feature = "otel-metrics")]
+pub(super) fn broker_metrics_sampling_config(
+    policy: rocketmq_observability::MetricsRuntimePolicy,
+) -> crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig {
+    crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(policy.sample_ratio)
+}
+
 pub(super) struct BrokerComposition {
     pub(super) state: Box<BrokerRuntimeState<BrokerMessageStore>>,
     pub(super) request_pipeline: BrokerRequestPipeline,
@@ -1092,15 +1099,15 @@ impl BrokerRuntime {
         let broker_config = validated_config.broker_arc();
         let message_store_config = validated_config.store_arc();
         #[cfg(feature = "otel-metrics")]
+        let metrics_runtime_policy = telemetry_handle.metrics_runtime_policy();
+        #[cfg(feature = "otel-metrics")]
         let broker_metrics_manager = crate::metrics::broker_metrics_manager::BrokerMetricsManager::from_telemetry(
             telemetry_handle.child(rocketmq_observability::BROKER_METER_SCOPE),
             Arc::new(crate::metrics::broker_metrics_manager::BrokerAttributesSupplier::new(
                 broker_config.broker_identity.broker_cluster_name.to_string(),
                 broker_config.broker_identity.get_canonical_name(),
             )),
-            crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(
-                broker_config.metrics_sample_ratio,
-            ),
+            broker_metrics_sampling_config(metrics_runtime_policy),
         )
         .map(Arc::new);
         #[cfg(feature = "otel-metrics")]

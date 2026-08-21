@@ -7,8 +7,6 @@ brokerIp1 = "broker"
 storePathRootDir = "/var/lib/rocketmq/broker"
 namesrvAddr = "namesrv:9876"
 autoCreateTopicEnable = true
-metricsExportIntervalMillis = 2000
-traceSampleRatio = 1.0
 authConfigPath = "/var/lib/rocketmq/broker/auth"
 aclFile = "/etc/rocketmq/security/broker-acl.yml"
 aclFileWatchEnabled = true
@@ -33,3 +31,9 @@ mappedFileSizeConsumeQueueExt = 65536
 maxHashSlotNum = 1000
 maxIndexNum = 4000
 timerWheelEnable = false
+
+[observability.metrics]
+exportIntervalMillis = 2000
+
+[observability.traces]
+sampleRatio = 1.0

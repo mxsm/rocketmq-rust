@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -28,7 +27,7 @@ use tokio::sync::RwLock;
 
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::utils::env_utils::EnvUtils;
-use rocketmq_observability::MetricsExporterType;
+use rocketmq_observability::ObservabilityOverrides;
 
 /// Controller type constant
 pub const RAFT_CONTROLLER: &str = "Raft";
@@ -79,7 +78,7 @@ impl fmt::Display for StorageBackendType {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct ControllerConfig {
     // --- shared Controller fields (existing) ---
     /// RocketMQ home directory
@@ -153,49 +152,9 @@ pub struct ControllerConfig {
     /// Default: 1000 (1 second), matching Java jRaftScanWaitTimeoutMs.
     pub raft_scan_wait_timeout_ms: u64,
 
-    /// Metrics exporter type
-    ///
-    /// Default: Disable
-    pub metrics_exporter_type: MetricsExporterType,
-
-    /// Metrics gRPC exporter target address
-    pub metrics_grpc_exporter_target: String,
-
-    /// Metrics gRPC exporter header
-    pub metrics_grpc_exporter_header: String,
-
-    /// Metric gRPC exporter timeout (milliseconds)
-    ///
-    /// Default: 3000 (3 seconds)
-    pub metric_grpc_exporter_time_out_in_mills: u64,
-
-    /// Metric gRPC exporter interval (milliseconds)
-    ///
-    /// Default: 60000 (60 seconds)
-    pub metric_grpc_exporter_interval_in_mills: u64,
-
-    /// Metric logging exporter interval (milliseconds)
-    ///
-    /// Default: 10000 (10 seconds)
-    pub metric_logging_exporter_interval_in_mills: u64,
-
-    /// Metrics Prometheus exporter port
-    ///
-    /// Default: 5557
-    pub metrics_prom_exporter_port: u16,
-
-    /// Metrics Prometheus exporter host
-    pub metrics_prom_exporter_host: String,
-
-    /// Metrics label (CSV format: Key:Value,Key:Value)
-    ///
-    /// Example: "instance_id:xxx,uid:xxx"
-    pub metrics_label: String,
-
-    /// Whether metrics are in delta mode
-    ///
-    /// Default: false
-    pub metrics_in_delta: bool,
+    /// Canonical file-based observability overrides.
+    #[serde(default)]
+    pub observability: ObservabilityOverrides,
 
     /// Configuration blacklist (configs that cannot be updated via command)
     ///
@@ -294,16 +253,7 @@ impl Clone for ControllerConfig {
             notify_broker_role_changed: self.notify_broker_role_changed,
             scan_inactive_master_interval: self.scan_inactive_master_interval,
             raft_scan_wait_timeout_ms: self.raft_scan_wait_timeout_ms,
-            metrics_exporter_type: self.metrics_exporter_type,
-            metrics_grpc_exporter_target: self.metrics_grpc_exporter_target.clone(),
-            metrics_grpc_exporter_header: self.metrics_grpc_exporter_header.clone(),
-            metric_grpc_exporter_time_out_in_mills: self.metric_grpc_exporter_time_out_in_mills,
-            metric_grpc_exporter_interval_in_mills: self.metric_grpc_exporter_interval_in_mills,
-            metric_logging_exporter_interval_in_mills: self.metric_logging_exporter_interval_in_mills,
-            metrics_prom_exporter_port: self.metrics_prom_exporter_port,
-            metrics_prom_exporter_host: self.metrics_prom_exporter_host.clone(),
-            metrics_label: self.metrics_label.clone(),
-            metrics_in_delta: self.metrics_in_delta,
+            observability: self.observability.clone(),
             config_black_list: self.config_black_list.clone(),
             authentication_enabled: self.authentication_enabled,
             authorization_enabled: self.authorization_enabled,
@@ -352,9 +302,9 @@ fn unknown_update_key(key: &str) -> RocketMQError {
 impl Default for ControllerConfig {
     fn default() -> Self {
         // Get ROCKETMQ_HOME from environment variable or use current directory
-        let rocketmq_home = env::var(ROCKETMQ_HOME_ENV)
+        let rocketmq_home = std::env::var(ROCKETMQ_HOME_ENV)
             .ok()
-            .or_else(|| env::var("rocketmq.home.dir").ok())
+            .or_else(|| std::env::var("rocketmq.home.dir").ok())
             .unwrap_or_else(EnvUtils::get_rocketmq_home);
 
         // Get user home directory
@@ -380,16 +330,7 @@ impl Default for ControllerConfig {
             notify_broker_role_changed: true,
             scan_inactive_master_interval: 5 * 1000,
             raft_scan_wait_timeout_ms: 1000,
-            metrics_exporter_type: MetricsExporterType::Disable,
-            metrics_grpc_exporter_target: String::new(),
-            metrics_grpc_exporter_header: String::new(),
-            metric_grpc_exporter_time_out_in_mills: 3 * 1000,
-            metric_grpc_exporter_interval_in_mills: 60 * 1000,
-            metric_logging_exporter_interval_in_mills: 10 * 1000,
-            metrics_prom_exporter_port: 5557,
-            metrics_prom_exporter_host: String::new(),
-            metrics_label: String::new(),
-            metrics_in_delta: false,
+            observability: ObservabilityOverrides::default(),
             config_black_list: "configBlackList;configStorePath;maintenanceCheckpointRoot".to_string(),
             authentication_enabled: false,
             authorization_enabled: false,
@@ -503,32 +444,6 @@ impl ControllerConfig {
     /// Set OpenRaft inactive-scan wait timeout.
     pub fn with_raft_scan_wait_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.raft_scan_wait_timeout_ms = timeout_ms;
-        self
-    }
-
-    /// Set metrics exporter type
-    pub fn with_metrics_exporter_type(mut self, exporter_type: MetricsExporterType) -> Self {
-        self.metrics_exporter_type = exporter_type;
-        self
-    }
-
-    /// Set metrics gRPC exporter configuration
-    pub fn with_metrics_grpc_exporter(mut self, target: impl Into<String>, header: impl Into<String>) -> Self {
-        self.metrics_grpc_exporter_target = target.into();
-        self.metrics_grpc_exporter_header = header.into();
-        self
-    }
-
-    /// Set metrics Prometheus exporter configuration
-    pub fn with_metrics_prom_exporter(mut self, host: impl Into<String>, port: u16) -> Self {
-        self.metrics_prom_exporter_host = host.into();
-        self.metrics_prom_exporter_port = port;
-        self
-    }
-
-    /// Set metrics label
-    pub fn with_metrics_label(mut self, label: impl Into<String>) -> Self {
-        self.metrics_label = label.into();
         self
     }
 
@@ -792,25 +707,6 @@ impl ControllerConfig {
         write_property!("notifyBrokerRoleChanged={}", self.notify_broker_role_changed);
         write_property!("scanInactiveMasterInterval={}", self.scan_inactive_master_interval);
         write_property!("raftScanWaitTimeoutMs={}", self.raft_scan_wait_timeout_ms);
-        write_property!("metricsExporterType={}", self.metrics_exporter_type);
-        write_property!("metricsGrpcExporterTarget={}", self.metrics_grpc_exporter_target);
-        write_property!("metricsGrpcExporterHeader={}", self.metrics_grpc_exporter_header);
-        write_property!(
-            "metricGrpcExporterTimeOutInMills={}",
-            self.metric_grpc_exporter_time_out_in_mills
-        );
-        write_property!(
-            "metricGrpcExporterIntervalInMills={}",
-            self.metric_grpc_exporter_interval_in_mills
-        );
-        write_property!(
-            "metricLoggingExporterIntervalInMills={}",
-            self.metric_logging_exporter_interval_in_mills
-        );
-        write_property!("metricsPromExporterPort={}", self.metrics_prom_exporter_port);
-        write_property!("metricsPromExporterHost={}", self.metrics_prom_exporter_host);
-        write_property!("metricsLabel={}", self.metrics_label);
-        write_property!("metricsInDelta={}", self.metrics_in_delta);
         write_property!("configBlackList={}", self.config_black_list);
         write_property!("authenticationEnabled={}", self.authentication_enabled);
         write_property!("authorizationEnabled={}", self.authorization_enabled);
@@ -914,50 +810,6 @@ impl ControllerConfig {
                     self.raft_scan_wait_timeout_ms = parse_update_value::<u64>("raftScanWaitTimeoutMs", value)?;
                 }
 
-                "metricsExporterType" => {
-                    self.metrics_exporter_type =
-                        parse_update_value::<MetricsExporterType>("metricsExporterType", value)?;
-                }
-
-                "metricsGrpcExporterTarget" => {
-                    self.metrics_grpc_exporter_target = value.clone();
-                }
-
-                "metricsGrpcExporterHeader" => {
-                    self.metrics_grpc_exporter_header = value.clone();
-                }
-
-                "metricGrpcExporterTimeOutInMills" => {
-                    self.metric_grpc_exporter_time_out_in_mills =
-                        parse_update_value::<u64>("metricGrpcExporterTimeOutInMills", value)?;
-                }
-
-                "metricGrpcExporterIntervalInMills" => {
-                    self.metric_grpc_exporter_interval_in_mills =
-                        parse_update_value::<u64>("metricGrpcExporterIntervalInMills", value)?;
-                }
-
-                "metricLoggingExporterIntervalInMills" => {
-                    self.metric_logging_exporter_interval_in_mills =
-                        parse_update_value::<u64>("metricLoggingExporterIntervalInMills", value)?;
-                }
-
-                "metricsPromExporterPort" => {
-                    self.metrics_prom_exporter_port = parse_update_value::<u16>("metricsPromExporterPort", value)?;
-                }
-
-                "metricsPromExporterHost" => {
-                    self.metrics_prom_exporter_host = value.clone();
-                }
-
-                "metricsLabel" => {
-                    self.metrics_label = value.clone();
-                }
-
-                "metricsInDelta" => {
-                    self.metrics_in_delta = parse_update_value::<bool>("metricsInDelta", value)?;
-                }
-
                 "configBlackList" => {
                     self.config_black_list = value.clone();
                 }
@@ -1056,6 +908,38 @@ impl ControllerConfig {
 mod tests {
     use super::*;
 
+    fn parse_controller_toml(source: &str) -> Result<ControllerConfig, config::ConfigError> {
+        config::Config::builder()
+            .add_source(config::File::from_str(source, config::FileFormat::Toml))
+            .build()?
+            .try_deserialize()
+    }
+
+    #[test]
+    fn controller_config_preserves_canonical_observability_overrides() {
+        let config = parse_controller_toml(
+            r#"
+controllerThreadPoolNums = 32
+
+[observability.metrics]
+exporter = "prometheus"
+
+[observability.prometheus]
+host = "127.0.0.1"
+port = 9464
+path = "/rocketmq"
+"#,
+        )
+        .expect("canonical Controller observability configuration should parse");
+        let value = serde_json::to_value(config).expect("Controller configuration should serialize");
+
+        assert_eq!(value["controllerThreadPoolNums"], 32);
+        assert_eq!(value["observability"]["metrics"]["exporter"], "prometheus");
+        assert_eq!(value["observability"]["prometheus"]["host"], "127.0.0.1");
+        assert_eq!(value["observability"]["prometheus"]["port"], 9464);
+        assert_eq!(value["observability"]["prometheus"]["path"], "/rocketmq");
+    }
+
     #[test]
     fn test_controller_config_default() {
         let config = ControllerConfig::default();
@@ -1069,7 +953,7 @@ mod tests {
         assert!(!config.enable_elect_unclean_master);
         assert!(!config.is_process_read_event);
         assert!(config.notify_broker_role_changed);
-        assert_eq!(config.metrics_prom_exporter_port, 5557);
+        assert_eq!(config.observability, ObservabilityOverrides::default());
     }
 
     #[test]
@@ -1224,19 +1108,6 @@ mod tests {
         assert!(config.is_config_in_blacklist("configStorePath"));
         assert!(config.is_config_in_blacklist("maintenanceCheckpointRoot"));
         assert!(!config.is_config_in_blacklist("controllerType"));
-    }
-
-    #[test]
-    fn test_metrics_config() {
-        let config = ControllerConfig::new()
-            .with_metrics_exporter_type(MetricsExporterType::Prom)
-            .with_metrics_prom_exporter("localhost", 9090)
-            .with_metrics_label("instance_id:test,uid:123");
-
-        assert_eq!(config.metrics_exporter_type, MetricsExporterType::Prom);
-        assert_eq!(config.metrics_prom_exporter_host, "localhost");
-        assert_eq!(config.metrics_prom_exporter_port, 9090);
-        assert_eq!(config.metrics_label, "instance_id:test,uid:123");
     }
 
     #[test]

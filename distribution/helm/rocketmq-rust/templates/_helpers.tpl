@@ -158,17 +158,57 @@ rocketmqrust.com/architecture-milestone: P0-05
 - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
 {{- end -}}
 
-{{/* Release identity and the local pull-based metrics listener are process-root inputs. */}}
-{{- define "rocketmq.telemetryEnv" -}}
+{{/* Release identity is always supplied as a process-root input. */}}
+{{- define "rocketmq.releaseIdentityEnv" -}}
 - {name: ROCKETMQ_RELEASE_COMMIT, value: {{ required "releaseIdentity.commit is required" .Values.releaseIdentity.commit | quote }}}
 - {name: ROCKETMQ_RELEASE_NONCE, value: {{ required "releaseIdentity.nonce is required" .Values.releaseIdentity.nonce | quote }}}
 - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: {{ required "releaseIdentity.configDigest is required" .Values.releaseIdentity.configDigest | quote }}}
 - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: {{ required "releaseIdentity.secretVersion is required" .Values.releaseIdentity.secretVersion | quote }}}
 - {name: ROCKETMQ_STORAGE_GENERATION, value: {{ .Values.releaseIdentity.storageGeneration | quote }}}
+{{- end -}}
+
+{{/* Explicit compatibility mode: environment values override canonical observability file values. */}}
+{{- define "rocketmq.observabilityEnvironmentOverrides" -}}
+{{- if .Values.global.observability.environmentOverridesEnabled }}
 - {name: ROCKETMQ_METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
 - {name: ROCKETMQ_METRICS_EXPORTER, value: {{ ternary "prometheus" "disable" .Values.metrics.enabled | quote }}}
 - {name: ROCKETMQ_METRICS_BIND_ADDR, value: {{ printf "0.0.0.0:%d" (int .Values.metrics.port) | quote }}}
 - {name: ROCKETMQ_METRICS_PATH, value: {{ .Values.metrics.path | quote }}}
+- {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}}
+- {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: {{ .Values.global.observability.otlpProtocol | quote }}}
+{{- end }}
+{{- end -}}
+
+{{/* Resolve the structured OTLP endpoint while preserving the legacy alias when only it was customized. */}}
+{{- define "rocketmq.observabilityOtlpEndpoint" -}}
+{{- $defaultEndpoint := "http://otel-collector.observability.svc.cluster.local:4317" -}}
+{{- $structuredEndpoint := .Values.global.observability.otlpEndpoint -}}
+{{- $legacyEndpoint := .Values.global.otelEndpoint -}}
+{{- if ne $structuredEndpoint $defaultEndpoint -}}
+{{- $structuredEndpoint -}}
+{{- else if ne $legacyEndpoint $defaultEndpoint -}}
+{{- $legacyEndpoint -}}
+{{- else -}}
+{{- $structuredEndpoint -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Canonical file configuration shared by Broker, NameServer, Controller, Proxy, and MCP. */}}
+{{- define "rocketmq.observabilityConfig" -}}
+[observability]
+[observability.metrics]
+exporter = {{ .Values.global.observability.metricsExporter | quote }}
+[observability.traces]
+exporter = {{ .Values.global.observability.tracesExporter | quote }}
+[observability.logs]
+exporter = {{ .Values.global.observability.logsExporter | quote }}
+[observability.otlp]
+endpoint = {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}
+protocol = {{ .Values.global.observability.otlpProtocol | quote }}
+[observability.prometheus]
+host = "0.0.0.0"
+port = {{ .Values.metrics.port }}
+path = {{ .Values.metrics.path | quote }}
 {{- end -}}
 
 {{- define "rocketmq.releaseAnnotations" -}}

@@ -122,6 +122,20 @@ Important fields:
 - `diagnosis.consumer_lag_policy_profile`: server-owned policy identifier reported with each diagnosis.
 - `diagnosis.consumer_lag_threshold`: server-owned threshold used by consumer-lag rules.
 
+OpenTelemetry settings use the same merge order as the other RocketMQ services:
+service defaults, then the `[observability]` file section, then only telemetry
+environment variables that are actually present. In other words, environment
+variables override file values, and file values override defaults. Supported
+environment overrides include `ROCKETMQ_METRICS_*`, the standard
+`OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL`, and the
+MCP-specific `ROCKETMQ_MCP_TRACE_SAMPLE_RATIO`. An absent metrics environment
+variable does not disable a signal selected in the file.
+
+Treat `[observability.otlp].headers` as secret material. Do not place OTLP
+headers or tokens in a broadly readable ConfigMap; use an access-restricted,
+secret-mounted configuration file when headers are required. Raw headers,
+resource attributes, and collector endpoints are not written to startup logs.
+
 Cache keys include the schema version, visibility class, query kind, resolved cluster, and normalized query parameters. Failures are not cached. Concurrent misses for the same key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
 
 Audit records use `schema_version = 1`, redact sensitive assignments and control characters before admission, and
@@ -200,11 +214,13 @@ For production, set `mode = "oauth-jwt"` and configure `issuer`, `audience`, `re
 
 Authorization, source, and output failures expose stable, sanitized codes such as `unauthorized_scope`, `tenant_mismatch`, `cluster_not_allowed`, `rate_limited`, `source_unavailable`, and `output_too_large`. Error envelopes include `retryable` and `correlation_id`; they do not echo credentials or tenant details.
 
-For OTLP export, build with `--features otlp` and set both
+For OTLP export, build with `--features otlp` and either configure the
+`[observability]` file section shown in `conf/mcp.example.toml` or set both
 `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. A missing
-or blank endpoint leaves remote export disabled. When an endpoint is present,
-any protocol other than `grpc` is rejected at startup; the endpoint authority
-is never written to logs or the authenticated observability status Resource.
+or blank endpoint environment variable leaves the file selection unchanged.
+When a non-blank endpoint environment variable is present, any protocol other
+than `grpc` is rejected at startup; the endpoint authority is never written to
+logs or the authenticated observability status Resource.
 `ROCKETMQ_MCP_TRACE_SAMPLE_RATIO` optionally overrides trace sampling with a
 finite value from `0.0` through `1.0`. When it is unset, the production default
 remains `0.01`; invalid values fail startup without being echoed in the error.

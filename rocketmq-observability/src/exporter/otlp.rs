@@ -43,7 +43,7 @@ pub(crate) fn init_otlp_meter_provider(
 
     let exporter = exporter_builder
         .build()
-        .map_err(crate::error::ObservabilityError::metrics_init)?;
+        .map_err(|_| crate::error::ObservabilityError::metrics_init("OTLP metrics exporter could not be built"))?;
     let reader = PeriodicReader::builder(exporter)
         .with_interval(Duration::from_millis(config.metrics.export_interval_millis))
         .build();
@@ -77,7 +77,7 @@ pub fn init_otlp_tracer_provider(
 
     let exporter = exporter_builder
         .build()
-        .map_err(crate::error::ObservabilityError::traces_init)?;
+        .map_err(|_| crate::error::ObservabilityError::traces_init("OTLP trace exporter could not be built"))?;
     let processor = crate::exporter::outage::OutageBoundedBatchSpanProcessor::new(exporter);
 
     Ok(SdkTracerProvider::builder()
@@ -109,7 +109,7 @@ pub fn init_otlp_logger_provider(
 
     let exporter = exporter_builder
         .build()
-        .map_err(crate::error::ObservabilityError::logs_init)?;
+        .map_err(|_| crate::error::ObservabilityError::logs_init("OTLP log exporter could not be built"))?;
     let processor = crate::exporter::outage::OutageBoundedBatchLogProcessor::new(exporter);
 
     Ok(SdkLoggerProvider::builder()
@@ -124,14 +124,10 @@ fn build_tonic_metadata(
 ) -> Result<tonic::metadata::MetadataMap, crate::error::ObservabilityError> {
     let mut metadata = tonic::metadata::MetadataMap::with_capacity(headers.len());
     for (key, value) in headers {
-        let key = tonic::metadata::MetadataKey::from_bytes(key.as_bytes()).map_err(|error| {
-            crate::error::ObservabilityError::invalid_config(format!("invalid OTLP gRPC metadata key '{key}': {error}"))
-        })?;
-        let value = tonic::metadata::MetadataValue::try_from(value.as_str()).map_err(|error| {
-            crate::error::ObservabilityError::invalid_config(format!(
-                "invalid OTLP gRPC metadata value for '{key}': {error}"
-            ))
-        })?;
+        let key = tonic::metadata::MetadataKey::from_bytes(key.as_bytes())
+            .map_err(|_| crate::error::ObservabilityError::invalid_config("invalid OTLP gRPC metadata key"))?;
+        let value = tonic::metadata::MetadataValue::try_from(value.as_str())
+            .map_err(|_| crate::error::ObservabilityError::invalid_config("invalid OTLP gRPC metadata value"))?;
         metadata.insert(key, value);
     }
     Ok(metadata)
@@ -157,10 +153,30 @@ mod tests {
 
     #[test]
     fn rejects_invalid_tonic_metadata_key() {
-        let headers = HashMap::from([("Invalid Header".to_string(), "value".to_string())]);
+        const METADATA_KEY_CANARY: &str = "Invalid Header OTLP_METADATA_KEY_CANARY";
+        let headers = HashMap::from([(METADATA_KEY_CANARY.to_string(), "value".to_string())]);
 
         let error = build_tonic_metadata(&headers).expect_err("invalid metadata key should fail");
 
         assert!(matches!(error, crate::error::ObservabilityError::InvalidConfig(_)));
+        for output in [error.to_string(), format!("{error:?}")] {
+            assert!(!output.contains(METADATA_KEY_CANARY));
+            assert!(output.contains("invalid OTLP gRPC metadata key"));
+        }
+    }
+
+    #[cfg(feature = "otlp-traces")]
+    #[test]
+    fn tracer_exporter_build_error_redacts_endpoint_and_upstream_diagnostic() {
+        const ENDPOINT_CANARY: &str = "OTLP_ENDPOINT_CANARY";
+        let mut config = crate::config::ObservabilityConfig::default();
+        config.otlp.endpoint = format!("http://[::{ENDPOINT_CANARY}");
+
+        let error = init_otlp_tracer_provider(&config).expect_err("invalid OTLP endpoint must fail");
+
+        for output in [error.to_string(), format!("{error:?}")] {
+            assert!(!output.contains(ENDPOINT_CANARY));
+            assert!(output.contains("OTLP trace exporter could not be built"));
+        }
     }
 }
