@@ -37,6 +37,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::common::parse_config_file::render_safe_config_error;
 use tracing::info;
 
 use crate::config::ControllerConfig;
@@ -58,7 +59,13 @@ fn parse_controller_config_file(config_path: &Path) -> RocketMQResult<Controller
     let config = config::Config::builder()
         .add_source(config::File::from(config_path))
         .build()
-        .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+        .map_err(|error| RocketMQError::ConfigParseFailed {
+            key: "controller.config",
+            reason: format!(
+                "failed to build Controller configuration: {}",
+                render_safe_config_error(&error)
+            ),
+        })?;
 
     for key in REMOVED_CONTROLLER_TELEMETRY_KEYS {
         if config.get::<config::Value>(key).is_ok() {
@@ -72,7 +79,13 @@ fn parse_controller_config_file(config_path: &Path) -> RocketMQResult<Controller
 
     config
         .try_deserialize()
-        .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))
+        .map_err(|error| RocketMQError::ConfigParseFailed {
+            key: "controller.config",
+            reason: format!(
+                "failed to deserialize Controller configuration: {}",
+                render_safe_config_error(&error)
+            ),
+        })
 }
 
 /// RocketMQ Controller Command Line Arguments
@@ -376,6 +389,40 @@ path = "/rocketmq"
                 .expect_err("every removed telemetry key must be rejected");
 
             assert!(error.to_string().contains(key), "error must identify {key}: {error}");
+        }
+    }
+
+    #[test]
+    fn controller_config_file_errors_redact_observability_values() {
+        let directory = tempfile::tempdir().expect("temporary Controller config directory");
+        let path = directory.path().join("controller.toml");
+
+        for (source, canary) in [
+            (
+                "[observability.otlp]\nheaders = \"CONTROLLER_HEADER_CANARY\"\n",
+                "CONTROLLER_HEADER_CANARY",
+            ),
+            (
+                "[observability]\nresourceAttributes = \"CONTROLLER_RESOURCE_CANARY\"\n",
+                "CONTROLLER_RESOURCE_CANARY",
+            ),
+            (
+                "[observability.otlp]\nendpoint = \"https://collector.invalid?token=CONTROLLER_ENDPOINT_CANARY\" trailing\n",
+                "CONTROLLER_ENDPOINT_CANARY",
+            ),
+        ] {
+            std::fs::write(&path, source).expect("write invalid Controller configuration");
+
+            let error = cli_with_config_file(path.clone())
+                .load_config(ControllerConfig::default())
+                .expect_err("invalid observability configuration must fail");
+
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(
+                    !output.contains(canary),
+                    "Controller configuration error exposed sensitive input: {output}"
+                );
+            }
         }
     }
 

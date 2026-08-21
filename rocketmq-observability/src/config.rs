@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fmt;
 
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ObservabilityConfig {
     pub enabled: bool,
@@ -36,6 +37,30 @@ pub struct ObservabilityConfig {
     pub prometheus: PrometheusConfig,
     pub subscriber_install_policy: SubscriberInstallPolicy,
     pub resource_attributes: HashMap<String, String>,
+}
+
+impl fmt::Debug for ObservabilityConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservabilityConfig")
+            .field("enabled", &self.enabled)
+            .field("service_name", &self.service_name)
+            .field("service_namespace", &self.service_namespace)
+            .field("service_instance_id_configured", &!self.service_instance_id.is_empty())
+            .field("service_version", &self.service_version)
+            .field("environment", &self.environment)
+            .field("cluster", &self.cluster)
+            .field("node_type", &self.node_type)
+            .field("node_id", &self.node_id)
+            .field("metrics", &self.metrics)
+            .field("traces", &self.traces)
+            .field("logs", &self.logs)
+            .field("otlp", &self.otlp)
+            .field("prometheus", &self.prometheus)
+            .field("subscriber_install_policy", &self.subscriber_install_policy)
+            .field("resource_attributes_count", &self.resource_attributes.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -123,13 +148,25 @@ pub struct LogsConfig {
     pub exporter: LogsExporter,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OtlpConfig {
     pub endpoint: String,
     pub protocol: OtlpProtocol,
     pub headers: HashMap<String, String>,
     pub timeout_millis: u64,
+}
+
+impl fmt::Debug for OtlpConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OtlpConfig")
+            .field("endpoint_configured", &!self.endpoint.is_empty())
+            .field("protocol", &self.protocol)
+            .field("headers_count", &self.headers.len())
+            .field("timeout_millis", &self.timeout_millis)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +177,7 @@ pub struct PrometheusConfig {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservabilityOverrides {
     pub environment: Option<String>,
@@ -151,6 +188,25 @@ pub struct ObservabilityOverrides {
     pub logs: LogsOverrides,
     pub otlp: OtlpOverrides,
     pub prometheus: PrometheusOverrides,
+}
+
+impl fmt::Debug for ObservabilityOverrides {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservabilityOverrides")
+            .field("environment_configured", &self.environment.is_some())
+            .field("service_instance_id_configured", &self.service_instance_id.is_some())
+            .field(
+                "resource_attributes_count",
+                &self.resource_attributes.as_ref().map(HashMap::len),
+            )
+            .field("metrics", &self.metrics)
+            .field("traces", &self.traces)
+            .field("logs", &self.logs)
+            .field("otlp", &self.otlp)
+            .field("prometheus", &self.prometheus)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -182,13 +238,25 @@ pub struct LogsOverrides {
     pub exporter: Option<LogsExporter>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct OtlpOverrides {
     pub endpoint: Option<String>,
     pub protocol: Option<OtlpProtocol>,
     pub headers: Option<HashMap<String, String>>,
     pub timeout_millis: Option<u64>,
+}
+
+impl fmt::Debug for OtlpOverrides {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OtlpOverrides")
+            .field("endpoint_configured", &self.endpoint.is_some())
+            .field("protocol", &self.protocol)
+            .field("headers_count", &self.headers.as_ref().map(HashMap::len))
+            .field("timeout_millis", &self.timeout_millis)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -504,6 +572,74 @@ impl Default for PrometheusConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ENDPOINT_CANARY: &str = "https://collector.invalid:4317/v1/traces?token=ENDPOINT_CANARY";
+    const HEADER_KEY_CANARY: &str = "x-header-key-canary";
+    const HEADER_VALUE_CANARY: &str = "Bearer HEADER_VALUE_CANARY";
+    const RESOURCE_KEY_CANARY: &str = "resource.key.canary";
+    const RESOURCE_VALUE_CANARY: &str = "RESOURCE_VALUE_CANARY";
+
+    fn assert_sensitive_debug_values_are_absent(output: &str) {
+        for canary in [
+            ENDPOINT_CANARY,
+            HEADER_KEY_CANARY,
+            HEADER_VALUE_CANARY,
+            RESOURCE_KEY_CANARY,
+            RESOURCE_VALUE_CANARY,
+        ] {
+            assert!(!output.contains(canary), "Debug output exposed {canary}: {output}");
+        }
+    }
+
+    #[test]
+    fn observability_config_debug_redacts_otlp_and_resource_values() {
+        let mut config = ObservabilityConfig::default();
+        config.otlp.endpoint = ENDPOINT_CANARY.to_string();
+        config
+            .otlp
+            .headers
+            .insert(HEADER_KEY_CANARY.to_string(), HEADER_VALUE_CANARY.to_string());
+        config
+            .resource_attributes
+            .insert(RESOURCE_KEY_CANARY.to_string(), RESOURCE_VALUE_CANARY.to_string());
+
+        let otlp_debug = format!("{:?}", config.otlp);
+        let config_debug = format!("{config:?}");
+
+        assert_sensitive_debug_values_are_absent(&otlp_debug);
+        assert_sensitive_debug_values_are_absent(&config_debug);
+        assert!(otlp_debug.contains("endpoint_configured"));
+        assert!(otlp_debug.contains("headers_count"));
+        assert!(config_debug.contains("resource_attributes_count"));
+    }
+
+    #[test]
+    fn observability_overrides_debug_redacts_otlp_and_resource_values() {
+        let overrides = ObservabilityOverrides {
+            resource_attributes: Some(HashMap::from([(
+                RESOURCE_KEY_CANARY.to_string(),
+                RESOURCE_VALUE_CANARY.to_string(),
+            )])),
+            otlp: OtlpOverrides {
+                endpoint: Some(ENDPOINT_CANARY.to_string()),
+                headers: Some(HashMap::from([(
+                    HEADER_KEY_CANARY.to_string(),
+                    HEADER_VALUE_CANARY.to_string(),
+                )])),
+                ..OtlpOverrides::default()
+            },
+            ..ObservabilityOverrides::default()
+        };
+
+        let otlp_debug = format!("{:?}", overrides.otlp);
+        let overrides_debug = format!("{overrides:?}");
+
+        assert_sensitive_debug_values_are_absent(&otlp_debug);
+        assert_sensitive_debug_values_are_absent(&overrides_debug);
+        assert!(otlp_debug.contains("endpoint_configured"));
+        assert!(otlp_debug.contains("headers_count"));
+        assert!(overrides_debug.contains("resource_attributes_count"));
+    }
 
     #[test]
     fn default_config_is_disabled_and_local_only() {

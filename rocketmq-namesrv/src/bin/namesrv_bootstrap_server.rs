@@ -539,8 +539,20 @@ fn parse_and_merge_config(
     if let Some(config_file) = args.config_file.clone() {
         let config = Config::builder()
             .add_source(config::File::from(config_file.as_path()))
-            .build()?
-            .try_deserialize::<RuntimeTransportOverrides>()?;
+            .build()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to build NameServer transport configuration: {}",
+                    parse_config_file::render_safe_config_error(&error)
+                )
+            })?
+            .try_deserialize::<RuntimeTransportOverrides>()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to deserialize NameServer transport configuration: {}",
+                    parse_config_file::render_safe_config_error(&error)
+                )
+            })?;
         apply_runtime_transport_overrides(&mut server_config, &mut tokio_client_config, config)?;
         apply_tls_properties_from_file(&mut server_config, config_file)?;
     }
@@ -831,8 +843,19 @@ fn load_controller_config(config_file: Option<PathBuf>, namesrv_config: &Namesrv
     if let Some(config_file) = config_file {
         let cfg = Config::builder()
             .add_source(config::File::from(config_file.as_path()))
-            .build()?;
-        let overrides = cfg.try_deserialize::<ControllerConfigOverrides>()?;
+            .build()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to build embedded Controller configuration: {}",
+                    parse_config_file::render_safe_config_error(&error)
+                )
+            })?;
+        let overrides = cfg.try_deserialize::<ControllerConfigOverrides>().map_err(|error| {
+            anyhow::anyhow!(
+                "failed to deserialize embedded Controller configuration: {}",
+                parse_config_file::render_safe_config_error(&error)
+            )
+        })?;
         apply_controller_config_overrides(&mut controller_config, overrides)?;
     }
 

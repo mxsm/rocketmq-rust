@@ -4,6 +4,71 @@ use rocketmq_observability::{
     LogsExporter, MetricsExporter, ObservabilityConfig, ObservabilityOverrides, OtlpProtocol, TraceExporter,
 };
 
+const ENDPOINT_CANARY: &str = "http://collector.invalid:4317/ENDPOINT_CANARY";
+const HEADER_KEY_CANARY: &str = "x-header-key-canary";
+const HEADER_VALUE_CANARY: &str = "Bearer HEADER_VALUE_CANARY";
+const RESOURCE_KEY_CANARY: &str = "resource.key.canary";
+const RESOURCE_VALUE_CANARY: &str = "RESOURCE_VALUE_CANARY";
+const RELEASE_NONCE_CANARY: &str = "release-nonce-canary";
+const METRICS_PATH_CANARY: &str = "/metrics-path-canary";
+
+fn assert_resolution_debug_values_are_absent(output: &str) {
+    for canary in [
+        ENDPOINT_CANARY,
+        HEADER_KEY_CANARY,
+        HEADER_VALUE_CANARY,
+        RESOURCE_KEY_CANARY,
+        RESOURCE_VALUE_CANARY,
+        RELEASE_NONCE_CANARY,
+        METRICS_PATH_CANARY,
+    ] {
+        assert!(!output.contains(canary), "Debug output exposed {canary}: {output}");
+    }
+}
+
+#[test]
+fn telemetry_environment_values_debug_reports_presence_without_values() {
+    let environment = rocketmq_observability::TelemetryEnvironmentValues {
+        release_nonce: Some(RELEASE_NONCE_CANARY.into()),
+        metrics_path: Some(METRICS_PATH_CANARY.into()),
+        otlp_endpoint: Some(ENDPOINT_CANARY.into()),
+        otlp_protocol: Some("grpc".into()),
+        ..rocketmq_observability::TelemetryEnvironmentValues::default()
+    };
+
+    let output = format!("{environment:?}");
+
+    assert_resolution_debug_values_are_absent(&output);
+    assert!(output.contains("otlp_endpoint_present"));
+    assert!(output.contains("release_nonce_present"));
+}
+
+#[test]
+fn telemetry_resolution_debug_redacts_bootstrap_and_process_values() {
+    let file: ObservabilityOverrides = serde_yaml::from_str(&format!(
+        "metrics:\n  exporter: otlp_grpc\notlp:\n  endpoint: {ENDPOINT_CANARY}\n  protocol: grpc\n  headers:\n    {HEADER_KEY_CANARY}: {HEADER_VALUE_CANARY}\nresourceAttributes:\n  {RESOURCE_KEY_CANARY}: {RESOURCE_VALUE_CANARY}\n"
+    ))
+    .expect("sensitive observability fixture should deserialize");
+    let environment = rocketmq_observability::TelemetryEnvironmentValues {
+        release_nonce: Some(RELEASE_NONCE_CANARY.into()),
+        metrics_path: Some(METRICS_PATH_CANARY.into()),
+        ..rocketmq_observability::TelemetryEnvironmentValues::default()
+    };
+
+    let resolution = rocketmq_observability::resolve_telemetry_values(
+        "rocketmq-broker",
+        rocketmq_observability::TelemetryBootstrapConfig::default(),
+        &file,
+        &environment,
+        rocketmq_observability::TelemetryEnvironmentSpec::default(),
+    )
+    .expect("sensitive observability fixture should resolve");
+    let output = format!("{resolution:?}");
+
+    assert_resolution_debug_values_are_absent(&output);
+    assert!(output.contains("TelemetryResolution"));
+}
+
 #[test]
 fn file_overrides_deserialize_camel_case_without_filling_absent_fields() {
     let overrides: ObservabilityOverrides = serde_yaml::from_str(

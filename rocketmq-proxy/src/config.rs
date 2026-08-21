@@ -295,22 +295,21 @@ impl ProxyConfig {
         let builder = config::Config::builder().add_source(config::File::from(path));
         let config = builder
             .build()
-            .map_err(|error| proxy_config_parse_failed("build", path, error))?;
+            .map_err(|error| proxy_config_parse_failed("build", error))?;
 
         config
             .try_deserialize()
-            .map_err(|error| proxy_config_parse_failed("deserialize", path, error).into())
+            .map_err(|error| proxy_config_parse_failed("deserialize", error).into())
     }
 }
 
-fn proxy_config_parse_failed(stage: &'static str, path: &Path, error: config::ConfigError) -> RocketMQError {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("proxy config");
+fn proxy_config_parse_failed(stage: &'static str, error: config::ConfigError) -> RocketMQError {
     RocketMQError::ConfigParseFailed {
         key: "proxy.config",
-        reason: format!("failed to {stage} proxy config {file_name}: {error}"),
+        reason: format!(
+            "failed to {stage} proxy configuration: {}",
+            rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
+        ),
     }
 }
 
@@ -530,6 +529,37 @@ observability:
     }
 
     #[test]
+    fn proxy_config_load_errors_redact_observability_values() {
+        for (source, canary) in [
+            (
+                "[observability.otlp]\nheaders = \"PROXY_HEADER_CANARY\"\n",
+                "PROXY_HEADER_CANARY",
+            ),
+            (
+                "[observability]\nresourceAttributes = \"PROXY_RESOURCE_CANARY\"\n",
+                "PROXY_RESOURCE_CANARY",
+            ),
+            (
+                "[observability.otlp]\nendpoint = \"https://collector.invalid?token=PROXY_ENDPOINT_CANARY\" trailing\n",
+                "PROXY_ENDPOINT_CANARY",
+            ),
+        ] {
+            let path = unique_proxy_toml_config_path("redaction");
+            std::fs::write(&path, source).expect("write invalid proxy config");
+
+            let error = ProxyConfig::load_from_file(&path).expect_err("invalid observability configuration must fail");
+            let _ = std::fs::remove_file(path);
+
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(
+                    !output.contains(canary),
+                    "Proxy configuration error exposed sensitive input: {output}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn proxy_auth_config_debug_redacts_embedded_credentials() {
         let config = ProxyAuthConfig {
             init_authentication_user: "admin:init-secret".to_owned(),
@@ -550,6 +580,10 @@ observability:
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("rocketmq-proxy-{name}-{nonce}.yaml"))
+    }
+
+    fn unique_proxy_toml_config_path(name: &str) -> std::path::PathBuf {
+        unique_proxy_config_path(name).with_extension("toml")
     }
 
     fn assert_proxy_config_parse_error(error: crate::error::ProxyError, expected_stage: &str) {

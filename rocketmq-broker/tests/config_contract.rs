@@ -56,6 +56,49 @@ fn load_inline_config(source: &str) -> Result<RawBrokerConfig, Box<BrokerConfigE
     RawBrokerConfig::load(file.path()).map_err(Box::new)
 }
 
+fn assert_broker_config_error_redacts(error: &BrokerConfigError, canary: &str) {
+    for output in [error.to_string(), format!("{error:?}")] {
+        assert!(
+            !output.contains(canary),
+            "broker configuration error exposed sensitive input: {output}"
+        );
+    }
+    assert!(
+        std::error::Error::source(error).is_none(),
+        "raw config::ConfigError must not remain in the public source chain"
+    );
+    if let BrokerConfigError::Load { source, .. } = error {
+        for output in [source.to_string(), format!("{source:?}")] {
+            assert!(
+                !output.contains(canary),
+                "Broker Load source exposed sensitive input: {output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn broker_config_load_errors_redact_observability_values() {
+    for (source, canary) in [
+        (
+            "[observability.otlp]\nheaders = \"BROKER_HEADER_CANARY\"\n",
+            "BROKER_HEADER_CANARY",
+        ),
+        (
+            "[observability]\nresourceAttributes = \"BROKER_RESOURCE_CANARY\"\n",
+            "BROKER_RESOURCE_CANARY",
+        ),
+        (
+            "[observability.otlp]\nendpoint = \"https://collector.invalid?token=BROKER_ENDPOINT_CANARY\" trailing\n",
+            "BROKER_ENDPOINT_CANARY",
+        ),
+    ] {
+        let error = load_inline_config(source).expect_err("invalid observability configuration must fail");
+
+        assert_broker_config_error_redacts(&error, canary);
+    }
+}
+
 #[test]
 fn timer_extended_capability_configuration_survives_validation_unchanged() {
     let store = MessageStoreConfig {

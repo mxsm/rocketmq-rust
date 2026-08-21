@@ -540,7 +540,7 @@ fn log_telemetry_bootstrap(
 fn load_logging_overrides(config_file: Option<&std::path::Path>) -> Result<rocketmq_observability::LoggingOverrides> {
     match config_file {
         Some(path) => parse_config_file::parse_config_file(path.to_path_buf())
-            .with_context(|| format!("failed to parse logging configuration from {}", path.display())),
+            .context("failed to parse Controller logging configuration"),
         None => Ok(rocketmq_observability::LoggingOverrides::default()),
     }
 }

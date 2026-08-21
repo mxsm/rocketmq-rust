@@ -429,21 +429,23 @@ fn load_logging_overrides(path: Option<&std::path::Path>) -> ProxyResult<rocketm
     let Some(path) = path else {
         return Ok(rocketmq_observability::LoggingOverrides::default());
     };
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("proxy config");
     let config = config::Config::builder()
         .add_source(config::File::from(path))
         .build()
         .map_err(|error| RocketMQError::ConfigParseFailed {
             key: "proxy.logging",
-            reason: format!("failed to build logging config {file_name}: {error}"),
+            reason: format!(
+                "failed to build proxy logging configuration: {}",
+                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
+            ),
         })?;
     config.try_deserialize().map_err(|error| {
         RocketMQError::ConfigParseFailed {
             key: "proxy.logging",
-            reason: format!("failed to deserialize logging config {file_name}: {error}"),
+            reason: format!(
+                "failed to deserialize proxy logging configuration: {}",
+                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
+            ),
         }
         .into()
     })

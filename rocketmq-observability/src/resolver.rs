@@ -14,6 +14,7 @@
 
 use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::fmt;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 
@@ -35,7 +36,7 @@ use crate::OTEL_EXPORTER_OTLP_PROTOCOL;
 ///
 /// Missing variables remain `None`; validation and UTF-8 conversion happen only
 /// when a present value participates in resolution.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct TelemetryEnvironmentValues {
     /// `ROCKETMQ_RELEASE_COMMIT`, when present.
     pub release_commit: Option<OsString>,
@@ -55,6 +56,23 @@ pub struct TelemetryEnvironmentValues {
     pub otlp_protocol: Option<OsString>,
     /// The service-specific trace sample ratio, when configured and present.
     pub trace_sample_ratio: Option<OsString>,
+}
+
+impl fmt::Debug for TelemetryEnvironmentValues {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TelemetryEnvironmentValues")
+            .field("release_commit_present", &self.release_commit.is_some())
+            .field("release_nonce_present", &self.release_nonce.is_some())
+            .field("metrics_enabled_present", &self.metrics_enabled.is_some())
+            .field("metrics_exporter_present", &self.metrics_exporter.is_some())
+            .field("metrics_bind_addr_present", &self.metrics_bind_addr.is_some())
+            .field("metrics_path_present", &self.metrics_path.is_some())
+            .field("otlp_endpoint_present", &self.otlp_endpoint.is_some())
+            .field("otlp_protocol_present", &self.otlp_protocol.is_some())
+            .field("trace_sample_ratio_present", &self.trace_sample_ratio.is_some())
+            .finish()
+    }
 }
 
 impl TelemetryEnvironmentValues {
@@ -90,7 +108,6 @@ pub struct TelemetryEnvironmentSpec {
 }
 
 /// Fully resolved telemetry configuration and its validated process metadata.
-#[derive(Debug)]
 pub struct TelemetryResolution {
     /// Final merged and validated bootstrap configuration.
     pub bootstrap: TelemetryBootstrapConfig,
@@ -100,6 +117,23 @@ pub struct TelemetryResolution {
     pub prometheus_listener_addr: Option<SocketAddr>,
     /// Whether at least one present environment field participated in resolution.
     pub environment_applied: bool,
+}
+
+impl fmt::Debug for TelemetryResolution {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TelemetryResolution")
+            .field("observability_enabled", &self.bootstrap.observability.enabled)
+            .field("metrics_exporter", &self.bootstrap.observability.metrics.exporter)
+            .field("trace_exporter", &self.bootstrap.observability.traces.exporter)
+            .field("log_exporter", &self.bootstrap.observability.logs.exporter)
+            .field("logging_enabled", &self.bootstrap.logging.enabled)
+            .field("process_metrics_enabled", &self.process.metrics_enabled())
+            .field("process_metrics_exporter", &self.process.metrics_exporter())
+            .field("prometheus_listener_addr", &self.prometheus_listener_addr)
+            .field("environment_applied", &self.environment_applied)
+            .finish()
+    }
 }
 
 /// Resolves telemetry using values read from the current process environment.
