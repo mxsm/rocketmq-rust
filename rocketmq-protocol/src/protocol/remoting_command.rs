@@ -1511,6 +1511,33 @@ mod tests {
         )
     }
 
+    fn complete_frame(header: &[u8], serialize_type: SerializeType) -> BytesMut {
+        let header_length = i32::try_from(header.len()).expect("test header length must fit the wire format");
+        let total_length = header_length
+            .checked_add(4)
+            .expect("test payload length must fit the wire format");
+        let mut frame = BytesMut::with_capacity(8 + header.len());
+        frame.put_i32(total_length);
+        frame.put_i32(RemotingCommand::mark_serialize_type(header_length, serialize_type));
+        frame.extend_from_slice(header);
+        frame
+    }
+
+    fn binary_header(extension_fields: &[u8]) -> Vec<u8> {
+        let extension_fields_length =
+            i32::try_from(extension_fields.len()).expect("test extension fields must fit the wire format");
+        let mut header = BytesMut::with_capacity(21 + extension_fields.len());
+        header.put_i16(10);
+        header.put_u8(LanguageCode::RUST.get_code());
+        header.put_i16(501);
+        header.put_i32(7);
+        header.put_i32(1);
+        header.put_i32(0);
+        header.put_i32(extension_fields_length);
+        header.extend_from_slice(extension_fields);
+        header.to_vec()
+    }
+
     #[test]
     fn request_id_sequence_is_unique_under_contention() {
         const THREADS: usize = 8;
@@ -1777,6 +1804,111 @@ mod tests {
         let (total, _) = RemotingCommand::checked_frame_lengths(0, max_body, SerializeType::JSON).unwrap();
         assert_eq!(total, i32::MAX);
         assert!(RemotingCommand::checked_frame_lengths(0, max_body + 1, SerializeType::JSON).is_err());
+    }
+
+    #[test]
+    fn structured_frame_fixture_decodes_canonical_json_extension_fields() {
+        let header = br#"{"code":10,"language":"RUST","version":501,"opaque":7,"flag":0,"remark":null,"extFields":{"queueId":"1"},"serializeTypeCurrentRPC":"JSON"}"#;
+        let mut frame = complete_frame(header, SerializeType::JSON);
+        frame.extend_from_slice(b"next-frame");
+
+        let command = RemotingCommand::decode(&mut frame)
+            .expect("canonical JSON frame must decode")
+            .expect("canonical JSON frame is complete");
+
+        assert_eq!(frame.as_ref(), b"next-frame");
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("queueId"))
+                .map(CheetahString::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn structured_frame_fixture_decodes_flexible_json_extension_fields() {
+        let header = r#" { "version" : 501, "code" : -7, "language" : "JAVA", "opaque" : 9, "flag" : 1, "remark" : "火箭", "extFields" : { "escaped\u004bey" : "quote\"slash\\solidus\/", "unicode" : "中🚀" }, "serializeTypeCurrentRPC" : "JSON" } "#;
+        let mut frame = complete_frame(header.as_bytes(), SerializeType::JSON);
+
+        let command = RemotingCommand::decode(&mut frame)
+            .expect("flexible JSON frame must decode")
+            .expect("flexible JSON frame is complete");
+
+        assert!(frame.is_empty());
+        assert_eq!(command.remark().map(CheetahString::as_str), Some("火箭"));
+        let fields = command.ext_fields().expect("flexible JSON extension fields");
+        assert_eq!(
+            fields.get("escapedKey").map(CheetahString::as_str),
+            Some("quote\"slash\\solidus/")
+        );
+        assert_eq!(fields.get("unicode").map(CheetahString::as_str), Some("中🚀"));
+    }
+
+    #[test]
+    fn structured_frame_fixture_decodes_two_rocketmq_extension_fields() {
+        let extension_fields = [
+            0, 5, b'a', b'l', b'p', b'h', b'a', 0, 0, 0, 5, b'f', b'i', b'r', b's', b't', 0, 4, b'z', b'e', b't', b'a',
+            0, 0, 0, 4, b'l', b'a', b's', b't',
+        ];
+        let mut frame = complete_frame(&binary_header(&extension_fields), SerializeType::ROCKETMQ);
+
+        let command = RemotingCommand::decode(&mut frame)
+            .expect("ROCKETMQ frame must decode")
+            .expect("ROCKETMQ frame is complete");
+
+        assert!(frame.is_empty());
+        let fields = command.ext_fields().expect("ROCKETMQ extension fields");
+        assert_eq!(fields.get("alpha").map(CheetahString::as_str), Some("first"));
+        assert_eq!(fields.get("zeta").map(CheetahString::as_str), Some("last"));
+    }
+
+    #[test]
+    fn incomplete_outer_frame_is_left_untouched() {
+        let mut frame = BytesMut::from(&[0, 0, 0, 8, 0, 0, 0, 0][..]);
+        let before = frame.clone();
+
+        assert!(RemotingCommand::decode(&mut frame).unwrap().is_none());
+        assert_eq!(frame, before);
+    }
+
+    #[test]
+    fn malformed_input_regressions_reject_complete_extension_field_frames() {
+        let invalid_json_header = [
+            br#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":null,"extFields":{"key":""#
+                .as_slice(),
+            &[0xff],
+            br#""},"serializeTypeCurrentRPC":"JSON"}"#.as_slice(),
+        ]
+        .concat();
+        let unterminated_json_header =
+            br#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":null,"extFields":{"key":"value"#;
+        assert_eq!(unterminated_json_header.len(), 99);
+        let invalid_binary_fields = [0, 1, 0xff, 0, 0, 0, 1, b'v'];
+        let overlong_binary_fields = [0, 1, b'k', 0, 0, 4, 0];
+        let mut cases = [
+            (
+                "invalid JSON UTF-8",
+                complete_frame(&invalid_json_header, SerializeType::JSON),
+            ),
+            (
+                "unterminated JSON extension field",
+                complete_frame(unterminated_json_header, SerializeType::JSON),
+            ),
+            (
+                "invalid ROCKETMQ UTF-8",
+                complete_frame(&binary_header(&invalid_binary_fields), SerializeType::ROCKETMQ),
+            ),
+            (
+                "overlong ROCKETMQ extension-field value",
+                complete_frame(&binary_header(&overlong_binary_fields), SerializeType::ROCKETMQ),
+            ),
+        ];
+
+        for (name, frame) in &mut cases {
+            assert!(RemotingCommand::decode(frame).is_err(), "{name}");
+            assert!(frame.is_empty(), "complete malformed frame must be consumed: {name}");
+        }
     }
 
     #[test]

@@ -283,6 +283,19 @@ mod tests {
     }
 
     #[test]
+    fn validates_and_materializes_two_binary_extension_fields() {
+        let mut payload = BytesMut::new();
+        entry(&mut payload, b"alpha", b"first");
+        entry(&mut payload, b"zeta", b"last");
+
+        let fields = BinaryHeaderFields::new(payload.freeze()).expect("valid binary extension fields");
+        let map = fields.materialize();
+
+        assert_eq!(map.get("alpha").map(CheetahString::as_str), Some("first"));
+        assert_eq!(map.get("zeta").map(CheetahString::as_str), Some("last"));
+    }
+
+    #[test]
     fn rejects_truncated_negative_empty_key_and_invalid_utf8_payloads() {
         let invalid_payloads = [
             Bytes::from_static(&[0]),
@@ -292,6 +305,7 @@ mod tests {
             Bytes::from_static(&[0, 0, 0, 0, 0, 1, b'v']),
             Bytes::from_static(&[0, 1, 0xff, 0, 0, 0, 1, b'v']),
             Bytes::from_static(&[0, 1, b'k', 0, 0, 0, 1, 0xff]),
+            Bytes::from_static(&[0, 1, b'k', 0, 0, 4, 0]),
         ];
 
         for payload in invalid_payloads {
