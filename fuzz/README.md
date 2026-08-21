@@ -7,6 +7,23 @@ This standalone `cargo-fuzz` package exercises four production input boundaries:
 - `controller_snapshot`: controller snapshot size, schema, version, membership, and checksum validation.
 - `store_recovery_record`: CommitLog frame recovery plus ConsumeQueue and Index record decoding.
 
+`protocol_decode` has the following curated regression seeds. All of its `.hex` files use the
+reviewable `hex:` representation described below; the target decodes that representation before
+invoking `RemotingCommand::decode`.
+
+| Seed | Parser path and expectation |
+| --- | --- |
+| `empty_frame.hex` | Envelope minimum-length rejection after a complete zero-length frame. |
+| `rocketmq_header.hex` | ROCKETMQ envelope reaches the binary-header fixed-length boundary. |
+| `json_canonical_ext_fields.hex` | Canonical JSON fast path, then materializes and traverses one extension field. |
+| `json_flexible_unicode_escaped_ext_fields.hex` | Flexible JSON with whitespace, Unicode, and escaped extension-field text; the escaped text uses the Serde compatibility fallback. |
+| `rocketmq_two_ext_fields.hex` | ROCKETMQ binary-header decoder validates, materializes, and traverses two extension fields. |
+| `json_invalid_utf8_ext_field.hex` | JSON retained-string validation rejects malformed UTF-8 before raw fields are retained. |
+| `rocketmq_invalid_utf8_ext_field.hex` | ROCKETMQ binary extension-field validation rejects malformed UTF-8. |
+| `truncated_declared_frame.hex` | Incomplete outer frame returns `Ok(None)` without consuming the buffer. |
+| `rocketmq_overlong_ext_field.hex` | ROCKETMQ binary extension-field parser rejects a value length that exceeds the retained payload. |
+| `json_unterminated_ext_field.hex` | Complete JSON envelope ends inside an extension-field string; the JSON fast parser and Serde fallback reject it after the declared frame is consumed. |
+
 Run targets locally with the repository-pinned nightly. Before running, set `CARGO_TARGET_DIR`,
 `TEMP`, and `TMP` to local directories outside the repository with sufficient free space.
 

@@ -744,6 +744,7 @@ pub(super) fn try_decode_json_header_bytes(header: Bytes) -> Option<RemotingComm
 
 #[cfg(test)]
 mod tests {
+    use bytes::BufMut;
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
 
@@ -831,6 +832,28 @@ mod tests {
     }
 
     #[test]
+    fn serde_fallback_decodes_flexible_whitespace_unicode_and_escaped_extension_fields() {
+        let input = r#" { "version" : 501, "code" : -7, "language" : "JAVA", "opaque" : 9, "flag" : 1, "remark" : "火箭", "extFields" : { "escaped\u004bey" : "quote\"slash\\solidus\/", "unicode" : "中🚀" }, "serializeTypeCurrentRPC" : "JSON" } "#
+            .as_bytes();
+        let mut header = BytesMut::from(input);
+        let header_length = header.len();
+
+        let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .expect("flexible JSON should use the compatibility fallback")
+            .expect("flexible JSON header is complete");
+        let fields = command.ext_fields().expect("extension fields");
+
+        assert_eq!(command.code, -7);
+        assert_eq!(command.language, LanguageCode::JAVA);
+        assert_eq!(command.remark.as_deref(), Some("火箭"));
+        assert_eq!(
+            fields.get("escapedKey").map(CheetahString::as_str),
+            Some("quote\"slash\\solidus/")
+        );
+        assert_eq!(fields.get("unicode").map(CheetahString::as_str), Some("中🚀"));
+    }
+
+    #[test]
     fn keeps_absent_null_and_empty_extension_fields_distinct() {
         let prefix = r#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0"#;
         let suffix = r#","serializeTypeCurrentRPC":"JSON"}"#;
@@ -879,6 +902,22 @@ mod tests {
 
         assert!(decode(&remark).is_none());
         assert!(decode(&field).is_none());
+    }
+
+    #[test]
+    fn rejects_unterminated_extension_field_strings_after_consuming_a_complete_frame() {
+        let header =
+            br#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":null,"extFields":{"key":"value"#;
+        assert_eq!(header.len(), 99);
+
+        let mut frame = BytesMut::with_capacity(107);
+        frame.put_i32(103);
+        frame.put_i32(RemotingCommand::mark_serialize_type(99, SerializeType::JSON));
+        frame.extend_from_slice(header);
+        assert_eq!(frame.len(), 107);
+
+        assert!(RemotingCommand::decode(&mut frame).is_err());
+        assert!(frame.is_empty());
     }
 
     #[test]

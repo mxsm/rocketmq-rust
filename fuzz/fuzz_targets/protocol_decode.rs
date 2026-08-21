@@ -14,6 +14,8 @@
 
 #![no_main]
 
+use std::hint::black_box;
+
 use bytes::BytesMut;
 use libfuzzer_sys::fuzz_target;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -35,11 +37,55 @@ fuzz_target!(|input: &[u8]| {
         return;
     }
     let input = corpus_bytes(input);
+    let input_len = input.len();
+    let advertised_frame_len = advertised_complete_frame_len(input.as_ref());
     let mut frame = BytesMut::from(input.as_ref());
-    if let Ok(Some(command)) = RemotingCommand::decode(&mut frame) {
-        decode_required_request_header(&command);
+
+    match RemotingCommand::decode(&mut frame) {
+        Ok(None) => {
+            assert_eq!(
+                frame.as_ref(),
+                input.as_ref(),
+                "incomplete frames must remain unchanged"
+            );
+        }
+        Ok(Some(command)) => {
+            if let Some(advertised_frame_len) = advertised_frame_len {
+                let consumed = input_len.saturating_sub(frame.len());
+                assert_eq!(
+                    consumed, advertised_frame_len,
+                    "a successful decoder must consume exactly one declared frame"
+                );
+                if let Some(trailing) = input.get(advertised_frame_len..) {
+                    assert_eq!(frame.as_ref(), trailing, "bytes after the declared frame must remain");
+                }
+            }
+            traverse_extension_fields(&command);
+            decode_required_request_header(&command);
+        }
+        Err(_) => {}
     }
 });
+
+fn advertised_complete_frame_len(input: &[u8]) -> Option<usize> {
+    const FRAME_LENGTH_BYTES: usize = 4;
+
+    let prefix = input.get(..FRAME_LENGTH_BYTES)?;
+    let declared_payload_len =
+        usize::try_from(i32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]])).ok()?;
+    let declared_frame_len = declared_payload_len.checked_add(FRAME_LENGTH_BYTES)?;
+    (declared_frame_len <= input.len()).then_some(declared_frame_len)
+}
+
+fn traverse_extension_fields(command: &RemotingCommand) {
+    let Some(fields) = command.ext_fields() else {
+        return;
+    };
+
+    for (key, value) in fields {
+        let _ = black_box((key.as_str(), value.as_str()));
+    }
+}
 
 fn decode_required_request_header(command: &RemotingCommand) {
     match RequestCode::from(command.code()) {
