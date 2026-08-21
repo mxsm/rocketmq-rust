@@ -19,10 +19,29 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::EncodedFrame;
 use rocketmq_protocol::RemotingCommand;
+
+const JSON_REQUEST_FRAME: &[u8; 182] = b"\x00\x00\x00\xb2\x00\x00\x00\xac\
+{\"code\":31,\"language\":\"JAVA\",\"version\":321,\"opaque\":16909060,\"flag\":0,\"remark\":\"json-request\",\"extFields\":{\"queueId\":\"7\",\"topic\":\"TopicA\"},\"serializeTypeCurrentRPC\":\"JSON\"}JR";
+const JSON_RESPONSE_FRAME: &[u8; 178] = b"\x00\x00\x00\xae\x00\x00\x00\xa8\
+{\"code\":0,\"language\":\"RUST\",\"version\":322,\"opaque\":-1234567,\"flag\":1,\"remark\":null,\"extFields\":{\"hasMsg\":\"true\",\"pollingFull\":\"false\"},\"serializeTypeCurrentRPC\":\"JSON\"}JS";
+const ROCKETMQ_REQUEST_FRAME: &[u8; 77] = b"\
+\x00\x00\x00\x49\x01\x00\x00\x42\
+\x00\x1f\x00\x01\x43\x7f\xff\xff\xff\x00\x00\x00\x02\
+\x00\x00\x00\x0ebinary-request\
+\x00\x00\x00\x1f\x00\x07queueId\x00\x00\x00\x018\x00\x05topic\x00\x00\x00\x06TopicB\
+\x00\xffR";
+const ROCKETMQ_RESPONSE_FRAME: &[u8; 70] = b"\
+\x00\x00\x00\x42\x01\x00\x00\x3c\
+\x00\x00\x0c\x01\x44\x80\x00\x00\x00\x00\x00\x00\x03\
+\x00\x00\x00\x00\x00\x00\x00\x27\
+\x00\x06hasMsg\x00\x00\x00\x05false\
+\x00\x0bpollingFull\x00\x00\x00\x05falseBR";
 
 fn decode_hex_fixture(fixture: &str) -> Vec<u8> {
     let encoded = fixture
@@ -176,4 +195,190 @@ fn deterministic_remoting_cases_round_trip_without_trailing_bytes() {
             "seed={SEED:#018x} case={case}"
         );
     }
+}
+
+#[test]
+fn json_request_and_response_frames_match_exact_wire_bytes() {
+    let request = RemotingCommand::with_resolved_defaults(321, SerializeType::JSON)
+        .set_code(31)
+        .set_language(LanguageCode::JAVA)
+        .set_opaque(0x0102_0304)
+        .set_remark("json-request")
+        .set_command_custom_header(GetMinOffsetRequestHeader {
+            topic: "TopicA".into(),
+            queue_id: 7,
+            topic_request_header: None,
+        })
+        .set_body(Bytes::from_static(b"JR"));
+    let response = RemotingCommand::with_resolved_defaults(322, SerializeType::JSON)
+        .set_code(0)
+        .set_language(LanguageCode::RUST)
+        .set_opaque(-1_234_567)
+        .mark_response_type()
+        .set_command_custom_header(NotificationResponseHeader {
+            has_msg: true,
+            ..Default::default()
+        })
+        .set_body(Bytes::from_static(b"JS"));
+
+    let actual_request = EncodedFrame::from_command(request)
+        .expect("JSON request must encode")
+        .into_bytes();
+    let actual_response = EncodedFrame::from_command(response)
+        .expect("JSON response must encode")
+        .into_bytes();
+
+    assert_eq!(actual_request.as_ref(), JSON_REQUEST_FRAME);
+    assert_eq!(actual_response.as_ref(), JSON_RESPONSE_FRAME);
+    assert_eq!(&JSON_REQUEST_FRAME[4..8], &[0x00, 0x00, 0x00, 0xac]);
+    assert_eq!(&JSON_RESPONSE_FRAME[4..8], &[0x00, 0x00, 0x00, 0xa8]);
+
+    let mut request_input = BytesMut::from(JSON_REQUEST_FRAME.as_slice());
+    let request = RemotingCommand::decode(&mut request_input)
+        .expect("JSON request fixture must decode")
+        .expect("JSON request fixture must be complete");
+    assert!(request_input.is_empty());
+    assert_eq!(request.code(), 31);
+    assert_eq!(request.language(), LanguageCode::JAVA);
+    assert_eq!(request.version(), 321);
+    assert_eq!(request.opaque(), 0x0102_0304);
+    assert_eq!(request.flag(), 0);
+    assert_eq!(request.remark().map(CheetahString::as_str), Some("json-request"));
+    assert_eq!(
+        request.ext_fields(),
+        Some(&HashMap::from([
+            (CheetahString::from("queueId"), CheetahString::from("7")),
+            (CheetahString::from("topic"), CheetahString::from("TopicA")),
+        ]))
+    );
+    assert_eq!(request.body().map(Bytes::as_ref), Some(b"JR".as_slice()));
+    assert_eq!(request.get_serialize_type(), SerializeType::JSON);
+    let header = request
+        .decode_command_custom_header::<GetMinOffsetRequestHeader>()
+        .expect("typed JSON request header must decode");
+    assert_eq!(header.topic, "TopicA");
+    assert_eq!(header.queue_id, 7);
+
+    let mut response_input = BytesMut::from(JSON_RESPONSE_FRAME.as_slice());
+    let response = RemotingCommand::decode(&mut response_input)
+        .expect("JSON response fixture must decode")
+        .expect("JSON response fixture must be complete");
+    assert!(response_input.is_empty());
+    assert_eq!(response.code(), 0);
+    assert_eq!(response.language(), LanguageCode::RUST);
+    assert_eq!(response.version(), 322);
+    assert_eq!(response.opaque(), -1_234_567);
+    assert_eq!(response.flag(), 1);
+    assert!(response.is_response_type());
+    assert!(!response.is_oneway_rpc());
+    assert!(response.remark().is_none());
+    assert_eq!(
+        response.ext_fields(),
+        Some(&HashMap::from([
+            (CheetahString::from("hasMsg"), CheetahString::from("true")),
+            (CheetahString::from("pollingFull"), CheetahString::from("false"),),
+        ]))
+    );
+    assert_eq!(response.body().map(Bytes::as_ref), Some(b"JS".as_slice()));
+    assert_eq!(response.get_serialize_type(), SerializeType::JSON);
+    let header = response
+        .decode_command_custom_header::<NotificationResponseHeader>()
+        .expect("typed JSON response header must decode");
+    assert!(header.has_msg);
+    assert!(!header.polling_full);
+}
+
+#[test]
+fn rocketmq_request_and_response_frames_match_exact_wire_bytes() {
+    let request = RemotingCommand::with_resolved_defaults(323, SerializeType::ROCKETMQ)
+        .set_code(31)
+        .set_language(LanguageCode::JAVA)
+        .set_opaque(i32::MAX)
+        .mark_oneway_rpc()
+        .set_remark("binary-request")
+        .set_command_custom_header(GetMinOffsetRequestHeader {
+            topic: "TopicB".into(),
+            queue_id: 8,
+            topic_request_header: None,
+        })
+        .set_body(Bytes::from_static(&[0x00, 0xff, 0x52]));
+    let response = RemotingCommand::with_resolved_defaults(324, SerializeType::ROCKETMQ)
+        .set_code(0)
+        .set_language(LanguageCode::RUST)
+        .set_opaque(i32::MIN)
+        .mark_response_type()
+        .mark_oneway_rpc()
+        .set_command_custom_header(NotificationResponseHeader {
+            has_msg: false,
+            ..Default::default()
+        })
+        .set_body(Bytes::from_static(b"BR"));
+
+    let actual_request = EncodedFrame::from_command(request)
+        .expect("ROCKETMQ request must encode")
+        .into_bytes();
+    let actual_response = EncodedFrame::from_command(response)
+        .expect("ROCKETMQ response must encode")
+        .into_bytes();
+
+    assert_eq!(actual_request.as_ref(), ROCKETMQ_REQUEST_FRAME);
+    assert_eq!(actual_response.as_ref(), ROCKETMQ_RESPONSE_FRAME);
+    assert_eq!(&ROCKETMQ_REQUEST_FRAME[4..8], &[0x01, 0x00, 0x00, 0x42]);
+    assert_eq!(&ROCKETMQ_RESPONSE_FRAME[4..8], &[0x01, 0x00, 0x00, 0x3c]);
+
+    let mut request_input = BytesMut::from(ROCKETMQ_REQUEST_FRAME.as_slice());
+    let request = RemotingCommand::decode(&mut request_input)
+        .expect("ROCKETMQ request fixture must decode")
+        .expect("ROCKETMQ request fixture must be complete");
+    assert!(request_input.is_empty());
+    assert_eq!(request.code(), 31);
+    assert_eq!(request.language(), LanguageCode::JAVA);
+    assert_eq!(request.version(), 323);
+    assert_eq!(request.opaque(), i32::MAX);
+    assert_eq!(request.flag(), 2);
+    assert!(!request.is_response_type());
+    assert!(request.is_oneway_rpc());
+    assert_eq!(request.remark().map(CheetahString::as_str), Some("binary-request"));
+    assert_eq!(
+        request.ext_fields(),
+        Some(&HashMap::from([
+            (CheetahString::from("queueId"), CheetahString::from("8")),
+            (CheetahString::from("topic"), CheetahString::from("TopicB")),
+        ]))
+    );
+    assert_eq!(request.body().map(Bytes::as_ref), Some([0x00, 0xff, 0x52].as_slice()));
+    assert_eq!(request.get_serialize_type(), SerializeType::ROCKETMQ);
+    let header = request
+        .decode_command_custom_header::<GetMinOffsetRequestHeader>()
+        .expect("typed ROCKETMQ request header must decode");
+    assert_eq!(header.topic, "TopicB");
+    assert_eq!(header.queue_id, 8);
+
+    let mut response_input = BytesMut::from(ROCKETMQ_RESPONSE_FRAME.as_slice());
+    let response = RemotingCommand::decode(&mut response_input)
+        .expect("ROCKETMQ response fixture must decode")
+        .expect("ROCKETMQ response fixture must be complete");
+    assert!(response_input.is_empty());
+    assert_eq!(response.code(), 0);
+    assert_eq!(response.language(), LanguageCode::RUST);
+    assert_eq!(response.version(), 324);
+    assert_eq!(response.opaque(), i32::MIN);
+    assert_eq!(response.flag(), 3);
+    assert!(response.is_response_type());
+    assert!(response.is_oneway_rpc());
+    assert!(response.remark().is_none());
+    assert_eq!(
+        response.ext_fields(),
+        Some(&HashMap::from([
+            (CheetahString::from("hasMsg"), CheetahString::from("false")),
+            (CheetahString::from("pollingFull"), CheetahString::from("false"),),
+        ]))
+    );
+    assert_eq!(response.body().map(Bytes::as_ref), Some(b"BR".as_slice()));
+    assert_eq!(response.get_serialize_type(), SerializeType::ROCKETMQ);
+    let header = response
+        .decode_command_custom_header::<NotificationResponseHeader>()
+        .expect("typed ROCKETMQ response header must decode");
+    assert!(!header.has_msg);
+    assert!(!header.polling_full);
 }

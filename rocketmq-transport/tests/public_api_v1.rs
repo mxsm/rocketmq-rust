@@ -28,6 +28,14 @@ use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportServer;
+use rocketmq_transport::prelude::OneShotTransportClient as PreludeOneShotTransportClient;
+use rocketmq_transport::prelude::RemotingClient as PreludeRemotingClient;
+use rocketmq_transport::prelude::RequestDeadline as PreludeRequestDeadline;
+use rocketmq_transport::prelude::RequestProcessor as PreludeRequestProcessor;
+use rocketmq_transport::prelude::ServerConfig as PreludeServerConfig;
+use rocketmq_transport::prelude::TransportClient as PreludeTransportClient;
+use rocketmq_transport::prelude::TransportClientConfig as PreludeTransportClientConfig;
+use rocketmq_transport::prelude::TransportServer as PreludeTransportServer;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
@@ -49,6 +57,20 @@ fn assert_stable_async_methods(client: &TransportClient<DefaultRequestProcessor>
     let oneway_future = client.send_oneway(target, request, deadline);
     let _: &dyn std::future::Future<Output = rocketmq_error::RocketMQResult<_>> = &request_future;
     let _: &dyn std::future::Future<Output = rocketmq_error::RocketMQResult<SendReceipt>> = &oneway_future;
+}
+
+fn assert_prelude_processor<T: PreludeRequestProcessor>() {}
+
+#[test]
+fn prelude_reexports_the_curated_composition_root_surface() {
+    let _ = PreludeServerConfig::default();
+    let _ = PreludeTransportClientConfig::default();
+    let _ = PreludeRequestDeadline::after(Duration::from_millis(1));
+    let _: Option<PreludeOneShotTransportClient> = None;
+    let _: Option<PreludeTransportClient<DefaultRequestProcessor>> = None;
+    let _: Option<PreludeRemotingClient<DefaultRequestProcessor>> = None;
+    let _: Option<PreludeTransportServer<DefaultRequestProcessor>> = None;
+    assert_prelude_processor::<DefaultRequestProcessor>();
 }
 
 #[tokio::test]
