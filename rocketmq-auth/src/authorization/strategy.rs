@@ -20,7 +20,6 @@
 //! - `StatefulAuthorizationStrategy`: Caching support for connection-based requests
 
 pub mod abstract_authorization_strategy;
-mod authorization_strategy;
 pub mod stateful_authorization_strategy;
 pub mod stateless_authorization_strategy;
 

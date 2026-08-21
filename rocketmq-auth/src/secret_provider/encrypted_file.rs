@@ -23,13 +23,20 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::Mutex;
 
+#[cfg(any(unix, test))]
 use aes_gcm::aead::Aead;
+#[cfg(any(unix, test))]
 use aes_gcm::aead::Generate;
+#[cfg(any(unix, test))]
 use aes_gcm::aead::KeyInit;
+#[cfg(any(unix, test))]
 use aes_gcm::aead::Nonce;
+#[cfg(any(unix, test))]
 use aes_gcm::aead::Payload;
+#[cfg(any(unix, test))]
 use aes_gcm::Aes256Gcm;
 use rocketmq_security_api::SecretAccess;
 use rocketmq_security_api::SecretMaterial;
@@ -43,18 +50,27 @@ use rocketmq_security_api::SecretVersion;
 use rocketmq_security_api::SecretVersioning;
 use rocketmq_security_api::VersionedSecret;
 
+#[cfg(any(unix, test))]
 const ENVELOPE_MAGIC: &[u8; 8] = b"RMQSEC01";
+#[cfg(any(unix, test))]
 const NONCE_LENGTH: usize = 12;
+#[cfg(any(unix, test))]
 const LENGTH_FIELD: usize = 8;
+#[cfg(any(unix, test))]
 const ENVELOPE_PREFIX_LENGTH: usize = ENVELOPE_MAGIC.len() + NONCE_LENGTH + LENGTH_FIELD;
+#[cfg(any(unix, test))]
 const MAX_SECRET_LENGTH: usize = 1024 * 1024;
+#[cfg(any(unix, test))]
 const AUTH_TAG_LENGTH: usize = 16;
 
 /// AES-256-GCM local development adapter with owner-only, immutable version files.
 pub struct EncryptedFileSecretProvider {
     id: SecretProviderId,
+    #[cfg(unix)]
     root: PathBuf,
+    #[cfg(unix)]
     key: SecretMaterial,
+    #[cfg(unix)]
     write_lock: Mutex<()>,
 }
 
@@ -77,8 +93,11 @@ impl EncryptedFileSecretProvider {
         prepare_root(&root)?;
         Ok(Self {
             id,
+            #[cfg(unix)]
             root,
+            #[cfg(unix)]
             key,
+            #[cfg(unix)]
             write_lock: Mutex::new(()),
         })
     }
@@ -293,6 +312,7 @@ fn read_restricted_file(path: &Path) -> Result<Vec<u8>, SecretProviderError> {
     Ok(envelope)
 }
 
+#[cfg(any(unix, test))]
 fn associated_data(name: &SecretName, version: SecretVersion) -> Vec<u8> {
     let mut data = Vec::with_capacity(32 + name.as_str().len());
     data.extend_from_slice(b"rocketmq-secret-envelope-v1\0");
@@ -302,6 +322,7 @@ fn associated_data(name: &SecretName, version: SecretVersion) -> Vec<u8> {
     data
 }
 
+#[cfg(any(unix, test))]
 fn encrypt_envelope(
     key: &SecretMaterial,
     name: &SecretName,
@@ -328,6 +349,7 @@ fn encrypt_envelope(
     Ok(envelope)
 }
 
+#[cfg(any(unix, test))]
 fn decrypt_envelope(
     key: &SecretMaterial,
     name: &SecretName,

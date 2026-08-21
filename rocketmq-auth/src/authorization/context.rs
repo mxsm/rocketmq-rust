@@ -13,5 +13,4 @@
 // limitations under the License.
 
 pub mod authentication_context;
-pub mod base_authorization_context;
 pub mod default_authorization_context;

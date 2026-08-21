@@ -723,20 +723,6 @@ impl AuthorizationMetadataManagerImpl {
             }),
         }
     }
-
-    /// Get the authorization provider reference.
-    #[allow(dead_code)]
-    fn get_authorization_provider(&self) -> &Arc<LocalAuthorizationMetadataProvider> {
-        &self.authorization_provider
-    }
-
-    /// Get the authentication provider reference.
-    #[allow(dead_code)]
-    fn get_authentication_provider(&self) -> ManagerResult<&Arc<dyn AuthenticationMetadataProvider>> {
-        self.authentication_provider.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized("The authenticationMetadataProvider is not configured.".to_string())
-        })
-    }
 }
 
 // ========== Helper Types ==========

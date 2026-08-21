@@ -76,10 +76,6 @@ impl Policy {
         }
     }
 
-    fn get_entry(&self, resource: &Resource) -> Option<&PolicyEntry> {
-        self.entries.iter().find(|e| e.resource() == resource)
-    }
-
     fn get_entry_mut(&mut self, resource: &Resource) -> Option<&mut PolicyEntry> {
         self.entries.iter_mut().find(|e| e.resource() == resource)
     }

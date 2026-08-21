@@ -46,19 +46,6 @@ pub struct DefaultAuthenticationHandler<P: AuthenticationMetadataProvider> {
 }
 
 impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
-    /// Create a new default authentication handler.
-    ///
-    /// # Arguments
-    ///
-    /// * `metadata_provider` - Provider for retrieving user metadata
-    pub fn new(metadata_provider: Arc<P>) -> Self {
-        Self::with_signature_algorithm(metadata_provider, SignatureAlgorithm::default())
-    }
-
-    pub fn with_signature_algorithm(metadata_provider: Arc<P>, signature_algorithm: SignatureAlgorithm) -> Self {
-        Self::with_options(metadata_provider, signature_algorithm, 0, AuthMetrics::default())
-    }
-
     pub fn with_options(
         metadata_provider: Arc<P>,
         signature_algorithm: SignatureAlgorithm,
@@ -286,10 +273,14 @@ mod tests {
         user
     }
 
+    fn create_handler(provider: Arc<MockMetadataProvider>) -> DefaultAuthenticationHandler<MockMetadataProvider> {
+        DefaultAuthenticationHandler::with_options(provider, SignatureAlgorithm::default(), 0, AuthMetrics::default())
+    }
+
     #[tokio::test]
     async fn test_user_not_found() {
         let provider = Arc::new(MockMetadataProvider { users: vec![] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from("unknown"));
@@ -322,7 +313,7 @@ mod tests {
     async fn test_user_disabled() {
         let user = create_test_user("test_user", "password", UserStatus::Disable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from("test_user"));
@@ -338,7 +329,7 @@ mod tests {
     async fn test_signature_mismatch() {
         let user = create_test_user("test_user", "password", UserStatus::Enable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let content = b"test content";
         let mut context = DefaultAuthenticationContext::new();
@@ -356,7 +347,7 @@ mod tests {
         let password = "test_password";
         let user = create_test_user("test_user", password, UserStatus::Enable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let content = b"test content";
         let expected_signature = acl_signer::cal_signature(content, password).unwrap();
@@ -423,7 +414,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_username() {
         let provider = Arc::new(MockMetadataProvider { users: vec![] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let context = DefaultAuthenticationContext::new();
 
@@ -436,7 +427,7 @@ mod tests {
     async fn test_missing_content() {
         let user = create_test_user("test_user", "password", UserStatus::Enable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from("test_user"));
@@ -454,7 +445,7 @@ mod tests {
     async fn test_missing_signature() {
         let user = create_test_user("test_user", "password", UserStatus::Enable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::new(provider);
+        let handler = create_handler(provider);
 
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from("test_user"));

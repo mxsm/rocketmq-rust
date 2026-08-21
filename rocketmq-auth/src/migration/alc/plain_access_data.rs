@@ -37,10 +37,6 @@ pub struct DataVersion {
 }
 
 impl PlainAccessData {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn global_white_remote_addresses(&self) -> &[CheetahString] {
         &self.global_white_remote_addresses
     }
@@ -53,24 +49,12 @@ impl PlainAccessData {
         &self.accounts
     }
 
-    pub fn set_accounts(&mut self, accounts: Vec<PlainAccessConfig>) {
-        self.accounts = accounts;
-    }
-
-    pub fn data_version(&self) -> &[DataVersion] {
-        &self.data_version
-    }
-
     pub fn set_data_version(&mut self, versions: Vec<DataVersion>) {
         self.data_version = versions;
     }
 }
 
 impl PlainAccessData {
-    pub fn has_changed(&self, other: &Self) -> bool {
-        self.data_version != other.data_version
-    }
-
     pub fn latest_version(&self) -> Option<&DataVersion> {
         self.data_version.last()
     }
@@ -81,27 +65,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plain_access_data_default_and_new() {
+    fn plain_access_data_defaults_are_empty() {
         let data = PlainAccessData::default();
         assert!(data.global_white_remote_addresses().is_empty());
         assert!(data.accounts().is_empty());
-        assert!(data.data_version().is_empty());
-
-        let data = PlainAccessData::new();
-        assert!(data.global_white_remote_addresses().is_empty());
-        assert!(data.accounts().is_empty());
-        assert!(data.data_version().is_empty());
+        assert!(data.data_version.is_empty());
     }
 
     #[test]
     fn plain_access_data_setters_and_getters() {
-        let mut data = PlainAccessData::new();
+        let mut data = PlainAccessData::default();
         let addrs = vec![CheetahString::from("127.0.0.1")];
         data.set_global_white_remote_addresses(addrs.clone());
         assert_eq!(data.global_white_remote_addresses(), addrs.as_slice());
 
         let accounts = vec![PlainAccessConfig::default()];
-        data.set_accounts(accounts.clone());
+        data.accounts = accounts.clone();
         assert_eq!(data.accounts(), accounts.as_slice());
 
         let versions = vec![DataVersion {
@@ -109,25 +88,12 @@ mod tests {
             counter: 1,
         }];
         data.set_data_version(versions.clone());
-        assert_eq!(data.data_version(), versions.as_slice());
-    }
-
-    #[test]
-    fn plain_access_data_has_changed() {
-        let mut data1 = PlainAccessData::new();
-        let data2 = PlainAccessData::new();
-        assert!(!data1.has_changed(&data2));
-
-        data1.set_data_version(vec![DataVersion {
-            timestamp: 100,
-            counter: 1,
-        }]);
-        assert!(data1.has_changed(&data2));
+        assert_eq!(data.data_version, versions);
     }
 
     #[test]
     fn plain_access_data_latest_version() {
-        let mut data = PlainAccessData::new();
+        let mut data = PlainAccessData::default();
         assert!(data.latest_version().is_none());
 
         let version = DataVersion {
@@ -140,7 +106,7 @@ mod tests {
 
     #[test]
     fn plain_access_data_serialization_and_deserialization() {
-        let mut data = PlainAccessData::new();
+        let mut data = PlainAccessData::default();
         data.set_global_white_remote_addresses(vec![CheetahString::from("127.0.0.1")]);
         let json = serde_json::to_string(&data).unwrap();
         let deserialized: PlainAccessData = serde_json::from_str(&json).unwrap();
@@ -182,7 +148,7 @@ dataVersion:
         assert_eq!(account.topic_perms().unwrap()[0].as_str(), "TopicA=PUB");
         assert_eq!(account.group_perms().unwrap()[0].as_str(), "GroupA=SUB");
         assert_eq!(
-            data.data_version(),
+            data.data_version,
             &[DataVersion {
                 timestamp: 1,
                 counter: 2
@@ -209,7 +175,7 @@ data_version:
         assert_eq!(data.accounts()[0].access_key().unwrap().as_str(), "ak");
         assert_eq!(data.accounts()[0].secret_key().unwrap().as_str(), "sk");
         assert_eq!(
-            data.data_version(),
+            data.data_version,
             &[DataVersion {
                 timestamp: 3,
                 counter: 4

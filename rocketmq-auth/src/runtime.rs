@@ -17,7 +17,6 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
 use rocketmq_transport::api::v1::Channel;
@@ -520,25 +519,10 @@ impl AuthRuntime {
 
 #[derive(Clone)]
 struct AclFileWatchHandle {
-    task_group: TaskGroup,
     scheduled_tasks: ScheduledTaskGroup,
-    shutdown_timeout: Duration,
 }
 
 impl AclFileWatchHandle {
-    async fn shutdown(&self) -> RocketMQResult<()> {
-        let _ = self.shutdown_with_report().await?;
-        Ok(())
-    }
-
-    async fn shutdown_with_report(&self) -> RocketMQResult<ShutdownReport> {
-        let report = self.task_group.shutdown(self.shutdown_timeout).await;
-        report
-            .assert_no_task_leak()
-            .map_err(|error| RocketMQError::auth_hot_reload_failed("aclFile", error))?;
-        Ok(report)
-    }
-
     fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
         self.scheduled_tasks.snapshot()
     }
@@ -780,11 +764,7 @@ fn start_acl_file_watcher(
         return None;
     }
 
-    Some(AclFileWatchHandle {
-        task_group,
-        scheduled_tasks,
-        shutdown_timeout: Duration::from_secs(5),
-    })
+    Some(AclFileWatchHandle { scheduled_tasks })
 }
 
 async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> RocketMQResult<usize> {

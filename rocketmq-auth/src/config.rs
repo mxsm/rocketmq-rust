@@ -68,6 +68,8 @@ pub struct AuthConfig {
 
     pub acl_cache_max_num: u32,
     pub acl_cache_expired_second: u32,
+    /// Maximum age of an ACL cache value returned without re-reading the provider's canonical
+    /// storage snapshot. `0` makes every ACL lookup read through storage.
     pub acl_cache_refresh_second: u32,
 
     pub stateful_authentication_cache_max_num: u32,

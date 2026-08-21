@@ -17,11 +17,8 @@
 pub mod acl_signer;
 pub mod default_authentication_handler;
 pub mod handler;
-pub mod handler_chain;
 
 #[allow(unused_imports)]
 pub use default_authentication_handler::DefaultAuthenticationHandler;
 #[allow(unused_imports)]
 pub use handler::AuthenticationHandler;
-#[allow(unused_imports)]
-pub use handler_chain::AuthenticationHandlerChain;

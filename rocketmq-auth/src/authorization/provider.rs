@@ -301,31 +301,24 @@ pub trait AuthorizationProvider: Send + Sync {
     }
 }
 
-/// A no-op authorization provider for testing or when authorization is disabled.
-///
-/// This provider always allows all operations without performing any checks.
-/// Useful for:
-/// - Testing environments
-/// - Development setups
-/// - Explicitly disabling authorization
-///
-/// # Security Warning
-/// **DO NOT use in production environments!** This provider grants full access to all operations.
-pub struct NoopAuthorizationProvider;
+#[cfg(test)]
+struct NoopAuthorizationProvider;
 
+#[cfg(test)]
 impl NoopAuthorizationProvider {
-    /// Create a new no-op authorization provider.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self
     }
 }
 
+#[cfg(test)]
 impl Default for NoopAuthorizationProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 impl AuthorizationProvider for NoopAuthorizationProvider {
     fn initialize(&mut self, _config: AuthConfig) -> AuthorizationResult<()> {
         // No initialization needed

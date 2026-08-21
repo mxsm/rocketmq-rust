@@ -17,12 +17,10 @@
 //! This strategy performs authentication for every request without caching results.
 //! Each authentication is independent and does not rely on historical state.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQResult;
 
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
@@ -109,31 +107,12 @@ where
     }
 }
 
-#[allow(async_fn_in_trait)]
 impl<P> AbstractAuthenticationStrategy for StatelessAuthenticationStrategy<P>
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    fn auth_config(&self) -> &AuthConfig {
-        &self.auth_config
-    }
-
     fn authentication_white_set(&self) -> &HashSet<String> {
         &self.authentication_white_set
-    }
-
-    fn authentication_provider(&self) -> Option<&dyn Any> {
-        self.authentication_provider.as_ref().map(|p| p.as_ref() as &dyn Any)
-    }
-
-    async fn authenticate_with_provider<C: AuthenticationContext>(
-        &self,
-        _provider: &dyn Any,
-        _context: &C,
-    ) -> RocketMQResult<()> {
-        Err(rocketmq_error::RocketMQError::authentication_failed(
-            "Use authenticate() method for stateless authentication",
-        ))
     }
 }
 
@@ -148,7 +127,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQResult;
 
     use super::*;
     use crate::authentication::provider::DefaultAuthenticationProvider;
