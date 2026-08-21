@@ -1,42 +1,6 @@
 {
   "entries": [
     {
-      "identity": "rocketmq-auth/src/authorization/builder/default_authorization_context_builder.rs:item:impl DefaultAuthorizationContextBuilder:dead_code:0",
-      "item": "impl DefaultAuthorizationContextBuilder",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "rocketmq-auth",
-      "path": "rocketmq-auth/src/authorization/builder/default_authorization_context_builder.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs:item:fn get_authentication_provider:dead_code:0",
-      "item": "fn get_authentication_provider",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "rocketmq-auth",
-      "path": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs:item:fn get_authorization_provider:dead_code:0",
-      "item": "fn get_authorization_provider",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "rocketmq-auth",
-      "path": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-auth/src/authorization/provider.rs:item:fn authorize:unused_variables:0",
       "item": "fn authorize",
       "lints": [
@@ -71,18 +35,6 @@
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
-    },
-    {
-      "identity": "rocketmq-auth/src/lib.rs:crate:<crate>:dead_code:0",
-      "item": "<crate>",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "rocketmq-auth",
-      "path": "rocketmq-auth/src/lib.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "crate"
     },
     {
       "identity": "rocketmq-broker/src/filter/expression_for_retry_message_filter.rs:item:impl MessageFilter:unused_variables:0",
@@ -1357,7 +1309,7 @@
       "scope": "item"
     }
   ],
-  "maximum_entries": 113,
+  "maximum_entries": 109,
   "schema_version": 2,
   "scope": "core-release",
   "too_many_arguments": {

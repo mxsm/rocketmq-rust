@@ -17,7 +17,6 @@
 //! This strategy caches authentication results per channel/user combination
 //! to avoid redundant authentication checks for the same connection.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -26,7 +25,6 @@ use std::time::Duration;
 
 use moka::sync::Cache;
 use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQResult;
 
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
@@ -214,31 +212,12 @@ where
     }
 }
 
-#[allow(async_fn_in_trait)]
 impl<P> AbstractAuthenticationStrategy for StatefulAuthenticationStrategy<P>
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    fn auth_config(&self) -> &AuthConfig {
-        &self.auth_config
-    }
-
     fn authentication_white_set(&self) -> &HashSet<String> {
         &self.authentication_white_set
-    }
-
-    fn authentication_provider(&self) -> Option<&dyn Any> {
-        self.authentication_provider.as_ref().map(|p| p.as_ref() as &dyn Any)
-    }
-
-    async fn authenticate_with_provider<C: AuthenticationContext>(
-        &self,
-        _provider: &dyn Any,
-        _context: &C,
-    ) -> RocketMQResult<()> {
-        Err(rocketmq_error::RocketMQError::authentication_failed(
-            "Use authenticate() method for stateful authentication",
-        ))
     }
 }
 
@@ -291,8 +270,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
+    use rocketmq_error::RocketMQResult;
 
     use super::*;
     use crate::authentication::provider::AuthenticationProvider;

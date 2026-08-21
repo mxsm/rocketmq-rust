@@ -54,24 +54,6 @@ impl FileAclConfigLoader {
         }
     }
 
-    pub fn from_roots<I, P>(roots: I, blocking: BlockingExecutor) -> Self
-    where
-        I: IntoIterator<Item = P>,
-        P: Into<PathBuf>,
-    {
-        Self {
-            roots: roots.into_iter().map(Into::into).collect(),
-            blocking: AuthBlockingExecutor::new(blocking),
-        }
-    }
-
-    pub async fn load(&self) -> RocketMQResult<AclConfig> {
-        let files = self.discover_files().await?;
-        let (config, _) = load_files(files).await?;
-        validate_acl_config(&config)?;
-        Ok(config)
-    }
-
     pub async fn load_with_fingerprint(&self) -> RocketMQResult<(AclConfig, AclConfigFingerprint)> {
         let files = self.discover_files().await?;
         let (config, fingerprint) = load_files(files).await?;
@@ -385,21 +367,21 @@ accounts:
         )
         .unwrap();
 
-        let config = FileAclConfigLoader::from_roots([second, first], metadata_blocking())
-            .load()
+        let (config, _) = FileAclConfigLoader::new(temp.path(), metadata_blocking())
+            .load_with_fingerprint()
             .await
             .unwrap();
 
         let white_addrs = config.global_white_addrs().unwrap();
         assert_eq!(
             white_addrs,
-            &[CheetahString::from("10.0.0.2"), CheetahString::from("10.0.0.1")]
+            &[CheetahString::from("10.0.0.1"), CheetahString::from("10.0.0.2")]
         );
 
         let accounts = config.plain_access_configs().unwrap();
         assert_eq!(accounts.len(), 2);
         assert_eq!(accounts[0].access_key().unwrap().as_str(), "ak");
-        assert_eq!(accounts[0].secret_key().unwrap().as_str(), "second-secret");
+        assert_eq!(accounts[0].secret_key().unwrap().as_str(), "first-secret");
         assert_eq!(accounts[1].access_key().unwrap().as_str(), "bk");
     }
 
@@ -409,8 +391,8 @@ accounts:
         let file = temp.path().join("plain_acl.yml");
         fs::write(&file, " \n\t").unwrap();
 
-        let config = FileAclConfigLoader::new(file, metadata_blocking())
-            .load()
+        let (config, _) = FileAclConfigLoader::new(file, metadata_blocking())
+            .load_with_fingerprint()
             .await
             .unwrap();
 
@@ -465,7 +447,7 @@ accounts:
         .unwrap();
 
         let error = FileAclConfigLoader::new(file, metadata_blocking())
-            .load()
+            .load_with_fingerprint()
             .await
             .unwrap_err();
 

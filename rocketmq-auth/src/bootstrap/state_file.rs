@@ -24,6 +24,7 @@ use super::BootstrapGrant;
 use super::BootstrapStatus;
 
 const STATE_SCHEMA_VERSION: u8 = 1;
+#[cfg(unix)]
 const MAXIMUM_STATE_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

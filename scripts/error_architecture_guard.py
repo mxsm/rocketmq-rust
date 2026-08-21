@@ -825,10 +825,6 @@ def check_redaction_guards() -> list[Finding]:
             "user_debug_redacts_password",
             "<redacted>",
         ],
-        ROOT / "rocketmq-auth" / "src" / "migration" / "alc" / "plain_access_resource.rs": [
-            "plain_access_resource_debug_redacts_secrets",
-            "signature-value",
-        ],
         ROOT / "rocketmq-auth" / "src" / "migration" / "alc" / "plain_access_config.rs": [
             "plain_access_config_debug_redacts_secret_key",
             "<redacted>",

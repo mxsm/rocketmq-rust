@@ -53,7 +53,6 @@ const B: &str = "b";
 
 #[derive(Clone, Debug)]
 pub struct DefaultAuthorizationContextBuilder {
-    #[allow(dead_code)]
     auth_config: AuthConfig,
 }
 
