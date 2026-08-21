@@ -262,32 +262,6 @@ spec:
             cidr: 0.0.0.0/0
       ports:
         - {protocol: TCP, port: 443}
----
-# Source: rocketmq-rust/templates/networkpolicies.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: rocketmq-metrics-scrape
-  namespace: rocketmq
-  labels:
-    app.kubernetes.io/instance: rocketmq
-    app.kubernetes.io/part-of: rocketmq-rust
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/instance: rocketmq
-      app.kubernetes.io/part-of: rocketmq-rust
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              rocketmqrust.com/observability: "true"
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: prometheus
-      ports:
-        - {protocol: TCP, port: 5557}
 
 ---
 # Source: rocketmq-rust/templates/pdbs.yaml
@@ -509,20 +483,15 @@ data:
     brokerClusterName = "RocketmqRust"
     brokerId = 0
     [observability]
-
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
@@ -533,6 +502,14 @@ data:
     haListenPort = 10912
     storePathRootDir = "/var/lib/rocketmq/store"
     storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
+    flushDiskType = "SYNC_FLUSH"
+    totalReplicas = 3
+    inSyncReplicas = 3
+    minInSyncReplicas = 2
+    allAckInSyncStateSet = true
+    enableAutoInSyncReplicas = false
+    slaveTimeout = 3000
+    haMaxTimeSlaveNotCatchup = 15000
   rocketmq-broker-1.toml: |-
     [broker]
     listenPort = 10911
@@ -560,20 +537,15 @@ data:
     brokerClusterName = "RocketmqRust"
     brokerId = 0
     [observability]
-
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
@@ -584,6 +556,14 @@ data:
     haListenPort = 10912
     storePathRootDir = "/var/lib/rocketmq/store"
     storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
+    flushDiskType = "SYNC_FLUSH"
+    totalReplicas = 3
+    inSyncReplicas = 3
+    minInSyncReplicas = 2
+    allAckInSyncStateSet = true
+    enableAutoInSyncReplicas = false
+    slaveTimeout = 3000
+    haMaxTimeSlaveNotCatchup = 15000
   rocketmq-broker-2.toml: |-
     [broker]
     listenPort = 10911
@@ -611,20 +591,15 @@ data:
     brokerClusterName = "RocketmqRust"
     brokerId = 0
     [observability]
-
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
@@ -635,6 +610,14 @@ data:
     haListenPort = 10912
     storePathRootDir = "/var/lib/rocketmq/store"
     storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
+    flushDiskType = "SYNC_FLUSH"
+    totalReplicas = 3
+    inSyncReplicas = 3
+    minInSyncReplicas = 2
+    allAckInSyncStateSet = true
+    enableAutoInSyncReplicas = false
+    slaveTimeout = 3000
+    haMaxTimeSlaveNotCatchup = 15000
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1
@@ -657,26 +640,21 @@ data:
     configStorePath = "/var/lib/rocketmq/namesrv/namesrv.properties"
     needWaitForService = false
     listenPort = 9876
-    [observability]
 
+    [observability]
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
     path = "/metrics"
-
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1
@@ -713,6 +691,8 @@ data:
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
+    snapshotLogsSinceLast = 5000
+    snapshotMaxLogEntriesToKeep = 1000
     storagePath = "/var/lib/rocketmq/controller/node-1"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
@@ -749,26 +729,21 @@ data:
     [[controllerPeers]]
     id = 3
     addr = "10.96.0.203:60109"
-    [observability]
 
+    [observability]
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
     path = "/metrics"
-
   rocketmq-controller-1.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
@@ -789,6 +764,8 @@ data:
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
+    snapshotLogsSinceLast = 5000
+    snapshotMaxLogEntriesToKeep = 1000
     storagePath = "/var/lib/rocketmq/controller/node-2"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
@@ -825,26 +802,21 @@ data:
     [[controllerPeers]]
     id = 3
     addr = "10.96.0.203:60109"
-    [observability]
 
+    [observability]
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
     path = "/metrics"
-
   rocketmq-controller-2.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
@@ -865,6 +837,8 @@ data:
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
+    snapshotLogsSinceLast = 5000
+    snapshotMaxLogEntriesToKeep = 1000
     storagePath = "/var/lib/rocketmq/controller/node-3"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
@@ -901,26 +875,21 @@ data:
     [[controllerPeers]]
     id = 3
     addr = "10.96.0.203:60109"
-    [observability]
 
+    [observability]
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
     path = "/metrics"
-
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1
@@ -959,26 +928,21 @@ data:
     aclFile = "/var/run/secrets/rocketmq/proxy-acl.yml"
     aclFileWatchEnabled = true
     signatureAlgorithm = "HmacSHA256"
-    [observability]
 
+    [observability]
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
     path = "/metrics"
-
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1
@@ -1062,26 +1026,21 @@ data:
     [diagnosis]
     consumer_lag_policy_profile = "production-default"
     consumer_lag_threshold = 1000
-    [observability]
 
+    [observability]
     [observability.metrics]
     exporter = "disable"
-
     [observability.traces]
     exporter = "disable"
-
     [observability.logs]
     exporter = "disable"
-
     [observability.otlp]
     endpoint = "http://otel-collector.observability.svc.cluster.local:4317"
     protocol = "grpc"
-
     [observability.prometheus]
     host = "0.0.0.0"
     port = 5557
     path = "/metrics"
-
   permissions.toml: |-
     [roles.read_only]
     allowed_clusters = ["*"]
@@ -1461,141 +1420,6 @@ spec:
       targetPort: 8081
       protocol: TCP
 ---
-# Source: rocketmq-rust/templates/services.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: rocketmq-broker-metrics
-  namespace: rocketmq
-  labels:
-    app.kubernetes.io/name: rocketmq-broker
-    app.kubernetes.io/instance: rocketmq
-    app.kubernetes.io/part-of: rocketmq-rust
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: "0.1.0"
-    rocketmqrust.com/service: broker
-    rocketmqrust.com/architecture-milestone: P0-05
-    rocketmqrust.com/metrics: "true"
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: rocketmq-broker
-    app.kubernetes.io/instance: rocketmq
-    rocketmqrust.com/service: broker
-  ports:
-    - name: metrics
-      port: 5557
-      targetPort: metrics
-      protocol: TCP
----
-# Source: rocketmq-rust/templates/services.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: rocketmq-namesrv-metrics
-  namespace: rocketmq
-  labels:
-    app.kubernetes.io/name: rocketmq-namesrv
-    app.kubernetes.io/instance: rocketmq
-    app.kubernetes.io/part-of: rocketmq-rust
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: "0.1.0"
-    rocketmqrust.com/service: namesrv
-    rocketmqrust.com/architecture-milestone: P0-05
-    rocketmqrust.com/metrics: "true"
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: rocketmq-namesrv
-    app.kubernetes.io/instance: rocketmq
-    rocketmqrust.com/service: namesrv
-  ports:
-    - name: metrics
-      port: 5557
-      targetPort: metrics
-      protocol: TCP
----
-# Source: rocketmq-rust/templates/services.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: rocketmq-controller-metrics
-  namespace: rocketmq
-  labels:
-    app.kubernetes.io/name: rocketmq-controller
-    app.kubernetes.io/instance: rocketmq
-    app.kubernetes.io/part-of: rocketmq-rust
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: "0.1.0"
-    rocketmqrust.com/service: controller
-    rocketmqrust.com/architecture-milestone: P0-05
-    rocketmqrust.com/metrics: "true"
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: rocketmq-controller
-    app.kubernetes.io/instance: rocketmq
-    rocketmqrust.com/service: controller
-  ports:
-    - name: metrics
-      port: 5557
-      targetPort: metrics
-      protocol: TCP
----
-# Source: rocketmq-rust/templates/services.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: rocketmq-proxy-metrics
-  namespace: rocketmq
-  labels:
-    app.kubernetes.io/name: rocketmq-proxy
-    app.kubernetes.io/instance: rocketmq
-    app.kubernetes.io/part-of: rocketmq-rust
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: "0.1.0"
-    rocketmqrust.com/service: proxy
-    rocketmqrust.com/architecture-milestone: P0-05
-    rocketmqrust.com/metrics: "true"
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: rocketmq-proxy
-    app.kubernetes.io/instance: rocketmq
-    rocketmqrust.com/service: proxy
-  ports:
-    - name: metrics
-      port: 5557
-      targetPort: metrics
-      protocol: TCP
----
-# Source: rocketmq-rust/templates/services.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: rocketmq-mcp-metrics
-  namespace: rocketmq
-  labels:
-    app.kubernetes.io/name: rocketmq-mcp
-    app.kubernetes.io/instance: rocketmq
-    app.kubernetes.io/part-of: rocketmq-rust
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: "0.1.0"
-    rocketmqrust.com/service: mcp
-    rocketmqrust.com/architecture-milestone: P0-05
-    rocketmqrust.com/metrics: "true"
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: rocketmq-mcp
-    app.kubernetes.io/instance: rocketmq
-    rocketmqrust.com/service: mcp
-  ports:
-    - name: metrics
-      port: 5557
-      targetPort: metrics
-      protocol: TCP
----
 # Source: rocketmq-rust/templates/workloads.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -1688,18 +1512,12 @@ spec:
             - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
             - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
-            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
-            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
-            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
-            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
 
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 8080, protocol: TCP}
             - {name: grpc, containerPort: 8081, protocol: TCP}
           lifecycle:
@@ -1837,17 +1655,11 @@ spec:
             - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
             - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
-            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
-            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
-            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
-            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: https-mcp, containerPort: 8089, protocol: TCP}
           lifecycle:
             preStop:
@@ -2010,10 +1822,7 @@ spec:
             - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
             - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
-            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
-            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
-            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
-            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
 
             - name: POD_NAME
               valueFrom:
@@ -2021,11 +1830,8 @@ spec:
                   fieldPath: metadata.name
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/broker}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-broker}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 10911, protocol: TCP}
             - {name: ha, containerPort: 10912, protocol: TCP}
           lifecycle:
@@ -2214,18 +2020,12 @@ spec:
             - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
             - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
-            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
-            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
-            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
-            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
 
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 9876, protocol: TCP}
           lifecycle:
             preStop:
@@ -2408,10 +2208,7 @@ spec:
             - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
             - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
             - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
-            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
-            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
-            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
-            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
 
             - name: POD_NAME
               valueFrom:
@@ -2421,11 +2218,8 @@ spec:
             - {name: ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR, value: "0.0.0.0:60110"}
             - {name: ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER, value: "true"}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-controller}
-            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
-            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 60109, protocol: TCP}
             - {name: raft, containerPort: 60110, protocol: TCP}
           lifecycle:

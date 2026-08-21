@@ -46,7 +46,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.releaseIdentityEnv" . | indent 12 }}
-{{ include "rocketmq.observabilityEnvironmentOverrides" . | indent 12 }}
+{{ with (include "rocketmq.observabilityEnvironmentOverrides" . | trim) }}{{ . | nindent 12 }}{{ end }}
 {{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - name: POD_NAME
               valueFrom:
@@ -168,7 +168,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.releaseIdentityEnv" . | indent 12 }}
-{{ include "rocketmq.observabilityEnvironmentOverrides" . | indent 12 }}
+{{ with (include "rocketmq.observabilityEnvironmentOverrides" . | trim) }}{{ . | nindent 12 }}{{ end }}
 {{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
@@ -268,7 +268,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.releaseIdentityEnv" . | indent 12 }}
-{{ include "rocketmq.observabilityEnvironmentOverrides" . | indent 12 }}
+{{ with (include "rocketmq.observabilityEnvironmentOverrides" . | trim) }}{{ . | nindent 12 }}{{ end }}
 {{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - name: POD_NAME
               valueFrom:
@@ -387,7 +387,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.releaseIdentityEnv" . | indent 12 }}
-{{ include "rocketmq.observabilityEnvironmentOverrides" . | indent 12 }}
+{{ with (include "rocketmq.observabilityEnvironmentOverrides" . | trim) }}{{ . | nindent 12 }}{{ end }}
 {{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
@@ -500,7 +500,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.releaseIdentityEnv" . | indent 12 }}
-{{ include "rocketmq.observabilityEnvironmentOverrides" . | indent 12 }}
+{{ with (include "rocketmq.observabilityEnvironmentOverrides" . | trim) }}{{ . | nindent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
           ports:

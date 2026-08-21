@@ -194,27 +194,22 @@ rocketmqrust.com/architecture-milestone: P0-05
 {{- end -}}
 
 {{/* Canonical file configuration shared by Broker, NameServer, Controller, Proxy, and MCP. */}}
-{{- define "rocketmq.observabilityConfig" }}
+{{- define "rocketmq.observabilityConfig" -}}
 [observability]
-
 [observability.metrics]
 exporter = {{ .Values.global.observability.metricsExporter | quote }}
-
 [observability.traces]
 exporter = {{ .Values.global.observability.tracesExporter | quote }}
-
 [observability.logs]
 exporter = {{ .Values.global.observability.logsExporter | quote }}
-
 [observability.otlp]
 endpoint = {{ include "rocketmq.observabilityOtlpEndpoint" . | quote }}
 protocol = {{ .Values.global.observability.otlpProtocol | quote }}
-
 [observability.prometheus]
 host = "0.0.0.0"
 port = {{ .Values.metrics.port }}
 path = {{ .Values.metrics.path | quote }}
-{{- end }}
+{{- end -}}
 
 {{- define "rocketmq.releaseAnnotations" -}}
 rocketmqrust.com/release-commit: {{ .Values.releaseIdentity.commit | quote }}
