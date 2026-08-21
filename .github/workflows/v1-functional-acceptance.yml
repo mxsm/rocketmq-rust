@@ -3,6 +3,10 @@ name: V1 Functional Acceptance and Local Handoff
 on:
   workflow_dispatch:
     inputs:
+      candidate_artifact_run_id:
+        description: Workflow run containing the explicit candidate artifacts
+        required: true
+        type: string
       candidate_source_artifact:
         description: Access-restricted candidate source bundle artifact name
         required: true
@@ -13,6 +17,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -28,10 +33,14 @@ jobs:
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - name: Prepare immutable draft transfer
         shell: bash
         run: >-
@@ -56,10 +65,14 @@ jobs:
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
@@ -87,10 +100,14 @@ jobs:
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
@@ -119,10 +136,14 @@ jobs:
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
@@ -166,10 +187,14 @@ jobs:
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
       - name: Finalize retained publication handoff
         run: >-
           bash scripts/run-publication-handoff.sh --mode Finalize
@@ -183,11 +208,123 @@ jobs:
           name: publication-handoff-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/v1-publication-handoff
           if-no-files-found: error
+          retention-days: 30
 
   handoff-lifecycle-finalizer:
     if: always()
-    needs: aggregate-handoff
+    needs: [prepare-draft, platform-linux, platform-windows, platform-macos, aggregate-handoff]
     runs-on: ubuntu-latest
     steps:
-      - name: Record aggregate outcome
-        run: test '${{ needs.aggregate-handoff.result }}' = 'success'
+      - uses: actions/checkout@v4
+      - name: Download selected candidate control
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_control_artifact }}
+          path: target/candidate-input/control
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_artifact_run_id }}
+      - name: Download committed handoff state
+        if: needs.aggregate-handoff.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: publication-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/publication-handoff
+      - name: Finalize handoff lifecycle
+        id: terminal
+        shell: bash
+        env:
+          PREPARE_RESULT: ${{ needs.prepare-draft.result }}
+          LINUX_RESULT: ${{ needs.platform-linux.result }}
+          WINDOWS_RESULT: ${{ needs.platform-windows.result }}
+          MACOS_RESULT: ${{ needs.platform-macos.result }}
+          AGGREGATE_RESULT: ${{ needs.aggregate-handoff.result }}
+        run: |
+          set -euo pipefail
+          output_root=target/handoff-terminal-control
+          mkdir -p "$output_root/candidate" "$output_root/series"
+
+          workflow_result=success
+          for result in "$PREPARE_RESULT" "$LINUX_RESULT" "$WINDOWS_RESULT" "$MACOS_RESULT" "$AGGREGATE_RESULT"; do
+            if [[ "$result" != success ]]; then
+              workflow_result=failure
+            fi
+          done
+
+          if [[ "$workflow_result" == success ]]; then
+            candidate_bundle=target/publication-handoff/terminal-control/candidate/CANDIDATE_CONTROL_BUNDLE.tar
+            series_bundle=target/publication-handoff/terminal-control/series/RELEASE_SERIES_CONTROL_BUNDLE.tar
+            [[ -f "$candidate_bundle" && -f "$series_bundle" ]]
+            python distribution/transfer_candidate.py import-build-control \
+              --bundle "$candidate_bundle" \
+              --output target/terminal-success-control \
+              --selector-output target/terminal-success-selector.json
+            candidate_manifest="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_manifest"])' target/terminal-success-selector.json)"
+            python - "$candidate_manifest" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          candidate = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if candidate.get("state") != "publication-ready" or candidate.get("sealed") is not True:
+              raise SystemExit("successful handoff control is not publication-ready and sealed")
+          PY
+            cp "$candidate_bundle" "$output_root/candidate/CANDIDATE_CONTROL_BUNDLE.tar"
+            cp "$series_bundle" "$output_root/series/RELEASE_SERIES_CONTROL_BUNDLE.tar"
+          else
+            python distribution/transfer_candidate.py import-build-control \
+              --bundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar \
+              --output target/terminal-rejected-control \
+              --selector-output target/terminal-rejected-selector.json
+            candidate_manifest="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_manifest"])' target/terminal-rejected-selector.json)"
+            python scripts/v1_candidate_lifecycle.py \
+              --mode RejectFinalHandoff \
+              --candidate-manifest "$candidate_manifest" \
+              --rejection-reason "publication handoff workflow did not complete successfully"
+            python - "$candidate_manifest" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          candidate = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if candidate.get("state") != "rejected" or candidate.get("sealed") is not True:
+              raise SystemExit("failed handoff candidate was not sealed as rejected")
+          PY
+            candidate_root="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["candidate_root"])' "$candidate_manifest")"
+            series_manifest="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["series_manifest"])' "$candidate_manifest")"
+            mapfile -t candidate_bundles < <(find "$candidate_root/transfer" -maxdepth 1 -type f -name 'CANDIDATE_CONTROL_BUNDLE.g*.tar' -print)
+            mapfile -t series_bundles < <(find "$(dirname "$series_manifest")" -maxdepth 1 -type f -name 'RELEASE_SERIES_CONTROL_BUNDLE.g*.tar' -print)
+            [[ ${#candidate_bundles[@]} -eq 1 && ${#series_bundles[@]} -eq 1 ]]
+            cp "${candidate_bundles[0]}" "$output_root/candidate/CANDIDATE_CONTROL_BUNDLE.tar"
+            cp "${series_bundles[0]}" "$output_root/series/RELEASE_SERIES_CONTROL_BUNDLE.tar"
+          fi
+
+          candidate_generation="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["generation"])' "$candidate_manifest")"
+          series_manifest="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["series_manifest"])' "$candidate_manifest")"
+          series_generation="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["generation"])' "$series_manifest")"
+          echo "workflow_result=$workflow_result" >> "$GITHUB_OUTPUT"
+          echo "candidate_generation=$candidate_generation" >> "$GITHUB_OUTPUT"
+          echo "series_generation=$series_generation" >> "$GITHUB_OUTPUT"
+          echo "candidate_control=$output_root/candidate/CANDIDATE_CONTROL_BUNDLE.tar" >> "$GITHUB_OUTPUT"
+          echo "series_control=$output_root/series/RELEASE_SERIES_CONTROL_BUNDLE.tar" >> "$GITHUB_OUTPUT"
+      - name: Upload terminal candidate control
+        if: steps.terminal.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: handoff-terminal-candidate-control-g${{ steps.terminal.outputs.candidate_generation }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.terminal.outputs.candidate_control }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload terminal release-series control
+        if: steps.terminal.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: handoff-terminal-release-series-control-g${{ steps.terminal.outputs.series_generation }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.terminal.outputs.series_control }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Propagate handoff result
+        if: always()
+        shell: bash
+        run: |
+          [[ '${{ steps.terminal.outcome }}' == success ]]
+          [[ '${{ steps.terminal.outputs.workflow_result }}' == success ]]

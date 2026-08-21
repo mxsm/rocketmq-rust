@@ -204,6 +204,68 @@ def _validate_handoff_evidence(root: Path | None, candidate: dict[str, Any]) -> 
         ensure_no_digest_fields(value)
 
 
+def _validate_final_handoff_gate_evidence(path: Path | None, candidate: dict[str, Any]) -> None:
+    if path is None:
+        raise LifecycleError("publication-ready requires final-handoff gate evidence")
+    value = read_json(resolve_existing_file(path, "final-handoff gate evidence"))
+    ensure_no_digest_fields(value)
+    required = {
+        "H01-LINUX",
+        "H01-WINDOWS",
+        "H01-MACOS",
+        "H02-DRAFT-SEMANTIC",
+        "H03-DRAFT-NO-REMOTE",
+        "H04-FINAL-SEMANTIC",
+        "H05-FINAL-NO-REMOTE",
+    }
+    identity = (
+        value.get("candidate_id"),
+        value.get("version"),
+        value.get("run_id"),
+        value.get("attempt"),
+    )
+    expected = (
+        candidate["candidate_id"],
+        candidate["version"],
+        candidate["run_id"],
+        candidate["attempt"],
+    )
+    release_results = value.get("release_result_ids")
+    normalized_results = value.get("results")
+    result_by_id = (
+        {
+            item.get("result_id"): item
+            for item in normalized_results
+            if isinstance(item, dict)
+        }
+        if isinstance(normalized_results, list)
+        else {}
+    )
+    if (
+        value.get("schema_version") != 1
+        or identity != expected
+        or value.get("phase") != 6
+        or value.get("gate_stage") != "final-handoff"
+        or set(value.get("required_result_ids", [])) != required
+        or not isinstance(release_results, dict)
+        or set(release_results) != required
+        or any(status != "passed" for status in release_results.values())
+        or len(result_by_id) != len(required)
+        or set(result_by_id) != required
+        or any(
+            result.get("status") != "passed"
+            or result.get("exit_code") != 0
+            or not isinstance(result.get("command"), list)
+            or not result["command"]
+            for result in result_by_id.values()
+        )
+        or value.get("all_required_passed") is not True
+        or value.get("failed_result_ids") != []
+        or value.get("remote_publication", {}).get("status") != "not-executed"
+    ):
+        raise LifecycleError("final-handoff gate evidence is incomplete")
+
+
 def _completion_event(
     current_route_id: str | None,
     candidate: dict[str, Any],
@@ -329,6 +391,7 @@ def transition_candidate(
             if publication_marker.exists():
                 raise LifecycleError("publication-ready marker already exists")
             _validate_known_issues(candidate)
+            _validate_final_handoff_gate_evidence(gate_evidence, candidate)
             _validate_handoff_evidence(handoff_evidence_root, candidate)
             target_outcome = "success"
             seal = True

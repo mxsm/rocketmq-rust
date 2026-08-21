@@ -214,6 +214,36 @@ class ReleaseCandidateCommandTests(unittest.TestCase):
                 )
             self.assertEqual(exit_code, 0)
 
+    def test_candidate_command_runs_from_the_declared_canonical_source_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            candidate = self.candidate.create_candidate(
+                root / "candidates", "1.0.0-rc.1", "rc1", 1, series
+            )
+            context = self.context.capture_context(candidate, "source-1", root / "context")
+            source = root / "canonical-source"
+            source.mkdir()
+            output = root / "observed-cwd.txt"
+
+            exit_code = self.command.run_command(
+                candidate,
+                route_id="R01-canonical-source",
+                worker_id="source-1",
+                context_path=context,
+                event_root=root / "events",
+                command=[
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(str(Path.cwd()))",
+                    str(output),
+                ],
+                cwd=source,
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(source.resolve(), Path(output.read_text(encoding="utf-8")))
+
     def test_sealed_candidate_cannot_capture_a_new_execution_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

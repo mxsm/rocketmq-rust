@@ -63,5 +63,46 @@
     {"capability_id":"G-05","test_id":"G05-ADMIN-OPERATION-GUARD","phase":4,"argv":["python","scripts/admin_operation_guard.py","--require-complete"]},
     {"capability_id":"G-06","test_id":"G06-CORE-PLATFORM-MATRIX","phase":5,"argv":["python","scripts/core_platform_matrix.py","--check"]},
     {"capability_id":"G-06","test_id":"G06-SEMANTIC-CANDIDATE-EVIDENCE","phase":5,"argv":["python","-m","unittest","scripts.tests.test_no_remote_publication_guard","scripts.tests.test_release_evidence_guard","scripts.tests.test_release_preparation_runner"]}
-  ]
+  ],
+  "functional_acceptance": {
+    "schema_version": 1,
+    "scenario_timeout_seconds": 600,
+    "max_workers": 4,
+    "java_workers": 2,
+    "routes": [
+      {"id":"P01","kind":"profile","driver_env":"ROCKETMQ_V1_P01_DRIVER","required_binaries":["namesrv","broker","admin"],"capability_ids":["F-01","F-02","F-03","F-04","F-11","F-12","F-17","F-18","G-02"],"depends_on":[],"port_count":4},
+      {"id":"P02","kind":"profile","driver_env":"ROCKETMQ_V1_P02_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["F-08"],"depends_on":[],"port_count":6},
+      {"id":"P03","kind":"profile","driver_env":"ROCKETMQ_V1_P03_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["F-08"],"depends_on":[],"port_count":6},
+      {"id":"P04","kind":"profile","driver_env":"ROCKETMQ_V1_P04_DRIVER","required_binaries":["namesrv","broker","controller"],"required_features":{"controller":["storage-rocksdb"]},"capability_ids":["F-09"],"depends_on":[],"port_count":9},
+      {"id":"P05","kind":"profile","driver_env":"ROCKETMQ_V1_P05_DRIVER","required_binaries":["namesrv","broker","controller"],"required_features":{"controller":["storage-rocksdb"]},"capability_ids":["F-09"],"depends_on":["P04"],"port_count":14},
+      {"id":"P06","kind":"profile","driver_env":"ROCKETMQ_V1_P06_DRIVER","required_binaries":["namesrv","broker"],"required_features":{"broker":["rocksdb_store"]},"capability_ids":["F-14","F-16"],"depends_on":[],"port_count":4},
+      {"id":"P07","kind":"profile","driver_env":"ROCKETMQ_V1_P07_DRIVER","required_binaries":["namesrv","broker"],"required_features":{"broker":["rocksdb_store"]},"capability_ids":["F-14"],"depends_on":[],"port_count":4},
+      {"id":"P08","kind":"profile","driver_env":"ROCKETMQ_V1_P08_DRIVER","required_binaries":["namesrv","broker"],"required_features":{"broker":["extended_timeline"]},"capability_ids":["F-10"],"depends_on":[],"port_count":4},
+      {"id":"P09","kind":"profile","driver_env":"ROCKETMQ_V1_P09_DRIVER","required_binaries":["namesrv","broker","proxy"],"capability_ids":["F-05","G-03"],"depends_on":[],"port_count":6},
+      {"id":"P10","kind":"profile","driver_env":"ROCKETMQ_V1_P10_DRIVER","required_binaries":["namesrv","broker","proxy"],"required_features":{"proxy":["tls"]},"capability_ids":["F-06","F-07","F-15"],"depends_on":[],"port_count":6},
+      {"id":"P11","kind":"profile","driver_env":"ROCKETMQ_V1_P11_DRIVER","required_binaries":["namesrv","broker"],"required_features":{"broker":["local_file_store"]},"capability_ids":["F-08"],"depends_on":[],"port_count":6},
+      {"id":"P12","kind":"profile","driver_env":"ROCKETMQ_V1_P12_DRIVER","required_binaries":["namesrv","broker"],"required_features":{"broker":["tieredstore"]},"capability_ids":["G-04"],"depends_on":[],"port_count":4},
+      {"id":"I01","kind":"scenario","driver_env":"ROCKETMQ_V1_I01_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["F-01","F-18"],"depends_on":["P01"],"lane":"java","port_count":4},
+      {"id":"I02","kind":"scenario","driver_env":"ROCKETMQ_V1_I02_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["F-17"],"depends_on":["P01"],"lane":"java","port_count":4},
+      {"id":"I03","kind":"scenario","driver_env":"ROCKETMQ_V1_I03_DRIVER","required_binaries":["namesrv","broker"],"required_features":{"broker":["rocksdb_store"]},"capability_ids":["F-16"],"depends_on":["P06"],"lane":"java","port_count":4},
+      {"id":"I04","kind":"scenario","driver_env":"ROCKETMQ_V1_I04_DRIVER","required_binaries":["namesrv","broker","proxy"],"capability_ids":["F-05","F-15"],"depends_on":["P09","P10"],"lane":"java","port_count":6},
+      {"id":"I05","kind":"scenario","driver_env":"ROCKETMQ_V1_I05_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["F-08"],"depends_on":["P02","P03"],"lane":"java","port_count":6},
+      {"id":"M01","kind":"scenario","driver_env":"ROCKETMQ_V1_M01_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["F-01","F-10"],"depends_on":["P01"],"port_count":4},
+      {"id":"L01","kind":"scenario","driver_env":"ROCKETMQ_V1_L01_DRIVER","required_binaries":["namesrv","broker"],"capability_ids":["G-01"],"depends_on":["P01"],"port_count":4},
+      {"id":"A01","kind":"scenario","driver_env":"ROCKETMQ_V1_A01_DRIVER","required_binaries":["namesrv","broker","admin"],"capability_ids":["F-01","F-17","G-05"],"depends_on":["P01"],"port_count":4},
+      {"id":"U01-LF","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_LF_DRIVER","required_binaries":["broker","store-inspect"],"capability_ids":["F-13"],"depends_on":["P01"],"port_count":2},
+      {"id":"U01-MP","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_MP_DRIVER","required_binaries":["broker","store-inspect"],"capability_ids":["F-08"],"depends_on":["P11"],"port_count":4},
+      {"id":"U01-RDB","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_RDB_DRIVER","required_binaries":["broker","store-inspect"],"required_features":{"broker":["rocksdb_store"]},"capability_ids":["F-14","F-16"],"depends_on":["P06"],"port_count":2},
+      {"id":"U01-CMP","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_CMP_DRIVER","required_binaries":["broker","store-inspect"],"capability_ids":["F-13"],"depends_on":["P01"],"port_count":2},
+      {"id":"U01-POP","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_POP_DRIVER","required_binaries":["broker","store-inspect"],"required_features":{"broker":["rocksdb_store"]},"capability_ids":["F-14"],"depends_on":["P07"],"port_count":2},
+      {"id":"U01-TMR","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_TMR_DRIVER","required_binaries":["broker","store-inspect"],"required_features":{"broker":["extended_timeline"]},"capability_ids":["F-10"],"depends_on":["P08"],"port_count":2},
+      {"id":"U01-TRD","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_TRD_DRIVER","required_binaries":["broker","store-inspect"],"required_features":{"broker":["tieredstore"]},"capability_ids":["G-04"],"depends_on":["P12"],"port_count":2},
+      {"id":"U01-CTL","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_CTL_DRIVER","required_binaries":["broker","controller"],"required_features":{"controller":["storage-rocksdb"]},"capability_ids":["F-09"],"depends_on":["P04"],"port_count":8},
+      {"id":"U01-UPG","kind":"scenario","driver_env":"ROCKETMQ_V1_U01_UPG_DRIVER","required_binaries":["broker","store-inspect"],"capability_ids":["F-08","F-10","F-13","F-14"],"depends_on":["P01"],"port_count":2},
+      {"id":"U01","kind":"aggregate","depends_on":["U01-LF","U01-MP","U01-RDB","U01-CMP","U01-POP","U01-TMR","U01-TRD","U01-CTL","U01-UPG"]},
+      {"id":"S01","kind":"install","driver_env":"ROCKETMQ_V1_S01_DRIVER","required_binaries":["namesrv","broker","controller","proxy","admin","store-inspect"],"capability_ids":[],"depends_on":[],"target":"x86_64-unknown-linux-gnu","port_count":1},
+      {"id":"S02","kind":"install","driver_env":"ROCKETMQ_V1_S02_DRIVER","required_binaries":["namesrv","broker","controller","proxy","admin","store-inspect"],"capability_ids":[],"depends_on":[],"target":"x86_64-pc-windows-msvc","port_count":1},
+      {"id":"S03","kind":"install","driver_env":"ROCKETMQ_V1_S03_DRIVER","required_binaries":["namesrv","broker","controller","proxy","admin","store-inspect"],"capability_ids":[],"depends_on":[],"target":"x86_64-apple-darwin","port_count":1}
+    ]
+  }
 }

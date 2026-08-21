@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from scripts.tests.release_test_support import load_module, read_json
@@ -43,6 +44,23 @@ class CandidateRunTests(unittest.TestCase):
             self.assertIsNone(value["parent_manifest"])
             self.assertEqual(Path(value["candidate_root"]), candidate.parent.resolve())
             self.assertEqual(read_json(series)["head"]["candidate_manifest"], str(candidate.resolve()))
+            self.assertIn("route_denominator", value)
+            self.assertEqual(1, value["route_denominator"]["schema_version"])
+            self.assertEqual(
+                ["R11-aggregate-validate"],
+                value["route_denominator"]["audit_points"]["release-preparation-aggregate"],
+            )
+            self.assertEqual(
+                [
+                    "H01-LINUX",
+                    "H01-WINDOWS",
+                    "H01-MACOS",
+                    "H01-MERGE",
+                    "H01-REFRESH",
+                    "H02-DRAFT-SEMANTIC",
+                ],
+                value["route_denominator"]["audit_points"]["handoff-draft"],
+            )
 
     def test_unsealed_head_duplicate_rc_and_stale_parent_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -189,6 +207,77 @@ class CandidateRunTests(unittest.TestCase):
 
             with self.assertRaises(self.candidate.ReleaseStateError):
                 self.candidate.validate_candidate(value)
+
+    def test_candidate_validation_rejects_duplicate_route_denominator_entries(self) -> None:
+        """A duplicated required route would make the frozen denominator ambiguous."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            candidate = self.candidate.create_candidate(
+                root / "candidates", "1.0.0-rc.1", "rc1", 1, series
+            )
+            value = read_json(candidate)
+            routes = value["route_denominator"]["audit_points"]["handoff-draft"]
+            routes.append(routes[0])
+
+            with self.assertRaisesRegex(
+                self.candidate.ReleaseStateError,
+                "route denominator is invalid",
+            ):
+                self.candidate.validate_candidate(value)
+
+    def test_candidate_validation_types_route_denominator_errors(self) -> None:
+        """Malformed nested route values must fail as release-state errors, not raw TypeError."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            candidate = self.candidate.create_candidate(
+                root / "candidates", "1.0.0-rc.1", "rc1", 1, series
+            )
+            value = read_json(candidate)
+            value["route_denominator"]["audit_points"]["handoff-draft"] = [["nested"]]
+
+            try:
+                self.candidate.validate_candidate(value)
+            except Exception as error:  # noqa: BLE001 - the assertion checks the public error boundary.
+                self.assertIsInstance(error, self.candidate.ReleaseStateError)
+            else:
+                self.fail("malformed route denominator was accepted")
+
+    def test_candidate_creation_rejects_a_malformed_route_policy_before_series_mutation(self) -> None:
+        """A bad repository policy must not create an invalid candidate or advance the series."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            series = self.series.create_series(root / "series", "1.0", "community-v1")
+            invalid_policy = root / "invalid-route-policy.json"
+            invalid_policy.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "audit_points": {"handoff-draft": ["H01-LINUX", "H01-LINUX"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(self.candidate, "ROUTE_DENOMINATOR", invalid_policy):
+                with self.assertRaisesRegex(
+                    self.candidate.ReleaseStateError,
+                    "route denominator is invalid",
+                ):
+                    self.candidate.create_candidate(
+                        root / "candidates",
+                        "1.0.0-rc.1",
+                        "rc1",
+                        1,
+                        series,
+                    )
+
+            self.assertIsNone(read_json(series)["head"])
+            self.assertFalse((root / "candidates").exists())
 
     def test_candidate_metadata_updates_require_a_consistent_current_series_head(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

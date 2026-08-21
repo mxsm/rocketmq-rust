@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "release-candidate": [
+      {"job_id": "prepare-common", "target": null, "result_ids": ["prepare-common"], "route_ids": ["prepare-common"]},
+      {
+        "job_id": "build-linux",
+        "target": "x86_64-unknown-linux-gnu",
+        "result_ids": ["S01"],
+        "route_ids": ["build-linux"]
+      },
+      {
+        "job_id": "build-windows",
+        "target": "x86_64-pc-windows-msvc",
+        "result_ids": ["S02"],
+        "route_ids": ["build-windows"]
+      },
+      {
+        "job_id": "build-macos",
+        "target": "x86_64-apple-darwin",
+        "result_ids": ["S03"],
+        "route_ids": ["build-macos"]
+      },
+      {
+        "job_id": "aggregate",
+        "target": null,
+        "result_ids": [
+          "aggregate", "R01-RELEASE-VERSION", "R01-CANDIDATE-LIFECYCLE", "R01-CORE-IMAGE-WORKFLOW"
+        ],
+        "route_ids": ["aggregate"]
+      },
+      {
+        "job_id": "full-matrix",
+        "target": null,
+        "route_ids": ["full-matrix"],
+        "result_ids": [
+          "P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08", "P09", "P10", "P11", "P12",
+          "I01", "I02", "I03", "I04", "I05", "M01", "L01", "A01",
+          "U01-LF", "U01-MP", "U01-RDB", "U01-CMP", "U01-POP", "U01-TMR", "U01-TRD", "U01-CTL",
+          "U01-UPG", "U01"
+        ]
+      }
+    ]
+  }
+}

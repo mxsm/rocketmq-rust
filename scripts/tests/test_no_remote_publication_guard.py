@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,6 +92,59 @@ class NoRemotePublicationGuardTests(unittest.TestCase):
                 )
             self.assertEqual(indeterminate.exception.status, "indeterminate")
 
+    def test_missing_entire_candidate_required_route_is_indeterminate(self) -> None:
+        """Omitting a complete required route must not produce not-executed evidence."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = create_candidate(root)
+            value = read_json(candidate)
+            value["route_denominator"] = {
+                "schema_version": 1,
+                "audit_points": {
+                    "release-preparation-aggregate": ["R11-aggregate-validate"],
+                },
+            }
+            candidate.write_text(json.dumps(value), encoding="utf-8")
+            contexts, events = self._completed_route(candidate, root)
+
+            with self.assertRaises(self.guard.NoRemotePublicationError) as failure:
+                self.guard.audit_no_remote_publication(
+                    candidate,
+                    phase=5,
+                    context_root=contexts,
+                    event_root=events,
+                    workflow_root=Path(__file__).resolve().parents[2] / ".github" / "workflows",
+                    output=root / "NO_REMOTE_PUBLICATION.json",
+                )
+
+            self.assertEqual("indeterminate", failure.exception.status)
+            self.assertIn("required route is missing", str(failure.exception))
+
+    def test_multi_point_candidate_requires_an_explicit_audit_point(self) -> None:
+        """A guard must not guess which frozen route denominator applies."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = create_candidate(root)
+            value = read_json(candidate)
+            value["route_denominator"]["audit_points"]["second-audit"] = ["R01-local-check"]
+            candidate.write_text(json.dumps(value), encoding="utf-8")
+            contexts, events = self._completed_route(candidate, root)
+
+            with self.assertRaises(self.guard.NoRemotePublicationError) as failure:
+                self.guard.audit_no_remote_publication(
+                    candidate,
+                    phase=5,
+                    context_root=contexts,
+                    event_root=events,
+                    workflow_root=Path(__file__).resolve().parents[2] / ".github" / "workflows",
+                    output=root / "NO_REMOTE_PUBLICATION.json",
+                )
+
+            self.assertEqual("indeterminate", failure.exception.status)
+            self.assertIn("audit point is required", str(failure.exception))
+
     def test_guard_can_run_inside_its_current_route_without_self_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -157,6 +210,28 @@ class NoRemotePublicationGuardTests(unittest.TestCase):
             (handoff / "unsafe.ps1").write_text("docker login ghcr.io\n", encoding="utf-8")
             findings = self.guard.audit_handoff(handoff)
             self.assertTrue(any("remote publication command" in finding for finding in findings))
+
+    def test_handoff_no_remote_evidence_has_final_gate_result_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = create_candidate(root)
+            contexts, events = self._completed_route(candidate, root)
+            try:
+                value = self.guard.audit_no_remote_publication(
+                    candidate,
+                    phase=6,
+                    context_root=contexts,
+                    event_root=events,
+                    workflow_root=Path(__file__).resolve().parents[2] / ".github" / "workflows",
+                    output=root / "H03-DRAFT-NO-REMOTE.json",
+                    result_id="H03-DRAFT-NO-REMOTE",
+                    gate_stage="final-handoff",
+                )
+            except TypeError as error:
+                self.fail(f"no-remote result identity is unsupported: {error}")
+
+            self.assertEqual("H03-DRAFT-NO-REMOTE", value["result_id"])
+            self.assertEqual("final-handoff", value["gate_stage"])
 
 
 if __name__ == "__main__":
