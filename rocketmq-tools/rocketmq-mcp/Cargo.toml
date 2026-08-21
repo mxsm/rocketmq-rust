@@ -69,7 +69,8 @@ chrono             = { version = "0.4", default-features = false, features = ["c
 clap               = { version = "4.6.1", features = ["derive", "env"] }
 config             = "0.15.23"
 jsonschema         = { version = "0.49", default-features = false }
-jsonwebtoken       = { version = "11.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+# Keep RS256 on AWS-LC: the RustCrypto backend pulls rsa 0.9, which has no fix for RUSTSEC-2023-0071.
+jsonwebtoken       = { version = "11.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 percent-encoding   = "2.3"
 regex              = "1.12.4"
 reqwest            = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
