@@ -3320,9 +3320,49 @@ td code,
 }
 
 .kv-value {
+  overflow: hidden;
   color: var(--muted);
-  white-space: pre-wrap;
-  word-break: break-word;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv-json-button {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--primary) 38%, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  color: var(--primary);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kv-json-button:hover {
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface));
+  color: var(--foreground);
+}
+
+.kv-json-dialog {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.kv-json-preview {
+  max-height: min(72vh, 720px);
+  margin: 16px 0 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
 }
 
 .kv-row .icon-button {
@@ -3645,8 +3685,235 @@ a:hover {
   margin-top: 20px;
 }
 
-.consumer-config-json {
-  max-height: 360px;
+.consumer-configuration-summary,
+.consumer-configuration-targets {
+  display: grid;
+  gap: 12px;
+}
+
+.consumer-configuration-targets {
+  margin-top: 20px;
+}
+
+.consumer-configuration-heading,
+.consumer-configuration-target-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.consumer-configuration-heading h3,
+.consumer-configuration-target-header h4,
+.consumer-configuration-group h5,
+.consumer-configuration-subscriptions h5 {
+  margin: 0;
+}
+
+.consumer-configuration-heading h3 {
+  font-size: 16px;
+}
+
+.consumer-configuration-heading p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.consumer-configuration-count {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.consumer-configuration-target {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.consumer-configuration-target-header {
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 42%, var(--card));
+}
+
+.consumer-configuration-target-header h4 {
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.consumer-configuration-target-header code {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.consumer-configuration-target > .notice {
+  margin: 12px;
+}
+
+.consumer-configuration-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+}
+
+.consumer-configuration-group {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: var(--card);
+}
+
+.consumer-configuration-group h5,
+.consumer-configuration-subscriptions h5 {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.consumer-configuration-field-grid,
+.consumer-configuration-attributes dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--border);
+}
+
+.consumer-configuration-field-grid > div,
+.consumer-configuration-attributes dl > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--muted) 20%, var(--card));
+}
+
+.consumer-configuration-field-grid dt,
+.consumer-configuration-attributes dt {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.consumer-configuration-field-grid dd,
+.consumer-configuration-attributes dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.consumer-retry-policy,
+.consumer-configuration-attributes {
+  border-top: 1px solid var(--border);
+}
+
+.consumer-retry-policy summary,
+.consumer-configuration-attributes summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.consumer-retry-policy summary > span:last-child {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.consumer-retry-policy pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 0 16px 16px;
   overflow: auto;
-  white-space: pre-wrap;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.consumer-configuration-subscriptions {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.consumer-configuration-subscriptions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.consumer-configuration-topic {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.consumer-configuration-attributes summary {
+  justify-content: flex-start;
+}
+
+.consumer-configuration-attributes dl {
+  margin: 0 16px 16px;
+}
+
+.consumer-configuration-unavailable {
+  margin: 0;
+  padding: 16px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .consumer-configuration-groups,
+  .consumer-configuration-field-grid,
+  .consumer-configuration-attributes dl {
+    grid-template-columns: 1fr;
+  }
+
+  .consumer-configuration-heading,
+  .consumer-configuration-target-header,
+  .consumer-retry-policy summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
 }

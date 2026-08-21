@@ -8,7 +8,7 @@ import { ConsumerQueryScopeProvider } from './ConsumerQueryScopeProvider';
 import ConsumerDetailContent from './ConsumerDetailContent';
 
 vi.mock('../../api/consumer_api', () => ({
-  consumerApi: { summary: vi.fn(), progress: vi.fn(), resetOffset: vi.fn() }
+  consumerApi: { summary: vi.fn(), progress: vi.fn(), config: vi.fn(), resetOffset: vi.fn() }
 }));
 vi.mock('../../api/config_api', () => ({ configApi: { getConfig: vi.fn() } }));
 
@@ -65,6 +65,47 @@ describe('ConsumerDetailContent', () => {
       queryScope: { mode: 'nameServer' }
     });
     vi.mocked(consumerApi.resetOffset).mockResolvedValue({ message: 'reset' });
+    vi.mocked(consumerApi.config).mockResolvedValue({
+      group: 'order-service',
+      effective: {
+        consumeEnable: true,
+        consumeFromMinEnable: true,
+        consumeBroadcastEnable: false,
+        consumeMessageOrderly: false,
+        retryQueueNums: 1,
+        retryMaxTimes: 16,
+        brokerId: 0,
+        whichBrokerWhenConsumeSlowly: 1,
+        notifyConsumerIdsChangedEnable: true,
+        groupSysFlag: 0,
+        consumeTimeoutMinute: 15,
+        groupRetryPolicyJson: '{"retryPolicy":{"type":"CUSTOMIZED","next":[1000,5000]}}'
+      },
+      inconsistentFields: [],
+      targets: [
+        {
+          brokerName: 'broker-a',
+          brokerAddress: '10.0.0.1:10911',
+          config: {
+            consumeEnable: true,
+            consumeFromMinEnable: true,
+            consumeBroadcastEnable: false,
+            consumeMessageOrderly: false,
+            retryQueueNums: 1,
+            retryMaxTimes: 16,
+            brokerId: 0,
+            whichBrokerWhenConsumeSlowly: 1,
+            notifyConsumerIdsChangedEnable: true,
+            groupSysFlag: 0,
+            consumeTimeoutMinute: 15,
+            groupRetryPolicyJson: '{"retryPolicy":{"type":"CUSTOMIZED","next":[1000,5000]}}'
+          },
+          subscriptionTopics: ['orders'],
+          attributes: []
+        }
+      ],
+      queryScope: { mode: 'nameServer' }
+    });
   });
 
   it('renders overview metrics and grouped progress', async () => {
@@ -90,5 +131,23 @@ describe('ConsumerDetailContent', () => {
     await user.click(screen.getByRole('button', { name: 'Review reset' }));
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(consumerApi.resetOffset).not.toHaveBeenCalled();
+  });
+
+  it('groups broker configuration and keeps the retry policy collapsed until requested', async () => {
+    const user = userEvent.setup();
+    renderContent('order-service');
+
+    await user.click(await screen.findByRole('tab', { name: 'Configuration' }));
+
+    expect(await screen.findByRole('heading', { name: 'Effective settings' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'broker-a' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Consumption' })).toBeInTheDocument();
+    expect(screen.getByText('CUSTOMIZED · 2 retry intervals')).toBeInTheDocument();
+    const retryPolicy = screen.getByText('Retry policy').closest('details');
+    expect(retryPolicy).not.toHaveAttribute('open');
+
+    await user.click(screen.getByText('Retry policy'));
+    expect(retryPolicy).toHaveAttribute('open');
+    expect(screen.getByText(/"retryPolicy"/)).toBeInTheDocument();
   });
 });

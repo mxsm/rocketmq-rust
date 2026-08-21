@@ -646,6 +646,42 @@
 }
 
 /* Broker detail */
+.broker-detail-page {
+  height: calc(100dvh - 104px);
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.broker-detail-content,
+.broker-detail-tabs,
+.broker-detail-fill-tab,
+.broker-detail-fill-tab .broker-detail-section,
+.broker-detail-fill-tab .kv-shell,
+.broker-detail-fill-tab .kv-list {
+  min-height: 0;
+}
+
+.broker-detail-tabs {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.broker-detail-fill-tab[data-state='active'],
+.broker-detail-fill-tab .broker-detail-section,
+.broker-detail-fill-tab .kv-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.broker-detail-fill-tab .kv-list {
+  max-height: none;
+}
+
+.broker-detail-fill-tab {
+  overflow: auto;
+}
+
 .broker-detail-content .ui-tabs-list {
   width: 100%;
   display: grid;
@@ -654,6 +690,23 @@
 
 .broker-detail-content .ui-tabs-trigger {
   width: 100%;
+  transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.broker-detail-content .ui-tabs-trigger[data-state='inactive'] {
+  color: var(--muted-foreground);
+}
+
+.broker-detail-content .ui-tabs-trigger[data-state='inactive']:hover {
+  background: color-mix(in srgb, var(--muted-surface) 68%, transparent);
+  color: var(--foreground);
+}
+
+.broker-detail-content .ui-tabs-trigger[data-state='active'] {
+  background: color-mix(in srgb, var(--primary) 14%, var(--muted-surface));
+  box-shadow: inset 0 -2px 0 var(--primary);
+  color: var(--foreground);
+  font-weight: 700;
 }
 
 .broker-identity-grid {
@@ -813,6 +866,10 @@
 }
 
 @media (max-width: 760px) {
+  .broker-detail-page {
+    height: calc(100dvh - 88px);
+  }
+
   .query-toolbar,
   .query-filters {
     align-items: stretch;
