@@ -324,11 +324,16 @@ where
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let key = build_topic_group_lookup_key(topic, group);
         let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
-        let offset_table = write_guard.get_mut(key.as_str());
-        match offset_table {
-            None => None,
-            Some(value) => value.remove(&queue_id),
+        let reset_offset = write_guard
+            .get_mut(key.as_str())
+            .and_then(|offset_table| offset_table.remove(&queue_id));
+        if write_guard
+            .get(key.as_str())
+            .is_some_and(|offset_table| offset_table.is_empty())
+        {
+            write_guard.remove(key.as_str());
         }
+        reset_offset
     }
 
     pub fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32, offset: i64) {
@@ -336,6 +341,16 @@ where
         let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper
             .reset_offset_table
+            .write()
+            .entry(key.clone())
+            .or_default()
+            .insert(queue_id, offset);
+
+        // Keep the durable consumer position aligned with the transient reset marker. Once the
+        // consumer observes and removes the marker, progress queries and subsequent commits must
+        // continue from the reset position instead of falling back to the previous larger offset.
+        self.consumer_offset_wrapper
+            .offset_table
             .write()
             .entry(key)
             .or_default()
@@ -444,8 +459,14 @@ where
     pub fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
         let key = build_topic_group_lookup_key(topic, group);
         if self.broker_config.use_server_side_reset_offset {
-            if let Some(value) = self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_str()) {
-                return *value.get(&queue_id).unwrap_or(&-1);
+            if let Some(offset) = self
+                .consumer_offset_wrapper
+                .reset_offset_table
+                .read()
+                .get(key.as_str())
+                .and_then(|offset_table| offset_table.get(&queue_id))
+            {
+                return *offset;
             }
         }
         if let Some(value) = self.consumer_offset_wrapper.offset_table.read().get(key.as_str()) {
@@ -1170,6 +1191,29 @@ mod tests {
     }
 
     #[test]
+    fn reset_offset_updates_committed_position_and_preserves_other_queues() {
+        let manager = new_manager();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 42);
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 1, 64);
+        manager.assign_reset_offset(&topic, &group, 0, 7);
+
+        assert_eq!(manager.query_offset(&group, &topic, 0), 7);
+        assert_eq!(manager.query_offset(&group, &topic, 1), 64);
+        assert_eq!(manager.query_then_erase_reset_offset(&topic, &group, 0), Some(7));
+        assert_eq!(manager.query_offset(&group, &topic, 0), 7);
+        assert_eq!(manager.query_offset(&group, &topic, 1), 64);
+        assert!(!manager.has_offset_reset(group.as_str(), topic.as_str(), 0));
+        assert!(!manager
+            .consumer_offset_wrapper
+            .reset_offset_table
+            .read()
+            .contains_key("topic-a@group-a"));
+    }
+
+    #[test]
     fn query_capability_reads_live_offsets_without_keeping_manager_alive() {
         let manager = Arc::new(new_manager());
         let capability = manager.query_capability();
@@ -1523,7 +1567,7 @@ mod tests {
     }
 
     #[test]
-    fn json_round_trip_preserves_version_reset_and_pull_tables_without_committed_offsets() {
+    fn json_round_trip_preserves_committed_reset_and_pull_offsets() {
         let manager = new_manager();
         let group = CheetahString::from_static_str("group-a");
         let topic = CheetahString::from_static_str("topic-a");
@@ -1543,6 +1587,7 @@ mod tests {
 
         assert_eq!(restored.data_version().counter(), 1);
         assert_eq!(restored.query_then_erase_reset_offset(&topic, &group, 0), Some(5));
+        assert_eq!(restored.query_offset(&group, &topic, 0), 5);
         assert_eq!(
             restored
                 .consumer_offset_wrapper

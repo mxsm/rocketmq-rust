@@ -18,6 +18,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Label } from '../../components/ui/Label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
+import { parseLocalDateTime } from '../../components/TopicResetOffsetDialog';
 import type {
   ConsumerConfigView,
   ConsumerConfigTarget,
@@ -82,7 +83,7 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [resetTopic, setResetTopic] = useState('');
-  const [resetTimestamp, setResetTimestamp] = useState(() => String(Date.now()));
+  const [resetTime, setResetTime] = useState('');
   const [forceReset, setForceReset] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -148,6 +149,7 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
     setClientsError(null);
     setConfigError(null);
     setResetTopic('');
+    setResetTime('');
     setValidationError(null);
     setNotice(null);
     setConfirmOpen(false);
@@ -168,17 +170,13 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   const topicOptions = useMemo(() => topics.map((topic) => topic.topic), [topics]);
 
   const reviewReset = () => {
-    const timestamp = Number(resetTimestamp);
+    const timestamp = parseLocalDateTime(resetTime);
     if (!resetTopic) {
       setValidationError('Select a topic before resetting offsets.');
       return;
     }
-    if (!resetTimestamp.trim() || !Number.isFinite(timestamp)) {
-      setValidationError('Reset timestamp must be a millisecond timestamp.');
-      return;
-    }
-    if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
-      setValidationError('Reset timestamp must be a non-negative safe integer.');
+    if (timestamp === null) {
+      setValidationError('Select a valid reset time.');
       return;
     }
     setValidationError(null);
@@ -186,6 +184,12 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   };
 
   const resetOffsets = async () => {
+    const resetTimestamp = parseLocalDateTime(resetTime);
+    if (resetTimestamp === null) {
+      setValidationError('Select a valid reset time.');
+      setConfirmOpen(false);
+      return;
+    }
     const operationToken = ++resetOperationToken.current;
     const operationGroup = group;
     const operationTopic = resetTopic;
@@ -193,7 +197,7 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
     try {
       await consumerApi.resetOffset(operationGroup, {
         topic: operationTopic,
-        resetTimestamp: Number(resetTimestamp),
+        resetTimestamp,
         force: forceReset
       });
       if (operationToken !== resetOperationToken.current || currentGroupRef.current !== operationGroup) return;
@@ -360,7 +364,10 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
           <section className="danger-zone consumer-reset-panel">
             <div>
               <h3>Reset consumer offsets</h3>
-              <p>Move this group to a timestamp for one topic. Review the target carefully before confirming.</p>
+              <p>
+                Choose a time before the messages you want to replay. Selecting the current time moves the group to
+                the queue tail, so no messages or lag will remain.
+              </p>
             </div>
             <div className="form-grid consumer-reset-form">
               <div className="field">
@@ -375,14 +382,13 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
                 </select>
               </div>
               <div className="field">
-                <Label htmlFor="consumer-reset-timestamp">Reset timestamp</Label>
+                <Label htmlFor="consumer-reset-time">Reset time</Label>
                 <Input
-                  id="consumer-reset-timestamp"
-                  type="number"
-                  min="0"
+                  id="consumer-reset-time"
+                  type="datetime-local"
                   step="1"
-                  value={resetTimestamp}
-                  onChange={(event) => setResetTimestamp(event.target.value)}
+                  value={resetTime}
+                  onChange={(event) => setResetTime(event.target.value)}
                 />
               </div>
               <label className="compact-check" htmlFor="consumer-force-reset">
@@ -407,7 +413,7 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
         <AlertDialogContent>
           <AlertDialogTitle>Reset consumer offset?</AlertDialogTitle>
           <AlertDialogDescription>
-            Reset {group} on {resetTopic} to timestamp {resetTimestamp}{forceReset ? ' with force enabled' : ''}?
+            Reset {group} on {resetTopic} to {formatResetTime(resetTime)}{forceReset ? ' with force enabled' : ''}?
           </AlertDialogDescription>
           <div className="ui-alert-dialog-actions">
             <AlertDialogCancel disabled={resetting}>Cancel</AlertDialogCancel>
@@ -430,6 +436,11 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
 function formatTimestamp(value: number): string {
   if (!value) return '-';
   return new Date(value).toLocaleString();
+}
+
+function formatResetTime(value: string): string {
+  const timestamp = parseLocalDateTime(value);
+  return timestamp === null ? 'the selected local time' : new Date(timestamp).toLocaleString();
 }
 
 interface ConsumerConfigurationTargetCardProps {
