@@ -198,16 +198,6 @@ impl RemotingCommand {
             .map_err(|source| required_header_decode_error(operation, source))
     }
 
-    pub fn read_custom_header_ref<T>(&self) -> Option<&T>
-    where
-        T: CommandCustomHeader + Sync + Send + 'static,
-    {
-        match self.command_custom_header.as_ref() {
-            None => None,
-            Some(value) => value.as_ref().as_any().downcast_ref::<T>(),
-        }
-    }
-
     pub fn try_read_custom_header_ref<T>(&self) -> rocketmq_error::RocketMQResult<&T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
@@ -220,21 +210,6 @@ impl RemotingCommand {
                 .downcast_ref::<T>()
                 .ok_or_else(Self::custom_header_type_mismatch_error::<T>),
         }
-    }
-
-    pub fn read_custom_header_mut<T>(&mut self) -> Option<&mut T>
-    where
-        T: CommandCustomHeader + Sync + Send + 'static,
-    {
-        let header = self.command_custom_header.as_ref()?;
-        if Arc::strong_count(header) != 1 || !header.as_ref().as_any().is::<T>() {
-            return None;
-        }
-        self.invalidate_materialized_custom_header();
-        Arc::get_mut(self.command_custom_header.as_mut()?)?
-            .as_mut()
-            .as_any_mut()
-            .downcast_mut::<T>()
     }
 
     pub fn try_read_custom_header_mut<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
