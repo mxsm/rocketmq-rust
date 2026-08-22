@@ -6146,13 +6146,33 @@
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command.rs": {
-      "production_lines": 1198,
-      "public_items": 102,
+      "production_lines": 587,
+      "public_items": 23,
+      "reexports": 0
+    },
+    "rocketmq-protocol/src/protocol/remoting_command/accessors.rs": {
+      "production_lines": 198,
+      "public_items": 40,
+      "reexports": 0
+    },
+    "rocketmq-protocol/src/protocol/remoting_command/constructors.rs": {
+      "production_lines": 105,
+      "public_items": 14,
+      "reexports": 0
+    },
+    "rocketmq-protocol/src/protocol/remoting_command/custom_header.rs": {
+      "production_lines": 265,
+      "public_items": 15,
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/extension_fields.rs": {
       "production_lines": 142,
       "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-protocol/src/protocol/remoting_command/flags.rs": {
+      "production_lines": 57,
+      "public_items": 10,
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/json_decode.rs": {
