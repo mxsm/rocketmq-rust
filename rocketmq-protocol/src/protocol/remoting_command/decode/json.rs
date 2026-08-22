@@ -18,8 +18,8 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
-use super::extension_fields::ExtensionFields;
-use super::RemotingCommand;
+use super::super::extension_fields::ExtensionFields;
+use super::super::RemotingCommand;
 use crate::protocol::header_codec::JsonHeaderFields;
 use crate::protocol::LanguageCode;
 use crate::protocol::SerializeType;
