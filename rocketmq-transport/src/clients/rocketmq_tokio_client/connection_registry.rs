@@ -19,6 +19,7 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedRocketMQError;
 
 use super::endpoint_state::EndpointLease;
 use crate::clients::TransportSession;
@@ -91,7 +92,7 @@ impl<PR> RegisteredSession<PR> {
 
 enum ConnectFlightState<PR> {
     Connecting,
-    Complete(Box<Result<Option<TransportSession<PR>>, Arc<str>>>),
+    Complete(Box<Result<Option<TransportSession<PR>>, SharedRocketMQError>>),
 }
 
 /// A shared connection attempt associated with one endpoint generation.
@@ -122,8 +123,12 @@ where
     }
 
     pub(super) fn complete(&self, result: RocketMQResult<Option<TransportSession<PR>>>) {
-        *self.state.lock() =
-            ConnectFlightState::Complete(Box::new(result.map_err(|error| Arc::<str>::from(error.to_string()))));
+        let mut state = self.state.lock();
+        if matches!(*state, ConnectFlightState::Complete(_)) {
+            return;
+        }
+        *state = ConnectFlightState::Complete(Box::new(result.map_err(SharedRocketMQError::new)));
+        drop(state);
         self.changed.notify_waiters();
     }
 
@@ -137,9 +142,7 @@ where
             tokio::pin!(changed);
             changed.as_mut().enable();
             if let ConnectFlightState::Complete(result) = &*self.state.lock() {
-                return (**result).clone().map_err(|message| {
-                    RocketMQError::network_connection_failed(target.to_string(), message.to_string())
-                });
+                return (**result).clone().map_err(SharedRocketMQError::into_error);
             }
             deadline
                 .timeout(changed)
@@ -419,5 +422,162 @@ where
         self.sessions
             .get(&RegistryKey::from_lease(identity.clone(), Some(lease)))
             .is_some_and(|entry| entry.value().belongs_to(lease))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::io;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use rocketmq_error::DomainError;
+    use tokio::sync::Barrier;
+    use tokio::sync::Notify;
+    use tokio::task::JoinSet;
+
+    use super::*;
+    use crate::deadline::RequestDeadline;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+
+    async fn assert_connect_flight_preserves_failure(error: RocketMQError) {
+        const WAITERS: usize = 3;
+
+        let expected_kind = error.kind();
+        let expected_context = error.context();
+        let expected_boundary = error.boundary_view();
+        let expected_retry = error.retry();
+        let expected_severity = error.severity();
+        let expected_redaction = error.redaction();
+        let expected_display = error.to_string();
+        let expected_source = error.source().map(ToString::to_string);
+
+        let flight = Arc::new(ConnectFlight::<DefaultRequestProcessor>::new(None));
+        let target = CheetahString::from_static_str("127.0.0.1:10911");
+        let barrier = Arc::new(Barrier::new(WAITERS + 1));
+        let ready_count = Arc::new(AtomicUsize::new(0));
+        let waiters_ready = Arc::new(Notify::new());
+        let mut tasks = JoinSet::new();
+
+        {
+            let barrier = Arc::clone(&barrier);
+            let flight = Arc::clone(&flight);
+            let target = target.clone();
+            let waiters_ready = Arc::clone(&waiters_ready);
+            tasks.spawn(async move {
+                barrier.wait().await;
+                waiters_ready.notified().await;
+                flight.complete(Err(error));
+                flight
+                    .wait(RequestDeadline::after(Duration::from_secs(1)), &target)
+                    .await
+            });
+        }
+
+        for _ in 0..WAITERS {
+            let barrier = Arc::clone(&barrier);
+            let flight = Arc::clone(&flight);
+            let target = target.clone();
+            let ready_count = Arc::clone(&ready_count);
+            let waiters_ready = Arc::clone(&waiters_ready);
+            tasks.spawn(async move {
+                barrier.wait().await;
+                if ready_count.fetch_add(1, Ordering::AcqRel) + 1 == WAITERS {
+                    waiters_ready.notify_one();
+                }
+                flight
+                    .wait(RequestDeadline::after(Duration::from_secs(1)), &target)
+                    .await
+            });
+        }
+
+        let mut snapshots = Vec::with_capacity(WAITERS + 1);
+        while let Some(result) = tasks.join_next().await {
+            let error = match result.expect("connect-flight task must complete") {
+                Err(error) => error,
+                Ok(_) => panic!("connect flight must return the shared failure"),
+            };
+            let RocketMQError::Shared(snapshot) = error else {
+                panic!("connect flight must return a shared typed error");
+            };
+            snapshots.push(snapshot);
+        }
+
+        let first = snapshots.first().expect("leader and waiters return snapshots");
+        for snapshot in &snapshots {
+            assert_eq!(snapshot.kind(), expected_kind);
+            assert_eq!(snapshot.context(), expected_context);
+            assert_eq!(snapshot.boundary_view(), expected_boundary);
+            assert_eq!(snapshot.retry(), expected_retry);
+            assert_eq!(snapshot.severity(), expected_severity);
+            assert_eq!(snapshot.redaction(), expected_redaction);
+            assert_eq!(snapshot.to_string(), expected_display);
+            assert!(std::ptr::eq(first.as_error(), snapshot.as_error()));
+
+            let source = snapshot.source().expect("shared error source");
+            let original = source
+                .downcast_ref::<RocketMQError>()
+                .expect("shared source must be the original error");
+            assert!(std::ptr::eq(snapshot.as_error(), original));
+            assert_eq!(source.to_string(), expected_display);
+            assert_eq!(source.source().map(ToString::to_string), expected_source);
+        }
+
+        flight.complete(Err(RocketMQError::ClientNotStarted));
+        let error = match flight
+            .wait(RequestDeadline::after(Duration::from_secs(1)), &target)
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("a completed flight cannot be overwritten"),
+        };
+        let RocketMQError::Shared(snapshot) = error else {
+            panic!("completed flight must retain its shared error");
+        };
+        assert!(std::ptr::eq(first.as_error(), snapshot.as_error()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn connect_flight_shares_exact_typed_failures_with_leader_and_waiters() {
+        assert_connect_flight_preserves_failure(RocketMQError::network_connection_failed(
+            "127.0.0.1:10911",
+            "connection refused",
+        ))
+        .await;
+        assert_connect_flight_preserves_failure(RocketMQError::ConfigInvalidValue {
+            key: "connect.timeout",
+            value: "invalid".to_owned(),
+            reason: "must be positive".to_owned(),
+        })
+        .await;
+        assert_connect_flight_preserves_failure(RocketMQError::ClientNotStarted).await;
+        assert_connect_flight_preserves_failure(RocketMQError::from(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            io::Error::new(io::ErrorKind::TimedOut, "inner connect timeout"),
+        )))
+        .await;
+    }
+
+    #[test]
+    fn connect_flight_failure_cleanup_is_identity_conditional() {
+        let registry = ConnectionRegistry::<DefaultRequestProcessor>::new();
+        let identity = CheetahString::from_static_str("127.0.0.1:10911");
+        let (failed, leader) = registry.acquire_flight(identity.clone(), None);
+        assert!(leader);
+
+        failed.complete(Err(RocketMQError::ClientNotStarted));
+        registry.remove_flight_if_matches(&identity, &failed);
+        assert_eq!(registry.flight_count(), 0);
+
+        let (replacement, replacement_leader) = registry.acquire_flight(identity.clone(), None);
+        assert!(replacement_leader);
+        registry.remove_flight_if_matches(&identity, &failed);
+        assert_eq!(registry.flight_count(), 1);
+        assert!(!Arc::ptr_eq(&failed, &replacement));
+
+        registry.remove_flight_if_matches(&identity, &replacement);
+        assert_eq!(registry.flight_count(), 0);
     }
 }

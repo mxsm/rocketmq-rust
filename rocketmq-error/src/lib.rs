@@ -61,6 +61,7 @@ mod filter_error;
 mod kind;
 mod observability_error;
 mod policy;
+mod shared;
 mod spec;
 mod unified;
 
@@ -102,6 +103,7 @@ pub use policy::ErrorSeverity;
 pub use policy::ObserveSpec;
 pub use policy::RecoverySpec;
 pub use policy::RetryClass;
+pub use shared::SharedRocketMQError;
 pub use spec::error_spec;
 pub use spec::ErrorSpec;
 pub use spec::ALL_ERROR_SPECS;
