@@ -1344,6 +1344,8 @@ mod tests {
     async fn invoke_broker_to_reset_offset_assigns_server_side_offset() {
         let runtime = new_test_runtime("reset-offset").await;
         let admin = runtime.admin_runtime_for_test();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
         let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
@@ -1354,6 +1356,9 @@ mod tests {
         admin
             .subscription_group_manager()
             .update_subscription_group_config(&mut group_config);
+        admin
+            .consumer_offset_manager()
+            .commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 9);
 
         let handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
@@ -1361,8 +1366,8 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::InvokeBrokerToResetOffset,
             ResetOffsetRequestHeader {
-                topic: CheetahString::from_static_str("topic-a"),
-                group: CheetahString::from_static_str("group-a"),
+                topic: topic.clone(),
+                group: group.clone(),
                 queue_id: 0,
                 offset: None,
                 timestamp: -1,
@@ -1396,6 +1401,25 @@ mod tests {
         )
         .expect("decode reset offset body");
         assert_eq!(body.offset_table.len(), 1);
+        let reset_offset = *body
+            .offset_table
+            .values()
+            .next()
+            .expect("reset response should contain a queue offset");
+        assert_eq!(
+            admin.consumer_offset_manager().query_offset(&group, &topic, 0),
+            reset_offset
+        );
+        assert_eq!(
+            admin
+                .consumer_offset_manager()
+                .query_then_erase_reset_offset(&topic, &group, 0),
+            Some(reset_offset)
+        );
+        assert_eq!(
+            admin.consumer_offset_manager().query_offset(&group, &topic, 0),
+            reset_offset
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

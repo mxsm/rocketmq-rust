@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import { configApi } from '../../api/config_api';
@@ -127,10 +127,27 @@ describe('ConsumerDetailContent', () => {
     await screen.findByRole('tab', { name: 'Overview' });
 
     await user.click(screen.getByRole('tab', { name: 'Reset offset' }));
-    await user.clear(screen.getByRole('spinbutton', { name: 'Reset timestamp' }));
     await user.click(screen.getByRole('button', { name: 'Review reset' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Select a valid reset time.');
     expect(consumerApi.resetOffset).not.toHaveBeenCalled();
+  });
+
+  it('resets to an explicit local time and explains that current time skips replay', async () => {
+    const user = userEvent.setup();
+    const resetTimestamp = new Date(2026, 7, 15, 10, 30, 0, 0).getTime();
+    renderContent('order-service', 'reset');
+
+    expect(await screen.findByText(/Selecting the current time moves the group to the queue tail/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Reset time'), { target: { value: '2026-08-15T10:30' } });
+    await user.click(screen.getByRole('button', { name: 'Review reset' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(new Date(resetTimestamp).toLocaleString());
+    await user.click(screen.getByRole('button', { name: 'Confirm reset' }));
+
+    await waitFor(() => expect(consumerApi.resetOffset).toHaveBeenCalledWith('order-service', {
+      topic: 'orders',
+      resetTimestamp,
+      force: false
+    }));
   });
 
   it('groups broker configuration and keeps the retry policy collapsed until requested', async () => {
