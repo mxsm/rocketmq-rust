@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
 import ConsumerDeleteDialog from '../components/ConsumerDeleteDialog';
+import EntityDetailPage from '../components/EntityDetailPage';
 import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
-import PageHeader from '../components/PageHeader';
 import { Button } from '../components/ui/Button';
 import type { ConsumerGroupListItem, ConsumerSummaryView } from '../types/consumer';
 import { useConsumerQueryScope } from './consumers/ConsumerQueryScopeProvider';
@@ -48,16 +48,17 @@ export default function ConsumerDetailPage() {
   } : null;
 
   return (
-    <div className="entity-workspace consumer-detail-page">
-      <PageHeader
-        title={group}
-        description="Inspect API-backed group identity, connections, progress, configuration, and protected offset maintenance."
-        actions={<>
-          <Button type="button" variant="outline" onClick={() => navigate('/consumers')}>Back to groups</Button>
-          <Button type="button" variant="outline" disabled={!listItem} onClick={() => setEditOpen(true)}>Edit configuration</Button>
-          <Button type="button" variant="destructive" disabled={!listItem} onClick={() => setDeleteOpen(true)}>Delete group</Button>
-        </>}
-      />
+    <EntityDetailPage
+      className="entity-workspace consumer-detail-page"
+      title={group}
+      description="Inspect API-backed group identity, connections, progress, configuration, and protected offset maintenance."
+      backTo="/consumers"
+      backLabel="Back to groups"
+      actions={<>
+        <Button type="button" variant="outline" size="sm" disabled={!listItem} onClick={() => setEditOpen(true)}>Edit configuration</Button>
+        <Button type="button" variant="destructive" size="sm" disabled={!listItem} onClick={() => setDeleteOpen(true)}>Delete group</Button>
+      </>}
+    >
       <ConsumerDetailContent group={group} initialTab={initialTab} />
 
       <ConsumerMutationDialog
@@ -73,6 +74,6 @@ export default function ConsumerDetailPage() {
         onOpenChange={setDeleteOpen}
         onSucceeded={() => navigate('/consumers')}
       />
-    </div>
+    </EntityDetailPage>
   );
 }

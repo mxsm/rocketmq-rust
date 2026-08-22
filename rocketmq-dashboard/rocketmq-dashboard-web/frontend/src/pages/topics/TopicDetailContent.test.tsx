@@ -80,7 +80,7 @@ describe('TopicDetailContent', () => {
     vi.mocked(topicApi.config).mockResolvedValue(configFixture);
   });
 
-  it('loads route and status independently and caches both for the selected topic', async () => {
+  it('refreshes route and status whenever their tabs are activated', async () => {
     const user = userEvent.setup();
     renderAtRoute(<TopicDetailContent topicName="orders" topic={topicFixture} />, '/topics');
 
@@ -96,10 +96,53 @@ describe('TopicDetailContent', () => {
     await user.click(screen.getByRole('tab', { name: 'Overview' }));
     await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
 
-    expect(topicApi.stats).toHaveBeenCalledTimes(1);
-    expect(topicApi.route).toHaveBeenCalledTimes(1);
+    expect(topicApi.stats).toHaveBeenCalledTimes(4);
+    expect(topicApi.route).toHaveBeenCalledTimes(2);
+    expect(topicApi.get).toHaveBeenCalledTimes(1);
     expect(topicApi.consumers).not.toHaveBeenCalled();
     expect(topicApi.config).not.toHaveBeenCalled();
+  });
+
+  it('refreshes when the already selected tab is clicked again', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<TopicDetailContent topicName="orders" topic={topicFixture} />, '/topics');
+
+    expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    await waitFor(() => expect(topicApi.stats).toHaveBeenCalledTimes(2));
+    expect(topicApi.get).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
+    await waitFor(() => expect(topicApi.route).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
+    await waitFor(() => expect(topicApi.route).toHaveBeenCalledTimes(2));
+    expect(topicApi.stats).toHaveBeenCalledTimes(4);
+  });
+
+  it('refreshes the resource set for each tab from the contextual refresh control', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<TopicDetailContent topicName="orders" topic={topicFixture} />, '/topics');
+
+    expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Refresh Overview' }));
+    await waitFor(() => expect(topicApi.stats).toHaveBeenCalledTimes(2));
+    expect(topicApi.get).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
+    await waitFor(() => expect(topicApi.route).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Refresh Routes and status' }));
+    await waitFor(() => expect(topicApi.route).toHaveBeenCalledTimes(2));
+    expect(topicApi.stats).toHaveBeenCalledTimes(4);
+
+    await user.click(screen.getByRole('tab', { name: 'Consumers' }));
+    await waitFor(() => expect(topicApi.consumers).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Refresh Consumers' }));
+    await waitFor(() => expect(topicApi.consumers).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole('tab', { name: 'Configuration' }));
+    await waitFor(() => expect(topicApi.config).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Refresh Configuration' }));
+    await waitFor(() => expect(topicApi.config).toHaveBeenCalledTimes(2));
   });
 
   it('loads topic identity for a direct route when list context is unavailable', async () => {
@@ -262,7 +305,7 @@ describe('TopicDetailContent', () => {
     expect(await screen.findByRole('combobox', { name: 'Configuration broker' })).toHaveTextContent('broker-a');
     await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
 
-    expect(topicApi.route).toHaveBeenCalledTimes(1);
+    expect(topicApi.route).toHaveBeenCalledTimes(2);
     expect(topicApi.config).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('region', { name: 'Topic routes' })).toBeInTheDocument();
   });
@@ -304,7 +347,8 @@ describe('TopicDetailContent', () => {
       brokerSelect.focus();
       await user.keyboard('{Enter}');
       await user.click(screen.getByRole('option', { name: 'broker-b' }));
-      expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Refreshing Configuration' })).toBeInTheDocument();
+      expect(screen.getByText('cleanup.policy')).toBeInTheDocument();
 
       brokerSelect.focus();
       await user.keyboard('{Enter}');
@@ -324,12 +368,12 @@ describe('TopicDetailContent', () => {
           olderBrokerBRequest.reject(new Error('stale broker-b failed'));
         }
       });
-      expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
-      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Refreshing Configuration' })).toBeInTheDocument();
+      expect(screen.queryByText('stale broker-b failed')).not.toBeInTheDocument();
       expect(screen.queryByText('64')).not.toBeInTheDocument();
 
       await act(async () => brokerARequest.resolve({ ...configFixture, readQueueNums: 12 }));
-      expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Refreshing Configuration' })).toBeInTheDocument();
       expect(screen.queryByText('12')).not.toBeInTheDocument();
 
       await act(async () => latestBrokerBRequest.resolve({

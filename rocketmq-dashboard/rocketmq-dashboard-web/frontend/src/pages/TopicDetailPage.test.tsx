@@ -43,6 +43,8 @@ describe('TopicDetailPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'orders' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'orders' }).closest('[data-surface="frosted"]')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to topics' })).toHaveAttribute('href', '/topics');
     expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
     expect(topicApi.route).not.toHaveBeenCalled();
 

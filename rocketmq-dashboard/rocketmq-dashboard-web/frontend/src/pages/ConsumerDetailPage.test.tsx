@@ -60,6 +60,8 @@ describe('ConsumerDetailPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'order-service' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'order-service' }).closest('[data-surface="frosted"]')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to groups' })).toHaveAttribute('href', '/consumers');
     expect(await screen.findByRole('tab', { name: 'Overview' })).toBeInTheDocument();
   });
 

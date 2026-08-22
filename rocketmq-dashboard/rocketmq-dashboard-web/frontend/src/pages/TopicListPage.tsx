@@ -502,6 +502,26 @@ export default function TopicListPage() {
         title={selectedTopic?.topic ?? 'Topic details'}
         description={selectedTopic ? `${selectedTopic.category} · ${selectedTopic.brokerName || 'All brokers'}` : undefined}
         restoreFocusRef={detailTriggerRef}
+        actions={selectedTopic && getTopicActionAvailability(selectedTopic).deleteTopic ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => handleMenuAction('delete-broker', selectedTopic)}
+            >
+              <Trash2 size={15} aria-hidden="true" /> Delete from broker
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => handleMenuAction('delete-topic', selectedTopic)}
+            >
+              <Trash2 size={15} aria-hidden="true" /> Delete topic
+            </Button>
+          </>
+        ) : undefined}
         onOpenChange={(open) => {
           if (!open) {
             selectedTopicRef.current = null;
@@ -510,36 +530,14 @@ export default function TopicListPage() {
         }}
       >
         {selectedTopic ? (
-          <>
-            {getTopicActionAvailability(selectedTopic).deleteTopic ? (
-              <div className="entity-row-actions">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleMenuAction('delete-broker', selectedTopic)}
-                >
-                  <Trash2 size={15} aria-hidden="true" /> Delete from broker
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => handleMenuAction('delete-topic', selectedTopic)}
-                >
-                  <Trash2 size={15} aria-hidden="true" /> Delete topic
-                </Button>
-              </div>
-            ) : null}
-            <TopicDetailContent
-              topicName={selectedTopic.topic}
-              topic={selectedTopic}
-              resourceRevisions={detailRevisions}
-              onEdit={getTopicActionAvailability(selectedTopic).edit ? (config) => openEdit(selectedTopic, config) : undefined}
-              onReset={getTopicActionAvailability(selectedTopic).reset ? (group) => openConsumerAction('reset', selectedTopic, group) : undefined}
-              onSkip={getTopicActionAvailability(selectedTopic).skip ? (group) => openConsumerAction('skip', selectedTopic, group) : undefined}
-            />
-          </>
+          <TopicDetailContent
+            topicName={selectedTopic.topic}
+            topic={selectedTopic}
+            resourceRevisions={detailRevisions}
+            onEdit={getTopicActionAvailability(selectedTopic).edit ? (config) => openEdit(selectedTopic, config) : undefined}
+            onReset={getTopicActionAvailability(selectedTopic).reset ? (group) => openConsumerAction('reset', selectedTopic, group) : undefined}
+            onSkip={getTopicActionAvailability(selectedTopic).skip ? (group) => openConsumerAction('skip', selectedTopic, group) : undefined}
+          />
         ) : null}
       </EntitySheet>
       <TopicConsumerActionDialog

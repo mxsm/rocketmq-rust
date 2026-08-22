@@ -1,5 +1,5 @@
-import { Database, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Database, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { topicApi } from '../../api/topic_api';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ErrorState from '../../components/ErrorState';
@@ -64,6 +64,12 @@ const emptyResource = <T,>(topicName: string, data: T | null = null): ResourceSt
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const EMPTY_REVISIONS: TopicDetailResourceRevisions = {};
+const TAB_LABELS: Record<TopicDetailTab, string> = {
+  overview: 'Overview',
+  routes: 'Routes and status',
+  consumers: 'Consumers',
+  configuration: 'Configuration'
+};
 
 export default function TopicDetailContent({
   topicName,
@@ -109,6 +115,7 @@ export default function TopicDetailContent({
   const consumersPendingRef = useRef(new Map<string, number>());
   const configPendingRef = useRef(new Map<string, number>());
   const resourceRevisionsRef = useRef({ topicName, revisions: resourceRevisions });
+  const selectedTabClickRef = useRef<TopicDetailTab | null>(null);
   topicNameRef.current = topicName;
 
   const activeTab = tabState.topicName === topicName ? tabState.tab : initialTab;
@@ -122,7 +129,7 @@ export default function TopicDetailContent({
   const selectedBroker = selectedBrokerState.topicName === topicName
     ? selectedBrokerState.brokerName
     : undefined;
-  const topicInfo = providedTopic ?? identity.data;
+  const topicInfo = identity.data ?? providedTopic;
 
   useEffect(() => {
     if (stateTopicRef.current === topicName) return;
@@ -153,20 +160,30 @@ export default function TopicDetailContent({
       : emptyResource(topicName, providedTopic));
   }, [providedTopic, topicName]);
 
-  const loadIdentity = useCallback(async () => {
+  const loadIdentity = useCallback(async (force = false) => {
     const requestTopic = topicName;
     const requestKey = requestTopic;
-    if (identityPendingRef.current.has(requestKey)) return;
+    if (!force && identityPendingRef.current.has(requestKey)) return;
     const requestId = ++identityRequestRef.current;
     identityPendingRef.current.set(requestKey, requestId);
-    setIdentityState({ topicName: requestTopic, data: null, loading: true, error: null });
+    setIdentityState((current) => ({
+      topicName: requestTopic,
+      data: current.topicName === requestTopic ? current.data : null,
+      loading: true,
+      error: null
+    }));
     try {
       const nextTopic = await topicApi.get(requestTopic);
       if (requestId !== identityRequestRef.current || topicNameRef.current !== requestTopic) return;
       setIdentityState({ topicName: requestTopic, data: nextTopic, loading: false, error: null });
     } catch (requestError) {
       if (requestId !== identityRequestRef.current || topicNameRef.current !== requestTopic) return;
-      setIdentityState({ topicName: requestTopic, data: null, loading: false, error: errorMessage(requestError) });
+      setIdentityState((current) => ({
+        topicName: requestTopic,
+        data: current.topicName === requestTopic ? current.data : null,
+        loading: false,
+        error: errorMessage(requestError)
+      }));
     } finally {
       if (identityPendingRef.current.get(requestKey) === requestId) {
         identityPendingRef.current.delete(requestKey);
@@ -294,6 +311,25 @@ export default function TopicDetailContent({
     }
   }, [topicName]);
 
+  const refreshTab = useCallback((tab: TopicDetailTab) => {
+    switch (tab) {
+      case 'overview':
+        void loadIdentity(true);
+        void loadStats(true);
+        break;
+      case 'routes':
+        void loadRoute(true);
+        void loadStats(true);
+        break;
+      case 'consumers':
+        void loadConsumers(true);
+        break;
+      case 'configuration':
+        void loadConfig(selectedBroker, true);
+        break;
+    }
+  }, [loadConfig, loadConsumers, loadIdentity, loadRoute, loadStats, selectedBroker]);
+
   useEffect(() => {
     const previous = resourceRevisionsRef.current;
     resourceRevisionsRef.current = { topicName, revisions: resourceRevisions };
@@ -410,19 +446,106 @@ export default function TopicDetailContent({
     ? Array.from(new Set([config.data.brokerName, ...config.data.brokerNameList].filter(Boolean)))
     : [];
   const mutationAllowed = !topicInfo?.systemTopic;
+  const activeTabLoading = activeTab === 'overview'
+    ? identity.loading || stats.loading
+    : activeTab === 'routes'
+      ? route.loading || stats.loading
+      : activeTab === 'consumers'
+        ? consumers.loading
+        : config.loading;
+  const activeTabError = activeTab === 'overview'
+    ? identity.error || stats.error
+    : activeTab === 'routes'
+      ? route.error || stats.error
+      : activeTab === 'consumers'
+        ? consumers.error
+        : config.error;
+  const activeTabLabel = TAB_LABELS[activeTab];
+
+  const handleTabChange = (value: string) => {
+    const nextTab = value as TopicDetailTab;
+    setTabState({ topicName, tab: nextTab });
+    refreshTab(nextTab);
+  };
+
+  const prepareTabClick = (tab: TopicDetailTab) => {
+    selectedTabClickRef.current = tab === activeTab ? tab : null;
+  };
+
+  const finishTabClick = (tab: TopicDetailTab) => {
+    if (selectedTabClickRef.current === tab) refreshTab(tab);
+    selectedTabClickRef.current = null;
+  };
+
+  const handleSelectedTabKeyDown = (event: KeyboardEvent, tab: TopicDetailTab) => {
+    if (!event.repeat && tab === activeTab && (event.key === 'Enter' || event.key === ' ')) {
+      refreshTab(tab);
+    }
+  };
 
   return (
     <div className="entity-detail-content topic-detail-content">
       <Tabs
+        className="topic-detail-tabs"
         value={activeTab}
-        onValueChange={(value) => setTabState({ topicName, tab: value as TopicDetailTab })}
+        onValueChange={handleTabChange}
       >
-        <TabsList aria-label="Topic detail sections">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="routes">Routes and status</TabsTrigger>
-          <TabsTrigger value="consumers">Consumers</TabsTrigger>
-          <TabsTrigger value="configuration">Configuration</TabsTrigger>
-        </TabsList>
+        <div className="topic-detail-tab-bar">
+          <TabsList aria-label="Topic detail sections">
+            <TabsTrigger
+              value="overview"
+              onPointerDownCapture={() => prepareTabClick('overview')}
+              onClick={() => finishTabClick('overview')}
+              onKeyDown={(event) => handleSelectedTabKeyDown(event, 'overview')}
+            >
+              Overview
+            </TabsTrigger>
+            <TabsTrigger
+              value="routes"
+              onPointerDownCapture={() => prepareTabClick('routes')}
+              onClick={() => finishTabClick('routes')}
+              onKeyDown={(event) => handleSelectedTabKeyDown(event, 'routes')}
+            >
+              Routes and status
+            </TabsTrigger>
+            <TabsTrigger
+              value="consumers"
+              onPointerDownCapture={() => prepareTabClick('consumers')}
+              onClick={() => finishTabClick('consumers')}
+              onKeyDown={(event) => handleSelectedTabKeyDown(event, 'consumers')}
+            >
+              Consumers
+            </TabsTrigger>
+            <TabsTrigger
+              value="configuration"
+              onPointerDownCapture={() => prepareTabClick('configuration')}
+              onClick={() => finishTabClick('configuration')}
+              onKeyDown={(event) => handleSelectedTabKeyDown(event, 'configuration')}
+            >
+              Configuration
+            </TabsTrigger>
+          </TabsList>
+          <div className="topic-detail-refresh-control">
+            <span
+              className={activeTabError ? 'topic-detail-refresh-error' : undefined}
+              title={activeTabError ?? undefined}
+              aria-live="polite"
+            >
+              {activeTabError ? 'Refresh failed' : `${activeTabLabel} data`}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              loading={activeTabLoading}
+              aria-label={activeTabLoading ? `Refreshing ${activeTabLabel}` : `Refresh ${activeTabLabel}`}
+              onClick={() => refreshTab(activeTab)}
+            >
+              {!activeTabLoading ? <RefreshCw size={15} aria-hidden="true" /> : null}
+              {activeTabLoading ? 'Refreshing' : 'Refresh'}
+            </Button>
+          </div>
+        </div>
 
         <TabsContent value="overview">
           <div className="entity-identity-grid">
@@ -433,11 +556,11 @@ export default function TopicDetailContent({
             <IdentityItem label="Permission" value={getTopicPermissionLabel(topicInfo?.perm ?? 0)} mono />
             <IdentityItem label="Ordered" value={topicInfo?.order ? 'Yes' : 'No'} />
           </div>
-          {stats.loading ? <LoadingState label="Loading topic overview" /> : null}
-          {!stats.loading && stats.error ? (
+          {stats.loading && !stats.data ? <LoadingState label="Loading topic overview" /> : null}
+          {!stats.loading && stats.error && !stats.data ? (
             <ErrorState message={stats.error} onRetry={() => void loadStats()} retryLabel="Retry stats" />
           ) : null}
-          {!stats.loading && !stats.error && stats.data ? (
+          {stats.data ? (
             <div className="metric-grid entity-detail-metrics">
               <MetricCard label="Queue entries" value={stats.data.queueCount} icon={<Database size={17} />} />
               <MetricCard label="Messages" value={stats.data.totalMessageCount} icon={<Database size={17} />} />
@@ -462,8 +585,8 @@ export default function TopicDetailContent({
               pageSize={Math.max(route.data?.queues.length ?? 0, 1)}
               total={route.data?.queues.length ?? 0}
               onPageChange={() => undefined}
-              loading={route.loading}
-              error={route.error}
+              loading={route.loading && !route.data}
+              error={route.data ? null : route.error}
               onRetry={() => void loadRoute()}
               retryLabel="Retry routes"
               emptyTitle="No route queues"
@@ -484,8 +607,8 @@ export default function TopicDetailContent({
               pageSize={Math.max(stats.data?.offsets.length ?? 0, 1)}
               total={stats.data?.offsets.length ?? 0}
               onPageChange={() => undefined}
-              loading={stats.loading}
-              error={stats.error}
+              loading={stats.loading && !stats.data}
+              error={stats.data ? null : stats.error}
               onRetry={() => void loadStats()}
               retryLabel="Retry status"
               emptyTitle="No queue offsets"
@@ -508,8 +631,8 @@ export default function TopicDetailContent({
               pageSize={Math.max(consumers.data?.items.length ?? 0, 1)}
               total={consumers.data?.items.length ?? 0}
               onPageChange={() => undefined}
-              loading={consumers.loading}
-              error={consumers.error}
+              loading={consumers.loading && !consumers.data}
+              error={consumers.data ? null : consumers.error}
               onRetry={() => void loadConsumers()}
               retryLabel="Retry consumers"
               emptyTitle="No consumers"
@@ -547,15 +670,15 @@ export default function TopicDetailContent({
               ) : null}
             </div>
 
-            {config.loading ? <LoadingState label="Loading topic configuration" /> : null}
-            {!config.loading && config.error ? (
+            {config.loading && !config.data ? <LoadingState label="Loading topic configuration" /> : null}
+            {!config.loading && config.error && !config.data ? (
               <ErrorState
                 message={config.error}
                 onRetry={() => void loadConfig(selectedBroker)}
                 retryLabel="Retry configuration"
               />
             ) : null}
-            {!config.loading && !config.error && config.data ? (
+            {config.data ? (
               <>
                 {config.data.inconsistentFields.length > 0 ? (
                   <div className="state-block state-block-error" role="alert">

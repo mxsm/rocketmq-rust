@@ -30,6 +30,12 @@
   --accent: var(--warning);
   --danger: var(--destructive);
   --shadow: 0 16px 40px rgb(0 0 0 / 0.45);
+  --glass-surface: color-mix(in srgb, var(--card) 84%, transparent);
+  --glass-surface-strong: color-mix(in srgb, var(--muted-surface) 88%, transparent);
+  --glass-control: color-mix(in srgb, var(--foreground) 6%, transparent);
+  --glass-control-hover: color-mix(in srgb, var(--foreground) 11%, transparent);
+  --glass-border: color-mix(in srgb, var(--foreground) 14%, var(--border));
+  --glass-shadow: -24px 0 64px rgb(0 0 0 / 0.46);
   --radius: 8px;
   --radius-sm: 6px;
 }

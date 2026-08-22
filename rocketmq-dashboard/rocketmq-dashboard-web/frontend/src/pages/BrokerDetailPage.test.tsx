@@ -46,6 +46,8 @@ describe('BrokerDetailPage', () => {
     expect(screen.getByText('V5_3_1')).toBeInTheDocument();
     expect(screen.getByText('MASTER')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Produce TPS: 12.5' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'broker-a' }).closest('[data-surface="frosted"]')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to cluster' })).toHaveAttribute('href', '/brokers');
     expect(brokerApi.list).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('Available from cluster inventory')).not.toBeInTheDocument();
   });

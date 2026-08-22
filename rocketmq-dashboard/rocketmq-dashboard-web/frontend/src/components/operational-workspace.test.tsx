@@ -71,7 +71,13 @@ describe('operational workspace components', () => {
     const user = userEvent.setup();
     const onOpenChange = vi.fn();
     render(
-      <EntitySheet open title="broker-a" description="Broker runtime and configuration" onOpenChange={onOpenChange}>
+      <EntitySheet
+        open
+        title="broker-a"
+        description="Broker runtime and configuration"
+        actions={<button type="button">Restart broker</button>}
+        onOpenChange={onOpenChange}
+      >
         <Tabs defaultValue="overview">
           <TabsList aria-label="Broker detail sections">
             <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -83,8 +89,9 @@ describe('operational workspace components', () => {
       </EntitySheet>
     );
 
-    expect(screen.getByRole('dialog', { name: 'broker-a' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'broker-a' })).toHaveAttribute('data-surface', 'frosted');
     expect(screen.getByText('Broker runtime and configuration')).toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: 'Detail actions' })).toContainElement(screen.getByRole('button', { name: 'Restart broker' }));
     const overview = screen.getByRole('tab', { name: 'Overview' });
     overview.focus();
     await user.keyboard('{ArrowRight}');
