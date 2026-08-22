@@ -18,12 +18,17 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::{FilterCompileError, FilterCompileErrorKind};
 
 use crate::expression::EvaluationContext;
 use crate::expression::EvaluationError;
 use crate::expression::Expression;
 use crate::expression::Value;
-use crate::filter::filter_spi::FilterError;
+
+mod compile_error;
+
+pub(super) use compile_error::legacy_projection;
+use compile_error::SpannedToken;
 
 const MAX_EXPRESSION_BYTES: usize = 64 * 1024;
 const MAX_SQL_TOKENS: usize = 4_096;
@@ -36,18 +41,20 @@ fn current_millis() -> u64 {
         .as_millis() as u64
 }
 
-pub(crate) fn compile_expression(expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+pub(crate) fn compile_expression(expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
     let trimmed = expr.trim();
     if trimmed.is_empty() {
-        return Err(FilterError::new("empty SQL92 expression"));
+        return Err(compile_error::empty_expression());
     }
+    let position_offset = expr.len() - expr.trim_start().len();
     if trimmed.len() > MAX_EXPRESSION_BYTES {
-        return Err(FilterError::new(format!(
-            "SQL92 expression exceeds the {MAX_EXPRESSION_BYTES}-byte limit"
-        )));
+        return Err(compile_error::lex_error(
+            FilterCompileErrorKind::ExpressionTooLarge,
+            position_offset + MAX_EXPRESSION_BYTES,
+        ));
     }
 
-    let mut parser = Parser::new(trimmed)?;
+    let mut parser = Parser::new(trimmed, position_offset)?;
     let root = parser.parse_expression()?;
     parser.expect_end()?;
 
@@ -115,6 +122,13 @@ enum ExprNode {
 }
 
 impl ExprNode {
+    fn literal(&self) -> Option<&Value> {
+        match self {
+            Self::Literal(value) => Some(value),
+            _ => None,
+        }
+    }
+
     fn evaluate(&self, context: &dyn EvaluationContext) -> Result<Value, EvaluationError> {
         match self {
             ExprNode::Literal(value) => Ok(value.clone()),
@@ -392,13 +406,6 @@ fn stringify_value(value: &Value) -> String {
     }
 }
 
-fn literal_value(node: &ExprNode) -> Option<&Value> {
-    match node {
-        ExprNode::Literal(value) => Some(value),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Ident(CheetahString),
@@ -429,89 +436,119 @@ enum Token {
     End,
 }
 
+impl Token {
+    fn matches_kind(&self, expected: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(expected)
+    }
+
+    fn into_constant(self) -> Option<Value> {
+        match self {
+            Self::String(value) => Some(Value::String(value)),
+            Self::Long(value) => Some(Value::Long(value)),
+            Self::Double(value) => Some(Value::Double(value)),
+            Self::Boolean(value) => Some(Value::Boolean(value)),
+            Self::Null => Some(Value::Null),
+            _ => None,
+        }
+    }
+
+    fn into_expression(self) -> Option<ExprNode> {
+        match self {
+            Self::Ident(name) => Some(ExprNode::Property(name)),
+            Self::Now => Some(ExprNode::Now),
+            token => token.into_constant().map(ExprNode::Literal),
+        }
+    }
+}
+
 struct Lexer<'a> {
     input: &'a str,
     bytes: &'a [u8],
     cursor: usize,
+    position_offset: usize,
 }
 
 impl<'a> Lexer<'a> {
-    fn new(input: &'a str) -> Self {
+    fn new(input: &'a str, position_offset: usize) -> Self {
         Self {
             input,
             bytes: input.as_bytes(),
             cursor: 0,
+            position_offset,
         }
     }
 
-    fn next_token(&mut self) -> Result<Token, FilterError> {
+    fn next_token(&mut self) -> Result<SpannedToken, FilterCompileError> {
         self.skip_whitespace();
         if self.cursor >= self.bytes.len() {
-            return Ok(Token::End);
+            return Ok(SpannedToken::new(Token::End, self.position_offset + self.cursor));
         }
 
+        let position = self.position_offset + self.cursor;
         let byte = self.bytes[self.cursor];
-        match byte {
+        let token = match byte {
             b'(' => {
                 self.cursor += 1;
-                Ok(Token::LParen)
+                Token::LParen
             }
             b')' => {
                 self.cursor += 1;
-                Ok(Token::RParen)
+                Token::RParen
             }
             b',' => {
                 self.cursor += 1;
-                Ok(Token::Comma)
+                Token::Comma
             }
             b'=' => {
                 self.cursor += 1;
-                Ok(Token::Eq)
+                Token::Eq
+            }
+            b'!' if self.peek_byte(1) == Some(b'=') => {
+                self.cursor += 2;
+                Token::Ne
             }
             b'!' => {
-                if self.peek_byte(1) == Some(b'=') {
-                    self.cursor += 2;
-                    Ok(Token::Ne)
-                } else {
-                    Err(FilterError::new(format!(
-                        "unexpected token '!' at position {}",
-                        self.cursor
-                    )))
-                }
+                return Err(compile_error::lex_error(
+                    FilterCompileErrorKind::UnexpectedToken,
+                    position,
+                ))
             }
             b'<' => {
                 if self.peek_byte(1) == Some(b'=') {
                     self.cursor += 2;
-                    Ok(Token::Lte)
+                    Token::Lte
                 } else if self.peek_byte(1) == Some(b'>') {
                     self.cursor += 2;
-                    Ok(Token::Ne)
+                    Token::Ne
                 } else {
                     self.cursor += 1;
-                    Ok(Token::Lt)
+                    Token::Lt
                 }
             }
             b'>' => {
                 if self.peek_byte(1) == Some(b'=') {
                     self.cursor += 2;
-                    Ok(Token::Gte)
+                    Token::Gte
                 } else {
                     self.cursor += 1;
-                    Ok(Token::Gt)
+                    Token::Gt
                 }
             }
-            b'\'' => self.read_string(),
-            b'-' if self.peek_byte(1).is_some_and(|next| next.is_ascii_digit()) => self.read_number(),
-            b'0'..=b'9' => self.read_number(),
+            b'\'' => self.read_string(position)?,
+            b'-' if self.peek_byte(1).is_some_and(|next| next.is_ascii_digit()) => self.read_number(position)?,
+            b'0'..=b'9' => self.read_number(position)?,
             _ if is_ident_start(byte) => self.read_identifier(),
-            _ => Err(FilterError::new(format!(
-                "unexpected token '{}' at position {}",
-                self.bytes[self.cursor] as char, self.cursor
-            ))),
-        }
+            _ => {
+                return Err(compile_error::lex_error(
+                    FilterCompileErrorKind::UnexpectedToken,
+                    position,
+                ))
+            }
+        };
+        Ok(SpannedToken::new(token, position))
     }
 
-    fn read_string(&mut self) -> Result<Token, FilterError> {
+    fn read_string(&mut self, position: usize) -> Result<Token, FilterCompileError> {
         self.cursor += 1;
         let mut string = String::new();
         while self.cursor < self.bytes.len() {
@@ -530,10 +567,13 @@ impl<'a> Lexer<'a> {
             self.cursor += 1;
         }
 
-        Err(FilterError::new("unterminated string literal"))
+        Err(compile_error::lex_error(
+            FilterCompileErrorKind::UnexpectedToken,
+            position,
+        ))
     }
 
-    fn read_number(&mut self) -> Result<Token, FilterError> {
+    fn read_number(&mut self, position: usize) -> Result<Token, FilterCompileError> {
         let start = self.cursor;
         self.cursor += 1;
         while self.cursor < self.bytes.len() && self.bytes[self.cursor].is_ascii_digit() {
@@ -560,7 +600,10 @@ impl<'a> Lexer<'a> {
                 self.cursor += 1;
             }
             if exponent_start == self.cursor {
-                return Err(FilterError::new("invalid exponent in numeric literal"));
+                return Err(compile_error::lex_error(
+                    FilterCompileErrorKind::InvalidNumber,
+                    position,
+                ));
             }
         }
 
@@ -568,20 +611,23 @@ impl<'a> Lexer<'a> {
         if is_double {
             let value = token
                 .parse::<f64>()
-                .map_err(|error| FilterError::new(format!("invalid number '{token}': {error}")))?;
+                .map_err(|_| compile_error::lex_error(FilterCompileErrorKind::InvalidNumber, position))?;
             if !value.is_finite() {
-                return Err(FilterError::new(format!("invalid number '{token}': overflow")));
+                return Err(compile_error::lex_error(
+                    FilterCompileErrorKind::InvalidNumber,
+                    position,
+                ));
             }
             Ok(Token::Double(value))
         } else {
             token
                 .parse::<i64>()
                 .map(Token::Long)
-                .map_err(|error| FilterError::new(format!("invalid number '{token}': {error}")))
+                .map_err(|_| compile_error::lex_error(FilterCompileErrorKind::InvalidNumber, position))
         }
     }
 
-    fn read_identifier(&mut self) -> Result<Token, FilterError> {
+    fn read_identifier(&mut self) -> Token {
         let start = self.cursor;
         self.cursor += 1;
         while self.cursor < self.bytes.len() && is_ident_part(self.bytes[self.cursor]) {
@@ -591,20 +637,20 @@ impl<'a> Lexer<'a> {
         let ident = &self.input[start..self.cursor];
         let upper = ident.to_ascii_uppercase();
         match upper.as_str() {
-            "AND" => Ok(Token::And),
-            "OR" => Ok(Token::Or),
-            "NOT" => Ok(Token::Not),
-            "IS" => Ok(Token::Is),
-            "IN" => Ok(Token::In),
-            "BETWEEN" => Ok(Token::Between),
-            "CONTAINS" => Ok(Token::Contains),
-            "STARTSWITH" => Ok(Token::StartsWith),
-            "ENDSWITH" => Ok(Token::EndsWith),
-            "TRUE" => Ok(Token::Boolean(true)),
-            "FALSE" => Ok(Token::Boolean(false)),
-            "NULL" => Ok(Token::Null),
-            "NOW" => Ok(Token::Now),
-            _ => Ok(Token::Ident(CheetahString::from_slice(ident))),
+            "AND" => Token::And,
+            "OR" => Token::Or,
+            "NOT" => Token::Not,
+            "IS" => Token::Is,
+            "IN" => Token::In,
+            "BETWEEN" => Token::Between,
+            "CONTAINS" => Token::Contains,
+            "STARTSWITH" => Token::StartsWith,
+            "ENDSWITH" => Token::EndsWith,
+            "TRUE" => Token::Boolean(true),
+            "FALSE" => Token::Boolean(false),
+            "NULL" => Token::Null,
+            "NOW" => Token::Now,
+            _ => Token::Ident(CheetahString::from_slice(ident)),
         }
     }
 
@@ -628,23 +674,26 @@ fn is_ident_part(byte: u8) -> bool {
 }
 
 struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<SpannedToken>,
     cursor: usize,
     nesting: usize,
 }
 
 impl Parser {
-    fn new(expr: &str) -> Result<Self, FilterError> {
-        let mut lexer = Lexer::new(expr);
+    fn new(expr: &str, position_offset: usize) -> Result<Self, FilterCompileError> {
+        let mut lexer = Lexer::new(expr, position_offset);
         let mut tokens = Vec::new();
         loop {
             let token = lexer.next_token()?;
-            let is_end = token == Token::End;
+            let is_end = token.token == Token::End;
             tokens.push(token);
             if tokens.len() > MAX_SQL_TOKENS {
-                return Err(FilterError::new(format!(
-                    "SQL92 expression exceeds the {MAX_SQL_TOKENS}-token limit"
-                )));
+                return Err(compile_error::lex_error(
+                    FilterCompileErrorKind::TooManyTokens,
+                    tokens
+                        .last()
+                        .map_or(position_offset + expr.len(), |token| token.position),
+                ));
             }
             if is_end {
                 break;
@@ -658,11 +707,12 @@ impl Parser {
         })
     }
 
-    fn nested<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T, FilterError>) -> Result<T, FilterError> {
+    fn nested<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, FilterCompileError>,
+    ) -> Result<T, FilterCompileError> {
         if self.nesting >= MAX_PARSE_NESTING {
-            return Err(FilterError::new(format!(
-                "SQL92 expression exceeds the {MAX_PARSE_NESTING}-level nesting limit"
-            )));
+            return Err(compile_error::nesting_limit_exceeded(self.position()));
         }
         self.nesting += 1;
         let result = parse(self);
@@ -670,13 +720,13 @@ impl Parser {
         result
     }
 
-    fn parse_expression(&mut self) -> Result<ExprNode, FilterError> {
+    fn parse_expression(&mut self) -> Result<ExprNode, FilterCompileError> {
         self.parse_or()
     }
 
-    fn parse_or(&mut self) -> Result<ExprNode, FilterError> {
+    fn parse_or(&mut self) -> Result<ExprNode, FilterCompileError> {
         let mut expr = self.parse_and()?;
-        while self.consume(TokenKind::Or) {
+        while self.consume(Token::Or) {
             let right = self.parse_and()?;
             expr = ExprNode::Logical {
                 op: LogicalOp::Or,
@@ -687,9 +737,9 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_and(&mut self) -> Result<ExprNode, FilterError> {
+    fn parse_and(&mut self) -> Result<ExprNode, FilterCompileError> {
         let mut expr = self.parse_not()?;
-        while self.consume(TokenKind::And) {
+        while self.consume(Token::And) {
             let right = self.parse_not()?;
             expr = ExprNode::Logical {
                 op: LogicalOp::And,
@@ -700,8 +750,8 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_not(&mut self) -> Result<ExprNode, FilterError> {
-        if self.consume(TokenKind::Not) {
+    fn parse_not(&mut self) -> Result<ExprNode, FilterCompileError> {
+        if self.consume(Token::Not) {
             let expression = self.nested(Self::parse_not)?;
             return Ok(ExprNode::Not(Box::new(expression)));
         }
@@ -709,43 +759,41 @@ impl Parser {
         self.parse_primary()
     }
 
-    fn parse_primary(&mut self) -> Result<ExprNode, FilterError> {
-        if self.consume(TokenKind::LParen) {
+    fn parse_primary(&mut self) -> Result<ExprNode, FilterCompileError> {
+        if self.consume(Token::LParen) {
             let expr = self.nested(Self::parse_expression)?;
-            self.expect(TokenKind::RParen)?;
+            self.expect(Token::RParen)?;
             return Ok(expr);
         }
 
         let left = self.parse_value()?;
-        if self.consume(TokenKind::Is) {
-            let negated = self.consume(TokenKind::Not);
-            self.expect(TokenKind::Null)?;
+        if self.consume(Token::Is) {
+            let negated = self.consume(Token::Not);
+            self.expect(Token::Null)?;
             return Ok(ExprNode::IsNull {
                 expr: Box::new(left),
                 negated,
             });
         }
 
-        let negated_special = self.consume(TokenKind::Not);
-        if self.consume(TokenKind::In) {
+        let negated_special = self.consume(Token::Not);
+        if self.consume(Token::In) {
             return self.parse_in_list(left, negated_special);
         }
-        if self.consume(TokenKind::Between) {
+        if self.consume(Token::Between) {
             return self.parse_between(left, negated_special);
         }
-        if self.consume(TokenKind::Contains) {
+        if self.consume(Token::Contains) {
             return self.parse_string_match(left, StringMatchOp::Contains, negated_special);
         }
-        if self.consume(TokenKind::StartsWith) {
+        if self.consume(Token::StartsWith) {
             return self.parse_string_match(left, StringMatchOp::StartsWith, negated_special);
         }
-        if self.consume(TokenKind::EndsWith) {
+        if self.consume(Token::EndsWith) {
             return self.parse_string_match(left, StringMatchOp::EndsWith, negated_special);
         }
         if negated_special {
-            return Err(FilterError::new(
-                "expected IN, BETWEEN, CONTAINS, STARTSWITH or ENDSWITH after NOT",
-            ));
+            return Err(compile_error::parse_error(self.position()));
         }
 
         if let Some(op) = self.parse_compare_op() {
@@ -760,37 +808,27 @@ impl Parser {
         Ok(ExprNode::BooleanCast(Box::new(left)))
     }
 
-    fn parse_value(&mut self) -> Result<ExprNode, FilterError> {
-        match self.next() {
-            Token::Ident(name) => Ok(ExprNode::Property(name)),
-            Token::String(value) => Ok(ExprNode::Literal(Value::String(value))),
-            Token::Long(value) => Ok(ExprNode::Literal(Value::Long(value))),
-            Token::Double(value) => Ok(ExprNode::Literal(Value::Double(value))),
-            Token::Boolean(value) => Ok(ExprNode::Literal(Value::Boolean(value))),
-            Token::Null => Ok(ExprNode::Literal(Value::Null)),
-            Token::Now => Ok(ExprNode::Now),
-            token => Err(FilterError::new(format!("unexpected token {token:?}"))),
-        }
+    fn parse_value(&mut self) -> Result<ExprNode, FilterCompileError> {
+        let SpannedToken { token, position } = self.next();
+        token
+            .into_expression()
+            .ok_or_else(|| compile_error::parse_error(position))
     }
 
-    fn parse_constant_value(&mut self) -> Result<Value, FilterError> {
-        match self.next() {
-            Token::String(value) => Ok(Value::String(value)),
-            Token::Long(value) => Ok(Value::Long(value)),
-            Token::Double(value) => Ok(Value::Double(value)),
-            Token::Boolean(value) => Ok(Value::Boolean(value)),
-            Token::Null => Ok(Value::Null),
-            token => Err(FilterError::new(format!("expected literal value, got {token:?}"))),
-        }
+    fn parse_constant_value(&mut self) -> Result<Value, FilterCompileError> {
+        let SpannedToken { token, position } = self.next();
+        token
+            .into_constant()
+            .ok_or_else(|| compile_error::parse_error(position))
     }
 
-    fn parse_in_list(&mut self, left: ExprNode, negated: bool) -> Result<ExprNode, FilterError> {
-        self.expect(TokenKind::LParen)?;
+    fn parse_in_list(&mut self, left: ExprNode, negated: bool) -> Result<ExprNode, FilterCompileError> {
+        self.expect(Token::LParen)?;
         let mut items = vec![self.parse_constant_value()?];
-        while self.consume(TokenKind::Comma) {
+        while self.consume(Token::Comma) {
             items.push(self.parse_constant_value()?);
         }
-        self.expect(TokenKind::RParen)?;
+        self.expect(Token::RParen)?;
         Ok(ExprNode::InList {
             expr: Box::new(left),
             items,
@@ -798,21 +836,38 @@ impl Parser {
         })
     }
 
-    fn parse_between(&mut self, left: ExprNode, negated: bool) -> Result<ExprNode, FilterError> {
+    fn parse_between(&mut self, left: ExprNode, negated: bool) -> Result<ExprNode, FilterCompileError> {
+        let low_position = self.position();
         let low = self.parse_value()?;
-        self.expect(TokenKind::And)?;
+        self.expect(Token::And)?;
+        let high_position = self.position();
         let high = self.parse_value()?;
 
-        if let (Some(low), Some(high)) = (literal_value(&low), literal_value(&high)) {
+        if let (Some(low), Some(high)) = (low.literal(), high.literal()) {
             if matches!(low, Value::Null) || matches!(high, Value::Null) {
-                return Err(FilterError::new("Illegal values of between, values can not be null"));
+                return Err(compile_error::semantic_error(
+                    FilterCompileErrorKind::InvalidBetweenBounds,
+                    if matches!(low, Value::Null) {
+                        low_position
+                    } else {
+                        high_position
+                    },
+                ));
             }
-            if let Some(false) =
-                eval_compare_values(CompareOp::Lte, low, high).map_err(|error| FilterError::new(error.to_string()))?
-            {
-                return Err(FilterError::new(format!(
-                    "Illegal values of between, left value({low}) must less than or equal to right value({high})"
-                )));
+            match eval_compare_values(CompareOp::Lte, low, high) {
+                Ok(Some(false)) => {
+                    return Err(compile_error::semantic_error(
+                        FilterCompileErrorKind::InvalidBetweenBounds,
+                        high_position,
+                    ));
+                }
+                Ok(Some(true) | None) => {}
+                Err(_) => {
+                    return Err(compile_error::semantic_error(
+                        FilterCompileErrorKind::UnsupportedOperand,
+                        high_position,
+                    ));
+                }
             }
         }
 
@@ -829,10 +884,12 @@ impl Parser {
         left: ExprNode,
         op: StringMatchOp,
         negated: bool,
-    ) -> Result<ExprNode, FilterError> {
-        let Token::String(search) = self.next() else {
-            return Err(FilterError::new(
-                "string match operators require a quoted string literal",
+    ) -> Result<ExprNode, FilterCompileError> {
+        let token = self.next();
+        let Token::String(search) = token.token else {
+            return Err(compile_error::semantic_error(
+                FilterCompileErrorKind::UnsupportedOperand,
+                token.position,
             ));
         };
         Ok(ExprNode::StringMatch {
@@ -844,40 +901,40 @@ impl Parser {
     }
 
     fn parse_compare_op(&mut self) -> Option<CompareOp> {
-        if self.consume(TokenKind::Eq) {
+        if self.consume(Token::Eq) {
             Some(CompareOp::Eq)
-        } else if self.consume(TokenKind::Ne) {
+        } else if self.consume(Token::Ne) {
             Some(CompareOp::Ne)
-        } else if self.consume(TokenKind::Gte) {
+        } else if self.consume(Token::Gte) {
             Some(CompareOp::Gte)
-        } else if self.consume(TokenKind::Gt) {
+        } else if self.consume(Token::Gt) {
             Some(CompareOp::Gt)
-        } else if self.consume(TokenKind::Lte) {
+        } else if self.consume(Token::Lte) {
             Some(CompareOp::Lte)
-        } else if self.consume(TokenKind::Lt) {
+        } else if self.consume(Token::Lt) {
             Some(CompareOp::Lt)
         } else {
             None
         }
     }
 
-    fn expect_end(&self) -> Result<(), FilterError> {
-        match self.peek() {
+    fn expect_end(&self) -> Result<(), FilterCompileError> {
+        match &self.peek().token {
             Token::End => Ok(()),
-            token => Err(FilterError::new(format!("unexpected trailing token {token:?}"))),
+            _ => Err(compile_error::parse_error(self.position())),
         }
     }
 
-    fn expect(&mut self, kind: TokenKind) -> Result<(), FilterError> {
+    fn expect(&mut self, kind: Token) -> Result<(), FilterCompileError> {
         if self.consume(kind) {
             Ok(())
         } else {
-            Err(FilterError::new(format!("expected {}", kind.as_str())))
+            Err(compile_error::parse_error(self.position()))
         }
     }
 
-    fn consume(&mut self, kind: TokenKind) -> bool {
-        if kind.matches(self.peek()) {
+    fn consume(&mut self, kind: Token) -> bool {
+        if self.peek().token.matches_kind(&kind) {
             self.cursor += 1;
             true
         } else {
@@ -885,90 +942,20 @@ impl Parser {
         }
     }
 
-    fn next(&mut self) -> Token {
+    fn next(&mut self) -> SpannedToken {
         let token = self.peek().clone();
         self.cursor += 1;
         token
     }
 
-    fn peek(&self) -> &Token {
+    fn peek(&self) -> &SpannedToken {
         self.tokens
             .get(self.cursor)
             .unwrap_or_else(|| self.tokens.last().expect("parser always has EOF"))
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TokenKind {
-    Null,
-    LParen,
-    RParen,
-    Comma,
-    Eq,
-    Ne,
-    Gt,
-    Gte,
-    Lt,
-    Lte,
-    And,
-    Or,
-    Not,
-    Is,
-    In,
-    Between,
-    Contains,
-    StartsWith,
-    EndsWith,
-}
-
-impl TokenKind {
-    fn matches(self, token: &Token) -> bool {
-        matches!(
-            (self, token),
-            (TokenKind::Null, Token::Null)
-                | (TokenKind::LParen, Token::LParen)
-                | (TokenKind::RParen, Token::RParen)
-                | (TokenKind::Comma, Token::Comma)
-                | (TokenKind::Eq, Token::Eq)
-                | (TokenKind::Ne, Token::Ne)
-                | (TokenKind::Gt, Token::Gt)
-                | (TokenKind::Gte, Token::Gte)
-                | (TokenKind::Lt, Token::Lt)
-                | (TokenKind::Lte, Token::Lte)
-                | (TokenKind::And, Token::And)
-                | (TokenKind::Or, Token::Or)
-                | (TokenKind::Not, Token::Not)
-                | (TokenKind::Is, Token::Is)
-                | (TokenKind::In, Token::In)
-                | (TokenKind::Between, Token::Between)
-                | (TokenKind::Contains, Token::Contains)
-                | (TokenKind::StartsWith, Token::StartsWith)
-                | (TokenKind::EndsWith, Token::EndsWith)
-        )
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            TokenKind::Null => "NULL",
-            TokenKind::LParen => "(",
-            TokenKind::RParen => ")",
-            TokenKind::Comma => ",",
-            TokenKind::Eq => "=",
-            TokenKind::Ne => "!=",
-            TokenKind::Gt => ">",
-            TokenKind::Gte => ">=",
-            TokenKind::Lt => "<",
-            TokenKind::Lte => "<=",
-            TokenKind::And => "AND",
-            TokenKind::Or => "OR",
-            TokenKind::Not => "NOT",
-            TokenKind::Is => "IS",
-            TokenKind::In => "IN",
-            TokenKind::Between => "BETWEEN",
-            TokenKind::Contains => "CONTAINS",
-            TokenKind::StartsWith => "STARTSWITH",
-            TokenKind::EndsWith => "ENDSWITH",
-        }
+    fn position(&self) -> usize {
+        self.peek().position
     }
 }
 
@@ -993,33 +980,42 @@ mod tests {
         expression.evaluate(&context)
     }
 
-    fn compile_error(expr: &str) -> String {
+    fn compile_error(expr: &str) -> rocketmq_error::FilterCompileError {
         match compile_expression(expr) {
             Ok(_) => panic!("expression should be rejected"),
-            Err(error) => error.to_string(),
+            Err(error) => error,
         }
     }
 
     #[test]
     fn compile_rejects_empty_expression() {
         let error = compile_error("   ");
-        assert!(error.contains("empty SQL92 expression"));
+        assert_eq!(error.kind(), rocketmq_error::FilterCompileErrorKind::EmptyExpression);
     }
 
     #[test]
     fn compile_rejects_oversized_and_deeply_nested_expressions() {
         let oversized = "x".repeat(MAX_EXPRESSION_BYTES + 1);
-        assert!(compile_error(&oversized).contains("byte limit"));
+        assert_eq!(
+            compile_error(&oversized).kind(),
+            rocketmq_error::FilterCompileErrorKind::ExpressionTooLarge
+        );
 
         let deeply_nested = format!(
             "{}flag{}",
             "(".repeat(MAX_PARSE_NESTING + 1),
             ")".repeat(MAX_PARSE_NESTING + 1)
         );
-        assert!(compile_error(&deeply_nested).contains("nesting limit"));
+        assert_eq!(
+            compile_error(&deeply_nested).kind(),
+            rocketmq_error::FilterCompileErrorKind::NestingLimitExceeded
+        );
 
         let too_many_tokens = "flag OR ".repeat(MAX_SQL_TOKENS / 2 + 1) + "flag";
-        assert!(compile_error(&too_many_tokens).contains("token limit"));
+        assert_eq!(
+            compile_error(&too_many_tokens).kind(),
+            rocketmq_error::FilterCompileErrorKind::TooManyTokens
+        );
     }
 
     #[test]
@@ -1118,19 +1114,22 @@ mod tests {
     #[test]
     fn compile_rejects_illegal_between_bounds() {
         let error = compile_error("a BETWEEN 10 AND 0");
-        assert!(error.contains("Illegal values of between"));
+        assert_eq!(
+            error.kind(),
+            rocketmq_error::FilterCompileErrorKind::InvalidBetweenBounds
+        );
     }
 
     #[test]
     fn compile_rejects_non_string_contains_operand() {
         let error = compile_error("a CONTAINS 1");
-        assert!(error.contains("string match operators require a quoted string literal"));
+        assert_eq!(error.kind(), rocketmq_error::FilterCompileErrorKind::UnsupportedOperand);
     }
 
     #[test]
     fn compile_rejects_invalid_number_exponent() {
         let error = compile_error("a = 1e");
-        assert!(error.contains("invalid exponent"));
+        assert_eq!(error.kind(), rocketmq_error::FilterCompileErrorKind::InvalidNumber);
     }
 
     #[test]
@@ -1142,7 +1141,7 @@ mod tests {
     #[test]
     fn compile_rejects_trailing_tokens() {
         let error = compile_error("a = 1 2");
-        assert!(error.contains("unexpected trailing token"));
+        assert_eq!(error.kind(), rocketmq_error::FilterCompileErrorKind::UnexpectedToken);
     }
 
     #[test]

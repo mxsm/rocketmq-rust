@@ -204,7 +204,7 @@ impl ConsumerFilterManager {
         let expression_text = expression.as_ref().filter(|value| !value.is_empty())?;
         let expression_type = type_.as_ref()?;
         let filter = FilterFactory::instance().get(expression_type.as_str())?;
-        let compiled = filter.compile(expression_text.as_str()).ok()?;
+        let compiled = filter.try_compile(expression_text.as_str()).ok()?;
 
         let mut consumer_filter_data = ConsumerFilterData::default();
         consumer_filter_data.set_topic(topic);
@@ -607,7 +607,7 @@ impl ConsumerFilterManager {
             self.cache_compile_failure(cache_key, format!("unknown filter type: {expression_type}"));
             return None;
         };
-        let compiled = match filter.compile(expression) {
+        let compiled = match filter.try_compile(expression) {
             Ok(compiled) => Arc::<dyn Expression + 'static>::from(compiled),
             Err(error) => {
                 self.stats.compile_failures.fetch_add(1, Ordering::Relaxed);
@@ -764,6 +764,10 @@ mod tests {
     use rocketmq_filter::expression::Value as ExprValue;
     use rocketmq_filter::expression::Value;
     use rocketmq_filter::filter::Filter;
+    #[allow(
+        deprecated,
+        reason = "These compatibility fixtures verify that legacy Filter implementations remain usable."
+    )]
     use rocketmq_filter::filter::FilterError;
 
     fn new_manager() -> ConsumerFilterManager {
@@ -915,6 +919,10 @@ mod tests {
         compile_count: Arc<AtomicUsize>,
     }
 
+    #[allow(
+        deprecated,
+        reason = "This compatibility fixture intentionally implements only the legacy Filter::compile method."
+    )]
     impl Filter for FailingFilter {
         fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
             self.compile_count.fetch_add(1, Ordering::Relaxed);
@@ -946,6 +954,10 @@ mod tests {
         filter_type: String,
     }
 
+    #[allow(
+        deprecated,
+        reason = "This compatibility fixture intentionally implements only the legacy Filter::compile method."
+    )]
     impl Filter for PassingFilter {
         fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
             Ok(Box::new(LiteralTrueExpression))
@@ -962,6 +974,10 @@ mod tests {
         compile_count: Arc<AtomicUsize>,
     }
 
+    #[allow(
+        deprecated,
+        reason = "This compatibility fixture intentionally implements only the legacy Filter::compile method."
+    )]
     impl Filter for CountingPassingFilter {
         fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
             self.compile_count.fetch_add(1, Ordering::Relaxed);

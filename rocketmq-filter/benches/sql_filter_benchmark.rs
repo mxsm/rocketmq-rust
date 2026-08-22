@@ -31,7 +31,7 @@ fn benchmark_sql_compile(c: &mut Criterion) {
             |b, expression| {
                 b.iter(|| {
                     let compiled = filter
-                        .compile(black_box(expression))
+                        .try_compile(black_box(expression))
                         .expect("benchmark expression should compile");
                     black_box(compiled);
                 });
@@ -46,7 +46,7 @@ fn benchmark_sql_evaluate(c: &mut Criterion) {
     let mut group = c.benchmark_group("sql_evaluate");
     let filter = SqlFilter::new();
     let expression = filter
-        .compile("color = 'blue' AND retries >= 3 AND region IN ('hz', 'sh') AND enabled = TRUE")
+        .try_compile("color = 'blue' AND retries >= 3 AND region IN ('hz', 'sh') AND enabled = TRUE")
         .expect("benchmark expression should compile");
     let mut properties = HashMap::with_hasher(RandomState::default());
     properties.insert(CheetahString::from_slice("color"), CheetahString::from_slice("blue"));

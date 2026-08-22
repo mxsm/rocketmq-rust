@@ -27,6 +27,7 @@ mod tools;
 use std::io;
 
 // Re-export filter error
+pub use crate::filter_error::FilterCompileError;
 pub use crate::filter_error::FilterError;
 pub use crate::observability_error::ObservabilityError;
 
@@ -843,6 +844,7 @@ impl RocketMQError {
                 .with_field("expected", *expected)
                 .with_field("actual", actual.as_str()),
             Self::Tools(error) => error.context(),
+            Self::Filter(FilterError::Compile(error)) => error.context(),
             Self::Filter(error) => ErrorContext::new().with_field("filter_error", error.to_string()),
             Self::Observability(error) => error.context(),
             Self::StorageReadFailed { path, reason } | Self::StorageWriteFailed { path, reason } => ErrorContext::new()
@@ -1290,6 +1292,12 @@ impl RocketMQError {
     #[inline]
     pub fn filter_uninitialized() -> Self {
         Self::Filter(FilterError::uninitialized())
+    }
+}
+
+impl From<FilterCompileError> for RocketMQError {
+    fn from(error: FilterCompileError) -> Self {
+        Self::Filter(FilterError::compile(error))
     }
 }
 
