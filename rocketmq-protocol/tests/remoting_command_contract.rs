@@ -168,7 +168,26 @@ fn complete_malformed_frames_with_serialization_header_consume_only_the_declared
         &[],
     );
     let invalid_serialize_type = complete_frame(0x0200_0000, &[]);
-    let malformed_json = complete_frame_for(b"{", SerializeType::JSON);
+    let invalid_utf8_json = [
+        br#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":""#.as_slice(),
+        &[0xff],
+        br#"","serializeTypeCurrentRPC":"JSON"}"#.as_slice(),
+    ]
+    .concat();
+    let malformed_json = [
+        ("truncated JSON object", b"{".to_vec()),
+        (
+            "unterminated JSON extension field",
+            br#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"extFields":{"key":"value"#
+                .to_vec(),
+        ),
+        (
+            "overflowing JSON integer",
+            br#"{"code":2147483648,"language":"RUST","version":0,"opaque":7,"flag":0,"serializeTypeCurrentRPC":"JSON"}"#
+                .to_vec(),
+        ),
+        ("invalid UTF-8 JSON string", invalid_utf8_json),
+    ];
 
     let invalid_utf8 = binary_header(&[0x00, 0x01, 0xff, 0x00, 0x00, 0x00, 0x01, b'v']);
     let truncated_key = binary_header(&[0x00, 0x02, b'k']);
@@ -181,7 +200,10 @@ fn complete_malformed_frames_with_serialization_header_consume_only_the_declared
 
     assert_complete_frame_is_consumed_on_error("invalid marked header length", &invalid_marked_header_length);
     assert_complete_frame_is_consumed_on_error("invalid serialization type", &invalid_serialize_type);
-    assert_complete_frame_is_consumed_on_error("malformed JSON header", &malformed_json);
+    for (name, header) in malformed_json {
+        let frame = complete_frame_for(&header, SerializeType::JSON);
+        assert_complete_frame_is_consumed_on_error(name, &frame);
+    }
     for (name, header) in malformed_binary {
         let frame = complete_frame_for(&header, SerializeType::ROCKETMQ);
         assert_complete_frame_is_consumed_on_error(name, &frame);

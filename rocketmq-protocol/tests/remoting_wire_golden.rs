@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 
+use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
@@ -195,6 +196,38 @@ fn deterministic_remoting_cases_round_trip_without_trailing_bytes() {
             "seed={SEED:#018x} case={case}"
         );
     }
+}
+
+#[test]
+fn json_i32_boundaries_keep_the_exact_wire_representation() {
+    const HEADER: &[u8] = br#"{"code":2147483647,"language":"RUST","version":-2147483648,"opaque":-2147483648,"flag":2147483647,"remark":null,"extFields":null,"serializeTypeCurrentRPC":"JSON"}"#;
+
+    let command = RemotingCommand::with_resolved_defaults(i32::MIN, SerializeType::JSON)
+        .set_code(i32::MAX)
+        .set_opaque(i32::MIN)
+        .set_flag(i32::MAX);
+    let actual = EncodedFrame::from_command(command)
+        .expect("boundary command must encode")
+        .into_bytes();
+    let mut expected = BytesMut::with_capacity(8 + HEADER.len());
+    expected.put_i32(i32::try_from(4 + HEADER.len()).expect("fixture length fits i32"));
+    expected.put_i32(RemotingCommand::mark_serialize_type(
+        i32::try_from(HEADER.len()).expect("fixture header length fits i32"),
+        SerializeType::JSON,
+    ));
+    expected.extend_from_slice(HEADER);
+
+    assert_eq!(actual.as_ref(), expected.as_ref());
+
+    let mut input = BytesMut::from(actual.as_ref());
+    let decoded = RemotingCommand::decode(&mut input)
+        .expect("boundary frame must decode")
+        .expect("boundary frame must be complete");
+    assert!(input.is_empty());
+    assert_eq!(decoded.code(), i32::MAX);
+    assert_eq!(decoded.version(), i32::MIN);
+    assert_eq!(decoded.opaque(), i32::MIN);
+    assert_eq!(decoded.flag(), i32::MAX);
 }
 
 #[test]

@@ -20,7 +20,7 @@ Release boundary: `2.0.0`.
 | `ARC-RUNTIME-006` | `runtime_adapter` | `dashboard` | `resolved` | 0 | the Dashboard lifecycle slot never owns a mutable AdminGuard across remote RPC awaits | `rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs`<br>`rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/dashboard.rs` |
 | `ARC-RUNTIME-007` | `runtime_adapter` | `runtime-maintainers` | `resolved` | 0 | fixed entrypoint blocking constants and the TUI unbounded action channel remain absent | `rocketmq-runtime/src/config.rs`<br>`rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs` |
 | `ARC-TRAIT-001` | `trait` | `architecture-maintainers` | `active` | 645 | all migrate-on-touch trait identities are resolved or accepted as final design | `scripts/trait-policy-baseline.json`<br>`scripts/trait_policy_guard.py` |
-| `ARC-UNSAFE-001` | `unsafe` | `architecture-maintainers` | `active` | 12 | all production protocol unsafe identities are removed with matching ledger updates | `scripts/rust-hygiene-baseline.json`<br>`scripts/rust_hygiene_guard.py`<br>`scripts/tests/test_rust_hygiene_guard.py` |
+| `ARC-UNSAFE-001` | `unsafe` | `architecture-maintainers` | `active` | 0 | production protocol unsafe identities remain absent through the 2.0.0 release boundary | `scripts/rust-hygiene-baseline.json`<br>`scripts/rust_hygiene_guard.py`<br>`scripts/tests/test_rust_hygiene_guard.py` |
 
 Removed internal crates, facade re-exports, old module paths, and historical migration
 evidence are not compatibility surfaces. Protocol, wire, persisted-layout, and implemented
