@@ -62,6 +62,32 @@
       ]
     },
     {
+      "debt_id": "ARC-UNSAFE-001",
+      "risk_class": "critical",
+      "owner": "architecture-maintainers",
+      "tests": [
+        {
+          "kind": "contract",
+          "sources": [
+            "scripts/tests/test_rust_hygiene_guard.py",
+            "scripts/tests/test_core_release_check_routes.py"
+          ],
+          "trigger_paths": [
+            "rocketmq-protocol/**",
+            "rocketmq-runtime/**",
+            "scripts/**",
+            ".github/workflows/rocketmq-rust-ci.yaml"
+          ],
+          "command": "python -m unittest scripts.tests.test_rust_hygiene_guard scripts.tests.test_core_release_check_routes -v",
+          "duration_seconds": 60,
+          "platform": "any",
+          "features": "not-applicable",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
       "debt_id": "ARC-TRAIT-001",
       "risk_class": "normal",
       "owner": "architecture-maintainers",
