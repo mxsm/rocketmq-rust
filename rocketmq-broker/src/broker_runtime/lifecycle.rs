@@ -1057,11 +1057,14 @@ impl BrokerRuntime {
                 }),
         );
         let live_broker_config = self.composition.state.broker_config();
+        // Controller-mode brokers start fenced and acquire write authority only after the
+        // Controller assigns a role and grants a lease. Process readiness therefore depends on
+        // the recovered store being eligible for promotion, not on already holding that lease.
         let store_writable = self
             .composition
             .state
             .message_store()
-            .is_some_and(|store| BrokerReadStore::put_message_preflight(store).is_writeable());
+            .is_some_and(|store| BrokerReadStore::put_message_preflight(store).is_store_ready_for_promotion());
         let processors_started = self.composition.state.pop_message_processor.is_some()
             && self.composition.state.pop_lite_message_processor.is_some()
             && self.composition.state.ack_message_processor.is_some()
