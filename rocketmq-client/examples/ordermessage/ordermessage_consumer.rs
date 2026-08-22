@@ -57,6 +57,7 @@ pub async fn main() -> RocketMQResult<()> {
     consumer.start().await?;
     let _ = tokio::signal::ctrl_c().await;
 
+    consumer.shutdown().await;
     example_runtime.shutdown().await;
 
     Ok(())
