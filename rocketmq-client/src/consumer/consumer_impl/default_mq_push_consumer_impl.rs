@@ -684,10 +684,11 @@ impl DefaultMQPushConsumerImpl {
                 );
             }
             ServiceState::Running => {
-                if let Some(consume_message_concurrently_service) = self.consume_message_service() {
-                    consume_message_concurrently_service
-                        .shutdown(await_terminate_millis)
-                        .await;
+                if let Some(consume_message_service) = self.consume_message_service() {
+                    consume_message_service.shutdown(await_terminate_millis).await;
+                }
+                if let Some(consume_message_pop_service) = self.consume_message_pop_service() {
+                    consume_message_pop_service.shutdown(await_terminate_millis).await;
                 }
                 self.persist_consumer_offset().await;
                 if let Some(offset_store) = self.offset_store() {
@@ -2567,6 +2568,54 @@ mod tests {
             .await
             .expect("shutdown should acquire the released lifecycle transition")
             .expect("shutdown task should not panic");
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_standard_and_pop_consume_services() {
+        let consumer = Arc::new(new_running_impl());
+        consumer.initialize_self_reference();
+        let consumer_config = consumer.consumer_config_snapshot();
+        let client_config = consumer.client_config_snapshot();
+        let listener: Arc<dyn MessageListenerConcurrently> = Arc::new(NoopConcurrentListener);
+        let standard_service = Arc::new(ConsumeMessageConcurrentlyService::new(
+            consumer.service_context.component("shutdown-standard-consume"),
+            consumer.telemetry_handle().clone(),
+            consumer.client_metrics().clone(),
+            client_config.clone(),
+            consumer_config.clone(),
+            consumer_config.consumer_group.clone(),
+            listener.clone(),
+            Some(Arc::downgrade(&consumer)),
+        ));
+        let pop_service = Arc::new(ConsumeMessagePopConcurrentlyService::new(
+            consumer.service_context.component("shutdown-pop-consume"),
+            consumer.telemetry_handle().clone(),
+            consumer.client_metrics().clone(),
+            client_config,
+            consumer_config.clone(),
+            consumer_config.consumer_group.clone(),
+            listener,
+            Some(Arc::downgrade(&consumer)),
+        ));
+        consumer.set_component(
+            &consumer.consume_message_service,
+            Some(Arc::new(ConsumeMessageServiceGeneral::new(
+                Some(standard_service.clone()),
+                None,
+            ))),
+        );
+        consumer.set_component(
+            &consumer.consume_message_pop_service,
+            Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
+                Some(pop_service.clone()),
+                None,
+            ))),
+        );
+
+        consumer.shutdown(1_000).await;
+
+        assert!(standard_service.is_shutdown());
+        assert!(pop_service.stopped.load(Ordering::Acquire));
     }
 
     fn message_queue() -> MessageQueue {

@@ -46,6 +46,7 @@ use tokio::sync::oneshot;
 const CHILD_MODE_ENV: &str = "ROCKETMQ_CLIENT_STACK_TEST_CHILD";
 const NAMESRV_ADDR_ENV: &str = "ROCKETMQ_CLIENT_STACK_TEST_NAMESRV_ADDR";
 const STARTUP_MARKER: &str = "CLIENT_STACK_STARTUP_OK";
+const SHUTDOWN_MARKER: &str = "CLIENT_STACK_SHUTDOWN_OK";
 const WINDOWS_MAIN_STACK_SIZE: usize = 1024 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -175,7 +176,12 @@ fn run_consumer_child() {
                 TelemetryHandle::noop(),
             )
             .expect("create client runtime");
-            owner.block_on(run_consumer_startup(client_runtime, namesrv_addr));
+            owner.block_on(run_consumer_startup(Arc::clone(&client_runtime), namesrv_addr));
+            let report = owner.block_on(client_runtime.shutdown());
+            assert!(report.is_healthy(), "{}", report.to_json());
+            owner
+                .shutdown_runtime_blocking()
+                .expect("consumer process runtime should stop cleanly");
         })
         .expect("start 1 MiB consumer startup thread");
 
@@ -197,7 +203,10 @@ async fn run_consumer_startup(client_runtime: Arc<ClientRuntime>, namesrv_addr: 
 
     println!("{STARTUP_MARKER}");
     std::io::stdout().flush().expect("flush startup marker");
-    std::process::exit(0);
+
+    consumer.shutdown().await;
+    println!("{SHUTDOWN_MARKER}");
+    std::io::stdout().flush().expect("flush shutdown marker");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -250,6 +259,11 @@ async fn windows_consumer_starts_without_stack_overflow() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains(STARTUP_MARKER),
         "Consumer did not emit startup marker:\n{}",
+        process_output(&output)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(SHUTDOWN_MARKER),
+        "Consumer did not complete clean shutdown:\n{}",
         process_output(&output)
     );
 
