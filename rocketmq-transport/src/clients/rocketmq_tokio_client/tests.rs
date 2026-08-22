@@ -202,6 +202,360 @@ async fn concurrent_nameserver_updates_publish_complete_owned_snapshots() {
     client.shutdown();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_endpoint_readers_observe_one_generation() {
+    let client = Arc::new(TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("endpoint-generation-reader-test"),
+    ));
+    let endpoint_a = NameServerEndpoint::legacy("ns-a:9876").expect("valid nameserver");
+    let identity_a = endpoint_a.identity().clone();
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint_a.clone()], Duration::ZERO);
+    let first_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity_a)
+        .expect("initial endpoint lease");
+    assert!(client
+        .endpoint_state
+        .update_availability(&first_lease, &identity_a, true));
+    assert!(client.endpoint_state.set_chosen(&first_lease));
+
+    let updater = Arc::clone(&client);
+    let updates = tokio::spawn(async move {
+        for _ in 0..64 {
+            updater.apply_name_server_endpoint_snapshot_sync(
+                vec![
+                    endpoint_a.clone(),
+                    NameServerEndpoint::legacy("ns-b:9876").expect("valid nameserver"),
+                ],
+                Duration::ZERO,
+            );
+            tokio::task::yield_now().await;
+            updater.apply_name_server_endpoint_snapshot_sync(
+                vec![
+                    endpoint_a.clone(),
+                    NameServerEndpoint::legacy("ns-c:9876").expect("valid nameserver"),
+                ],
+                Duration::ZERO,
+            );
+            tokio::task::yield_now().await;
+        }
+    });
+
+    for _ in 0..128 {
+        let state = client.endpoint_state.load();
+        let observed_lease = state.lease_for(&identity_a).expect("configured endpoint lease");
+        assert!(observed_lease.same_generation(&first_lease));
+        assert!(state.available().contains(&identity_a));
+        assert_eq!(state.chosen(), Some(&identity_a));
+        assert!((1..=2).contains(&state.endpoints().len()));
+        assert!(state
+            .endpoints()
+            .iter()
+            .all(|endpoint| state.lease_for(endpoint.identity()).is_some()));
+        tokio::task::yield_now().await;
+    }
+
+    updates.await.expect("endpoint updates should complete");
+    client.shutdown();
+}
+
+#[tokio::test]
+async fn stale_failure_cannot_clear_newer_nameserver_choice() {
+    let client = Arc::new(TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("stale-chosen-clear-test"),
+    ));
+    let endpoint_a = NameServerEndpoint::legacy("ns-a:9876").expect("valid nameserver");
+    let endpoint_b = NameServerEndpoint::legacy("ns-b:9876").expect("valid nameserver");
+    let endpoint_c = NameServerEndpoint::legacy("ns-c:9876").expect("valid nameserver");
+    let identity_a = endpoint_a.identity().clone();
+    let identity_c = endpoint_c.identity().clone();
+
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint_a.clone(), endpoint_b.clone()], Duration::ZERO);
+    let stale_a_lease = client.endpoint_state.load().lease_for(&identity_a).expect("S1 A lease");
+    assert!(client.endpoint_state.set_chosen(&stale_a_lease));
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let entered_wait = entered.notified();
+    tokio::pin!(entered_wait);
+    entered_wait.as_mut().enable();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let stale_store = Arc::clone(&client.endpoint_state);
+    let entered_for_task = Arc::clone(&entered);
+    let resume_for_task = Arc::clone(&resume);
+    let stale_task = tokio::spawn(async move {
+        entered_for_task.notify_one();
+        resume_for_task.notified().await;
+        let _ = result_tx.send(stale_store.clear_chosen_if_matches(&stale_a_lease));
+    });
+    entered_wait.await;
+
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint_a, endpoint_b, endpoint_c], Duration::ZERO);
+    let c_lease = client.endpoint_state.load().lease_for(&identity_c).expect("S2 C lease");
+    assert!(client.endpoint_state.set_chosen(&c_lease));
+    resume.notify_one();
+
+    assert!(!result_rx.await.expect("stale clear result"));
+    stale_task.await.expect("stale failure task");
+    let state = client.endpoint_state.load();
+    assert_eq!(state.chosen(), Some(&identity_c));
+    assert!(state
+        .lease_for(&identity_c)
+        .is_some_and(|lease| lease.same_generation(&c_lease)));
+    client.shutdown();
+}
+
+#[tokio::test]
+async fn stale_probe_result_cannot_update_replaced_generation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let (release_server, server_release) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.expect("accept stale probe connection");
+        server_release.await.expect("release probe server");
+    });
+    let client = Arc::new(TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("stale-probe-generation-test"),
+    ));
+    let endpoint = NameServerEndpoint::legacy(addr.to_string()).expect("valid nameserver");
+    let identity = endpoint.identity().clone();
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint.clone()], Duration::ZERO);
+    let stale_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("initial endpoint lease");
+    let hook = EndpointCompletionTestHook::new();
+    client.install_connect_completion_test_hook(hook.clone());
+    let scan_client = Arc::clone(&client);
+    let scan = tokio::spawn(async move {
+        scan_client.scan_available_name_srv().await;
+    });
+    hook.wait_until_entered().await;
+
+    client.apply_name_server_endpoint_snapshot_sync(Vec::new(), Duration::ZERO);
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint.clone()], Duration::ZERO);
+    let readded_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("re-added endpoint lease");
+    assert!(!readded_lease.same_generation(&stale_lease));
+    client
+        .nameserver_health
+        .connection_admission_if_current(&identity, &readded_lease, || {
+            client.endpoint_state.is_current(&readded_lease)
+        });
+    assert!(client
+        .nameserver_health
+        .owns_latency_for_test(&identity, &readded_lease));
+    hook.release();
+    scan.await.expect("stale scan should finish");
+
+    assert!(!client.endpoint_state.load().available().contains(&identity));
+    assert!(client
+        .nameserver_health
+        .owns_latency_for_test(&identity, &readded_lease));
+    client.shutdown();
+    release_server.send(()).expect("release probe server");
+    server.await.expect("probe server task");
+}
+
+#[tokio::test]
+async fn stale_connect_completion_cannot_register_into_new_generation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.expect("accept client");
+        let _ = release_rx.await;
+    });
+    let client = Arc::new(TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("stale-connect-generation-test"),
+    ));
+    let endpoint = NameServerEndpoint::legacy(addr.to_string()).expect("valid nameserver");
+    let identity = endpoint.identity().clone();
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint.clone()], Duration::ZERO);
+    let stale_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("initial endpoint lease");
+    let hook = EndpointCompletionTestHook::new();
+    client.install_connect_completion_test_hook(hook.clone());
+    let connect_client = Arc::clone(&client);
+    let connect_identity = identity.clone();
+    let connect_endpoint = endpoint.clone();
+    let connect_lease = stale_lease.clone();
+    let connect = tokio::spawn(async move {
+        connect_client
+            .create_client_for_nameserver_until(
+                &connect_identity,
+                connect_endpoint,
+                connect_lease,
+                RequestDeadline::after(Duration::from_secs(1)),
+            )
+            .await
+    });
+    hook.wait_until_entered().await;
+
+    client.apply_name_server_endpoint_snapshot_sync(Vec::new(), Duration::ZERO);
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint], Duration::ZERO);
+    let readded_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("re-added endpoint lease");
+    hook.release();
+
+    assert!(!client.can_commit_endpoint_lease(Some(&stale_lease)));
+    assert!(connect
+        .await
+        .expect("connect flight task")
+        .expect("stale connection completion")
+        .is_none());
+    assert!(!client
+        .connection_registry
+        .has_session_for_lease(&identity, &stale_lease));
+    assert!(!client
+        .connection_registry
+        .has_session_for_lease(&identity, &readded_lease));
+    client.shutdown();
+    release_tx.send(()).expect("release server");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn retired_generation_cleanup_preserves_readded_endpoint() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let (release_server, server_release) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.expect("accept nameserver session");
+        server_release.await.expect("release retirement server");
+    });
+    let client = TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("retired-generation-cleanup-test"),
+    );
+    let endpoint = NameServerEndpoint::legacy(addr.to_string()).expect("valid nameserver");
+    let identity = endpoint.identity().clone();
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint.clone()], Duration::ZERO);
+    let first_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("initial endpoint lease");
+    let session = client
+        .create_client_for_nameserver_until(
+            &identity,
+            endpoint.clone(),
+            first_lease.clone(),
+            RequestDeadline::after(Duration::from_secs(1)),
+        )
+        .await
+        .expect("connect initial nameserver")
+        .expect("initial nameserver session");
+    assert!(client
+        .connection_registry
+        .has_session_for_lease(&identity, &first_lease));
+    assert!(client.nameserver_health.owns_latency_for_test(&identity, &first_lease));
+    drop(session);
+
+    client.apply_name_server_endpoint_snapshot_sync(
+        vec![
+            endpoint.clone(),
+            NameServerEndpoint::legacy("ns-b:9876").expect("valid nameserver"),
+        ],
+        Duration::ZERO,
+    );
+    let retained_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("retained endpoint lease");
+    assert!(retained_lease.same_generation(&first_lease));
+
+    client.apply_name_server_endpoint_snapshot_sync(
+        vec![NameServerEndpoint::legacy("ns-b:9876").expect("valid nameserver")],
+        Duration::ZERO,
+    );
+    assert!(!client
+        .connection_registry
+        .has_session_for_lease(&identity, &first_lease));
+    assert!(!client.nameserver_health.owns_latency_for_test(&identity, &first_lease));
+    client.shutdown();
+    release_server.send(()).expect("release retirement server");
+    server.await.expect("retirement server task");
+}
+
+#[tokio::test]
+async fn direct_broker_session_survives_nameserver_retirement_at_same_address() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let (release_server, server_release) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (_direct_socket, _) = listener.accept().await.expect("accept direct broker session");
+        let (_nameserver_socket, _) = listener.accept().await.expect("accept nameserver session");
+        server_release.await.expect("release shared-address server");
+    });
+    let client = TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("direct-and-nameserver-scope-test"),
+    );
+    let endpoint = NameServerEndpoint::legacy(addr.to_string()).expect("valid nameserver");
+    let identity = endpoint.identity().clone();
+    let direct_session = client
+        .create_client(&identity, Duration::from_secs(1))
+        .await
+        .expect("direct broker session");
+
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint.clone()], Duration::ZERO);
+    let nameserver_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("nameserver endpoint lease");
+    let nameserver_session = client
+        .create_client_for_nameserver_until(
+            &identity,
+            endpoint,
+            nameserver_lease.clone(),
+            RequestDeadline::after(Duration::from_secs(1)),
+        )
+        .await
+        .expect("connect nameserver session")
+        .expect("nameserver session");
+    assert!(client.connection_registry.healthy_session(&identity, None).is_some());
+    assert!(client
+        .connection_registry
+        .has_session_for_lease(&identity, &nameserver_lease));
+    drop(nameserver_session);
+
+    client.apply_name_server_endpoint_snapshot_sync(Vec::new(), Duration::ZERO);
+    assert!(direct_session.connection().is_healthy());
+    assert!(client.connection_registry.healthy_session(&identity, None).is_some());
+    assert!(!client
+        .connection_registry
+        .has_session_for_lease(&identity, &nameserver_lease));
+
+    drop(direct_session);
+    client.shutdown();
+    release_server.send(()).expect("release shared-address server");
+    server.await.expect("shared-address server task");
+}
+
 #[tokio::test]
 async fn service_context_parents_background_and_worker_tasks() {
     let context = RuntimeContext::from_current("remoting-default-client-parent-test");
@@ -343,7 +697,7 @@ async fn cold_endpoint_burst_uses_one_lifecycle_owned_connect_flight() {
         .expect("burst deadline");
     assert!(responses.into_iter().all(|response| response.is_ok()));
     assert_eq!(client.connect_attempts.load(Ordering::Relaxed), 1);
-    assert_eq!(client.connection_tables.len(), 1);
+    assert_eq!(client.connection_registry.len(), 1);
 
     server.await.expect("server task");
     client.shutdown();
@@ -431,26 +785,28 @@ async fn registry_token_distinguishes_replacements_and_same_port_nameserver_iden
         .create_client(&target, Duration::from_secs(1))
         .await
         .expect("first client");
-    client.connection_tables.remove(&target);
+    client.connection_registry.remove_session_by_identity(&target);
     let replacement = client
         .create_client(&target, Duration::from_secs(1))
         .await
         .expect("replacement client");
-    client.connection_tables.remove(&target);
+    client.connection_registry.remove_session_by_identity(&target);
 
     let first_identity = CheetahString::from_static_str("nameserver-a:9876");
     let replacement_identity = CheetahString::from_static_str("nameserver-b:9876");
-    client.connection_tables.insert(first_identity.clone(), first.clone());
     client
-        .connection_tables
-        .insert(replacement_identity.clone(), replacement.clone());
+        .connection_registry
+        .insert_session(first_identity.clone(), first.clone(), None, || true);
+    client
+        .connection_registry
+        .insert_session(replacement_identity.clone(), replacement.clone(), None, || true);
 
     assert_eq!(client.session_cache_identity(None, &first), first_identity);
     assert_eq!(client.session_cache_identity(None, &replacement), replacement_identity);
     assert!(!client.remove_cached_session_if_matches(&replacement_identity, &first));
-    assert!(client.connection_tables.contains_key(&replacement_identity));
+    assert!(client.connection_registry.contains(&replacement_identity));
     assert!(client.remove_cached_session_if_matches(&first_identity, &first));
-    assert!(client.connection_tables.contains_key(&replacement_identity));
+    assert!(client.connection_registry.contains(&replacement_identity));
 
     client.shutdown();
     let _ = release_tx.send(());
@@ -558,8 +914,8 @@ async fn explicit_broker_requests_do_not_update_nameserver_latency() {
         .await
         .expect("explicit Broker oneway");
 
-    assert_eq!(client.latency_tracker.get_p99(&target), None);
-    assert_eq!(client.latency_tracker.get_error_count(&target), 0);
+    assert_eq!(client.nameserver_health.latency_p99_for_test(&target), None);
+    assert_eq!(client.nameserver_health.latency_error_count_for_test(&target), 0);
     server.await.expect("server task");
     client.shutdown();
 }
@@ -600,8 +956,8 @@ async fn nameserver_request_updates_latency_and_failover_state() {
         .await
         .expect("NameServer request");
 
-    assert!(client.latency_tracker.get_p99(&target).is_some());
-    assert_eq!(client.latency_tracker.get_error_count(&target), 0);
+    assert!(client.nameserver_health.latency_p99_for_test(&target).is_some());
+    assert_eq!(client.nameserver_health.latency_error_count_for_test(&target), 0);
     server.await.expect("server task");
     client.shutdown();
 }
@@ -652,8 +1008,8 @@ async fn unchanged_resolved_endpoint_reuses_connection_and_identity_state() {
     }
 
     assert_eq!(client.connect_attempts.load(Ordering::Relaxed), 1);
-    assert!(client.connection_tables.contains_key(&identity));
-    assert!(client.latency_tracker.get_p99(&identity).is_some());
+    assert!(client.connection_registry.contains(&identity));
+    assert!(client.nameserver_health.latency_p99_for_test(&identity).is_some());
     let snapshot = client.snapshot();
     assert_eq!(snapshot.healthy_name_server_count, 1);
     assert_eq!(snapshot.probing_name_server_count, 0);
@@ -714,9 +1070,12 @@ async fn same_socket_with_new_authority_does_not_reuse_the_old_session() {
         .expect("second authority request");
 
     assert_eq!(client.connect_attempts.load(Ordering::Relaxed), 2);
-    assert!(!client.connection_tables.contains_key(&first.identity()));
-    assert!(client.connection_tables.contains_key(&second.identity()));
-    assert!(client.latency_tracker.get_p99(&second.identity()).is_some());
+    assert!(!client.connection_registry.contains(&first.identity()));
+    assert!(client.connection_registry.contains(&second.identity()));
+    assert!(client
+        .nameserver_health
+        .latency_p99_for_test(&second.identity())
+        .is_some());
     server.await.expect("server task");
     client.shutdown();
 }
@@ -763,7 +1122,7 @@ async fn removed_endpoint_rejects_new_work_and_closes_after_drain_timeout() {
     client.update_name_server_connect_targets_sync(Vec::new(), Duration::from_millis(25));
 
     assert!(client.get_name_server_address_list().is_empty());
-    assert!(!client.connection_tables.contains_key(&identity));
+    assert!(!client.connection_registry.contains(&identity));
     assert!(time::timeout(Duration::from_secs(1), request)
         .await
         .unwrap()
@@ -893,14 +1252,14 @@ async fn shutdown_with_report_closes_connection_table_clients() {
         .await
         .expect("client connection should be created");
     drop(created);
-    assert_eq!(client.connection_tables.len(), 1);
+    assert_eq!(client.connection_registry.len(), 1);
 
     let report = client.shutdown_with_report(Duration::from_secs(1)).await;
 
     assert!(report.is_healthy(), "{report:?}");
     assert_eq!(report.connections.len(), 1);
     assert_eq!(report.connections[0].addr, target);
-    assert!(client.connection_tables.is_empty());
+    assert!(client.connection_registry.is_empty());
     server.abort();
 }
 
@@ -933,7 +1292,7 @@ async fn idle_scan_evicts_an_expired_persistent_session() {
 
     client.scan_idle_connections();
 
-    assert!(client.connection_tables.is_empty());
+    assert!(client.connection_registry.is_empty());
     client.shutdown();
     server.abort();
 }

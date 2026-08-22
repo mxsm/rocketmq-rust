@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
@@ -21,11 +20,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use dashmap::DashMap;
 use parking_lot::Mutex;
-use parking_lot::RwLock;
 use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -50,14 +46,8 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
 use crate::clients::client::SessionConnectTarget;
-use crate::clients::nameserver_endpoint::diff_name_server_endpoints;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
-use crate::clients::nameserver_failover::build_nameserver_failover_candidates;
-use crate::clients::nameserver_selector::LatencyTracker;
-use crate::clients::reconnect::CircuitAdmission;
-use crate::clients::reconnect::CircuitBreaker;
-use crate::clients::reconnect::CircuitState;
 use crate::clients::TransportSession;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
@@ -74,11 +64,48 @@ use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::telemetry::TransportGoAwayOutcome;
-use crate::telemetry::TransportNameServerFailoverReason;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsConfig;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+
+mod connection_registry;
+mod endpoint_state;
+mod nameserver;
+
+use connection_registry::ConnectionRegistry;
+use endpoint_state::EndpointLease;
+use endpoint_state::EndpointStateStore;
+use nameserver::NameServerHealth;
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct EndpointCompletionTestHook {
+    entered: Arc<std::sync::atomic::AtomicBool>,
+    entered_signal: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(test)]
+impl EndpointCompletionTestHook {
+    pub(crate) fn new() -> Self {
+        Self {
+            entered: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            entered_signal: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    pub(crate) async fn wait_until_entered(&self) {
+        while !self.entered.load(Ordering::Acquire) {
+            self.entered_signal.notified().await;
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.notify_one();
+    }
+}
 
 /// High-performance async RocketMQ client with persistent endpoint sessions and auto-reconnection.
 ///
@@ -163,37 +190,18 @@ pub struct TransportClient<PR = DefaultRequestProcessor> {
     /// - Concurrency: Scales linearly with CPU cores (typically 16-64 shards)
     ///
     /// Invariant: Only contains healthy connections (unhealthy removed on error)
-    connection_tables: Arc<DashMap<CheetahString /* ip:port */, TransportSession<PR>>>,
-
-    /// One lifecycle-owned connection attempt per endpoint during cold bursts.
-    connect_flights: Arc<DashMap<CheetahString, Arc<ConnectFlight<PR>>>>,
+    connection_registry: Arc<ConnectionRegistry<PR>>,
     connect_attempts: Arc<AtomicU64>,
     namesrv_draining_count: Arc<AtomicUsize>,
 
     /// List of all nameserver addresses (in priority order)
     ///
     /// Updated via `update_name_server_address_list()`
-    namesrv_endpoints: Arc<ArcSwap<Vec<NameServerEndpoint>>>,
-
-    /// Currently selected nameserver (cached for fast path)
-    ///
-    /// May be `None` if no nameserver available or all unhealthy
-    namesrv_addr_choosed: Arc<RwLock<Option<CheetahString>>>,
-
-    /// Set of healthy/reachable nameservers
-    ///
-    /// Updated asynchronously by health check task (`scan_available_name_srv`)
-    available_namesrv_addr_set: Arc<RwLock<HashSet<CheetahString>>>,
-
-    /// Latency tracker for smart nameserver selection
-    ///
-    /// Tracks P99 latency and error rates to select the best nameserver
-    latency_tracker: LatencyTracker,
-
-    /// Circuit breakers per address to prevent cascading failures
-    ///
-    /// Maps address to circuit breaker state for auto-reconnection
-    circuit_breakers: Arc<DashMap<CheetahString, CircuitBreaker>>,
+    endpoint_state: Arc<EndpointStateStore>,
+    nameserver_health: Arc<NameServerHealth>,
+    direct_circuit_breakers: Arc<dashmap::DashMap<CheetahString, crate::clients::reconnect::CircuitBreaker>>,
+    #[cfg(test)]
+    connect_completion_test_hook: Arc<Mutex<Option<EndpointCompletionTestHook>>>,
 
     /// Token used to signal graceful shutdown of background tasks.
     ///
@@ -377,63 +385,6 @@ where
     }
 }
 
-enum ConnectFlightState<PR> {
-    Connecting,
-    Complete(Box<Result<Option<TransportSession<PR>>, Arc<str>>>),
-}
-
-struct ConnectFlight<PR> {
-    state: Mutex<ConnectFlightState<PR>>,
-    changed: tokio::sync::Notify,
-}
-
-struct DrainingEndpointGuard(Arc<AtomicUsize>);
-
-impl Drop for DrainingEndpointGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-impl<PR> ConnectFlight<PR>
-where
-    PR: RequestProcessor + Sync + Clone + 'static,
-{
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(ConnectFlightState::Connecting),
-            changed: tokio::sync::Notify::new(),
-        }
-    }
-
-    fn complete(&self, result: RocketMQResult<Option<TransportSession<PR>>>) {
-        *self.state.lock() =
-            ConnectFlightState::Complete(Box::new(result.map_err(|error| Arc::<str>::from(error.to_string()))));
-        self.changed.notify_waiters();
-    }
-
-    async fn wait(
-        &self,
-        deadline: RequestDeadline,
-        target: &CheetahString,
-    ) -> RocketMQResult<Option<TransportSession<PR>>> {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if let ConnectFlightState::Complete(result) = &*self.state.lock() {
-                return (**result).clone().map_err(|message| {
-                    RocketMQError::network_connection_failed(target.to_string(), message.to_string())
-                });
-            }
-            deadline
-                .timeout(changed)
-                .await
-                .map_err(|_| RocketMQError::network_connection_timeout(target.to_string(), deadline.budget_millis()))?;
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize)]
 pub struct ClientStartReport {
     pub background_tasks_started: usize,
@@ -509,15 +460,14 @@ impl<PR> Clone for TransportClient<PR> {
     fn clone(&self) -> Self {
         Self {
             tokio_client_config: self.tokio_client_config.clone(),
-            connection_tables: self.connection_tables.clone(),
-            connect_flights: self.connect_flights.clone(),
+            connection_registry: self.connection_registry.clone(),
             connect_attempts: self.connect_attempts.clone(),
             namesrv_draining_count: self.namesrv_draining_count.clone(),
-            namesrv_endpoints: self.namesrv_endpoints.clone(),
-            namesrv_addr_choosed: self.namesrv_addr_choosed.clone(),
-            available_namesrv_addr_set: self.available_namesrv_addr_set.clone(),
-            latency_tracker: self.latency_tracker.clone(),
-            circuit_breakers: self.circuit_breakers.clone(),
+            endpoint_state: self.endpoint_state.clone(),
+            nameserver_health: self.nameserver_health.clone(),
+            direct_circuit_breakers: self.direct_circuit_breakers.clone(),
+            #[cfg(test)]
+            connect_completion_test_hook: self.connect_completion_test_hook.clone(),
             shutdown_token: self.shutdown_token.clone(),
             background_task_group: self.background_task_group.clone(),
             worker_task_group: self.worker_task_group.clone(),
@@ -588,15 +538,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         );
         Ok(Self {
             tokio_client_config,
-            connection_tables: Arc::new(DashMap::with_capacity(64)),
-            connect_flights: Arc::new(DashMap::with_capacity(64)),
+            connection_registry: Arc::new(ConnectionRegistry::new()),
             connect_attempts: Arc::new(AtomicU64::new(0)),
             namesrv_draining_count: Arc::new(AtomicUsize::new(0)),
-            namesrv_endpoints: Arc::new(ArcSwap::from_pointee(Vec::new())),
-            namesrv_addr_choosed: Arc::new(RwLock::new(Default::default())),
-            available_namesrv_addr_set: Arc::new(RwLock::new(Default::default())),
-            latency_tracker: LatencyTracker::new(),
-            circuit_breakers: Arc::new(DashMap::with_capacity(64)),
+            endpoint_state: Arc::new(EndpointStateStore::new()),
+            nameserver_health: Arc::new(NameServerHealth::new()),
+            direct_circuit_breakers: Arc::new(dashmap::DashMap::with_capacity(64)),
+            #[cfg(test)]
+            connect_completion_test_hook: Arc::new(Mutex::new(None)),
             shutdown_token: CancellationToken::new(),
             background_task_group: Arc::new(Mutex::new(None)),
             worker_task_group: Arc::new(Mutex::new(None)),
@@ -630,34 +579,37 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
     #[must_use]
     pub fn snapshot(&self) -> ClientSnapshot {
-        let endpoints = self.namesrv_endpoints.load();
-        let identities = endpoints
+        let state = self.endpoint_state.load();
+        let healthy_name_server_count = state
+            .endpoints()
             .iter()
-            .map(|endpoint| endpoint.identity())
-            .collect::<HashSet<_>>();
-        let healthy_name_server_count = identities
-            .iter()
-            .filter(|identity| {
-                self.connection_tables
-                    .get(**identity)
-                    .is_some_and(|session| session.connection().is_healthy())
-                    && self.latency_tracker.is_healthy(identity)
+            .filter(|endpoint| {
+                state.lease_for(endpoint.identity()).is_some_and(|lease| {
+                    self.connection_registry
+                        .healthy_session(endpoint.identity(), Some(&lease))
+                        .is_some_and(|session| session.connection().is_healthy())
+                        && self.nameserver_health.is_healthy(endpoint.identity(), &lease)
+                })
             })
             .count();
-        let (probing_name_server_count, circuit_open_name_server_count) = self
-            .circuit_breakers
+        let (probing_name_server_count, circuit_open_name_server_count) = state
+            .endpoints()
             .iter()
-            .filter(|entry| identities.contains(entry.key()))
-            .fold((0, 0), |(probing, open), entry| match entry.state() {
-                CircuitState::Closed => (probing, open),
-                CircuitState::HalfOpen => (probing + 1, open),
-                CircuitState::Open => (probing, open + 1),
+            .filter_map(|endpoint| {
+                state
+                    .lease_for(endpoint.identity())
+                    .and_then(|lease| self.nameserver_health.circuit_state(endpoint.identity(), &lease))
+            })
+            .fold((0, 0), |(probing, open), state| match state {
+                crate::clients::reconnect::CircuitState::Closed => (probing, open),
+                crate::clients::reconnect::CircuitState::HalfOpen => (probing + 1, open),
+                crate::clients::reconnect::CircuitState::Open => (probing, open + 1),
             });
         ClientSnapshot {
-            connection_count: self.connection_tables.len(),
-            connect_flight_count: self.connect_flights.len(),
-            configured_name_server_count: self.namesrv_endpoints.load().len(),
-            available_name_server_count: self.available_namesrv_addr_set.read().len(),
+            connection_count: self.connection_registry.len(),
+            connect_flight_count: self.connection_registry.flight_count(),
+            configured_name_server_count: state.endpoints().len(),
+            available_name_server_count: state.available().len(),
             healthy_name_server_count,
             probing_name_server_count,
             draining_name_server_count: self.namesrv_draining_count.load(Ordering::Acquire),
@@ -689,7 +641,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
     /// Atomically applies resolved NameServer targets and starts bounded retirement for removals.
     pub fn update_name_server_connect_targets_sync(&self, targets: Vec<ConnectTarget>, drain_timeout: Duration) {
-        let endpoints = targets.into_iter().map(NameServerEndpoint::resolved).collect();
+        let endpoints = Self::name_server_connect_targets_to_endpoints(targets);
         self.apply_name_server_endpoint_snapshot_sync(endpoints, drain_timeout);
     }
 
@@ -699,50 +651,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         endpoints: Vec<NameServerEndpoint>,
         drain_timeout: Duration,
     ) {
-        let current = self.namesrv_endpoints.load_full();
-        let diff = diff_name_server_endpoints(&current, &endpoints);
-        if diff.added.is_empty() && diff.removed.is_empty() {
-            return;
-        }
-
-        let old_count = current.len();
-        self.namesrv_endpoints.store(Arc::new(endpoints));
-        info!(
-            added = diff.added.len(),
-            unchanged = diff.unchanged.len(),
-            removed = diff.removed.len(),
-            old_count,
-            new_count = self.namesrv_endpoints.load().len(),
-            "NameServer endpoint snapshot updated"
-        );
-
-        for endpoint in diff.removed {
-            let identity = endpoint.identity().clone();
-            self.available_namesrv_addr_set.write().remove(&identity);
-            if self.namesrv_addr_choosed.read().as_ref() == Some(&identity) {
-                self.namesrv_addr_choosed.write().take();
-            }
-            self.connect_flights.remove(&identity);
-            if let Some((_, session)) = self.connection_tables.remove(&identity) {
-                self.start_removed_endpoint_drain(identity, session, drain_timeout);
-            }
-        }
-    }
-
-    fn name_server_identity_list(&self) -> Vec<CheetahString> {
-        self.namesrv_endpoints
-            .load()
-            .iter()
-            .map(|endpoint| endpoint.identity().clone())
-            .collect()
-    }
-
-    fn name_server_endpoint(&self, identity: &CheetahString) -> Option<NameServerEndpoint> {
-        self.namesrv_endpoints
-            .load()
-            .iter()
-            .find(|endpoint| endpoint.identity() == identity)
-            .cloned()
+        self.apply_name_server_endpoint_snapshot(endpoints, drain_timeout);
     }
 
     fn get_or_create_worker_task_group(&self) -> Option<TaskGroup> {
@@ -771,6 +680,21 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         self.worker_task_group.lock().as_ref().cloned()
     }
 
+    #[cfg(test)]
+    pub(crate) fn install_connect_completion_test_hook(&self, hook: EndpointCompletionTestHook) {
+        *self.connect_completion_test_hook.lock() = Some(hook);
+    }
+
+    #[cfg(test)]
+    async fn wait_for_connect_completion_test_hook(&self) {
+        let hook = self.connect_completion_test_hook.lock().clone();
+        if let Some(hook) = hook {
+            hook.entered.store(true, Ordering::Release);
+            hook.entered_signal.notify_waiters();
+            hook.release.notified().await;
+        }
+    }
+
     pub(crate) fn spawn_worker_task<F>(&self, name: impl Into<Arc<str>>, future: F) -> Option<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -789,164 +713,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             }
         }
     }
-
-    fn start_removed_endpoint_drain(
-        &self,
-        identity: CheetahString,
-        session: TransportSession<PR>,
-        drain_timeout: Duration,
-    ) {
-        session.begin_drain();
-        self.namesrv_draining_count.fetch_add(1, Ordering::AcqRel);
-        let drain_guard = DrainingEndpointGuard(self.namesrv_draining_count.clone());
-        self.telemetry
-            .record_nameserver_failover(TransportNameServerFailoverReason::Draining);
-        let latency_tracker = self.latency_tracker.clone();
-        let circuit_breakers = self.circuit_breakers.clone();
-        let cleanup_identity = identity.clone();
-        let task_name = format!("rocketmq.transport.nameserver-drain.{identity}");
-        let spawned = self.spawn_worker_task(task_name, async move {
-            let _drain_guard = drain_guard;
-            let report = session.drain_and_close(drain_timeout).await;
-            latency_tracker.remove(&cleanup_identity);
-            circuit_breakers.remove(&cleanup_identity);
-            if !report.is_healthy() {
-                warn!(report = %report.to_json(), "removed NameServer endpoint drain was unhealthy");
-            }
-        });
-        if spawned.is_none() {
-            warn!("removed NameServer endpoint drain could not be scheduled because the client is shutting down");
-        }
-    }
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
-    /// Get or create connection to a healthy nameserver using smart latency-based selection.
-    ///
-    /// # Selection Strategy
-    ///
-    /// **Latency-based**: Selects lowest P99 latency nameserver
-    /// ```text
-    /// namesrv_list = [ns1, ns2, ns3]
-    /// Metrics:
-    ///   ns1: P99=5ms,  errors=0
-    ///   ns2: P99=50ms, errors=0
-    ///   ns3: P99=10ms, errors=3 (unhealthy)
-    ///
-    /// Selection: ns1 (lowest latency + healthy)
-    /// ```
-    ///
-    /// **Scoring Formula**:
-    /// ```text
-    /// score = P99_latency_ms + (consecutive_errors × 100)
-    /// ```
-    ///
-    /// **Fallback**: If no metrics available, uses first nameserver
-    ///
-    /// # Performance Notes
-    ///
-    /// - **Lock Minimization**: Drops lock before expensive `create_client()`
-    /// - **Smart Selection**: O(N) where N = nameserver count (typically <10)
-    /// - **Caching**: Reuses `namesrv_addr_choosed` for fast path
-    ///
-    /// # Returns
-    ///
-    /// * `Some(client)` - Connected to healthy nameserver
-    /// * `None` - No nameservers available or all unhealthy
-    async fn get_and_create_nameserver_client_until(
-        &self,
-        deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<TransportSession<PR>>> {
-        deadline.ensure_before_send("<nameserver>")?;
-        let cached_addr = self.namesrv_addr_choosed.read().clone();
-
-        if let Some(ref addr) = cached_addr {
-            // Quick lookup in the endpoint-session registry.
-            if let Some(client) = self.connection_tables.get(addr) {
-                if client.connection().is_healthy() && self.latency_tracker.is_healthy(addr) {
-                    // Fast path: Cached nameserver is healthy
-                    return Ok(Some(client.value().clone()));
-                }
-                debug!("Cached nameserver {} is unhealthy, selecting new one", addr);
-                self.telemetry
-                    .record_nameserver_failover(TransportNameServerFailoverReason::Unhealthy);
-            }
-        }
-
-        let addr_list = self.name_server_identity_list();
-
-        if addr_list.is_empty() {
-            warn!("No nameservers configured in namesrv_addr_list");
-            return Ok(None);
-        }
-
-        let available = self.available_namesrv_addr_set.read().clone();
-        let mut half_open_probe_selected = false;
-        let mut candidates =
-            build_nameserver_failover_candidates(&addr_list, &available, &self.latency_tracker, |address| {
-                let mut breaker = self
-                    .circuit_breakers
-                    .entry(address.clone())
-                    .or_insert_with(CircuitBreaker::default_breaker);
-                match breaker.connection_admission() {
-                    CircuitAdmission::Regular => true,
-                    CircuitAdmission::Probe if !half_open_probe_selected => {
-                        half_open_probe_selected = true;
-                        true
-                    }
-                    CircuitAdmission::Probe | CircuitAdmission::Rejected => {
-                        self.telemetry
-                            .record_nameserver_failover(TransportNameServerFailoverReason::CircuitOpen);
-                        false
-                    }
-                }
-            });
-        candidates.sort_by_key(|address| {
-            self.connection_tables
-                .get(address)
-                .is_none_or(|session| !session.connection().is_healthy())
-        });
-        if candidates.is_empty() {
-            error!(
-                "Failed to select healthy nameserver. Available list: {:?}, Available set: {:?}",
-                addr_list, available
-            );
-            return Ok(None);
-        }
-
-        let mut last_error = None;
-        for selected_addr in candidates {
-            deadline.ensure_before_send(selected_addr.to_string())?;
-            info!(
-                "Selected nameserver: {} (P99: {:?}, errors: {})",
-                selected_addr,
-                self.latency_tracker
-                    .get_p99(&selected_addr)
-                    .unwrap_or(Duration::from_secs(0)),
-                self.latency_tracker.get_error_count(&selected_addr)
-            );
-            match self.create_client_until(&selected_addr, deadline).await {
-                Ok(Some(client)) => {
-                    self.namesrv_addr_choosed.write().replace(selected_addr);
-                    return Ok(Some(client));
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    self.telemetry
-                        .record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
-                    self.latency_tracker.record_error(&selected_addr);
-                    last_error = Some(error);
-                }
-            }
-        }
-
-        self.namesrv_addr_choosed.write().take();
-        match last_error {
-            Some(error) => Err(error),
-            None => Ok(None),
-        }
-    }
-
     /// Get existing healthy client or create new connection.
     ///
     /// # Flow
@@ -958,17 +727,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     /// # Performance
     /// - **Fast path**: Single lock acquire + HashMap lookup + health check (< 100ns)
     /// - **Slow path**: Lock + TCP handshake + TLS (if enabled) (10-50ms)
-    async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<TransportSession<PR>> {
-        let deadline = RequestDeadline::after(self.tokio_client_config.connect.timeout);
-        match self.get_and_create_client_until(addr, deadline).await {
-            Ok(client) => client,
-            Err(error) => {
-                warn!(error = ?error, "Failed to get or create remoting client");
-                None
-            }
-        }
-    }
-
     async fn get_and_create_client_until(
         &self,
         addr: Option<&CheetahString>,
@@ -976,23 +734,25 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
         // Route empty addresses to nameserver
         let target_addr = match addr {
-            None => return self.get_and_create_nameserver_client_until(deadline).await,
-            Some(addr) if addr.is_empty() => return self.get_and_create_nameserver_client_until(deadline).await,
+            None => {
+                return self
+                    .get_and_create_nameserver_client_until(deadline)
+                    .await
+                    .map(|selection| selection.map(|selection| selection.session))
+            }
+            Some(addr) if addr.is_empty() => {
+                return self
+                    .get_and_create_nameserver_client_until(deadline)
+                    .await
+                    .map(|selection| selection.map(|selection| selection.session))
+            }
             Some(addr) => addr,
         };
         deadline.ensure_before_send(target_addr.to_string())?;
 
-        // Fast path: Check the persistent endpoint-session registry.
-        if let Some(client_ref) = self.connection_tables.get(target_addr) {
-            let client = client_ref.value().clone();
-            if client.connection().is_healthy() {
-                return Ok(Some(client)); // Return healthy cached client
-            }
-            // Client unhealthy - will create new connection
-            debug!("Cached client for {} is unhealthy, reconnecting...", target_addr);
+        if let Some(client) = self.connection_registry.healthy_session(target_addr, None) {
+            return Ok(Some(client));
         }
-
-        // Slow path: Create new connection
         self.create_client_until(target_addr, deadline).await
     }
 
@@ -1049,43 +809,61 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         addr: &CheetahString,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
+        self.create_client_with_lease_until(addr, None, None, deadline).await
+    }
+
+    async fn create_client_for_nameserver_until(
+        &self,
+        addr: &CheetahString,
+        endpoint: NameServerEndpoint,
+        lease: EndpointLease,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
+        self.create_client_with_lease_until(addr, Some(endpoint), Some(lease), deadline)
+            .await
+    }
+
+    async fn create_client_with_lease_until(
+        &self,
+        addr: &CheetahString,
+        configured_nameserver: Option<NameServerEndpoint>,
+        lease: Option<EndpointLease>,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
-        if let Some(client) = self.connection_tables.get(addr) {
-            if client.connection().is_healthy() {
-                return Ok(Some(client.value().clone()));
-            }
+        if !self.can_commit_endpoint_lease(lease.as_ref()) {
+            return Ok(None);
+        }
+        if let Some(client) = self.connection_registry.healthy_session(addr, lease.as_ref()) {
+            return Ok(Some(client));
         }
 
-        let (flight, leader) = match self.connect_flights.entry(addr.clone()) {
-            dashmap::mapref::entry::Entry::Occupied(entry) => (entry.get().clone(), false),
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let flight = Arc::new(ConnectFlight::new());
-                entry.insert(flight.clone());
-                (flight, true)
-            }
-        };
+        let (flight, leader) = self.connection_registry.acquire_flight(addr.clone(), lease.clone());
         if leader {
             let client = self.clone();
             let flight_for_task = flight.clone();
             let target = addr.clone();
-            let configured_nameserver = self.name_server_endpoint(addr);
             let connect_timeout = self.tokio_client_config.connect.timeout;
             let target_for_task = target.clone();
+            let lease_for_task = lease.clone();
             let spawned = self.spawn_worker_task(format!("rocketmq.transport.connect.{target}"), async move {
                 client.connect_attempts.fetch_add(1, Ordering::Relaxed);
                 let result = client
                     .connect_endpoint_until(
                         &target_for_task,
                         configured_nameserver,
+                        lease_for_task,
                         RequestDeadline::after(connect_timeout),
                     )
                     .await;
                 flight_for_task.complete(result);
-                client.connect_flights.remove(&target_for_task);
+                client
+                    .connection_registry
+                    .remove_flight_if_matches(&target_for_task, &flight_for_task);
             });
             if spawned.is_none() {
                 flight.complete(Err(RocketMQError::ClientNotStarted));
-                self.connect_flights.remove(&target);
+                self.connection_registry.remove_flight_if_matches(&target, &flight);
             }
         }
         flight.wait(deadline, addr).await
@@ -1095,29 +873,29 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         &self,
         addr: &CheetahString,
         configured_nameserver: Option<NameServerEndpoint>,
+        lease: Option<EndpointLease>,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
-        // Check if healthy client already exists
-        if let Some(client_ref) = self.connection_tables.get(addr) {
-            let client = client_ref.value().clone();
-            if client.connection().is_healthy() {
-                return Ok(Some(client));
-            }
-            // Client unhealthy - remove it immediately (DashMap allows concurrent removal)
-            drop(client_ref); // Release read guard before removal
-            self.connection_tables.remove(addr);
+        if !self.can_commit_endpoint_lease(lease.as_ref()) {
+            return Ok(None);
+        }
+        if let Some(client) = self.connection_registry.healthy_session(addr, lease.as_ref()) {
+            return Ok(Some(client));
         }
 
-        // Check circuit breaker for this address
-        let mut breaker = self
-            .circuit_breakers
-            .entry(addr.clone())
-            .or_insert_with(CircuitBreaker::default_breaker)
-            .clone();
-
-        // Check if request allowed (CLOSED or HALF_OPEN)
-        if !breaker.allow_request() {
+        let allowed = match lease.as_ref() {
+            Some(lease) => self
+                .nameserver_health
+                .connection_admission_if_current(addr, lease, || self.endpoint_state.is_current(lease))
+                .is_some_and(|admission| admission != crate::clients::reconnect::CircuitAdmission::Rejected),
+            None => self
+                .direct_circuit_breakers
+                .entry(addr.clone())
+                .or_insert_with(crate::clients::reconnect::CircuitBreaker::default_breaker)
+                .allow_request(),
+        };
+        if !allowed {
             warn!("Circuit breaker OPEN for {}, rejecting connection attempt", addr);
             return Ok(None);
         }
@@ -1151,161 +929,71 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         match connect_result {
             Ok(new_client) => {
-                if configured_nameserver.is_some() && self.name_server_endpoint(addr).is_none() {
+                #[cfg(test)]
+                if lease.is_some() {
+                    self.wait_for_connect_completion_test_hook().await;
+                }
+                if !self.can_commit_endpoint_lease(lease.as_ref()) {
                     new_client.begin_drain();
                     let _ = new_client.close_with_report(Duration::from_secs(1)).await;
                     return Ok(None);
                 }
-                // Connection successful - record success in circuit breaker
-                breaker.record_success();
-                self.circuit_breakers.insert(addr.clone(), breaker);
-
-                match self.connection_tables.entry(addr.clone()) {
-                    dashmap::mapref::entry::Entry::Occupied(mut entry) => {
-                        // Check if existing is still healthy
-                        if entry.get().connection().is_healthy() {
-                            info!("Race condition: {} already connected by another task", addr);
-                            return Ok(Some(entry.get().clone()));
+                match lease.as_ref() {
+                    Some(lease) => self
+                        .nameserver_health
+                        .record_connection_success_if_current(addr, lease, || self.endpoint_state.is_current(lease)),
+                    None => {
+                        if let Some(mut breaker) = self.direct_circuit_breakers.get_mut(addr) {
+                            breaker.record_success();
                         }
-                        // Replace unhealthy with new client
-                        entry.insert(new_client.clone());
-                    }
-                    dashmap::mapref::entry::Entry::Vacant(entry) => {
-                        entry.insert(new_client.clone());
                     }
                 }
-
-                info!("Successfully created client for {}", addr);
-                Ok(Some(new_client))
+                let session_lease = lease.clone();
+                match self
+                    .connection_registry
+                    .insert_session(addr.clone(), new_client.clone(), lease, || {
+                        self.can_commit_endpoint_lease(session_lease.as_ref())
+                    }) {
+                    Some(client) => {
+                        info!("Successfully created client for {}", addr);
+                        Ok(Some(client))
+                    }
+                    None => {
+                        new_client.begin_drain();
+                        let _ = new_client.close_with_report(Duration::from_secs(1)).await;
+                        Ok(None)
+                    }
+                }
             }
             Err(error) => {
-                // Connection failed - record failure in circuit breaker
                 error!(remote_addr = %addr, error = ?error, "Failed to connect");
-                breaker.record_failure();
-                self.circuit_breakers.insert(addr.clone(), breaker);
+                match lease.as_ref() {
+                    Some(lease) => self
+                        .nameserver_health
+                        .record_connection_failure_if_current(addr, lease, || self.endpoint_state.is_current(lease)),
+                    None => {
+                        if let Some(mut breaker) = self.direct_circuit_breakers.get_mut(addr) {
+                            breaker.record_failure();
+                        }
+                    }
+                }
                 Err(error)
             }
         }
     }
 
-    /// Background task: Continuously scan nameservers to update availability set.
-    ///
-    /// # Purpose
-    ///
-    /// Maintains `available_namesrv_addr_set` by probing all configured nameservers
-    /// and marking them as available/unavailable based on connection health.
-    ///
-    /// # Algorithm
-    ///
-    /// ```text
-    /// 1. Cleanup phase: Remove stale entries not in namesrv_addr_list
-    /// 2. Probe phase: Test connection to each nameserver
-    /// 3. Update phase: Add/remove from available_namesrv_addr_set
-    /// ```
-    ///
-    /// # Performance
-    ///
-    /// - **Frequency**: Called every `connect_timeout_millis` (typically 3s)
-    /// - **Concurrency**: Parallel probes via `futures::future::join_all`
-    /// - **Overhead**: O(N) where N = number of nameservers (typically < 10)
-    ///
-    /// # Example Timeline
-    ///
-    /// ```text
-    /// T+0s:  Start scan
-    /// T+0s:  Cleanup: Remove ["old-ns:9876"]
-    /// T+0s:  Probe ns1 → Success (mark available)
-    /// T+50ms: Probe ns2 → Timeout (mark unavailable)
-    /// T+100ms: Probe ns3 → Success (mark available)
-    /// T+100ms: Scan complete
-    /// T+3s:  Next scan begins...
-    /// ```
-    async fn scan_available_name_srv(&self) {
-        let addr_list = self.name_server_identity_list();
-
-        if addr_list.is_empty() {
-            debug!("No nameservers configured, skipping availability scan");
-            return;
-        }
-
-        // Collect addresses to remove (avoid holding borrow during mutation)
-        let stale_addrs: Vec<CheetahString> = self
-            .available_namesrv_addr_set
-            .read()
-            .iter()
-            .filter(|addr| !addr_list.contains(addr))
-            .cloned()
-            .collect();
-
-        for stale_addr in stale_addrs {
-            warn!("Removing stale nameserver from available set: {}", stale_addr);
-            self.available_namesrv_addr_set.write().remove(&stale_addr);
-        }
-
-        // Parallel probing reduces total scan time
-        use futures::future::join_all;
-
-        let probe_futures: Vec<_> = addr_list
-            .iter()
-            .map(|addr| {
-                let addr_clone = addr.clone();
-                async move {
-                    let result = self.get_and_create_client(Some(&addr_clone)).await;
-                    (addr_clone, result.is_some())
-                }
-            })
-            .collect();
-
-        // Execute all probes concurrently
-        let results = join_all(probe_futures).await;
-
-        // Update availability set based on probe results
-        for (namesrv_addr, is_available) in results {
-            if is_available {
-                // Connection successful - mark as available
-                if self.available_namesrv_addr_set.write().insert(namesrv_addr.clone()) {
-                    info!("Nameserver {} is now available", namesrv_addr);
-                }
-            } else {
-                // Connection failed - mark as unavailable
-                if self.available_namesrv_addr_set.write().remove(&namesrv_addr) {
-                    warn!("Nameserver {} is now unavailable", namesrv_addr);
-                }
-            }
-        }
-
-        debug!(
-            "Availability scan complete: {}/{} nameservers available",
-            self.available_namesrv_addr_set.read().len(),
-            addr_list.len()
-        );
+    fn can_commit_endpoint_lease(&self, lease: Option<&EndpointLease>) -> bool {
+        lease.is_none_or(|lease| self.endpoint_state.is_current(lease))
     }
 
     /// Scans persistent sessions and removes those that are unhealthy or idle.
     fn scan_idle_connections(&self) {
         let idle_threshold = self.tokio_client_config.maintenance.idle_scan_interval;
         let now_millis = current_millis();
-        let mut stale_addrs = Vec::new();
-
-        for entry in self.connection_tables.iter() {
-            let addr = entry.key().clone();
-            let client = entry.value();
-
-            // Remove connections that are no longer healthy
-            if !client.connection().is_healthy() {
-                stale_addrs.push(addr);
-                continue;
-            }
-
-            if idle_threshold.is_some_and(|threshold| client.idle_for_at(now_millis) >= threshold) {
-                stale_addrs.push(addr);
-            }
-        }
-
-        for addr in &stale_addrs {
-            if self.connection_tables.remove(addr).is_some() {
-                warn!("[SCAN] Removed idle/unhealthy connection: {}", addr);
-            }
+        for addr in self.connection_registry.remove_unhealthy_or_idle(|client| {
+            idle_threshold.is_some_and(|threshold| client.idle_for_at(now_millis) >= threshold)
+        }) {
+            warn!("[SCAN] Removed idle/unhealthy connection: {}", addr);
         }
     }
 
@@ -1325,13 +1013,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             None => None,
         };
 
-        let addrs: Vec<_> = self.connection_tables.iter().map(|entry| entry.key().clone()).collect();
-        let mut clients = Vec::with_capacity(addrs.len());
-        for addr in addrs {
-            if let Some((addr, client)) = self.connection_tables.remove(&addr) {
-                clients.push((addr, client));
-            }
-        }
+        let clients = self.connection_registry.take_all_sessions();
 
         let mut connections = Vec::with_capacity(clients.len());
         for (addr, client) in clients {
@@ -1339,9 +1021,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             connections.push(ConnectionShutdownReport { addr, report });
         }
 
-        self.namesrv_endpoints.store(Arc::new(Vec::new()));
-        self.namesrv_addr_choosed.write().take();
-        self.available_namesrv_addr_set.write().clear();
+        self.nameserver_health
+            .with_mutation_lock(|| self.endpoint_state.replace_topology(Vec::new()));
 
         ClientShutdownReport {
             background,
@@ -1440,11 +1121,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 );
             }
         }
-        self.connection_tables.clear();
-        self.connect_flights.clear();
-        self.namesrv_endpoints.store(Arc::new(Vec::new()));
-        self.namesrv_addr_choosed.write().take();
-        self.available_namesrv_addr_set.write().clear();
+        self.connection_registry.take_all_sessions();
+        self.connection_registry.clear_flights();
+        self.nameserver_health
+            .with_mutation_lock(|| self.endpoint_state.replace_topology(Vec::new()));
 
         info!("RemotingClient shutdown complete");
     }
@@ -1468,19 +1148,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     ) -> CheetahString {
         requested_addr
             .cloned()
-            .or_else(|| {
-                self.connection_tables
-                    .iter()
-                    .find(|entry| entry.value().is_same_registry_session(session))
-                    .map(|entry| entry.key().clone())
-            })
-            .or_else(|| self.namesrv_addr_choosed.read().clone())
+            .or_else(|| self.connection_registry.session_identity(session))
+            .or_else(|| self.endpoint_state.load().chosen().cloned())
             .unwrap_or_else(|| CheetahString::from_string(session.remote_address().to_string()))
     }
 
     fn remove_cached_session_if_matches(&self, identity: &CheetahString, expected: &TransportSession<PR>) -> bool {
-        self.connection_tables
-            .remove_if(identity, |_, current| current.is_same_registry_session(expected))
+        self.connection_registry
+            .remove_session_if_matches(identity, expected)
             .is_some()
     }
 
@@ -1499,15 +1174,18 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         }
     }
 
-    fn record_nameserver_outcome(&self, addr: Option<&CheetahString>, latency: Duration, success: bool) {
-        let Some(addr) = addr else {
+    fn record_nameserver_outcome(
+        &self,
+        addr: Option<&CheetahString>,
+        lease: Option<&EndpointLease>,
+        latency: Duration,
+        success: bool,
+    ) {
+        let (Some(addr), Some(lease)) = (addr, lease) else {
             return;
         };
-        if success {
-            self.latency_tracker.record_success(addr, latency);
-        } else {
-            self.latency_tracker.record_error(addr);
-        }
+        self.nameserver_health
+            .record_outcome_if_current(addr, lease, latency, success, || self.endpoint_state.is_current(lease));
     }
 
     async fn invoke_oneway_until(
@@ -1578,15 +1256,16 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     }
 
     pub fn get_name_server_address_list(&self) -> Vec<CheetahString> {
-        self.namesrv_endpoints
+        self.endpoint_state
             .load()
+            .endpoints()
             .iter()
             .map(NameServerEndpoint::compatibility_address)
             .collect()
     }
 
     pub fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
-        self.available_namesrv_addr_set.read().iter().cloned().collect()
+        self.endpoint_state.load().available().iter().cloned().collect()
     }
 
     /// Sends one canonical request under an absolute deadline.
@@ -1622,14 +1301,23 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             }
             RequestTarget::NameServer => {
                 let started_at = time::Instant::now();
+                deadline.ensure_before_send("<nameserver>")?;
+                let Some(selection) = self.get_and_create_nameserver_client_until(deadline).await? else {
+                    return Err(RocketMQError::network_connection_failed(
+                        "<nameserver>",
+                        "one-way nameserver client unavailable",
+                    ));
+                };
+                let metric_identity = selection.identity.clone();
+                let metric_lease = selection.lease.clone();
+                let selection_generation = selection.state.generation();
+                let mut client = selection.session;
+                debug!(
+                    selected = %metric_identity,
+                    generation = selection_generation,
+                    "Sending one-way request to selected nameserver"
+                );
                 let result = async {
-                    deadline.ensure_before_send("<nameserver>")?;
-                    let Some(mut client) = self.get_and_create_client_until(None, deadline).await? else {
-                        return Err(RocketMQError::network_connection_failed(
-                            "<nameserver>",
-                            "one-way nameserver client unavailable",
-                        ));
-                    };
                     let endpoint = CheetahString::from_string(client.remote_address().to_string());
                     let mut request = request;
                     if let Some(hooks) = self.cmd_handler.hook_snapshot() {
@@ -1648,12 +1336,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     })
                 }
                 .await;
-                let metric_addr = self
-                    .namesrv_addr_choosed
-                    .read()
-                    .clone()
-                    .or_else(|| result.as_ref().ok().map(|receipt| receipt.endpoint.clone()));
-                self.record_nameserver_outcome(metric_addr.as_ref(), started_at.elapsed(), result.is_ok());
+                self.record_nameserver_outcome(
+                    Some(&metric_identity),
+                    Some(&metric_lease),
+                    started_at.elapsed(),
+                    result.is_ok(),
+                );
                 result
             }
         }
@@ -1712,33 +1400,47 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         request: RemotingCommand,
         deadline: RequestDeadline,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        let nameserver_request = addr.is_none();
+        let nameserver_request = addr.is_none_or(CheetahString::is_empty);
         let start = time::Instant::now();
         let timeout_millis = deadline.budget_millis();
-        let target = addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string);
+        let target = if nameserver_request {
+            "<nameserver>".to_string()
+        } else {
+            addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string)
+        };
         deadline.ensure_before_send(target.clone())?;
-
-        let mut client = self.get_and_create_client_until(addr, deadline).await?.ok_or_else(|| {
+        let nameserver_diagnostics = nameserver_request.then(|| self.endpoint_state.load());
+        let nameserver_selection = if nameserver_request {
+            self.get_and_create_nameserver_client_until(deadline).await?
+        } else {
+            None
+        };
+        let nameserver_metric_addr = nameserver_selection
+            .as_ref()
+            .map(|selection| selection.identity.clone());
+        let nameserver_lease = nameserver_selection.as_ref().map(|selection| selection.lease.clone());
+        let nameserver_generation = nameserver_selection
+            .as_ref()
+            .map(|selection| selection.state.generation());
+        let mut client = match nameserver_selection {
+            Some(selection) => Some(selection.session),
+            None if nameserver_request => None,
+            None => self.get_and_create_client_until(addr, deadline).await?,
+        }
+        .ok_or_else(|| {
             if target == "<nameserver>" {
-                let configured_list = self.name_server_identity_list();
-                let available_set = self.available_namesrv_addr_set.read().clone();
-                let cached_choice = self.namesrv_addr_choosed.read().clone();
-                error!(
-                    "Failed to get client for <nameserver>. Diagnostics: configured_list={:?}, available_set={:?}, \
-                     cached_choice={:?}, connections={}",
-                    configured_list,
-                    available_set,
-                    cached_choice,
-                    self.connection_tables.len()
-                );
+                if let Some(state) = nameserver_diagnostics.as_ref() {
+                    error!(
+                        "Failed to get client for <nameserver>. Diagnostics: configured_list={:?}, available_set={:?}, \
+                         cached_choice={:?}, connections={}",
+                        state.endpoints(),
+                        state.available(),
+                        state.chosen(),
+                        self.connection_registry.len()
+                    );
+                }
             } else {
                 error!("Failed to get client for {}", target);
-            }
-
-            if nameserver_request {
-                if let Some(addr) = self.namesrv_addr_choosed.read().as_ref() {
-                    self.latency_tracker.record_error(addr);
-                }
             }
 
             RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
@@ -1750,8 +1452,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         let mut request = request;
         let initial_remote_address = client.remote_address();
-        let initial_identity = self.session_cache_identity(addr, &client);
-        let nameserver_metric_addr = nameserver_request.then(|| initial_identity.clone());
         deadline.ensure_before_send(initial_remote_address.to_string())?;
         let hooks = self.cmd_handler.hook_snapshot();
         let request_for_after = if let Some(hooks) = hooks {
@@ -1790,7 +1490,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         for attempt in 0..Self::MAX_GO_AWAY_ATTEMPTS {
             let remote_address = client.remote_address();
-            let identity = self.session_cache_identity(addr, &client);
+            let identity = if nameserver_request {
+                self.connection_registry
+                    .session_identity(&client)
+                    .or_else(|| nameserver_metric_addr.clone())
+                    .unwrap_or_else(|| CheetahString::from_string(remote_address.to_string()))
+            } else {
+                self.session_cache_identity(addr, &client)
+            };
             let mut attempt_request = retry_request.clone();
             if attempt > 0 {
                 attempt_request.set_opaque_mut(RemotingCommand::get_and_add());
@@ -1802,7 +1509,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     if !retry_allowed {
                         let response = apply_final_hooks(response, remote_address)?;
                         let latency = start.elapsed();
-                        self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, true);
+                        self.record_nameserver_outcome(
+                            nameserver_metric_addr.as_ref(),
+                            nameserver_lease.as_ref(),
+                            latency,
+                            true,
+                        );
                         debug!(
                             remote_addr = %identity,
                             elapsed_ms = latency.as_millis() as u64,
@@ -1815,7 +1527,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
                     if attempt + 1 == Self::MAX_GO_AWAY_ATTEMPTS {
                         self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                        self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                        self.record_nameserver_outcome(
+                            nameserver_metric_addr.as_ref(),
+                            nameserver_lease.as_ref(),
+                            start.elapsed(),
+                            false,
+                        );
                         return Err(RpcClientError::unexpected_response_code(
                             response.code(),
                             "GO_AWAY after replacement-connection retry",
@@ -1826,7 +1543,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     attempted_retry = true;
                     if let Err(error) = deadline.ensure_before_send(identity.to_string()) {
                         self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                        self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                        self.record_nameserver_outcome(
+                            nameserver_metric_addr.as_ref(),
+                            nameserver_lease.as_ref(),
+                            start.elapsed(),
+                            false,
+                        );
                         return Err(error);
                     }
                     let replacement = match self.get_and_create_client_until(addr, deadline).await {
@@ -1841,7 +1563,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                         Ok(replacement) => replacement,
                         Err(error) => {
                             self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                            self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                            self.record_nameserver_outcome(
+                                nameserver_metric_addr.as_ref(),
+                                nameserver_lease.as_ref(),
+                                start.elapsed(),
+                                false,
+                            );
                             return Err(error);
                         }
                     };
@@ -1853,7 +1580,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                             if attempted_retry {
                                 self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
                             }
-                            self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                            self.record_nameserver_outcome(
+                                nameserver_metric_addr.as_ref(),
+                                nameserver_lease.as_ref(),
+                                start.elapsed(),
+                                false,
+                            );
                             return Err(error);
                         }
                     };
@@ -1861,9 +1593,15 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                         self.telemetry.record_go_away(TransportGoAwayOutcome::RetrySuccess);
                     }
                     let latency = start.elapsed();
-                    self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, true);
+                    self.record_nameserver_outcome(
+                        nameserver_metric_addr.as_ref(),
+                        nameserver_lease.as_ref(),
+                        latency,
+                        true,
+                    );
                     debug!(
                         remote_addr = %identity,
+                        nameserver_generation = ?nameserver_generation,
                         elapsed_ms = latency.as_millis() as u64,
                         "request completed"
                     );
@@ -1883,7 +1621,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                         self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
                     }
                     let latency = start.elapsed();
-                    self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, false);
+                    self.record_nameserver_outcome(
+                        nameserver_metric_addr.as_ref(),
+                        nameserver_lease.as_ref(),
+                        latency,
+                        false,
+                    );
                     warn!(
                         remote_addr = %identity,
                         elapsed_ms = latency.as_millis() as u64,
@@ -1918,13 +1661,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     }
 
     pub fn is_address_reachable(&self, addr: &CheetahString) {
-        if let Some(client_ref) = self.connection_tables.get(addr) {
-            if client_ref.value().connection().is_healthy() {
-                return;
-            }
-            // Connection exists but is unhealthy; drop the guard before removal
-            drop(client_ref);
-            self.connection_tables.remove(addr);
+        if self.connection_registry.healthy_session(addr, None).is_some() {
+            return;
+        }
+        if self.connection_registry.remove_unhealthy_session(addr) {
             warn!("Removed unhealthy connection for {}", addr);
         } else {
             debug!("No connection found for {}", addr);
@@ -1934,7 +1674,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     pub fn close_clients(&self, addrs: Vec<String>) {
         for addr in &addrs {
             let key = CheetahString::from(addr.as_str());
-            if let Some((_, _client)) = self.connection_tables.remove(&key) {
+            if !self.connection_registry.remove_sessions_by_identity(&key).is_empty() {
                 info!("Closed client connection for {}", addr);
             }
         }
