@@ -2978,15 +2978,15 @@ dependencies = [
 
 [[package]]
 name = "openraft-macros"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ec23cd291c763fb17d8dabf7cc4eacaefd45d02e52a4df88ce50c702f030689"
+checksum = "f5c57259539e016f70d05ea7e264573cc5ddabd651a127a13374e47b165b7664"
 dependencies = [
  "chrono",
  "proc-macro2",
  "quote",
  "semver",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
