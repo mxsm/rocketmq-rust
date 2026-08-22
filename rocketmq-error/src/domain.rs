@@ -24,6 +24,7 @@ use crate::ErrorContext;
 use crate::ErrorKind;
 use crate::ErrorSeverity;
 use crate::ErrorSpec;
+use crate::FilterCompileError;
 use crate::FilterError;
 use crate::NetworkError;
 use crate::ObservabilityError;
@@ -170,6 +171,23 @@ impl DomainError for ControllerError {
 impl DomainError for FilterError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Filter
+    }
+
+    fn context(&self) -> ErrorContext {
+        match self {
+            FilterError::Compile(error) => error.context(),
+            _ => ErrorContext::new().with_sensitive("domain_error", Sensitive::new(self.to_string())),
+        }
+    }
+}
+
+impl DomainError for FilterCompileError {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Filter
+    }
+
+    fn context(&self) -> ErrorContext {
+        FilterCompileError::context(self)
     }
 }
 

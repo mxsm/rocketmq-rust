@@ -88,6 +88,10 @@ pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
 pub use domain::DomainError;
 // Re-export filter error types
+pub use filter_error::FilterCompileError;
+pub use filter_error::FilterCompileErrorKind;
+pub use filter_error::FilterCompileSource;
+pub use filter_error::FilterCompileStage;
 pub use filter_error::FilterError;
 pub use kind::ErrorCategory;
 pub use kind::ErrorCode;

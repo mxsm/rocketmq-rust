@@ -46,7 +46,7 @@
 //! use rocketmq_filter::filter::{Filter, FilterFactory};
 //!
 //! let filter = FilterFactory::get_sql_filter();
-//! let expr = filter.compile("age > 18 AND region = 'US'")?;
+//! let expr = filter.try_compile("age > 18 AND region = 'US'")?;
 //! ```
 //!
 //! ## Registering Custom Filters
@@ -86,6 +86,14 @@ mod sql_runtime;
 
 pub use filter_factory::FilterFactory;
 pub use filter_spi::Filter;
+#[allow(
+    deprecated,
+    reason = "The re-export preserves the legacy FilterError compatibility surface."
+)]
 pub use filter_spi::FilterError;
 pub use filter_spi::FilterSpi;
 pub use filter_sql_filter::SqlFilter;
+pub use rocketmq_error::FilterCompileError;
+pub use rocketmq_error::FilterCompileErrorKind;
+pub use rocketmq_error::FilterCompileSource;
+pub use rocketmq_error::FilterCompileStage;

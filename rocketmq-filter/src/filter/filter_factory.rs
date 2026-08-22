@@ -85,7 +85,7 @@ static FILTER_REGISTRY: LazyLock<DashMap<String, Arc<dyn Filter>>> = LazyLock::n
 ///
 /// // Get a registered filter
 /// if let Some(filter) = factory.get("SQL92") {
-///     let expr = filter.compile("age > 18")?;
+///     let expr = filter.try_compile("age > 18")?;
 /// }
 /// ```
 #[derive(Debug)]
@@ -187,7 +187,7 @@ impl FilterFactory {
     /// ```rust,ignore
     /// let factory = FilterFactory::instance();
     /// if let Some(filter) = factory.get("SQL92") {
-    ///     let expr = filter.compile("age > 18")?;
+    ///     let expr = filter.try_compile("age > 18")?;
     /// }
     /// ```
     ///
@@ -215,7 +215,7 @@ impl FilterFactory {
     /// use rocketmq_filter::filter::FilterFactory;
     ///
     /// let sql_filter = FilterFactory::get_sql_filter();
-    /// let expr = sql_filter.compile("price > 100")?;
+    /// let expr = sql_filter.try_compile("price > 100")?;
     /// ```
     ///
     /// # Panics

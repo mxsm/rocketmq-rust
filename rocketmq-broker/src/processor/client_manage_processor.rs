@@ -177,7 +177,7 @@ where
         }
 
         match FilterFactory::instance().get(subscription_data.expression_type.as_str()) {
-            Some(filter) => match filter.compile(subscription_data.sub_string.as_str()) {
+            Some(filter) => match filter.try_compile(subscription_data.sub_string.as_str()) {
                 Ok(_) => Ok(Some(response)),
                 Err(error) => Ok(Some(
                     response
@@ -592,6 +592,9 @@ mod tests {
             RemotingResponseCode::from(response.code()),
             RemotingResponseCode::SubscriptionParseFailed
         );
+        let remark = response.remark().expect("parse failure should have a redacted remark");
+        assert!(remark.contains("UnexpectedToken"));
+        assert!(!remark.contains("a >"));
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

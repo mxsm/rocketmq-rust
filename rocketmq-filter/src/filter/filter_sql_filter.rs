@@ -33,13 +33,18 @@
 //! use rocketmq_filter::filter::{SqlFilter, Filter};
 //!
 //! let filter = SqlFilter::new();
-//! let expr = filter.compile("age > 18 AND region = 'US'")?;
+//! let expr = filter.try_compile("age > 18 AND region = 'US'")?;
 //! ```
 
+use rocketmq_error::FilterCompileError;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 
 use crate::expression::Expression;
 use crate::filter::filter_spi::Filter;
+#[allow(
+    deprecated,
+    reason = "SqlFilter's deprecated compile wrapper preserves the legacy error type."
+)]
 use crate::filter::filter_spi::FilterError;
 use crate::filter::sql_runtime;
 
@@ -64,7 +69,7 @@ use crate::filter::sql_runtime;
 /// use std::sync::Arc;
 ///
 /// let filter: Arc<dyn Filter> = Arc::new(SqlFilter::new());
-/// let expr = filter.compile("price > 100 AND category = 'electronics'")?;
+/// let expr = filter.try_compile("price > 100 AND category = 'electronics'")?;
 /// ```
 ///
 /// # Performance
@@ -91,7 +96,15 @@ impl SqlFilter {
 }
 
 impl Filter for SqlFilter {
+    #[allow(
+        deprecated,
+        reason = "This compatibility wrapper preserves the deprecated Filter::compile API."
+    )]
     fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+        self.try_compile(expr).map_err(sql_runtime::legacy_projection)
+    }
+
+    fn try_compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
         sql_runtime::compile_expression(expr)
     }
 
@@ -131,6 +144,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "This test verifies the deprecated compile compatibility wrapper."
+    )]
     fn test_sql_filter_compile_and_evaluate() {
         let filter = SqlFilter::new();
         let expression = filter
@@ -146,6 +163,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "This test verifies the deprecated compile compatibility wrapper."
+    )]
     fn test_sql_filter_rejects_invalid_expression() {
         let filter = SqlFilter::new();
 
@@ -157,13 +178,13 @@ mod tests {
         const SEED: u64 = 0x524d_5146_494c_5445;
         let filter = SqlFilter::new();
         let left = filter
-            .compile("score >= 10 AND color = 'blue'")
+            .try_compile("score >= 10 AND color = 'blue'")
             .expect("left expression");
         let right = filter
-            .compile("color = 'blue' AND score >= 10")
+            .try_compile("color = 'blue' AND score >= 10")
             .expect("right expression");
         let complement = filter
-            .compile("NOT (score >= 10 AND color = 'blue')")
+            .try_compile("NOT (score >= 10 AND color = 'blue')")
             .expect("complement expression");
         let mut state = SEED;
 

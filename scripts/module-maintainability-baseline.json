@@ -29,12 +29,12 @@
       "reexports": 102
     },
     "rocketmq-error": {
-      "public_items": 240,
-      "reexports": 51
+      "public_items": 252,
+      "reexports": 56
     },
     "rocketmq-filter": {
       "public_items": 106,
-      "reexports": 17
+      "reexports": 21
     },
     "rocketmq-macros": {
       "public_items": 4,
@@ -3291,13 +3291,13 @@
       "reexports": 0
     },
     "rocketmq-error/src/domain.rs": {
-      "production_lines": 145,
+      "production_lines": 160,
       "public_items": 1,
       "reexports": 0
     },
     "rocketmq-error/src/filter_error.rs": {
-      "production_lines": 35,
-      "public_items": 7,
+      "production_lines": 140,
+      "public_items": 19,
       "reexports": 0
     },
     "rocketmq-error/src/kind.rs": {
@@ -3306,9 +3306,9 @@
       "reexports": 0
     },
     "rocketmq-error/src/lib.rs": {
-      "production_lines": 55,
+      "production_lines": 59,
       "public_items": 0,
-      "reexports": 42
+      "reexports": 46
     },
     "rocketmq-error/src/observability_error.rs": {
       "production_lines": 106,
@@ -3331,9 +3331,9 @@
       "reexports": 0
     },
     "rocketmq-error/src/unified.rs": {
-      "production_lines": 831,
+      "production_lines": 838,
       "public_items": 59,
-      "reexports": 9
+      "reexports": 10
     },
     "rocketmq-error/src/unified/network.rs": {
       "production_lines": 134,
@@ -3396,9 +3396,9 @@
       "reexports": 0
     },
     "rocketmq-filter/src/filter.rs": {
-      "production_lines": 9,
+      "production_lines": 17,
       "public_items": 0,
-      "reexports": 5
+      "reexports": 9
     },
     "rocketmq-filter/src/filter/filter_factory.rs": {
       "production_lines": 40,
@@ -3406,17 +3406,22 @@
       "reexports": 0
     },
     "rocketmq-filter/src/filter/filter_spi.rs": {
-      "production_lines": 27,
+      "production_lines": 61,
       "public_items": 5,
       "reexports": 0
     },
     "rocketmq-filter/src/filter/filter_sql_filter.rs": {
-      "production_lines": 20,
+      "production_lines": 32,
       "public_items": 2,
       "reexports": 0
     },
     "rocketmq-filter/src/filter/sql_runtime.rs": {
-      "production_lines": 872,
+      "production_lines": 860,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-filter/src/filter/sql_runtime/compile_error.rs": {
+      "production_lines": 63,
       "public_items": 0,
       "reexports": 0
     },
