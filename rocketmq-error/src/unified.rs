@@ -35,6 +35,7 @@ use crate::boundary::BoundaryErrorView;
 use crate::context::ErrorContext;
 use crate::context::Sensitive;
 use crate::kind::ErrorKind;
+use crate::shared::SharedRocketMQError;
 use crate::spec::ErrorSpec;
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
@@ -86,6 +87,10 @@ pub use crate::controller_error::ControllerError;
 /// ```
 #[derive(Debug, Error)]
 pub enum RocketMQError {
+    /// An immutable shared snapshot of a typed RocketMQ error.
+    #[error(transparent)]
+    Shared(#[from] SharedRocketMQError),
+
     // ============================================================================
     // Network Errors
     // ============================================================================
@@ -660,6 +665,7 @@ impl RocketMQError {
     #[inline]
     pub fn kind(&self) -> ErrorKind {
         match self {
+            Self::Shared(error) => error.as_error().kind(),
             Self::Network(_) => ErrorKind::Network,
             Self::Serialization(_) => ErrorKind::Serialization,
             Self::Protocol(_) => ErrorKind::Protocol,
@@ -750,6 +756,7 @@ impl RocketMQError {
     /// adapters can safely render the context without leaking raw values.
     pub fn context(&self) -> ErrorContext {
         match self {
+            Self::Shared(error) => error.as_error().context(),
             Self::Network(error) => {
                 ErrorContext::new().with_sensitive("addr", Sensitive::new(error.addr().to_string()))
             }

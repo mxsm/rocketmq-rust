@@ -29,8 +29,8 @@
       "reexports": 102
     },
     "rocketmq-error": {
-      "public_items": 252,
-      "reexports": 56
+      "public_items": 256,
+      "reexports": 57
     },
     "rocketmq-filter": {
       "public_items": 106,
@@ -3306,9 +3306,9 @@
       "reexports": 0
     },
     "rocketmq-error/src/lib.rs": {
-      "production_lines": 59,
+      "production_lines": 61,
       "public_items": 0,
-      "reexports": 46
+      "reexports": 47
     },
     "rocketmq-error/src/observability_error.rs": {
       "production_lines": 106,
@@ -3318,6 +3318,11 @@
     "rocketmq-error/src/policy.rs": {
       "production_lines": 105,
       "public_items": 8,
+      "reexports": 0
+    },
+    "rocketmq-error/src/shared.rs": {
+      "production_lines": 69,
+      "public_items": 4,
       "reexports": 0
     },
     "rocketmq-error/src/spec.rs": {
@@ -3331,7 +3336,7 @@
       "reexports": 0
     },
     "rocketmq-error/src/unified.rs": {
-      "production_lines": 838,
+      "production_lines": 843,
       "public_items": 59,
       "reexports": 10
     },
@@ -10926,7 +10931,7 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/connection_registry.rs": {
-      "production_lines": 366,
+      "production_lines": 369,
       "public_items": 0,
       "reexports": 0
     },
