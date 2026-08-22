@@ -41,6 +41,11 @@ class ArchitectureEvidenceGovernanceGuardTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("ARCHITECTURE_EVIDENCE_GOVERNANCE_OK", result.stdout)
+        self.assertIn(f"risk={len(self.risk['entries'])}", result.stdout)
+
+    def test_live_risk_matrix_tracks_every_registered_debt(self) -> None:
+        self.assertEqual(len(self.debt["entries"]), len(self.risk["entries"]))
+        self.assertEqual(15, len(self.risk["entries"]))
 
     def test_missing_debt_mapping_is_rejected(self) -> None:
         invalid = copy.deepcopy(self.risk)

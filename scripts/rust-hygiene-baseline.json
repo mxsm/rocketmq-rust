@@ -1,9 +1,10 @@
 {
   "schema_version": 3,
   "policy": {
-    "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment.",
+    "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment; protocol unsafe identities may not grow.",
     "safe_raw_pointer_api": "Public safe functions must not accept raw pointers.",
-    "debt": "Existing panic surfaces, manual Pin projection, and mod.rs files may be deleted but not added."
+    "debt": "Existing panic surfaces, manual Pin projection, protocol unsafe regions, and mod.rs files may be deleted but not added.",
+    "legacy_runtime": "Non-canonical production RocketMQRuntime use is forbidden."
   },
   "entries": [
     {
@@ -5815,18 +5816,6 @@
       "expiry": "2.0.0"
     },
     {
-      "identity": "rocketmq-store/src/timer/tests/mod.rs:legacy_mod_rs:<module>:0",
-      "path": "rocketmq-store/src/timer/tests/mod.rs",
-      "kind": "legacy_mod_rs",
-      "item": "<module>",
-      "line": 1,
-      "classification": "legacy module layout; additions are forbidden",
-      "owner": "owning crate maintainers",
-      "reachability": "production-layout",
-      "justification": "legacy module identity retained only until its owning module is touched",
-      "expiry": "2.0.0"
-    },
-    {
       "identity": "rocketmq-store/src/timer/timeline/mod.rs:legacy_mod_rs:<module>:0",
       "path": "rocketmq-store/src/timer/timeline/mod.rs",
       "kind": "legacy_mod_rs",
@@ -6484,6 +6473,162 @@
       "owner": "rocketmq-transport",
       "reachability": "production-internal",
       "justification": "reviewed legacy identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/field_source.rs:unsafe_block:read_utf8:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/field_source.rs",
+      "kind": "unsafe_block",
+      "item": "read_utf8",
+      "line": 160,
+      "classification": "unsafe_invariant",
+      "owner": "read_utf8",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/field_source.rs:unsafe_block:read_utf8:1",
+      "path": "rocketmq-protocol/src/protocol/header_codec/field_source.rs",
+      "kind": "unsafe_block",
+      "item": "read_utf8",
+      "line": 234,
+      "classification": "unsafe_invariant",
+      "owner": "read_utf8",
+      "ordinal": 1,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/field_source.rs:unsafe_block:take:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/field_source.rs",
+      "kind": "unsafe_block",
+      "item": "take",
+      "line": 214,
+      "classification": "unsafe_invariant",
+      "owner": "take",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:canonical_string_length:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "canonical_string_length",
+      "line": 367,
+      "classification": "unsafe_invariant",
+      "owner": "canonical_string_length",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:canonical_string_length:1",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "canonical_string_length",
+      "line": 382,
+      "classification": "unsafe_invariant",
+      "owner": "canonical_string_length",
+      "ordinal": 1,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:next_canonical_unescaped_object:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "next_canonical_unescaped_object",
+      "line": 352,
+      "classification": "unsafe_invariant",
+      "owner": "next_canonical_unescaped_object",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:read_unescaped_json_string:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "read_unescaped_json_string",
+      "line": 300,
+      "classification": "unsafe_invariant",
+      "owner": "read_unescaped_json_string",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:read_unescaped_json_string:1",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "read_unescaped_json_string",
+      "line": 306,
+      "classification": "unsafe_invariant",
+      "owner": "read_unescaped_json_string",
+      "ordinal": 1,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:read_utf8:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "read_utf8",
+      "line": 282,
+      "classification": "unsafe_invariant",
+      "owner": "read_utf8",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs:unsafe_block:take:0",
+      "path": "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs",
+      "kind": "unsafe_block",
+      "item": "take",
+      "line": 268,
+      "classification": "unsafe_invariant",
+      "owner": "take",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/remoting_command/json_decode.rs:unsafe_block:into_command:0",
+      "path": "rocketmq-protocol/src/protocol/remoting_command/json_decode.rs",
+      "kind": "unsafe_block",
+      "item": "into_command",
+      "line": 482,
+      "classification": "unsafe_invariant",
+      "owner": "into_command",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+      "expiry": "2.0.0"
+    },
+    {
+      "identity": "rocketmq-protocol/src/protocol/remoting_command/json_decode.rs:unsafe_block:parse_i32:0",
+      "path": "rocketmq-protocol/src/protocol/remoting_command/json_decode.rs",
+      "kind": "unsafe_block",
+      "item": "parse_i32",
+      "line": 186,
+      "classification": "unsafe_invariant",
+      "owner": "parse_i32",
+      "ordinal": 0,
+      "reachability": "production-internal",
+      "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
       "expiry": "2.0.0"
     }
   ]

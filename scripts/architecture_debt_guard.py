@@ -32,7 +32,7 @@ import core_release_scope
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_RELATIVE = Path("scripts/architecture-debt-registry.json")
-REQUIRED_CLASSES = {"compatibility", "panic", "trait", "allow", "runtime_adapter", "facade"}
+REQUIRED_CLASSES = {"compatibility", "panic", "unsafe", "trait", "allow", "runtime_adapter", "facade"}
 REQUIRED_ENTRY_FIELDS = {
     "id",
     "class",
@@ -249,6 +249,12 @@ def validate_specialist_ledgers(
     panic_count = sum(entry["kind"] == "panic_surface" for entry in hygiene["entries"])
     if entries["ARC-PANIC-001"]["scope_count"] != panic_count:
         findings.append(Finding("scope-drift", "scripts/rust-hygiene-baseline.json", f"panic={panic_count}"))
+
+    unsafe_entries = [entry for entry in hygiene["entries"] if str(entry["kind"]).startswith("unsafe_")]
+    if any(not str(entry["path"]).startswith("rocketmq-protocol/") for entry in unsafe_entries):
+        findings.append(Finding("unsafe-ledger-scope", "scripts/rust-hygiene-baseline.json", "non-protocol identity"))
+    if entries["ARC-UNSAFE-001"]["scope_count"] != len(unsafe_entries):
+        findings.append(Finding("scope-drift", "scripts/rust-hygiene-baseline.json", f"unsafe={len(unsafe_entries)}"))
 
     traits = json.loads((root / "scripts/trait-policy-baseline.json").read_text(encoding="utf-8"))
     if entries["ARC-TRAIT-001"]["scope_count"] != len(traits["entries"]):

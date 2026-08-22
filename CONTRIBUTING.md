@@ -86,6 +86,31 @@ cargo test
   taplo format -o align_entries=true **/Cargo.toml
   ```
 
+### Foundation safety and compatibility
+
+- New production request headers use `RequestHeaderCodecV3`. `RequestHeaderCodec`
+  and `RequestHeaderCodecV2` remain only for supported compatibility macros and
+  their compile fixtures; do not add production derives for either legacy entry.
+- A process entrypoint owns its runtime through `RuntimeOwner`. Background work
+  receives an injected `ServiceContext`/`ChildServiceContext` or a parent
+  `TaskGroup` rather than creating another runtime or detached task.
+- Recoverable production failures use the owning typed error. Follow the error
+  architecture below instead of adding `unwrap`, `expect`, or a string-only
+  error path for protocol, I/O, configuration, or lifecycle failures.
+- Protocol unsafe identities (`ARC-UNSAFE-001`) and non-canonical
+  `RocketMQRuntime` use are registered no-growth risks. Resolve an unsafe
+  region by removing its active ledger entry in the same reviewed change; do
+  not rewrite the whole hygiene baseline. Update the architecture debt registry
+  and risk-test matrix when a governed risk's scope changes.
+
+Before opening a pull request that changes these boundaries, run:
+
+```shell
+python scripts/request-header-codec/migrate.py check
+python scripts/rust_hygiene_guard.py --scope core-release --identity structural
+python scripts/architecture_debt_guard.py --check --scope core-release
+```
+
 ### Error architecture
 
 When adding or changing an error that can cross crate, process, protocol, or CLI

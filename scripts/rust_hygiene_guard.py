@@ -23,21 +23,27 @@ import json
 import re
 import sys
 from collections import Counter
-from collections import defaultdict
 from pathlib import Path
 from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import environment_write_guard as rust_source  # noqa: E402
 import core_release_scope  # noqa: E402
+import rust_production_sources  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "rust-hygiene-baseline.json"
 
 UNSAFE_REGION = re.compile(r"\bunsafe\s*(?:impl\b|\{)")
+UNSAFE_FORM = re.compile(r"\bunsafe\s+(?P<form>fn|trait|impl|extern)\b|\bunsafe\s*(?P<block>\{)")
 MANUAL_PIN = re.compile(r"\b(?:get_unchecked_mut|map_unchecked(?:_mut)?|Pin\s*::\s*new_unchecked)\b")
 PANIC_SURFACE = re.compile(r"(?:\.\s*(unwrap|expect)\s*\(|\b(panic|unreachable)\s*!\s*\()")
+USE_STATEMENT = re.compile(
+    r"\b(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(?P<body>[^;]+);",
+    re.MULTILINE,
+)
+LEGACY_RUNTIME = re.compile(r"\bRocketMQRuntime\b")
 PUBLIC_SAFE_FUNCTION = re.compile(
     r"\bpub\s+(?:(?:async|const|extern)\b\s*)*fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
@@ -53,12 +59,6 @@ FUNCTION = re.compile(
     re.MULTILINE,
 )
 CFG_ATTRIBUTE = re.compile(r"#\s*\[\s*cfg\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
-EXTERNAL_MODULE = re.compile(
-    r"(?P<attributes>(?:#\s*\[[^]]*\]\s*)*)"
-    r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
-    re.MULTILINE,
-)
-PATH_ATTRIBUTE = re.compile(r'#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]')
 DEBT_FIELDS = {
     "identity",
     "path",
@@ -70,6 +70,15 @@ DEBT_FIELDS = {
     "reachability",
     "justification",
     "expiry",
+}
+UNSAFE_DEBT_FIELDS = {"ordinal"}
+UNSAFE_DEBT_KINDS = {"unsafe_block", "unsafe_fn", "unsafe_impl", "unsafe_trait", "unsafe_extern"}
+PROTOCOL_PREFIX = "rocketmq-protocol/"
+BASELINE_POLICY = {
+    "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment; protocol unsafe identities may not grow.",
+    "safe_raw_pointer_api": "Public safe functions must not accept raw pointers.",
+    "debt": "Existing panic surfaces, manual Pin projection, protocol unsafe regions, and mod.rs files may be deleted but not added.",
+    "legacy_runtime": "Non-canonical production RocketMQRuntime use is forbidden.",
 }
 
 REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
@@ -154,64 +163,6 @@ def is_test_source_path(relative: str) -> bool:
     )
 
 
-def external_module_target(root: Path, parent: Path, attributes: str, name: str) -> Path | None:
-    path_attribute = PATH_ATTRIBUTE.search(attributes)
-    if path_attribute is not None:
-        candidates = [parent.parent / path_attribute.group("path")]
-    else:
-        base = parent.parent if parent.name in {"lib.rs", "main.rs", "mod.rs"} else parent.parent / parent.stem
-        candidates = [base / f"{name}.rs", base / name / "mod.rs"]
-
-    root = root.resolve()
-    existing = []
-    for candidate in candidates:
-        candidate = candidate.resolve()
-        if candidate.is_relative_to(root) and candidate.is_file():
-            existing.append(candidate)
-    return existing[0] if len(existing) == 1 else None
-
-
-def test_only_external_modules(root: Path, sources: list[Path]) -> set[Path]:
-    inbound: dict[Path, list[tuple[Path, bool]]] = defaultdict(list)
-    pending = list(sources)
-    visited: set[Path] = set()
-    while pending:
-        parent = pending.pop().resolve()
-        if parent in visited:
-            continue
-        visited.add(parent)
-        source = parent.read_text(encoding="utf-8")
-        masked = rust_source.mask_comments_and_literals(source)
-        for declaration in EXTERNAL_MODULE.finditer(masked):
-            attributes = source[declaration.start("attributes"):declaration.end("attributes")]
-            target = external_module_target(root, parent, attributes, declaration.group("name"))
-            if target is None:
-                continue
-            requires_test = any(
-                cfg_requires_test(attribute.group("body"))
-                for attribute in CFG_ATTRIBUTE.finditer(attributes)
-            )
-            inbound[target].append((parent.resolve(), requires_test))
-            if target not in visited:
-                pending.append(target)
-
-    test_only = {
-        path.resolve()
-        for path in sources
-        if is_test_source_path(path.relative_to(root).as_posix())
-    }
-    changed = True
-    while changed:
-        changed = False
-        for target, references in inbound.items():
-            if target in test_only:
-                continue
-            if references and all(requires_test or parent in test_only for parent, requires_test in references):
-                test_only.add(target)
-                changed = True
-    return test_only
-
-
 def split_cfg_arguments(arguments: str) -> list[str]:
     result: list[str] = []
     depth = 0
@@ -226,6 +177,55 @@ def split_cfg_arguments(arguments: str) -> list[str]:
             start = index + 1
     result.append(arguments[start:].strip())
     return [argument for argument in result if argument]
+
+
+def use_leaves(tree: str, prefix: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], str]]:
+    """Flatten the small use-tree subset needed for panic macro aliases."""
+
+    tree = re.sub(r"\br#", "", tree.strip()).removeprefix("::")
+    opening = tree.find("{")
+    if opening >= 0 and tree.endswith("}"):
+        base = tuple(part.strip() for part in tree[:opening].rstrip(":").split("::") if part.strip())
+        return [
+            leaf
+            for branch in tree[opening + 1 : -1].split(",")
+            for leaf in use_leaves(branch, prefix + base)
+        ]
+    parts = re.split(r"\s+as\s+", tree, maxsplit=1)
+    path = prefix + tuple(part.strip() for part in parts[0].split("::") if part.strip())
+    local = parts[1].strip() if len(parts) == 2 else (path[-1] if path else "")
+    return [(path, local)] if path and local not in {"", "_", "*"} else []
+
+
+def panic_surface_offsets(masked: str) -> list[int]:
+    """Return direct panic surfaces plus practical std/core alias declarations and calls."""
+
+    offsets = {match.start() for match in PANIC_SURFACE.finditer(masked)}
+    bindings = [
+        (path, local, statement.start())
+        for statement in USE_STATEMENT.finditer(masked)
+        for path, local in use_leaves(statement.group("body"))
+    ]
+    aliases: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for path, local, offset in bindings:
+            source = path[-1]
+            direct = source in {"panic", "unreachable"} and (
+                len(path) == 1 or path[0] in {"std", "core"}
+            )
+            chained = source in aliases and (len(path) == 1 or path[0] in {"self", "super", "crate"})
+            if (direct or chained) and local not in aliases:
+                aliases.add(local)
+                offsets.add(offset)
+                changed = True
+    for alias in aliases - {"panic", "unreachable"}:
+        offsets.update(
+            match.start()
+            for match in re.finditer(rf"(?<![\w])(?:r#)?{re.escape(alias)}\s*!\s*[({{\[]", masked)
+        )
+    return sorted(offsets)
 
 
 def cfg_requires_test(expression: str) -> bool:
@@ -307,6 +307,27 @@ def matching_delimiter(masked: str, opening: int, opener: str, closer: str) -> i
             if depth == 0:
                 return index
     return None
+
+
+def legacy_runtime_offsets(masked: str, relative: str) -> list[int]:
+    """Reject runtime references outside the legacy definition and root re-export."""
+
+    allowed: list[tuple[int, int]] = []
+    if relative == "rocketmq-runtime/src/legacy.rs":
+        for declaration in re.finditer(r"\b(?:pub\s+enum|impl)\s+RocketMQRuntime\b", masked):
+            opening = masked.find("{", declaration.end())
+            closing = matching_delimiter(masked, opening, "{", "}") if opening >= 0 else None
+            if closing is not None:
+                allowed.append((declaration.start(), closing + 1))
+    elif relative == "rocketmq-runtime/src/lib.rs":
+        reexport = re.search(r"\bpub\s+use\s+legacy\s*::\s*RocketMQRuntime\s*;", masked)
+        if reexport is not None:
+            allowed.append(reexport.span())
+    return [
+        match.start()
+        for match in LEGACY_RUNTIME.finditer(masked)
+        if not any(start <= match.start() < end for start, end in allowed)
+    ]
 
 
 def matching_generic_delimiter(masked: str, opening: int) -> int | None:
@@ -409,12 +430,47 @@ def enclosing_function(masked: str, offset: int) -> str:
     return matches[-1].group(1) if matches else "<module>"
 
 
-def normalized_line(masked: str, offset: int) -> str:
-    start = masked.rfind("\n", 0, offset) + 1
-    end = masked.find("\n", offset)
-    if end == -1:
-        end = len(masked)
-    return re.sub(r"\s+", "", masked[start:end])
+def unsafe_occurrences(masked: str) -> list[tuple[int, str, str, int]]:
+    """Classify production unsafe forms with stable owner-local ordinals."""
+
+    found: list[tuple[int, str, str, int]] = []
+    ordinals: Counter[tuple[str, str]] = Counter()
+    for match in UNSAFE_FORM.finditer(masked):
+        form = match.group("form") or "block"
+        kind = f"unsafe_{form}"
+        owner = enclosing_function(masked, match.start())
+        if form in {"fn", "trait"}:
+            name = re.match(r"\s+([A-Za-z_][A-Za-z0-9_]*)", masked[match.end() :])
+            owner = name.group(1) if name is not None else "<unknown>"
+        elif form == "impl":
+            opening = masked.find("{", match.end())
+            header = masked[match.end() : opening if opening >= 0 else match.end()]
+            owner = re.sub(r"\s+", "", header) or "<unknown>"
+        elif form == "extern":
+            owner = "<module>"
+        key = (kind, owner)
+        ordinal = ordinals[key]
+        ordinals[key] += 1
+        found.append((match.start(), kind, owner, ordinal))
+    return found
+
+
+def unsafe_debt_entry(
+    relative: str, source: str, offset: int, kind: str, owner: str, ordinal: int
+) -> dict[str, object]:
+    return {
+        "identity": f"{relative}:{kind}:{owner}:{ordinal}",
+        "path": relative,
+        "kind": kind,
+        "item": owner,
+        "line": source.count("\n", 0, offset) + 1,
+        "classification": "unsafe_invariant",
+        "owner": owner,
+        "ordinal": ordinal,
+        "reachability": "production-internal",
+        "justification": "reviewed protocol unsafe identity; additions are forbidden and deletion is monotonic",
+        "expiry": "2.0.0",
+    }
 
 
 def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) -> dict[str, object]:
@@ -442,8 +498,10 @@ def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) 
     }
 
 
-def scan_source(source: str, relative: str) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
-    if is_test_source_path(relative):
+def scan_source(
+    source: str, relative: str, *, production_reachable: bool = False
+) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
+    if not production_reachable and is_test_source_path(relative):
         return [], []
     masked = rust_source.mask_comments_and_literals(source)
     test_ranges = rust_source.test_module_ranges(masked) + cfg_test_item_ranges(masked, source)
@@ -474,12 +532,31 @@ def scan_source(source: str, relative: str) -> tuple[list[SafetyFinding], list[d
                 )
             )
 
-    for kind, pattern in (("manual_pin", MANUAL_PIN), ("panic_surface", PANIC_SURFACE)):
+    for offset, kind, owner, ordinal in unsafe_occurrences(masked):
+        if is_test_only(offset, test_ranges):
+            continue
+        if relative.startswith(PROTOCOL_PREFIX):
+            debt.append(unsafe_debt_entry(relative, source, offset, kind, owner, ordinal))
+
+    for offset in legacy_runtime_offsets(masked, relative):
+        if not is_test_only(offset, test_ranges):
+            safety_findings.append(
+                SafetyFinding(
+                    relative,
+                    source.count("\n", 0, offset) + 1,
+                    "non-canonical production RocketMQRuntime use is forbidden",
+                )
+            )
+
+    for kind, offsets in (
+        ("manual_pin", (match.start() for match in MANUAL_PIN.finditer(masked))),
+        ("panic_surface", iter(panic_surface_offsets(masked))),
+    ):
         duplicates: Counter[str] = Counter()
-        for match in pattern.finditer(masked):
-            if is_test_only(match.start(), test_ranges):
+        for offset in offsets:
+            if is_test_only(offset, test_ranges):
                 continue
-            entry = debt_entry(relative, kind, masked, source, match.start())
+            entry = debt_entry(relative, kind, masked, source, offset)
             base_identity = str(entry["identity"])
             ordinal = duplicates[base_identity]
             duplicates[base_identity] += 1
@@ -496,29 +573,37 @@ def scan_tree(
 ) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
     safety_findings: list[SafetyFinding] = []
     debt: list[dict[str, object]] = []
-    sources = rust_source.production_sources(root)
     scope_document = (
         core_release_scope.load_scope(root / "scripts/core-release-scope.json")
         if scope != "all"
         else None
     )
-    test_only_modules = test_only_external_modules(root, sources)
+    root_filter = (
+        (lambda relative: core_release_scope.path_in_scope(relative, scope, scope_document))
+        if scope_document is not None
+        else None
+    )
+    sources, discovery_findings = rust_production_sources.production_sources(
+        root, cfg_requires_test, root_filter
+    )
+    safety_findings.extend(
+        SafetyFinding(finding.path, finding.line, finding.reason)
+        for finding in discovery_findings
+    )
     for path in sources:
-        if path.resolve() in test_only_modules:
-            continue
         relative = path.relative_to(root).as_posix()
         if scope_document is not None and not core_release_scope.path_in_scope(
             relative, scope, scope_document
         ):
             continue
-        file_safety, file_debt = scan_source(path.read_text(encoding="utf-8"), relative)
+        file_safety, file_debt = scan_source(
+            path.read_text(encoding="utf-8"), relative, production_reachable=True
+        )
         safety_findings.extend(file_safety)
         debt.extend(file_debt)
 
-    for path in sorted(root.rglob("mod.rs")):
+    for path in (path for path in sources if path.name == "mod.rs"):
         relative_path = path.relative_to(root)
-        if "target" in relative_path.parts or "src" not in relative_path.parts:
-            continue
         relative = relative_path.as_posix()
         if scope_document is not None and not core_release_scope.path_in_scope(
             relative, scope, scope_document
@@ -542,30 +627,25 @@ def scan_tree(
     return safety_findings, sorted(debt, key=lambda entry: str(entry["identity"]))
 
 
-def write_baseline(path: Path, debt: list[dict[str, object]]) -> None:
-    payload = {
-        "schema_version": 3,
-        "policy": {
-            "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment.",
-            "safe_raw_pointer_api": "Public safe functions must not accept raw pointers.",
-            "debt": "Existing panic surfaces, manual Pin projection, and mod.rs files may be deleted but not added.",
-        },
-        "entries": debt,
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
-
-
 def load_baseline(path: Path, *, scope: str = "all", root: Path = ROOT) -> set[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != 3 or not isinstance(payload.get("entries"), list):
+    if (
+        payload.get("schema_version") != 3
+        or payload.get("policy") != BASELINE_POLICY
+        or not isinstance(payload.get("entries"), list)
+    ):
         raise ValueError("rust hygiene baseline has an unsupported schema")
     for entry in payload["entries"]:
-        if not isinstance(entry, dict) or set(entry) != DEBT_FIELDS:
+        unsafe = isinstance(entry, dict) and entry.get("kind") in UNSAFE_DEBT_KINDS
+        expected = DEBT_FIELDS | (UNSAFE_DEBT_FIELDS if unsafe else set())
+        if not isinstance(entry, dict) or set(entry) != expected:
             raise ValueError("rust hygiene baseline contains an invalid debt entry")
         if any(not isinstance(entry[field], str) or not entry[field] for field in DEBT_FIELDS - {"line"}):
             raise ValueError("rust hygiene baseline contains empty debt metadata")
         if not isinstance(entry["line"], int) or entry["line"] < 1:
             raise ValueError("rust hygiene baseline contains an invalid line")
+        if unsafe and (not isinstance(entry["ordinal"], int) or entry["ordinal"] < 0):
+            raise ValueError("rust hygiene baseline contains an invalid unsafe ordinal")
     scope_document = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
     identities = [
         entry.get("identity")
@@ -583,7 +663,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--baseline", type=Path, default=BASELINE)
-    parser.add_argument("--write-baseline", action="store_true")
+    parser.add_argument("--write-baseline", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--scope",
         choices=("core-release", "repo-global", "all"),
@@ -593,17 +673,18 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.root.resolve()
+    if args.write_baseline:
+        print(
+            "RUST_HYGIENE_GUARD_FAILED whole-baseline rewrites are disabled; review identities individually",
+            file=sys.stderr,
+        )
+        return 2
     safety_findings, debt = scan_tree(root, scope=args.scope)
     if safety_findings:
         for finding in safety_findings:
             print(f"{finding.path}:{finding.line}: {finding.reason}", file=sys.stderr)
         print(f"RUST_HYGIENE_GUARD_FAILED hygiene_findings={len(safety_findings)}", file=sys.stderr)
         return 1
-
-    if args.write_baseline:
-        write_baseline(args.baseline, debt)
-        print(f"RUST_HYGIENE_BASELINE_WRITTEN entries={len(debt)} path={args.baseline}")
-        return 0
 
     try:
         baseline = load_baseline(args.baseline, scope=args.scope, root=root)
@@ -629,18 +710,14 @@ def main() -> int:
         for entry in debt
         if (str(entry["path"]), str(entry["item"])) in REVIEWED_PANIC_INVARIANTS
     )
-    excluded_test_sources = sum(
-        1
-        for path in rust_source.production_sources(root)
-        if is_test_source_path(path.relative_to(root).as_posix())
-    )
+    protocol_unsafe = sum(counts[kind] for kind in UNSAFE_DEBT_KINDS)
     print(
         "RUST_HYGIENE_GUARD_OK "
         f"manual_pin={counts['manual_pin']} "
+        f"protocol_unsafe={protocol_unsafe} "
         f"panic_surface={counts['panic_surface']} "
         f"legacy_mod_rs={counts['legacy_mod_rs']} "
-        f"reviewed_invariants={reviewed_invariants} "
-        f"excluded_test_sources={excluded_test_sources}"
+        f"reviewed_invariants={reviewed_invariants} excluded_test_sources=0"
     )
     return 0
 

@@ -335,7 +335,11 @@ def main() -> int:
         for finding in findings:
             print(finding.render())
         return 1
-    print("ARCHITECTURE_EVIDENCE_GOVERNANCE_OK risk=14 property_categories=7 fuzz_targets=4 patch=70%")
+    risk = json.loads((ROOT / RISK_MATRIX).read_text(encoding="utf-8"))
+    print(
+        "ARCHITECTURE_EVIDENCE_GOVERNANCE_OK "
+        f"risk={len(risk['entries'])} property_categories=7 fuzz_targets=4 patch=70%"
+    )
     return 0
 
 

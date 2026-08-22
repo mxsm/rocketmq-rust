@@ -113,6 +113,13 @@ class CoreReleaseCheckRouteTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/rocketmq-rust-ci.yaml").read_text(encoding="utf-8")
         self.assertIn("core-release-short-checks:", workflow)
         self.assertIn("run: python scripts/core_release_static_guard.py", workflow)
+        self.assertIn("run: python scripts/request-header-codec/migrate.py check", workflow)
+        self.assertIn(
+            "run: python scripts/rust_hygiene_guard.py --scope core-release --identity structural",
+            workflow,
+        )
+        for protected in ("rocketmq-protocol/**", "rocketmq-runtime/**", "scripts/**"):
+            self.assertNotIn(f"- '{protected}'", workflow.split("jobs:", 1)[0])
         for name in ("Check dependency baseline", "Check dependency transition", "Check architecture release package"):
             block = workflow.split(f"- name: {name}", 1)[1].split("- name:", 1)[0]
             self.assertIn("continue-on-error: true", block)

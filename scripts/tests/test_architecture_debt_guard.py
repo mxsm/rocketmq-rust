@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 import sys
 import tempfile
@@ -67,6 +68,15 @@ SOURCE_STRINGIFICATION_ALLOWLIST = {}
     def test_repository_registry_is_complete(self) -> None:
         self.assertEqual([], guard.validate_registry(ROOT, self.registry))
         self.assertEqual([], guard.validate_specialist_ledgers(ROOT, self.registry))
+
+    def test_protocol_unsafe_debt_is_registered_with_its_exact_active_scope(self) -> None:
+        hygiene = json.loads((ROOT / "scripts/rust-hygiene-baseline.json").read_text(encoding="utf-8"))
+        unsafe_entries = [entry for entry in hygiene["entries"] if entry["kind"].startswith("unsafe_")]
+        registry_entry = next(entry for entry in self.registry["entries"] if entry["id"] == "ARC-UNSAFE-001")
+
+        self.assertEqual(12, len(unsafe_entries))
+        self.assertTrue(all(entry["path"].startswith("rocketmq-protocol/") for entry in unsafe_entries))
+        self.assertEqual(len(unsafe_entries), registry_entry["scope_count"])
 
     def test_active_entry_requires_owner_and_removal_contract(self) -> None:
         registry = copy.deepcopy(self.registry)
