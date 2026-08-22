@@ -32,6 +32,12 @@ const brokerB: BrokerInfo = {
   version: '5.4.0'
 };
 
+const preciseBroker: BrokerInfo = {
+  ...broker,
+  produceTps: 133.0211239537,
+  consumeTps: 133.0211239537
+};
+
 describe('BrokerDetailContent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -56,6 +62,14 @@ describe('BrokerDetailContent', () => {
     expect(screen.getByRole('group', { name: 'Produce TPS: 128.4' })).toBeInTheDocument();
     expect(brokerApi.runtime).not.toHaveBeenCalled();
     expect(brokerApi.config).not.toHaveBeenCalled();
+  });
+
+  it('rounds high-precision throughput so metric cards stay readable in drawers', () => {
+    renderAtRoute(<BrokerDetailContent brokerName="broker-a" broker={preciseBroker} />, '/brokers');
+
+    expect(screen.getByRole('group', { name: 'Produce TPS: 133.02' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Consume TPS: 133.02' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Combined TPS: 266.04' })).toBeInTheDocument();
   });
 
   it('loads runtime data once on demand and caches it for the open session', async () => {

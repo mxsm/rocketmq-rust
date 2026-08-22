@@ -404,6 +404,7 @@ describe('TopicListPage', () => {
   it('refreshes only config and the catalog after Edit while preserving the detail tab', async () => {
     const user = userEvent.setup();
     const refreshedOrders = { ...topics[0], category: 'EDITED', messageType: 'FIFO' };
+    vi.mocked(topicApi.get).mockResolvedValue(refreshedOrders);
     vi.mocked(topicApi.list)
       .mockResolvedValueOnce(listView)
       .mockResolvedValueOnce({ ...listView, items: [refreshedOrders, ...topics.slice(1)] });

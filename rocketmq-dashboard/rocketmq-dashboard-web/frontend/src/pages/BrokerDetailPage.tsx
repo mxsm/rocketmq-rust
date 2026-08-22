@@ -1,11 +1,9 @@
-import { ArrowLeft } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { brokerApi } from '../api/broker_api';
+import EntityDetailPage from '../components/EntityDetailPage';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
-import PageHeader from '../components/PageHeader';
-import { buttonVariants } from '../components/ui/Button';
 import type { BrokerInfo } from '../types/broker';
 import BrokerDetailContent from './brokers/BrokerDetailContent';
 
@@ -39,16 +37,13 @@ export default function BrokerDetailPage() {
   }, [loadBroker]);
 
   return (
-    <div className="broker-detail-page">
-      <PageHeader
-        title={brokerName}
-        description="Inspect runtime evidence and safely review broker configuration."
-        actions={
-          <Link className={buttonVariants({ variant: 'outline', size: 'sm' })} to="/brokers">
-            <ArrowLeft size={14} aria-hidden="true" /> Back to cluster
-          </Link>
-        }
-      />
+    <EntityDetailPage
+      className="broker-detail-page"
+      title={brokerName}
+      description="Inspect runtime evidence and safely review broker configuration."
+      backTo="/brokers"
+      backLabel="Back to cluster"
+    >
       {loading ? <LoadingState label="Loading broker overview" /> : null}
       {!loading && error ? <ErrorState message={error} onRetry={() => void loadBroker()} /> : null}
       {!loading && !error && !broker ? (
@@ -59,6 +54,6 @@ export default function BrokerDetailPage() {
         />
       ) : null}
       {!loading && !error && broker ? <BrokerDetailContent brokerName={brokerName} broker={broker} /> : null}
-    </div>
+    </EntityDetailPage>
   );
 }

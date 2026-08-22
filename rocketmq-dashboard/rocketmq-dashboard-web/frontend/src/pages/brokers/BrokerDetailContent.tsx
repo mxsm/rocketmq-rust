@@ -193,9 +193,9 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
           </div>
           {broker ? (
             <div className="broker-throughput-grid">
-              <MetricCard label="Produce TPS" value={broker.produceTps} detail="Current reported ingress" />
-              <MetricCard label="Consume TPS" value={broker.consumeTps} detail="Current reported egress" />
-              <MetricCard label="Combined TPS" value={Number((broker.produceTps + broker.consumeTps).toFixed(2))} detail="Produce plus consume" />
+              <MetricCard label="Produce TPS" value={formatTps(broker.produceTps)} detail="Current reported ingress" />
+              <MetricCard label="Consume TPS" value={formatTps(broker.consumeTps)} detail="Current reported egress" />
+              <MetricCard label="Combined TPS" value={formatTps(broker.produceTps + broker.consumeTps)} detail="Produce plus consume" />
             </div>
           ) : null}
         </TabsContent>
@@ -283,4 +283,8 @@ function IdentityItem({ label, value, mono = false, status = false }: { label: s
       {status ? <StatusBadge status={value} tone={value === 'Unknown' ? 'neutral' : 'info'} /> : <strong className={mono ? 'mono' : undefined}>{value}</strong>}
     </div>
   );
+}
+
+function formatTps(value: number) {
+  return Number(value.toFixed(2));
 }
