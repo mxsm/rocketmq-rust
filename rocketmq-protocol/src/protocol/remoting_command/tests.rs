@@ -440,6 +440,10 @@ fn rocketmq_frame_encoding_does_not_preflight_custom_header_lengths() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "verifies the deprecated unchecked compatibility alias preserves its typed error result"
+)]
 fn try_read_custom_header_ref_reports_missing_header() {
     let command = RemotingCommand::create_remoting_command(1);
 
@@ -450,6 +454,10 @@ fn try_read_custom_header_ref_reports_missing_header() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "verifies the deprecated unchecked compatibility alias preserves its typed error result"
+)]
 fn try_read_custom_header_ref_reports_type_mismatch() {
     let command = RemotingCommand::create_request_command(1, TestCustomHeader::default());
 
@@ -1103,4 +1111,186 @@ fn fast_rocketmq_encode_frame_decodes_with_body() {
     assert_eq!(decoded.code(), 100);
     assert_eq!(decoded.opaque(), 7);
     assert_eq!(decoded.get_body(), Some(&body));
+}
+
+#[test]
+#[allow(
+    deprecated,
+    reason = "verifies legacy header read compatibility facades during their deprecation window"
+)]
+fn legacy_header_read_facades_match_typed_results() {
+    let command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
+
+    assert_eq!(
+        command
+            .read_custom_header_ref::<TestCustomHeader>()
+            .map(|header| header.value),
+        Some(7)
+    );
+    assert_eq!(
+        command
+            .read_custom_header_ref_unchecked::<TestCustomHeader>()
+            .unwrap()
+            .value,
+        7
+    );
+
+    let missing = RemotingCommand::create_remoting_command(1);
+    assert!(missing.read_custom_header_ref::<TestCustomHeader>().is_none());
+    assert!(missing.read_custom_header_ref_unchecked::<TestCustomHeader>().is_err());
+
+    assert!(command.read_custom_header_ref::<OtherCustomHeader>().is_none());
+    assert!(command.read_custom_header_ref_unchecked::<OtherCustomHeader>().is_err());
+}
+
+#[test]
+#[allow(
+    deprecated,
+    reason = "verifies legacy mutable compatibility facades preserve typed invalidation and shared-header behavior"
+)]
+fn legacy_mutable_header_facades_preserve_typed_invalidation_and_shared_errors() {
+    let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
+    command.try_make_custom_header_to_net().unwrap();
+
+    command
+        .read_custom_header_mut::<TestCustomHeader>()
+        .expect("unique legacy header should be mutable")
+        .value = 9;
+    assert!(!command.custom_header_to_net);
+    command.make_custom_header_to_net();
+    assert_eq!(
+        command
+            .ext_fields()
+            .and_then(|fields| fields.get("value"))
+            .map(CheetahString::as_str),
+        Some("9")
+    );
+
+    let mut from_ref = RemotingCommand::create_request_command(1, TestCustomHeader { value: 3 });
+    from_ref
+        .read_custom_header_mut_from_ref::<TestCustomHeader>()
+        .expect("legacy shared-reference compatibility name should mutate unique headers")
+        .value = 4;
+    assert_eq!(
+        from_ref.try_read_custom_header_ref::<TestCustomHeader>().unwrap().value,
+        4
+    );
+
+    let mut unchecked = RemotingCommand::create_request_command(1, TestCustomHeader { value: 5 });
+    unchecked
+        .read_custom_header_mut_unchecked::<TestCustomHeader>()
+        .unwrap()
+        .value = 6;
+    assert_eq!(
+        unchecked
+            .try_read_custom_header_ref::<TestCustomHeader>()
+            .unwrap()
+            .value,
+        6
+    );
+
+    let _shared = command.clone();
+    assert!(command.read_custom_header_mut::<TestCustomHeader>().is_none());
+    assert!(command.read_custom_header_mut_from_ref::<TestCustomHeader>().is_none());
+    assert!(command.read_custom_header_mut_unchecked::<TestCustomHeader>().is_err());
+}
+
+#[test]
+fn legacy_materializers_preserve_typed_failure_state() {
+    use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+
+    for materializer in ["make", "materialize"] {
+        let header = SendMessageResponseHeader::new("typed".into(), 1, 2, None, None, None);
+        let mut command = RemotingCommand::create_success_response_command_with_header(header)
+            .set_ext_fields(HashMap::from([("msgId".into(), "dynamic".into())]));
+
+        match materializer {
+            "make" => command.make_custom_header_to_net(),
+            "materialize" => command.materialize_custom_header_to_ext_fields(),
+            _ => unreachable!("test enumerates the two legacy materializers"),
+        }
+
+        assert!(!command.custom_header_to_net, "{materializer}");
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("msgId"))
+                .map(CheetahString::as_str),
+            Some("dynamic"),
+            "{materializer}"
+        );
+    }
+}
+
+#[test]
+fn legacy_header_and_frame_facades_match_typed_bytes() {
+    for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+        let command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 })
+            .set_serialize_type(serialize_type);
+
+        let mut typed_header = command.clone();
+        let expected_header = typed_header.try_header_encode().unwrap();
+        let mut legacy_header = command.clone();
+        assert_eq!(legacy_header.header_encode(), Some(expected_header));
+
+        let mut typed_frame = command.clone();
+        let expected_frame = typed_frame.try_encode_header_with_body_length(0).unwrap();
+        let mut legacy_frame = command.clone();
+        assert_eq!(legacy_frame.encode_header(), Some(expected_frame.clone()));
+        assert_eq!(legacy_frame.encode_header_with_body_length(0), Some(expected_frame));
+    }
+}
+
+#[test]
+fn legacy_header_and_fast_facades_map_typed_failures_without_mutation() {
+    use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+
+    for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+        let header = SendMessageResponseHeader::new("typed".into(), 1, 2, None, None, None);
+        let command = RemotingCommand::create_success_response_command_with_header(header)
+            .set_serialize_type(serialize_type)
+            .set_ext_fields(HashMap::from([("msgId".into(), "dynamic".into())]));
+
+        let mut typed_header = command.clone();
+        assert!(typed_header.try_header_encode().is_err());
+        let mut legacy_header = command.clone();
+        assert!(legacy_header.header_encode().is_none());
+
+        let mut typed_frame = command.clone();
+        assert!(typed_frame.try_encode_header_with_body_length(0).is_err());
+        let mut legacy_frame = command.clone();
+        assert!(legacy_frame.encode_header().is_none());
+
+        let mut destination = BytesMut::from(&b"prefix"[..]);
+        let mut legacy_fast = command.clone();
+        legacy_fast.fast_header_encode(&mut destination);
+        assert_eq!(destination.as_ref(), b"prefix");
+    }
+}
+
+#[test]
+#[allow(
+    deprecated,
+    reason = "verifies ambiguous response compatibility factories retain their documented SUCCESS behavior"
+)]
+fn legacy_response_factories_preserve_success_semantics() {
+    let response = RemotingCommand::create_response_command();
+    assert_eq!(
+        response.code(),
+        crate::code::response_code::RemotingSysResponseCode::Success as i32
+    );
+    assert!(response.is_response_type());
+
+    let response_with_header = RemotingCommand::create_response_command_with_header(TestCustomHeader { value: 7 });
+    assert_eq!(
+        response_with_header.code(),
+        crate::code::response_code::RemotingSysResponseCode::Success as i32
+    );
+    assert_eq!(
+        response_with_header
+            .try_read_custom_header_ref::<TestCustomHeader>()
+            .unwrap()
+            .value,
+        7
+    );
 }

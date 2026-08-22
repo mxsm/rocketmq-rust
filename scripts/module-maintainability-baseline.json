@@ -6146,8 +6146,8 @@
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command.rs": {
-      "production_lines": 203,
-      "public_items": 14,
+      "production_lines": 163,
+      "public_items": 7,
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/accessors.rs": {
@@ -6161,8 +6161,8 @@
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/custom_header.rs": {
-      "production_lines": 265,
-      "public_items": 15,
+      "production_lines": 248,
+      "public_items": 13,
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/decode.rs": {
@@ -6176,8 +6176,8 @@
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/encode.rs": {
-      "production_lines": 76,
-      "public_items": 3,
+      "production_lines": 72,
+      "public_items": 1,
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/encode/json.rs": {
@@ -6201,8 +6201,13 @@
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command/frame.rs": {
-      "production_lines": 61,
-      "public_items": 3,
+      "production_lines": 59,
+      "public_items": 1,
+      "reexports": 0
+    },
+    "rocketmq-protocol/src/protocol/remoting_command/legacy_api.rs": {
+      "production_lines": 82,
+      "public_items": 13,
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/remoting_command_compat.rs": {

@@ -23,38 +23,32 @@ mod json;
 mod rocketmq;
 
 impl RemotingCommand {
-    /// Encode header with optimized path selection
     #[inline]
-    pub fn header_encode(&mut self) -> Option<Bytes> {
+    pub(super) fn try_header_encode(&mut self) -> rocketmq_error::RocketMQResult<Bytes> {
         match self.serialize_type {
             SerializeType::ROCKETMQ => {
                 let mut encoded = BytesMut::new();
-                RocketMQSerializable::try_rocketmq_protocol_encode(self, &mut encoded).ok()?;
-                Some(encoded.freeze())
+                RocketMQSerializable::try_rocketmq_protocol_encode(self, &mut encoded)
+                    .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+                Ok(encoded.freeze())
             }
             SerializeType::JSON => {
-                self.try_make_custom_header_to_net().ok()?;
+                self.try_make_custom_header_to_net()
+                    .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
                 #[cfg(feature = "simd")]
                 {
-                    match simd_json::to_vec(self) {
-                        Ok(value) => Some(Bytes::from(value)),
-                        Err(_) => None,
-                    }
+                    simd_json::to_vec(self).map(Bytes::from).map_err(|error| {
+                        rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string()).into()
+                    })
                 }
                 #[cfg(not(feature = "simd"))]
                 {
-                    match serde_json::to_vec(self) {
-                        Ok(value) => Some(Bytes::from(value)),
-                        Err(_) => None,
-                    }
+                    serde_json::to_vec(self).map(Bytes::from).map_err(|error| {
+                        rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string()).into()
+                    })
                 }
             }
         }
-    }
-
-    #[inline]
-    pub fn fast_header_encode(&mut self, dst: &mut BytesMut) {
-        let _ = self.try_fast_header_encode(dst);
     }
 
     /// Encodes the frame header and rolls the destination back on failure.

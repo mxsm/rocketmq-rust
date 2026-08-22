@@ -20,21 +20,16 @@ use super::RemotingCommand;
 use super::SerializeType;
 
 impl RemotingCommand {
-    /// Encode header with body length information
     #[inline]
-    pub fn encode_header(&mut self) -> Option<Bytes> {
-        let body_length = self.body.as_ref().map_or(0, |b| b.len());
-        self.encode_header_with_body_length(body_length)
-    }
-
-    /// Optimized header encoding with pre-calculated capacity
-    #[inline]
-    pub fn encode_header_with_body_length(&mut self, body_length: usize) -> Option<Bytes> {
+    pub(super) fn try_encode_header_with_body_length(
+        &mut self,
+        body_length: usize,
+    ) -> rocketmq_error::RocketMQResult<Bytes> {
         // Encode header data
-        let header_data = self.header_encode()?;
+        let header_data = self.try_header_encode()?;
         let header_len = header_data.len();
         let (total_length, marked_header_length) =
-            Self::checked_frame_lengths(header_len, body_length, self.serialize_type).ok()?;
+            Self::checked_frame_lengths(header_len, body_length, self.serialize_type)?;
 
         // Allocate exact capacity
         let mut result = BytesMut::with_capacity(8 + header_len);
@@ -48,7 +43,7 @@ impl RemotingCommand {
         // Write header data
         result.put(header_data);
 
-        Some(result.freeze())
+        Ok(result.freeze())
     }
 
     pub(super) fn checked_frame_lengths(
