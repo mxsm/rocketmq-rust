@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::fmt;
-use std::mem::size_of;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -258,28 +257,23 @@ struct JsonHeaderFieldIter<'a> {
 
 impl<'a> JsonHeaderFieldIter<'a> {
     #[inline]
-    fn take(&mut self, length: usize) -> &'a [u8] {
+    fn take(&mut self, length: usize) -> Option<&'a [u8]> {
         let start = self.cursor;
-        let end = start + length;
-        debug_assert!(end <= self.payload.len());
+        let end = start.checked_add(length)?;
+        let bytes = self.payload.get(start..end)?;
         self.cursor = end;
-        // SAFETY: construction validates every length-prefixed field boundary,
-        // and the immutable payload cannot change while this iterator is alive.
-        unsafe { self.payload.get_unchecked(start..end) }
+        Some(bytes)
     }
 
     #[inline]
-    fn read_u32(&mut self) -> usize {
-        let bytes = self.take(FIELD_LENGTH_BYTES);
-        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize
+    fn read_u32(&mut self) -> Option<usize> {
+        let bytes: [u8; FIELD_LENGTH_BYTES] = self.take(FIELD_LENGTH_BYTES)?.try_into().ok()?;
+        Some(u32::from_be_bytes(bytes) as usize)
     }
 
     #[inline]
-    fn read_utf8(&mut self, length: usize) -> &'a str {
-        let bytes = self.take(length);
-        // SAFETY: `JsonHeaderFields` is private and its payload is populated only
-        // from strings accepted by Serde. The iterator preserves byte boundaries.
-        unsafe { std::str::from_utf8_unchecked(bytes) }
+    fn read_utf8(&mut self, length: usize) -> Option<&'a str> {
+        std::str::from_utf8(self.take(length)?).ok()
     }
 
     #[inline]
@@ -290,20 +284,18 @@ impl<'a> JsonHeaderFieldIter<'a> {
     }
 
     #[inline]
-    fn read_unescaped_json_string(&mut self) -> &'a str {
+    fn read_unescaped_json_string(&mut self) -> Option<&'a str> {
         self.skip_json_whitespace();
-        debug_assert_eq!(self.payload[self.cursor], b'"');
+        if self.payload.get(self.cursor).copied()? != b'"' {
+            return None;
+        }
         self.cursor += 1;
         let start = self.cursor;
-        // SAFETY: construction validates every string terminator and the
-        // immutable payload cannot change while this iterator is alive.
-        let relative_end = unsafe { memchr(b'"', &self.payload[self.cursor..]).unwrap_unchecked() };
-        self.cursor += relative_end;
-        let end = self.cursor;
-        self.cursor += 1;
-        // SAFETY: the fast JSON parser validates the full header as UTF-8 and
-        // accepts this representation only when strings contain no escapes.
-        unsafe { std::str::from_utf8_unchecked(&self.payload[start..end]) }
+        let relative_end = memchr(b'"', self.payload.get(start..)?)?;
+        let end = start.checked_add(relative_end)?;
+        let value = std::str::from_utf8(self.payload.get(start..end)?).ok()?;
+        self.cursor = end.checked_add(1)?;
+        Some(value)
     }
 
     #[inline]
@@ -312,14 +304,16 @@ impl<'a> JsonHeaderFieldIter<'a> {
         if self.cursor >= self.payload.len() {
             return None;
         }
-        if self.payload[self.cursor] == b',' {
+        if self.payload.get(self.cursor) == Some(&b',') {
             self.cursor += 1;
         }
-        let key = self.read_unescaped_json_string();
+        let key = self.read_unescaped_json_string()?;
         self.skip_json_whitespace();
-        debug_assert_eq!(self.payload[self.cursor], b':');
+        if self.payload.get(self.cursor).copied()? != b':' {
+            return None;
+        }
         self.cursor += 1;
-        let value = self.read_unescaped_json_string();
+        let value = self.read_unescaped_json_string()?;
         self.skip_json_whitespace();
         Some((key, value))
     }
@@ -330,60 +324,38 @@ impl<'a> JsonHeaderFieldIter<'a> {
             return None;
         }
         if self.cursor != 0 {
-            debug_assert_eq!(self.payload[self.cursor], b',');
+            if self.payload.get(self.cursor).copied()? != b',' {
+                return None;
+            }
             self.cursor += 1;
         }
-        debug_assert_eq!(self.payload[self.cursor], b'"');
+        if self.payload.get(self.cursor).copied()? != b'"' {
+            return None;
+        }
         self.cursor += 1;
         let key_start = self.cursor;
-        let key_length = self.canonical_string_length();
-        self.cursor += key_length;
+        let key_length = self.canonical_string_length()?;
+        self.cursor = self.cursor.checked_add(key_length)?;
         let key_end = self.cursor;
-        debug_assert_eq!(self.payload[self.cursor + 1], b':');
-        debug_assert_eq!(self.payload[self.cursor + 2], b'"');
-        self.cursor += 3;
+        let value_prefix_end = self.cursor.checked_add(3)?;
+        if self.payload.get(self.cursor..value_prefix_end)? != b"\":\"" {
+            return None;
+        }
+        self.cursor = value_prefix_end;
         let value_start = self.cursor;
-        let value_length = self.canonical_string_length();
-        self.cursor += value_length;
+        let value_length = self.canonical_string_length()?;
+        self.cursor = self.cursor.checked_add(value_length)?;
         let value_end = self.cursor;
-        self.cursor += 1;
-        // SAFETY: the canonical fast parser validates both retained ranges as
-        // UTF-8 and rejects escaped strings before constructing this source.
-        Some(unsafe {
-            (
-                std::str::from_utf8_unchecked(self.payload.get_unchecked(key_start..key_end)),
-                std::str::from_utf8_unchecked(self.payload.get_unchecked(value_start..value_end)),
-            )
-        })
+        self.cursor = self.cursor.checked_add(1)?;
+        Some((
+            std::str::from_utf8(self.payload.get(key_start..key_end)?).ok()?,
+            std::str::from_utf8(self.payload.get(value_start..value_end)?).ok()?,
+        ))
     }
 
     #[inline(always)]
-    fn canonical_string_length(&self) -> usize {
-        let mut length = 0usize;
-        let remaining = self.payload.len() - self.cursor;
-        while remaining - length >= size_of::<u64>() {
-            // SAFETY: the loop condition keeps the unaligned word read inside
-            // the immutable payload.
-            let word = unsafe {
-                (self.payload.as_ptr().add(self.cursor + length) as *const u64)
-                    .read_unaligned()
-                    .to_le()
-            };
-            let quote_bytes = word ^ 0x2222_2222_2222_2222;
-            let matches = quote_bytes.wrapping_sub(0x0101_0101_0101_0101) & !quote_bytes & 0x8080_8080_8080_8080;
-            if matches != 0 {
-                return length + matches.trailing_zeros() as usize / 8;
-            }
-            length += size_of::<u64>();
-        }
-        loop {
-            // SAFETY: the canonical parser validates every retained string
-            // terminator before constructing this immutable source.
-            if unsafe { *self.payload.get_unchecked(self.cursor + length) } == b'"' {
-                return length;
-            }
-            length += 1;
-        }
+    fn canonical_string_length(&self) -> Option<usize> {
+        memchr(b'"', self.payload.get(self.cursor..)?)
     }
 
     #[inline]
@@ -391,10 +363,10 @@ impl<'a> JsonHeaderFieldIter<'a> {
         if self.cursor >= self.payload.len() {
             return None;
         }
-        let key_length = self.read_u32();
-        let key = self.read_utf8(key_length);
-        let value_length = self.read_u32();
-        let value = self.read_utf8(value_length);
+        let key_length = self.read_u32()?;
+        let key = self.read_utf8(key_length)?;
+        let value_length = self.read_u32()?;
+        let value = self.read_utf8(value_length)?;
         Some((key, value))
     }
 }
@@ -410,5 +382,44 @@ impl<'a> Iterator for JsonHeaderFieldIter<'a> {
             JsonFieldEncoding::LengthPrefixed => {}
         }
         self.next_length_prefixed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iterates_all_valid_internal_encodings() {
+        let mut length_prefixed = Vec::new();
+        length_prefixed.extend_from_slice(&3u32.to_be_bytes());
+        length_prefixed.extend_from_slice(b"key");
+        length_prefixed.extend_from_slice(&5u32.to_be_bytes());
+        length_prefixed.extend_from_slice(b"value");
+        let fields = [
+            JsonHeaderFields::from_length_prefixed(length_prefixed, 1),
+            JsonHeaderFields::from_unescaped_object(Bytes::from_static(b" \"key\" : \"value\" "), 1),
+            JsonHeaderFields::from_canonical_unescaped_object(Bytes::from_static(b"\"key\":\"value\""), 1),
+        ];
+
+        for fields in fields {
+            assert_eq!(fields.iter().collect::<Vec<_>>(), vec![("key", "value")]);
+        }
+    }
+
+    #[test]
+    fn iterators_fail_closed_on_truncated_invalid_utf8_and_missing_terminators() {
+        let fields = [
+            JsonHeaderFields::from_length_prefixed(vec![0, 0, 0, 4, b'k'], 1),
+            JsonHeaderFields::from_length_prefixed(vec![0, 0, 0, 1, 0xff, 0, 0, 0, 1, b'v'], 1),
+            JsonHeaderFields::from_unescaped_object(Bytes::from_static(b"\"key\":\"value"), 1),
+            JsonHeaderFields::from_unescaped_object(Bytes::from_static(b"\"key\"?\"value\""), 1),
+            JsonHeaderFields::from_canonical_unescaped_object(Bytes::from_static(b"\"unterminated"), 1),
+            JsonHeaderFields::from_canonical_unescaped_object(Bytes::from_static(b"\"key\"?\"value\""), 1),
+        ];
+
+        for fields in fields {
+            assert!(fields.iter().next().is_none());
+        }
     }
 }

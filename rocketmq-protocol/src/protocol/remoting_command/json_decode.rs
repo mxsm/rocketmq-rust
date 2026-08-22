@@ -163,10 +163,13 @@ impl<'a> JsonHeaderParser<'a> {
     #[inline]
     fn parse_i32(&mut self) -> Option<i32> {
         self.skip_whitespace();
-        let start = self.cursor;
-        if self.src.get(self.cursor) == Some(&b'-') {
+        let negative = if self.src.get(self.cursor) == Some(&b'-') {
             self.cursor += 1;
-        }
+            true
+        } else {
+            false
+        };
+        let digits_start = self.cursor;
         match self.src.get(self.cursor).copied()? {
             b'0' => {
                 self.cursor += 1;
@@ -182,10 +185,18 @@ impl<'a> JsonHeaderParser<'a> {
             }
             _ => return None,
         }
-        // SAFETY: this slice contains ASCII sign/digit bytes only.
-        unsafe { std::str::from_utf8_unchecked(&self.src[start..self.cursor]) }
-            .parse()
-            .ok()
+        let value = self
+            .src
+            .get(digits_start..self.cursor)?
+            .iter()
+            .try_fold(0i32, |value, byte| {
+                value.checked_mul(10)?.checked_sub(i32::from(byte - b'0'))
+            })?;
+        if negative {
+            Some(value)
+        } else {
+            value.checked_neg()
+        }
     }
 
     fn parse_extension_fields(&mut self) -> Option<(Range<usize>, usize)> {
@@ -475,32 +486,40 @@ enum ParsedExtensionFields {
 }
 
 impl ParsedJsonHeader {
-    fn into_command(self, src: Bytes) -> RemotingCommand {
-        let remark = self.remark.map(|range| {
-            // SAFETY: parse_string validates every retained string range as
-            // UTF-8 and accepts no escapes.
-            CheetahString::from_slice(unsafe { std::str::from_utf8_unchecked(&src[range]) })
-        });
-        let ext_fields = self.ext_fields.map_or_else(ExtensionFields::default, |fields| {
-            let fields = match fields {
-                ParsedExtensionFields::Borrowed {
-                    range,
-                    entry_count,
-                    canonical: true,
-                } => JsonHeaderFields::from_canonical_unescaped_object(src.slice(range), entry_count),
-                ParsedExtensionFields::Borrowed {
-                    range,
-                    entry_count,
-                    canonical: false,
-                } => JsonHeaderFields::from_unescaped_object(src.slice(range), entry_count),
-                ParsedExtensionFields::LengthPrefixed { payload, entry_count } => {
-                    JsonHeaderFields::from_length_prefixed(payload, entry_count)
-                }
-            };
-            ExtensionFields::from_json_raw(fields)
-        });
+    fn into_command(self, src: Bytes) -> Option<RemotingCommand> {
+        let remark = match self.remark {
+            Some(range) => Some(CheetahString::from_slice(std::str::from_utf8(src.get(range)?).ok()?)),
+            None => None,
+        };
+        let ext_fields = match self.ext_fields {
+            Some(fields) => {
+                let fields = match fields {
+                    ParsedExtensionFields::Borrowed {
+                        range,
+                        entry_count,
+                        canonical: true,
+                    } => {
+                        std::str::from_utf8(src.get(range.clone())?).ok()?;
+                        JsonHeaderFields::from_canonical_unescaped_object(src.slice(range), entry_count)
+                    }
+                    ParsedExtensionFields::Borrowed {
+                        range,
+                        entry_count,
+                        canonical: false,
+                    } => {
+                        std::str::from_utf8(src.get(range.clone())?).ok()?;
+                        JsonHeaderFields::from_unescaped_object(src.slice(range), entry_count)
+                    }
+                    ParsedExtensionFields::LengthPrefixed { payload, entry_count } => {
+                        JsonHeaderFields::from_length_prefixed(payload, entry_count)
+                    }
+                };
+                ExtensionFields::from_json_raw(fields)
+            }
+            None => ExtensionFields::default(),
+        };
 
-        RemotingCommand {
+        Some(RemotingCommand {
             code: self.code,
             language: self.language,
             version: self.version,
@@ -513,7 +532,7 @@ impl ParsedJsonHeader {
             command_custom_header: None,
             custom_header_to_net: false,
             serialize_type: self.serialize_type,
-        }
+        })
     }
 }
 
@@ -734,12 +753,12 @@ fn try_parse_flexible_json_header(src: &[u8]) -> Option<ParsedJsonHeader> {
 pub(super) fn try_decode_json_header(src: &mut BytesMut, header_length: usize) -> Option<RemotingCommand> {
     let parsed = try_parse_json_header(src.get(..header_length)?)?;
     let header = src.split_to(header_length).freeze();
-    Some(parsed.into_command(header))
+    parsed.into_command(header)
 }
 
 pub(super) fn try_decode_json_header_bytes(header: Bytes) -> Option<RemotingCommand> {
     let parsed = try_parse_json_header(&header)?;
-    Some(parsed.into_command(header))
+    parsed.into_command(header)
 }
 
 #[cfg(test)]
@@ -875,18 +894,28 @@ mod tests {
 
     #[test]
     fn parses_i32_boundaries_without_accepting_overflow() {
-        let valid = br#"{"code":-2147483648,"language":"RUST","version":2147483647,"opaque":-0,"flag":0,"serializeTypeCurrentRPC":"JSON"}"#;
+        let valid = br#"{"code":-2147483648,"language":"RUST","version":2147483647,"opaque":-0,"flag":-2147483648,"serializeTypeCurrentRPC":"JSON"}"#;
         let command = decode(valid).expect("i32 boundaries should decode");
         assert_eq!(command.code, i32::MIN);
         assert_eq!(command.version, i32::MAX);
         assert_eq!(command.opaque, 0);
+        assert_eq!(command.flag, i32::MIN);
 
-        for code in ["2147483648", "-2147483649"] {
+        for code in ["2147483648", "-2147483649", "999999999999999999999999"] {
             let input = format!(
                 r#"{{"code":{code},"language":"RUST","version":0,"opaque":0,"flag":0,"serializeTypeCurrentRPC":"JSON"}}"#
             );
             assert!(decode(input.as_bytes()).is_none());
         }
+    }
+
+    #[test]
+    fn command_construction_rejects_an_invalid_retained_range() {
+        let input = br#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":"ok","serializeTypeCurrentRPC":"JSON"}"#;
+        let mut parsed = try_parse_json_header(input).expect("valid JSON header");
+        parsed.remark = Some(input.len()..usize::MAX);
+
+        assert!(parsed.into_command(Bytes::from_static(input)).is_none());
     }
 
     #[test]

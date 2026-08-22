@@ -74,7 +74,7 @@ SOURCE_STRINGIFICATION_ALLOWLIST = {}
         unsafe_entries = [entry for entry in hygiene["entries"] if entry["kind"].startswith("unsafe_")]
         registry_entry = next(entry for entry in self.registry["entries"] if entry["id"] == "ARC-UNSAFE-001")
 
-        self.assertEqual(12, len(unsafe_entries))
+        self.assertEqual(0, len(unsafe_entries))
         self.assertTrue(all(entry["path"].startswith("rocketmq-protocol/") for entry in unsafe_entries))
         self.assertEqual(len(unsafe_entries), registry_entry["scope_count"])
 

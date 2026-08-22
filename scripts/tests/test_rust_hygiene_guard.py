@@ -174,7 +174,7 @@ pub unsafe fn read_raw(pointer: *const u8) -> u8 {
         self.assertFalse(any("rocketmq-mcp" in entry["path"] for entry in debt))
         self.assertFalse(any(entry["path"].startswith("rocketmq-dashboard/") for entry in debt))
         self.assertEqual(527, sum(entry["kind"] == "panic_surface" for entry in debt))
-        self.assertEqual(12, sum(entry["kind"].startswith("unsafe_") for entry in debt))
+        self.assertEqual(0, sum(entry["kind"].startswith("unsafe_") for entry in debt))
         self.assertEqual(12, sum(entry["kind"] == "legacy_mod_rs" for entry in debt))
 
     def test_ignores_test_module_debt_and_unsafe(self):

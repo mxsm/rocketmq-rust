@@ -56,16 +56,16 @@
       "class": "unsafe",
       "owner": "architecture-maintainers",
       "status": "active",
-      "reason": "the twelve reviewed protocol unsafe identities are an exact active ledger and must not grow or become stale",
+      "reason": "production protocol unsafe identities are absent and the active zero-growth ledger prevents regression",
       "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
-      "removal_condition": "all production protocol unsafe identities are removed with matching ledger updates",
+      "removal_condition": "production protocol unsafe identities remain absent through the 2.0.0 release boundary",
       "target_release": "2.0.0",
       "evidence": [
         "scripts/rust-hygiene-baseline.json",
         "scripts/rust_hygiene_guard.py",
         "scripts/tests/test_rust_hygiene_guard.py"
       ],
-      "scope_count": 12
+      "scope_count": 0
     },
     {
       "id": "ARC-TRAIT-001",
