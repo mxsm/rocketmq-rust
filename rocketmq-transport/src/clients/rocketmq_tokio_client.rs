@@ -20,20 +20,14 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_error::NetworkError;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RpcClientError;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
-use rocketmq_runtime::ResourcePermit;
 #[cfg(test)]
 use rocketmq_runtime::TaskGroup;
 #[cfg(test)]
 use rocketmq_runtime::TaskGroupLifecycleState;
-use tokio::time;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -41,9 +35,7 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
-use crate::clients::TransportSession;
 use crate::codec::remoting_command_codec::FrameLimits;
-use crate::deadline::RequestDeadline;
 use crate::remoting::inner::RemotingGeneralHandler;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 #[cfg(test)]
@@ -56,12 +48,9 @@ use crate::runtime::processor::RequestProcessor;
 #[cfg(test)]
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
-use crate::telemetry::TransportGoAwayOutcome;
 use crate::telemetry::TransportTelemetry;
 #[cfg(test)]
 use crate::tls::TlsConfig;
-use rocketmq_protocol::code::response_code::ResponseCode;
-use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 mod api;
 mod connect_flight;
@@ -69,6 +58,7 @@ mod connection_registry;
 mod endpoint_state;
 mod lifecycle;
 mod nameserver;
+mod request;
 
 pub use api::{
     ClientShutdownReport, ClientSnapshot, ClientStartReport, ConnectionShutdownReport, PendingUsage, RemotingClient,
@@ -76,7 +66,6 @@ pub use api::{
 };
 
 use connection_registry::ConnectionRegistry;
-use endpoint_state::EndpointLease;
 use endpoint_state::EndpointStateStore;
 use lifecycle::ClientLifecycle;
 use nameserver::NameServerHealth;
@@ -453,432 +442,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
-    const MAX_GO_AWAY_ATTEMPTS: usize = 2;
-
-    fn session_cache_identity(
-        &self,
-        requested_addr: Option<&CheetahString>,
-        session: &TransportSession<PR>,
-    ) -> CheetahString {
-        requested_addr
-            .cloned()
-            .or_else(|| self.connection_registry.session_identity(session))
-            .or_else(|| self.endpoint_state.load().chosen().cloned())
-            .unwrap_or_else(|| CheetahString::from_string(session.remote_address().to_string()))
-    }
-
-    fn remove_cached_session_if_matches(&self, identity: &CheetahString, expected: &TransportSession<PR>) -> bool {
-        self.connection_registry
-            .remove_session_if_matches(identity, expected)
-            .is_some()
-    }
-
-    fn start_go_away_drain(&self, identity: CheetahString, session: TransportSession<PR>) {
-        session.begin_drain();
-        let drain_timeout = session.max_pending_request_age();
-        let task_name = format!("rocketmq.transport.go-away-drain.{identity}");
-        let spawned = self.spawn_worker_task(task_name, async move {
-            let report = session.drain_and_close(drain_timeout).await;
-            if !report.is_healthy() {
-                warn!(report = %report.to_json(), "GO_AWAY session drain was unhealthy");
-            }
-        });
-        if spawned.is_none() {
-            warn!(%identity, "GO_AWAY session drain could not be scheduled because the client is shutting down");
-        }
-    }
-
-    fn record_nameserver_outcome(
-        &self,
-        addr: Option<&CheetahString>,
-        lease: Option<&EndpointLease>,
-        latency: Duration,
-        success: bool,
-    ) {
-        let (Some(addr), Some(lease)) = (addr, lease) else {
-            return;
-        };
-        self.nameserver_health
-            .record_outcome_if_current(addr, lease, latency, success, || self.endpoint_state.is_current(lease));
-    }
-
-    async fn invoke_oneway_until(
-        &self,
-        addr: &CheetahString,
-        request: RemotingCommand,
-        deadline: RequestDeadline,
-        permit: Option<ResourcePermit>,
-    ) -> RocketMQResult<()> {
-        self.invoke_oneway_until_inner(addr, request, deadline, permit).await
-    }
-
-    async fn invoke_oneway_until_inner(
-        &self,
-        addr: &CheetahString,
-        request: RemotingCommand,
-        deadline: RequestDeadline,
-        permit: Option<ResourcePermit>,
-    ) -> RocketMQResult<()> {
-        deadline.ensure_before_send(addr.to_string())?;
-        if self.is_stopping() {
-            return Err(RocketMQError::ClientNotStarted);
-        }
-        let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
-            return Err(RocketMQError::network_connection_failed(
-                addr.to_string(),
-                "one-way client unavailable",
-            ));
-        };
-        if self.is_stopping() {
-            return Err(RocketMQError::ClientNotStarted);
-        }
-
-        let mut request = request;
-        let remote_address = client.remote_address();
-        if let Some(hooks) = self.cmd_handler.hook_snapshot() {
-            request.make_custom_header_to_net();
-            self.cmd_handler.do_before_rpc_hooks_with_snapshot(
-                Some(hooks.as_ref()),
-                remote_address,
-                Some(&mut request),
-            )?;
-        }
-        deadline.ensure_before_send(remote_address.to_string())?;
-        request.mark_oneway_rpc_ref();
-        match permit {
-            Some(permit) => client.send_until_with_permit(request, deadline, permit).await,
-            None => client.send_until(request, deadline).await,
-        }
-    }
-}
-
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
-    /// Sends one canonical request under an absolute deadline.
-    async fn request_inner(
-        &self,
-        target: RequestTarget,
-        request: RemotingCommand,
-        deadline: RequestDeadline,
-    ) -> RocketMQResult<RemotingCommand> {
-        match target {
-            RequestTarget::Endpoint(endpoint) => {
-                self.invoke_request_with_deadline(Some(&endpoint), request, deadline)
-                    .await
-            }
-            RequestTarget::NameServer => self.invoke_request_with_deadline(None, request, deadline).await,
-        }
-    }
-
-    /// Sends one command and resolves only after the sole writer has completed it.
-    async fn send_oneway_inner(
-        &self,
-        target: RequestTarget,
-        request: RemotingCommand,
-        deadline: RequestDeadline,
-    ) -> RocketMQResult<SendReceipt> {
-        match target {
-            RequestTarget::Endpoint(endpoint) => {
-                self.invoke_oneway_until(&endpoint, request, deadline, None).await?;
-                Ok(SendReceipt {
-                    endpoint,
-                    written_at_millis: current_millis(),
-                })
-            }
-            RequestTarget::NameServer => {
-                let started_at = time::Instant::now();
-                deadline.ensure_before_send("<nameserver>")?;
-                let Some(selection) = self.get_and_create_nameserver_client_until(deadline).await? else {
-                    return Err(RocketMQError::network_connection_failed(
-                        "<nameserver>",
-                        "one-way nameserver client unavailable",
-                    ));
-                };
-                let metric_identity = selection.identity.clone();
-                let metric_lease = selection.lease.clone();
-                let selection_generation = selection.state.generation();
-                let mut client = selection.session;
-                debug!(
-                    selected = %metric_identity,
-                    generation = selection_generation,
-                    "Sending one-way request to selected nameserver"
-                );
-                let result = async {
-                    let endpoint = CheetahString::from_string(client.remote_address().to_string());
-                    let mut request = request;
-                    if let Some(hooks) = self.cmd_handler.hook_snapshot() {
-                        request.make_custom_header_to_net();
-                        self.cmd_handler.do_before_rpc_hooks_with_snapshot(
-                            Some(hooks.as_ref()),
-                            client.remote_address(),
-                            Some(&mut request),
-                        )?;
-                    }
-                    request.mark_oneway_rpc_ref();
-                    client.send_until(request, deadline).await?;
-                    Ok(SendReceipt {
-                        endpoint,
-                        written_at_millis: current_millis(),
-                    })
-                }
-                .await;
-                self.record_nameserver_outcome(
-                    Some(&metric_identity),
-                    Some(&metric_lease),
-                    started_at.elapsed(),
-                    result.is_ok(),
-                );
-                result
-            }
-        }
-    }
-
-    pub async fn invoke_request_with_deadline(
-        &self,
-        addr: Option<&CheetahString>,
-        request: RemotingCommand,
-        deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        let nameserver_request = addr.is_none_or(CheetahString::is_empty);
-        let start = time::Instant::now();
-        let timeout_millis = deadline.budget_millis();
-        let target = if nameserver_request {
-            "<nameserver>".to_string()
-        } else {
-            addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string)
-        };
-        deadline.ensure_before_send(target.clone())?;
-        let nameserver_diagnostics = nameserver_request.then(|| self.endpoint_state.load());
-        let nameserver_selection = if nameserver_request {
-            self.get_and_create_nameserver_client_until(deadline).await?
-        } else {
-            None
-        };
-        let nameserver_metric_addr = nameserver_selection
-            .as_ref()
-            .map(|selection| selection.identity.clone());
-        let nameserver_lease = nameserver_selection.as_ref().map(|selection| selection.lease.clone());
-        let nameserver_generation = nameserver_selection
-            .as_ref()
-            .map(|selection| selection.state.generation());
-        let mut client = match nameserver_selection {
-            Some(selection) => Some(selection.session),
-            None if nameserver_request => None,
-            None => self.get_and_create_client_until(addr, deadline).await?,
-        }
-        .ok_or_else(|| {
-            if target == "<nameserver>" {
-                if let Some(state) = nameserver_diagnostics.as_ref() {
-                    error!(
-                        "Failed to get client for <nameserver>. Diagnostics: configured_list={:?}, available_set={:?}, \
-                         cached_choice={:?}, connections={}",
-                        state.endpoints(),
-                        state.available(),
-                        state.chosen(),
-                        self.connection_registry.len()
-                    );
-                }
-            } else {
-                error!("Failed to get client for {}", target);
-            }
-
-            RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
-        })?;
-
-        if self.is_stopping() {
-            return Err(RocketMQError::ClientNotStarted);
-        }
-
-        let mut request = request;
-        let initial_remote_address = client.remote_address();
-        deadline.ensure_before_send(initial_remote_address.to_string())?;
-        let hooks = self.cmd_handler.hook_snapshot();
-        let request_for_after = if let Some(hooks) = hooks {
-            request.make_custom_header_to_net();
-            self.cmd_handler.do_before_rpc_hooks_with_snapshot(
-                Some(hooks.as_ref()),
-                initial_remote_address,
-                Some(&mut request),
-            )?;
-            deadline.ensure_before_send(initial_remote_address.to_string())?;
-            Some((request.clone(), hooks))
-        } else {
-            None
-        };
-        let apply_final_hooks =
-            |mut response: RemotingCommand, remote_address: std::net::SocketAddr| -> RocketMQResult<RemotingCommand> {
-                if let Some((request, hooks)) = request_for_after.as_ref() {
-                    self.cmd_handler.do_after_rpc_hooks_with_snapshot(
-                        Some(hooks.as_ref()),
-                        remote_address,
-                        request,
-                        Some(&mut response),
-                    )?;
-                }
-                if deadline.is_expired() {
-                    return Err(RocketMQError::network_response_timeout(
-                        remote_address.to_string(),
-                        timeout_millis,
-                    ));
-                }
-                Ok(response)
-            };
-        let retry_allowed = self.go_away_policy.allows_request(request.code()) && !request.is_oneway_rpc();
-        let retry_request = request.clone();
-        let mut attempted_retry = false;
-
-        for attempt in 0..Self::MAX_GO_AWAY_ATTEMPTS {
-            let remote_address = client.remote_address();
-            let identity = if nameserver_request {
-                self.connection_registry
-                    .session_identity(&client)
-                    .or_else(|| nameserver_metric_addr.clone())
-                    .unwrap_or_else(|| CheetahString::from_string(remote_address.to_string()))
-            } else {
-                self.session_cache_identity(addr, &client)
-            };
-            let mut attempt_request = retry_request.clone();
-            if attempt > 0 {
-                attempt_request.set_opaque_mut(RemotingCommand::get_and_add());
-            }
-
-            match client.send_read(attempt_request, deadline).await {
-                Ok(response) if response.code() == ResponseCode::GoAway.to_i32() => {
-                    self.telemetry.record_go_away(TransportGoAwayOutcome::Received);
-                    if !retry_allowed {
-                        let response = apply_final_hooks(response, remote_address)?;
-                        let latency = start.elapsed();
-                        self.record_nameserver_outcome(
-                            nameserver_metric_addr.as_ref(),
-                            nameserver_lease.as_ref(),
-                            latency,
-                            true,
-                        );
-                        debug!(
-                            remote_addr = %identity,
-                            elapsed_ms = latency.as_millis() as u64,
-                            "request completed with GO_AWAY retry disabled"
-                        );
-                        return Ok(response);
-                    }
-                    self.remove_cached_session_if_matches(&identity, &client);
-                    self.start_go_away_drain(identity.clone(), client);
-
-                    if attempt + 1 == Self::MAX_GO_AWAY_ATTEMPTS {
-                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                        self.record_nameserver_outcome(
-                            nameserver_metric_addr.as_ref(),
-                            nameserver_lease.as_ref(),
-                            start.elapsed(),
-                            false,
-                        );
-                        return Err(RpcClientError::unexpected_response_code(
-                            response.code(),
-                            "GO_AWAY after replacement-connection retry",
-                        )
-                        .into());
-                    }
-
-                    attempted_retry = true;
-                    if let Err(error) = deadline.ensure_before_send(identity.to_string()) {
-                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                        self.record_nameserver_outcome(
-                            nameserver_metric_addr.as_ref(),
-                            nameserver_lease.as_ref(),
-                            start.elapsed(),
-                            false,
-                        );
-                        return Err(error);
-                    }
-                    let replacement = match self.get_and_create_client_until(addr, deadline).await {
-                        Ok(Some(replacement)) => Ok(replacement),
-                        Ok(None) => Err(RocketMQError::network_connection_failed(
-                            identity.to_string(),
-                            "GO_AWAY replacement connection unavailable",
-                        )),
-                        Err(error) => Err(error),
-                    };
-                    client = match replacement {
-                        Ok(replacement) => replacement,
-                        Err(error) => {
-                            self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                            self.record_nameserver_outcome(
-                                nameserver_metric_addr.as_ref(),
-                                nameserver_lease.as_ref(),
-                                start.elapsed(),
-                                false,
-                            );
-                            return Err(error);
-                        }
-                    };
-                }
-                Ok(response) => {
-                    let response = match apply_final_hooks(response, remote_address) {
-                        Ok(response) => response,
-                        Err(error) => {
-                            if attempted_retry {
-                                self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                            }
-                            self.record_nameserver_outcome(
-                                nameserver_metric_addr.as_ref(),
-                                nameserver_lease.as_ref(),
-                                start.elapsed(),
-                                false,
-                            );
-                            return Err(error);
-                        }
-                    };
-                    if attempted_retry {
-                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetrySuccess);
-                    }
-                    let latency = start.elapsed();
-                    self.record_nameserver_outcome(
-                        nameserver_metric_addr.as_ref(),
-                        nameserver_lease.as_ref(),
-                        latency,
-                        true,
-                    );
-                    debug!(
-                        remote_addr = %identity,
-                        nameserver_generation = ?nameserver_generation,
-                        elapsed_ms = latency.as_millis() as u64,
-                        "request completed"
-                    );
-                    return Ok(response);
-                }
-                Err(error) => {
-                    if matches!(
-                        error,
-                        RocketMQError::Network(
-                            NetworkError::WriteTimeout { .. } | NetworkError::ResponseTimeout { .. }
-                        )
-                    ) {
-                        client.retire_after_timeout().await;
-                        self.remove_cached_session_if_matches(&identity, &client);
-                    }
-                    if attempted_retry {
-                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
-                    }
-                    let latency = start.elapsed();
-                    self.record_nameserver_outcome(
-                        nameserver_metric_addr.as_ref(),
-                        nameserver_lease.as_ref(),
-                        latency,
-                        false,
-                    );
-                    warn!(
-                        remote_addr = %identity,
-                        elapsed_ms = latency.as_millis() as u64,
-                        error = ?error,
-                        "request failed"
-                    );
-                    return Err(error);
-                }
-            }
-        }
-
-        unreachable!("GO_AWAY attempt loop has a fixed non-zero bound")
-    }
-
     fn is_address_reachable_inner(&self, addr: &CheetahString) {
         if self.connection_registry.healthy_session(addr, None).is_some() {
             return;

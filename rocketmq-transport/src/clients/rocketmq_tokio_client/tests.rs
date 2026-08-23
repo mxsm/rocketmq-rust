@@ -18,16 +18,21 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeContext;
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
 use super::*;
 use crate::connection::Connection;
+use crate::deadline::RequestDeadline;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::TransportClientConfig;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use tokio::time;
 
 use self::runtime_test_support::test_service_context;
 
@@ -71,6 +76,26 @@ impl RPCHook for CountingHook {
         );
         response.ensure_ext_fields_initialized();
         response.add_ext_field("afterHook", "true");
+        Ok(())
+    }
+}
+
+struct RejectingRequestHook {
+    calls: AtomicUsize,
+}
+
+impl RPCHook for RejectingRequestHook {
+    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(RocketMQError::illegal_argument("injected request hook rejection"))
+    }
+
+    fn do_after_response(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &RemotingCommand,
+        _response: &mut RemotingCommand,
+    ) -> RocketMQResult<()> {
         Ok(())
     }
 }
@@ -369,6 +394,48 @@ async fn stale_probe_result_cannot_update_replaced_generation() {
 }
 
 #[tokio::test]
+async fn stale_nameserver_request_outcome_cannot_mutate_a_readded_generation() {
+    let client = TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("stale-request-outcome-generation-test"),
+    );
+    let endpoint = NameServerEndpoint::legacy("127.0.0.1:9876").expect("valid nameserver");
+    let identity = endpoint.identity().clone();
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint.clone()], Duration::ZERO);
+    let stale_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("initial endpoint lease");
+
+    client.apply_name_server_endpoint_snapshot_sync(Vec::new(), Duration::ZERO);
+    client.apply_name_server_endpoint_snapshot_sync(vec![endpoint], Duration::ZERO);
+    let readded_lease = client
+        .endpoint_state
+        .load()
+        .lease_for(&identity)
+        .expect("re-added endpoint lease");
+    assert!(!readded_lease.same_generation(&stale_lease));
+    client
+        .nameserver_health
+        .connection_admission_if_current(&identity, &readded_lease, || {
+            client.endpoint_state.is_current(&readded_lease)
+        });
+    assert!(client
+        .nameserver_health
+        .owns_latency_for_test(&identity, &readded_lease));
+
+    client.record_nameserver_outcome(Some(&identity), Some(&stale_lease), Duration::from_millis(1), false);
+
+    assert_eq!(client.nameserver_health.latency_error_count_for_test(&identity), 0);
+    assert!(client
+        .nameserver_health
+        .owns_latency_for_test(&identity, &readded_lease));
+    client.shutdown();
+}
+
+#[tokio::test]
 async fn stale_connect_completion_cannot_register_into_new_generation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
     let addr = listener.local_addr().expect("listener addr");
@@ -652,6 +719,50 @@ async fn invoke_request_runs_outbound_rpc_hooks() {
 
     server.await.expect("server task");
     client.shutdown();
+}
+
+#[tokio::test]
+async fn request_before_hook_error_is_preserved_without_writing_a_frame() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind hook peer");
+    let target = CheetahString::from_string(listener.local_addr().expect("hook peer address").to_string());
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept hook client");
+        let mut byte = [0_u8; 1];
+        socket.read(&mut byte).await.expect("read hook client")
+    });
+    let client = TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("remoting-client-request-hook-error-test"),
+    );
+    let hook = Arc::new(RejectingRequestHook {
+        calls: AtomicUsize::new(0),
+    });
+    client.register_rpc_hook(hook.clone());
+
+    let result = client
+        .invoke_request(
+            Some(&target),
+            RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+            3_000,
+        )
+        .await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("request hook rejection must be returned"),
+    };
+
+    assert!(matches!(
+        error,
+        RocketMQError::IllegalArgument(message) if message == "injected request hook rejection"
+    ));
+    assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+    client.shutdown();
+    assert_eq!(
+        peer.await.expect("hook peer task"),
+        0,
+        "hook rejection must not write bytes"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -25,7 +25,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::RpcClientError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
@@ -534,7 +536,11 @@ async fn a_second_go_away_fails_without_an_unbounded_retry() {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("GO_AWAY"), "{error}");
+    let RocketMQError::Rpc(RpcClientError::UnexpectedResponseCode { code, code_name }) = error else {
+        panic!("second GO_AWAY must preserve the typed unexpected-response error");
+    };
+    assert_eq!(code, ResponseCode::GoAway.to_i32());
+    assert_eq!(code_name, "GO_AWAY after replacement-connection retry");
     assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
     assert_eq!(hook.before.load(Ordering::SeqCst), 1);
     assert_eq!(hook.after.load(Ordering::SeqCst), 0);
