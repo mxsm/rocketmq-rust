@@ -524,12 +524,7 @@ impl DashboardAdminClient {
             connections: connections
                 .connections
                 .into_iter()
-                .map(|item| ProducerConnectionInfo {
-                    client_id: item.client_id,
-                    client_addr: item.client_addr,
-                    language: item.language,
-                    version: item.version.to_string(),
-                })
+                .map(map_producer_connection)
                 .collect(),
         })
     }

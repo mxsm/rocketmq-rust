@@ -1,14 +1,15 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configApi } from '../api/config_api';
 import { renderAtRoute } from '../test/render';
-import type { DashboardConfigView } from '../types/config';
+import type { DashboardConfigView, NameserverAvailabilityView } from '../types/config';
 import ConfigPage from './ConfigPage';
 
 vi.mock('../api/config_api', () => ({
   configApi: {
     getConfig: vi.fn(),
+    getNameserverAvailability: vi.fn(),
     replaceNameservers: vi.fn(),
     addNameserver: vi.fn(),
     setVipChannel: vi.fn(),
@@ -29,6 +30,13 @@ const initialConfig: DashboardConfigView = {
   storageBackend: 'file'
 };
 
+const initialAvailability: NameserverAvailabilityView = {
+  endpoints: [
+    { address: '10.0.0.10:9876', status: 'available', checkedAt: 1_700_000_000_000 },
+    { address: '10.0.0.11:9876', status: 'unavailable', checkedAt: 1_700_000_000_000 }
+  ]
+};
+
 const mockedConfigApi = vi.mocked(configApi);
 
 function mutationResult(config = initialConfig, message = 'Configuration updated') {
@@ -39,6 +47,7 @@ describe('ConfigPage', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockedConfigApi.getConfig.mockResolvedValue(initialConfig);
+    mockedConfigApi.getNameserverAvailability.mockResolvedValue(initialAvailability);
     mockedConfigApi.replaceNameservers.mockImplementation((request) => mutationResult({
       ...initialConfig,
       namesrvAddrList: request.namesrvAddrList,
@@ -58,7 +67,8 @@ describe('ConfigPage', () => {
     await screen.findByRole('heading', { name: 'OPS settings' });
 
     await user.selectOptions(screen.getByLabelText('Current NameServer'), '10.0.0.11:9876');
-    await user.click(screen.getByRole('button', { name: 'Save NameServers' }));
+    expect(screen.getByText('Active endpoint change pending')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply active endpoint' }));
 
     await waitFor(() => expect(mockedConfigApi.replaceNameservers).toHaveBeenCalledWith({
       namesrvAddrList: ['10.0.0.10:9876', '10.0.0.11:9876'],
@@ -66,6 +76,52 @@ describe('ConfigPage', () => {
     }));
     expect(onConfigUpdated).toHaveBeenCalledTimes(1);
     window.removeEventListener('rocketmq-config-updated', onConfigUpdated);
+  });
+
+  it('only shows active endpoint actions while the selection has unsaved changes', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<ConfigPage />, '/config');
+    await screen.findByRole('heading', { name: 'OPS settings' });
+
+    expect(screen.queryByRole('button', { name: 'Apply active endpoint' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Configuration is current')).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Current NameServer'), '10.0.0.11:9876');
+
+    const pendingStatus = screen.getByText('Active endpoint change pending').closest('[role="status"]');
+    expect(pendingStatus).not.toBeNull();
+    expect(within(pendingStatus as HTMLElement).getByText('10.0.0.10:9876')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply active endpoint' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Discard change' }));
+
+    expect(screen.getByLabelText('Current NameServer')).toHaveValue('10.0.0.10:9876');
+    expect(screen.queryByRole('button', { name: 'Apply active endpoint' })).not.toBeInTheDocument();
+  });
+
+  it('shows the endpoint legend and refreshes independent NameServer availability', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<ConfigPage />, '/config');
+
+    const table = await screen.findByRole('table', { name: 'NameServer endpoints' });
+    const unavailableRow = within(table).getByRole('row', { name: /10\.0\.0\.11:9876/ });
+    await waitFor(() => expect(within(unavailableRow).getByText('Unavailable')).toBeInTheDocument());
+    expect(screen.getByLabelText('NameServer endpoint legend')).toHaveTextContent('Current');
+    expect(screen.getByLabelText('NameServer endpoint legend')).toHaveTextContent('Checking');
+
+    let resolveAvailability: ((value: NameserverAvailabilityView) => void) | undefined;
+    mockedConfigApi.getNameserverAvailability.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAvailability = resolve;
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Check all NameServer endpoints' }));
+    expect(within(unavailableRow).getByText('Checking')).toBeInTheDocument();
+    resolveAvailability?.({
+      endpoints: initialAvailability.endpoints.map((endpoint) => ({ ...endpoint, status: 'available' }))
+    });
+
+    await waitFor(() => expect(within(unavailableRow).getByText('Available')).toBeInTheDocument());
+    expect(mockedConfigApi.getNameserverAvailability).toHaveBeenCalledTimes(2);
   });
 
   it('adds a NameServer with the exact normalized address and clears the input only after success', async () => {
@@ -116,7 +172,7 @@ describe('ConfigPage', () => {
     expect(screen.getByRole('button', { name: 'Reload OPS settings' })).toBeDisabled();
     expect(screen.getByLabelText('Add NameServer')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Add NameServer' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Remove 10.0.0.10:9876' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove 10.0.0.11:9876' })).toBeDisabled();
     expect(mockedConfigApi.getConfig).toHaveBeenCalledTimes(1);
     expect(mockedConfigApi.addNameserver).not.toHaveBeenCalled();
     expect(mockedConfigApi.replaceNameservers).not.toHaveBeenCalled();
@@ -180,22 +236,12 @@ describe('ConfigPage', () => {
     expect(mockedConfigApi.replaceNameservers).not.toHaveBeenCalled();
   });
 
-  it('removes the current NameServer with the remaining endpoint as the exact current fallback', async () => {
-    const user = userEvent.setup();
-    const onConfigUpdated = vi.fn();
-    window.addEventListener('rocketmq-config-updated', onConfigUpdated);
+  it('protects the current NameServer from removal until another endpoint is selected', async () => {
     renderAtRoute(<ConfigPage />, '/config');
     await screen.findByRole('heading', { name: 'OPS settings' });
 
-    await user.click(screen.getByRole('button', { name: 'Remove 10.0.0.10:9876' }));
-    await user.click(screen.getByRole('button', { name: 'Remove NameServer' }));
-
-    await waitFor(() => expect(mockedConfigApi.replaceNameservers).toHaveBeenCalledWith({
-      namesrvAddrList: ['10.0.0.11:9876'],
-      currentNamesrv: '10.0.0.11:9876'
-    }));
-    expect(onConfigUpdated).toHaveBeenCalledTimes(1);
-    window.removeEventListener('rocketmq-config-updated', onConfigUpdated);
+    expect(screen.queryByRole('button', { name: 'Remove 10.0.0.10:9876' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove 10.0.0.11:9876' })).toBeEnabled();
   });
 });
 

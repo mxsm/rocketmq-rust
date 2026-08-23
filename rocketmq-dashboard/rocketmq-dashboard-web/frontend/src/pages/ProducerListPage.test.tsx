@@ -49,6 +49,18 @@ const connectionView: ProducerConnectionView = {
   ]
 };
 
+async function selectProducerTopic(
+  user: ReturnType<typeof userEvent.setup>,
+  topic: string,
+  query = topic
+) {
+  await user.click(screen.getByRole('button', { name: 'Producer topic' }));
+  const search = screen.getByRole('textbox', { name: 'Producer topic search' });
+  await user.type(search, query);
+  const listbox = screen.getByRole('listbox', { name: 'Producer topic' });
+  await user.click(within(listbox).getByRole('option', { name: topic }));
+}
+
 describe('ProducerListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -83,7 +95,14 @@ describe('ProducerListPage', () => {
     const producerRow = screen.getByRole('row', { name: /payment-producer/ });
     await user.click(producerRow);
     expect(producerApi.connections).not.toHaveBeenCalled();
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Producer topic' }), 'payment-events');
+    await user.click(screen.getByRole('button', { name: 'Producer topic' }));
+    const topicSearch = screen.getByRole('textbox', { name: 'Producer topic search' });
+    await user.type(topicSearch, 'payment');
+    const topicOptions = screen.getByRole('listbox', { name: 'Producer topic' });
+    expect(within(topicOptions).getByRole('option', { name: 'payment-events' })).toBeInTheDocument();
+    expect(within(topicOptions).queryByRole('option', { name: 'orders' })).not.toBeInTheDocument();
+    await user.click(within(topicOptions).getByRole('option', { name: 'payment-events' }));
+    expect(screen.getByRole('button', { name: 'Producer topic' })).toHaveTextContent('payment-events');
     await user.click(screen.getByRole('button', { name: 'Query producer connections' }));
     expect(producerApi.connections).toHaveBeenCalledWith('payment-events', 'payment-producer');
     expect(screen.getByRole('status', { name: 'Loading producer connections' })).toBeInTheDocument();
@@ -106,7 +125,7 @@ describe('ProducerListPage', () => {
     await screen.findByRole('heading', { name: 'Producers' });
 
     await user.click(screen.getByRole('row', { name: /order-producer/ }));
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Producer topic' }), 'orders');
+    await selectProducerTopic(user, 'orders');
     await user.click(screen.getByRole('button', { name: 'Query producer connections' }));
     expect(await screen.findByText('connection lookup unavailable')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry connection query' }));
@@ -125,11 +144,11 @@ describe('ProducerListPage', () => {
     await screen.findByRole('heading', { name: 'Producers' });
 
     await user.click(screen.getByRole('row', { name: /order-producer/ }));
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Producer topic' }), 'orders');
+    await selectProducerTopic(user, 'orders');
     await user.click(screen.getByRole('button', { name: 'Query producer connections' }));
 
     await user.click(screen.getByRole('row', { name: /payment-producer/ }));
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Producer topic' }), 'payment-events');
+    await selectProducerTopic(user, 'payment-events');
     await user.click(screen.getByRole('button', { name: 'Query producer connections' }));
 
     resolvePayments(connectionView);
@@ -157,6 +176,7 @@ describe('ProducerListPage', () => {
     await user.click(screen.getByRole('button', { name: 'Refresh topics' }));
 
     await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole('option', { name: 'orders' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Producer topic' }));
+    expect(screen.getByRole('option', { name: 'orders' })).toBeInTheDocument();
   });
 });

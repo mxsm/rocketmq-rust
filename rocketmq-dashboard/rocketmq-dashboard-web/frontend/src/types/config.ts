@@ -10,6 +10,18 @@ export interface DashboardConfigView {
   storageBackend: StorageBackend;
 }
 
+export type NameserverAvailabilityStatus = 'available' | 'unavailable';
+
+export interface NameserverEndpointAvailability {
+  address: string;
+  status: NameserverAvailabilityStatus;
+  checkedAt: number;
+}
+
+export interface NameserverAvailabilityView {
+  endpoints: NameserverEndpointAvailability[];
+}
+
 export interface AddressRequest {
   address: string;
 }

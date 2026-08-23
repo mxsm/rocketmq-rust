@@ -16,11 +16,47 @@ use crate::model::AddressRequest;
 use crate::model::BoolSettingRequest;
 use crate::model::ConfigMutationResult;
 use crate::model::DashboardConfigView;
+use crate::model::NameserverAvailabilityStatus;
+use crate::model::NameserverAvailabilityView;
+use crate::model::NameserverEndpointAvailability;
 use crate::model::NameserverListRequest;
 use crate::state::AppState;
+use chrono::Utc;
+use std::time::Duration;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
+
+const NAMESERVER_AVAILABILITY_TIMEOUT: Duration = Duration::from_millis(800);
 
 pub async fn get_config(state: &AppState) -> DashboardConfigView {
     state.dashboard_config.read().await.clone()
+}
+
+pub async fn get_nameserver_availability(state: &AppState) -> NameserverAvailabilityView {
+    let addresses = state.dashboard_config.read().await.namesrv_addr_list.clone();
+    let mut endpoints = Vec::with_capacity(addresses.len());
+
+    for address in addresses {
+        endpoints.push(check_nameserver_endpoint(address).await);
+    }
+
+    NameserverAvailabilityView { endpoints }
+}
+
+async fn check_nameserver_endpoint(address: String) -> NameserverEndpointAvailability {
+    let status = match timeout(NAMESERVER_AVAILABILITY_TIMEOUT, TcpStream::connect(&address)).await {
+        Ok(Ok(stream)) => {
+            drop(stream);
+            NameserverAvailabilityStatus::Available
+        }
+        Ok(Err(_)) | Err(_) => NameserverAvailabilityStatus::Unavailable,
+    };
+
+    NameserverEndpointAvailability {
+        address,
+        status,
+        checked_at: Utc::now().timestamp_millis(),
+    }
 }
 
 pub async fn replace_nameservers(
@@ -186,12 +222,40 @@ fn normalize_address(value: &str, label: &str) -> Result<String, DashboardError>
 
 #[cfg(test)]
 mod tests {
+    use super::check_nameserver_endpoint;
     use super::normalize_address;
+    use crate::model::NameserverAvailabilityStatus;
+    use tokio::net::TcpListener;
 
     #[test]
     fn normalize_address_trims_and_lowercases_host() {
         let address = normalize_address(" LOCALHOST : 9876 ", "NameServer").expect("valid address");
 
         assert_eq!(address, "localhost:9876");
+    }
+
+    #[tokio::test]
+    async fn availability_check_reports_reachable_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let address = listener.local_addr().expect("listener address").to_string();
+
+        let result = check_nameserver_endpoint(address.clone()).await;
+
+        assert_eq!(result.address, address);
+        assert_eq!(result.status, NameserverAvailabilityStatus::Available);
+        assert!(result.checked_at > 0);
+    }
+
+    #[tokio::test]
+    async fn availability_check_reports_unreachable_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let address = listener.local_addr().expect("listener address").to_string();
+        drop(listener);
+
+        let result = check_nameserver_endpoint(address.clone()).await;
+
+        assert_eq!(result.address, address);
+        assert_eq!(result.status, NameserverAvailabilityStatus::Unavailable);
+        assert!(result.checked_at > 0);
     }
 }

@@ -7,6 +7,7 @@ import EntitySheet from '../components/EntitySheet';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import RefreshButton from '../components/RefreshButton';
+import SelectMenu from '../components/SelectMenu';
 import StatusBadge from '../components/StatusBadge';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -98,6 +99,12 @@ export default function MessageQueryPage() {
   }, [invalidateResend, selected?.messageId]);
 
   const visibleRows = useMemo(() => rows.slice((page - 1) * pageSize, page * pageSize), [page, rows]);
+  const topicOptions = useMemo(
+    () => topics.length === 0
+      ? [{ value: '', label: 'Select a topic' }]
+      : topics.map((topic) => ({ value: topic, label: topic })),
+    [topics]
+  );
   const columns: AppDataTableColumn<MessageView>[] = [
     {
       id: 'message-id', header: 'Message ID', width: '31%',
@@ -231,11 +238,16 @@ export default function MessageQueryPage() {
         <CardContent>
           <div className="message-query-grid">
             <div className="message-query-field">
-              <Label htmlFor="message-topic">Message topic</Label>
-              <select id="message-topic" value={form.topic} onChange={(event) => updateForm({ ...form, topic: event.target.value })}>
-                {topics.length === 0 ? <option value="">Select a topic</option> : null}
-                {topics.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
-              </select>
+              <Label>Message topic</Label>
+              <SelectMenu
+                value={form.topic}
+                options={topicOptions}
+                onChange={(topic) => updateForm({ ...form, topic })}
+                ariaLabel="Message topic"
+                className="message-query-topic-select"
+                searchable
+                searchPlaceholder="Search topics"
+              />
             </div>
             {form.mode === 'topic' ? (
               <>

@@ -55,6 +55,32 @@ describe('MessageQueryPage', () => {
     expect(await screen.findByRole('dialog', { name: 'Message detail' })).toBeInTheDocument();
   });
 
+  it('filters and selects the message topic before querying', async () => {
+    const user = userEvent.setup();
+    vi.mocked(topicApi.list).mockResolvedValue({
+      items: [
+        { ...message, topic: 'orders', brokerName: 'broker-a' },
+        { ...message, topic: 'payment-events', brokerName: 'broker-a' },
+        { ...message, topic: 'audit-log', brokerName: 'broker-b' }
+      ],
+      total: 3
+    } as never);
+
+    renderAtRoute(<MessageQueryPage />, '/messages');
+    await screen.findByRole('heading', { name: 'Message search' });
+    await user.click(screen.getByRole('button', { name: 'Message topic' }));
+    await user.type(screen.getByRole('textbox', { name: 'Message topic search' }), 'payment');
+
+    const options = screen.getByRole('listbox', { name: 'Message topic' });
+    expect(within(options).getByRole('option', { name: 'payment-events' })).toBeInTheDocument();
+    expect(within(options).queryByRole('option', { name: 'orders' })).not.toBeInTheDocument();
+    await user.click(within(options).getByRole('option', { name: 'payment-events' }));
+    expect(screen.getByRole('button', { name: 'Message topic' })).toHaveTextContent('payment-events');
+
+    await user.click(screen.getByRole('button', { name: 'Search messages' }));
+    await waitFor(() => expect(messageApi.list).toHaveBeenCalledWith(expect.objectContaining({ topic: 'payment-events' })));
+  });
+
   it('validates time ranges and confirms the exact resend request', async () => {
     const user = userEvent.setup();
     renderAtRoute(<MessageQueryPage />, '/messages');
@@ -213,7 +239,7 @@ describe('MessageQueryPage', () => {
     await user.click(screen.getByRole('button', { name: 'Retry topics' }));
 
     await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole('combobox', { name: 'Message topic' })).toHaveValue('orders');
+    expect(screen.getByRole('button', { name: 'Message topic' })).toHaveTextContent('orders');
     expect(screen.queryByText('Topic discovery failed: nameserver unavailable')).not.toBeInTheDocument();
   });
 

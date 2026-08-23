@@ -5,6 +5,7 @@ import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataT
 import ErrorState from '../../components/ErrorState';
 import LoadingState from '../../components/LoadingState';
 import MetricCard from '../../components/MetricCard';
+import RefreshButton from '../../components/RefreshButton';
 import StatusBadge from '../../components/StatusBadge';
 import {
   AlertDialog,
@@ -168,6 +169,19 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
 
   const topics = progress?.topics ?? [];
   const topicOptions = useMemo(() => topics.map((topic) => topic.topic), [topics]);
+  const refreshing = activeTab === 'clients' ? clientsLoading : activeTab === 'config' ? configLoading : loading;
+
+  const refreshActiveTab = async () => {
+    if (activeTab === 'clients') {
+      await loadClients();
+      return;
+    }
+    if (activeTab === 'config') {
+      await loadConfig();
+      return;
+    }
+    await load();
+  };
 
   const reviewReset = () => {
     const timestamp = parseLocalDateTime(resetTime);
@@ -221,19 +235,23 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   return (
     <div className="entity-detail-content consumer-detail-content">
       {notice ? <div className="notice notice-success" role="status">{notice}</div> : null}
-      {loading && progress ? <LoadingState label="Refreshing consumer workspace" /> : null}
       {!loading && error && progress ? (
         <ErrorState message={error} onRetry={() => void load()} retryLabel="Retry workspace refresh" />
       ) : null}
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
-        <TabsList aria-label="Consumer detail sections">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="clients">Clients</TabsTrigger>
-          <TabsTrigger value="progress">Progress</TabsTrigger>
-          <TabsTrigger value="config">Configuration</TabsTrigger>
-          <TabsTrigger value="reset">Reset offset</TabsTrigger>
-        </TabsList>
+        <div className="consumer-detail-tab-bar">
+          <TabsList aria-label="Consumer detail sections">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="clients">Clients</TabsTrigger>
+            <TabsTrigger value="progress">Progress</TabsTrigger>
+            <TabsTrigger value="config">Configuration</TabsTrigger>
+            <TabsTrigger value="reset">Reset offset</TabsTrigger>
+          </TabsList>
+          <div className="consumer-detail-refresh-control">
+            <RefreshButton refreshing={refreshing} onRefresh={() => void refreshActiveTab()} />
+          </div>
+        </div>
 
         <TabsContent value="overview">
           <div className="metric-grid entity-detail-metrics">

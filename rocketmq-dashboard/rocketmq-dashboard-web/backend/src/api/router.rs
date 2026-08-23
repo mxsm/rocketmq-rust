@@ -136,7 +136,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/config", get(config_api::get_config))
         .route(
             "/api/config/nameservers",
-            post(config_api::add_nameserver).put(config_api::replace_nameservers),
+            get(config_api::get_nameserver_availability)
+                .post(config_api::add_nameserver)
+                .put(config_api::replace_nameservers),
         )
         .route("/api/config/vip-channel", put(config_api::set_vip_channel))
         .route("/api/config/tls", put(config_api::set_tls))

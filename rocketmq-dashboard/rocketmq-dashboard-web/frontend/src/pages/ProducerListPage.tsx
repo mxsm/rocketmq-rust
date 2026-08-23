@@ -11,6 +11,7 @@ import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import QueryToolbar from '../components/QueryToolbar';
 import RefreshButton from '../components/RefreshButton';
+import SelectMenu from '../components/SelectMenu';
 import StatusBadge from '../components/StatusBadge';
 import { Button } from '../components/ui/Button';
 import type { ProducerConnectionInfo, ProducerConnectionView, ProducerInfo } from '../types/producer';
@@ -61,6 +62,13 @@ export default function ProducerListPage() {
   const availableTopics = useMemo(
     () => Array.from(new Set(topics.map((topic) => topic.topic).filter(Boolean))).sort(),
     [topics]
+  );
+  const topicOptions = useMemo(
+    () => [
+      { value: '', label: 'Select a topic' },
+      ...availableTopics.map((topic) => ({ value: topic, label: topic }))
+    ],
+    [availableTopics]
   );
   const filteredProducers = useMemo(() => filterProducers(items, query), [items, query]);
   const pageCount = Math.max(1, Math.ceil(filteredProducers.length / PAGE_SIZE));
@@ -249,18 +257,18 @@ export default function ProducerListPage() {
           ) : (
             <>
               <div className="producer-query-controls">
-                <label>
+                <div className="producer-topic-field">
                   <span>Topic</span>
-                  <select
-                    className="ui-select-native"
-                    aria-label="Producer topic"
+                  <SelectMenu
                     value={selectedTopic}
-                    onChange={(event) => changeTopic(event.target.value)}
-                  >
-                    <option value="">Select a topic</option>
-                    {availableTopics.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
-                  </select>
-                </label>
+                    options={topicOptions}
+                    onChange={changeTopic}
+                    ariaLabel="Producer topic"
+                    className="producer-connection-topic-select"
+                    searchable
+                    searchPlaceholder="Search topics"
+                  />
+                </div>
                 <Button
                   type="button"
                   variant="outline"

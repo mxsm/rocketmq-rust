@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import { configApi } from '../../api/config_api';
 import { consumerApi } from '../../api/consumer_api';
+import type { ConsumerProgressView } from '../../types/consumer';
 import { render } from '@testing-library/react';
 import { ConsumerQueryScopeProvider } from './ConsumerQueryScopeProvider';
 import ConsumerDetailContent from './ConsumerDetailContent';
@@ -119,6 +120,39 @@ describe('ConsumerDetailContent', () => {
     expect(await screen.findByText('orders')).toBeInTheDocument();
     expect(screen.getByText('broker-a')).toBeInTheDocument();
     expect(screen.getByText('12')).toBeInTheDocument();
+  });
+
+  it('refreshes the active progress view without shifting the tab layout', async () => {
+    const user = userEvent.setup();
+    renderContent('order-service', 'progress');
+
+    expect(await screen.findByText('Lag 12')).toBeInTheDocument();
+    const refreshedProgress: ConsumerProgressView = {
+      group: 'order-service',
+      topicCount: 1,
+      totalDiff: 7,
+      topics: [{
+        topic: 'orders',
+        diffTotal: 7,
+        lastTimestamp: 1_700_000_000_000,
+        queues: [{
+          brokerName: 'broker-a', queueId: 0, brokerOffset: 100, consumerOffset: 93,
+          diffTotal: 7, clientInfo: '10.0.0.8@client-a', lastTimestamp: 1_700_000_000_000
+        }]
+      }],
+      queryScope: { mode: 'nameServer' }
+    };
+    let resolveRefresh!: (value: typeof refreshedProgress) => void;
+    vi.mocked(consumerApi.progress).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRefresh = resolve;
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(screen.getByRole('button', { name: 'Refreshing' })).toBeDisabled();
+    resolveRefresh(refreshedProgress);
+    await waitFor(() => expect(consumerApi.progress).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Lag 7')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Progress' })).toHaveAttribute('data-state', 'active');
   });
 
   it('requires a valid timestamp before reset review', async () => {
