@@ -23,6 +23,8 @@ export interface TopicCurrentMetric {
 export interface DashboardHistoryQuery {
   date: string;
   topicName?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export interface DashboardHistorySeries {
@@ -31,9 +33,22 @@ export interface DashboardHistorySeries {
   topicName?: string | null;
   collected: boolean;
   points: DashboardHistoryPoint[];
+  nextCursor?: string | null;
+  health?: DashboardHistoryHealth;
 }
 
 export interface DashboardHistoryPoint {
   timestamp: number;
   value: number;
+}
+
+export interface DashboardHistoryHealth {
+  backend: 'file' | 'sqlite' | 'mysql' | 'postgres';
+  connectivity: 'available' | 'unavailable';
+  role: 'leader' | 'standby';
+  leaseExpiresAtMs?: number | null;
+  lastCollectionAtMs?: number | null;
+  lastAppendAtMs?: number | null;
+  lastRetentionAtMs?: number | null;
+  recentError?: string | null;
 }

@@ -45,6 +45,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::timeout;
 
+#[path = "history_lease_store.rs"]
+mod history_lease_store;
+#[path = "history_sql_store.rs"]
+mod history_sql_store;
+#[cfg(test)]
+#[path = "history_sql_store_docker_tests.rs"]
+mod history_sql_store_docker_tests;
+
 pub enum DatabasePool {
     Sqlite(SqlitePool),
     MySql(MySqlPool),
@@ -1181,7 +1189,7 @@ mod tests {
             let first = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-first"))
                 .await
                 .expect("first SQLite initialization");
-            assert_eq!(first.schema_version(), 2);
+            assert_eq!(first.schema_version(), 3);
             let health = first.storage_health().await;
             assert!(matches!(health.status, StorageStatus::Available));
             assert!(health.pool_size.is_some());
@@ -1191,7 +1199,7 @@ mod tests {
             let second = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-second"))
                 .await
                 .expect("second SQLite initialization");
-            assert_eq!(second.schema_version(), 2);
+            assert_eq!(second.schema_version(), 3);
         });
         assert!(database_path.exists());
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
@@ -1369,7 +1377,7 @@ mod tests {
                 SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-first"))
                     .await
                     .expect("first storage initialization");
-            assert_eq!(first.schema_version(), 2);
+            assert_eq!(first.schema_version(), 3);
             assert_eq!(first.storage_health().await.status, StorageStatus::Available);
             assert_schema_metadata(&first).await;
             drop(first);
@@ -1377,7 +1385,7 @@ mod tests {
                 SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-second"))
                     .await
                     .expect("second storage initialization");
-            assert_eq!(second.schema_version(), 2);
+            assert_eq!(second.schema_version(), 3);
             assert_eq!(second.storage_health().await.status, StorageStatus::Available);
         });
         if config.backend == StorageBackend::Sqlite {

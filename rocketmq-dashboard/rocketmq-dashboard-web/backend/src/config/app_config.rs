@@ -27,6 +27,9 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub auth: AuthConfig,
     pub dashboard_history_interval_secs: u64,
+    pub dashboard_history_retention_days: u32,
+    pub dashboard_history_retention_batch_size: u32,
+    pub dashboard_history_lease_ttl_secs: u64,
     pub initial_config: DashboardConfigView,
     pub admin_credentials: Option<AdminCredentials>,
 }
@@ -39,6 +42,18 @@ impl fmt::Debug for AppConfig {
             .field("storage", &self.storage)
             .field("auth", &self.auth)
             .field("dashboard_history_interval_secs", &self.dashboard_history_interval_secs)
+            .field(
+                "dashboard_history_retention_days",
+                &self.dashboard_history_retention_days,
+            )
+            .field(
+                "dashboard_history_retention_batch_size",
+                &self.dashboard_history_retention_batch_size,
+            )
+            .field(
+                "dashboard_history_lease_ttl_secs",
+                &self.dashboard_history_lease_ttl_secs,
+            )
             .field("initial_config", &self.initial_config)
             .field("admin_credentials", &self.admin_credentials.as_ref().map(|_| REDACTED))
             .finish()
@@ -251,6 +266,21 @@ impl AppConfig {
                 password: env::var("DASHBOARD_WEB_PASSWORD").unwrap_or_else(|_| "rocketmq".to_string()),
             },
             dashboard_history_interval_secs: parse_u64_env("DASHBOARD_WEB_HISTORY_INTERVAL_SECS", 60)?,
+            dashboard_history_retention_days: positive_u32(
+                "DASHBOARD_WEB_HISTORY_RETENTION_DAYS",
+                parse_u32_env("DASHBOARD_WEB_HISTORY_RETENTION_DAYS", 30)?,
+                36_500,
+            )?,
+            dashboard_history_retention_batch_size: positive_u32(
+                "DASHBOARD_WEB_HISTORY_RETENTION_BATCH_SIZE",
+                parse_u32_env("DASHBOARD_WEB_HISTORY_RETENTION_BATCH_SIZE", 500)?,
+                5_000,
+            )?,
+            dashboard_history_lease_ttl_secs: positive_u64(
+                "DASHBOARD_WEB_HISTORY_LEASE_TTL_SECS",
+                parse_u64_env("DASHBOARD_WEB_HISTORY_LEASE_TTL_SECS", 30)?,
+                86_400,
+            )?,
             initial_config,
             admin_credentials: admin_credentials_from_env()?,
         })
@@ -326,6 +356,26 @@ fn parse_u64_env(name: &str, default_value: u64) -> Result<u64, DashboardError> 
         .map(|value| value.unwrap_or(default_value))
 }
 
+fn positive_u32(name: &str, value: u32, maximum: u32) -> Result<u32, DashboardError> {
+    if value == 0 || value > maximum {
+        Err(DashboardError::Config(format!(
+            "{name} must be between 1 and {maximum}"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
+fn positive_u64(name: &str, value: u64, maximum: u64) -> Result<u64, DashboardError> {
+    if value == 0 || value > maximum {
+        Err(DashboardError::Config(format!(
+            "{name} must be between 1 and {maximum}"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +444,9 @@ mod tests {
                 password: "dashboard-secret".to_string(),
             },
             dashboard_history_interval_secs: 60,
+            dashboard_history_retention_days: 30,
+            dashboard_history_retention_batch_size: 500,
+            dashboard_history_lease_ttl_secs: 30,
             initial_config: DashboardConfigView::default(),
             admin_credentials: Some(
                 AdminCredentials::try_new("access-value", "secret-value", Some("token-value".to_string()))

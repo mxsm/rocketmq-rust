@@ -22,9 +22,9 @@ use crate::persistence::StorageHealth;
 use crate::persistence::StorageStatus;
 use crate::persistence::error::PersistenceError;
 use crate::service::AuthState;
-use crate::service::DashboardHistoryStore;
-use crate::service::DashboardTaskManager;
-use crate::service::spawn_dashboard_history_collector;
+use crate::service::DashboardHistoryRuntime;
+use crate::service::HistoryCollectorConfig;
+use crate::service::start_dashboard_history_collector;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_dashboard_common::DashboardAdminFacade;
 use std::future::Future;
@@ -59,8 +59,7 @@ pub struct AppState {
     pub(crate) environment_refresh_lock: Arc<Mutex<()>>,
     persisted_mutation_context: rocketmq_runtime::ChildServiceContext,
     pub auth_state: Arc<AuthState>,
-    pub history_store: DashboardHistoryStore,
-    pub dashboard_tasks: DashboardTaskManager,
+    pub history_runtime: DashboardHistoryRuntime,
     pub published_environment: Arc<std::sync::RwLock<PublishedEnvironment>>,
     pub admin_client: DashboardAdminClient,
     #[cfg(test)]
@@ -93,23 +92,33 @@ impl AppState {
         );
         ensure_persistence_ready(persistence.storage_health().await)?;
         let auth_state = Arc::new(AuthState::new(config.auth));
-        let history_store = DashboardHistoryStore::default();
-        let dashboard_tasks = DashboardTaskManager::default();
         let environment = load_or_create_default_environment(&persistence, &config.initial_config).await?;
+        let history_environment_id = environment.environment_id.clone();
         let published_environment = Arc::new(std::sync::RwLock::new(PublishedEnvironment::from_environment(
             environment,
             persistence.storage_backend(),
         )));
         let convergence_context = client_runtime.component("dashboard-environment-convergence");
         let persisted_mutation_context = client_runtime.component("dashboard-persisted-mutation-owner");
-        let admin_client =
-            DashboardAdminClient::new(published_environment.clone(), client_runtime, config.admin_credentials);
+        let admin_client = DashboardAdminClient::new(
+            published_environment.clone(),
+            client_runtime.clone(),
+            config.admin_credentials,
+        );
+        let history_runtime = DashboardHistoryRuntime::new(persistence.storage_backend());
         if config.dashboard_history_interval_secs > 0 {
-            spawn_dashboard_history_collector(
-                &dashboard_tasks,
+            start_dashboard_history_collector(
+                client_runtime.component("dashboard-history-collector"),
+                persistence.clone(),
                 DashboardAdminFacade::new(admin_client.clone()),
-                history_store.clone(),
-                config.dashboard_history_interval_secs,
+                history_environment_id,
+                HistoryCollectorConfig {
+                    interval_secs: config.dashboard_history_interval_secs,
+                    retention_days: config.dashboard_history_retention_days,
+                    retention_batch_size: config.dashboard_history_retention_batch_size,
+                    lease_ttl_secs: config.dashboard_history_lease_ttl_secs,
+                },
+                history_runtime.clone(),
             )?;
         }
 
@@ -119,8 +128,7 @@ impl AppState {
             environment_refresh_lock: Arc::new(Mutex::new(())),
             persisted_mutation_context,
             auth_state,
-            history_store,
-            dashboard_tasks,
+            history_runtime,
             published_environment,
             admin_client,
             #[cfg(test)]
@@ -391,6 +399,9 @@ mod tests {
                 password: "test-password".to_string(),
             },
             dashboard_history_interval_secs: 0,
+            dashboard_history_retention_days: 30,
+            dashboard_history_retention_batch_size: 500,
+            dashboard_history_lease_ttl_secs: 30,
             initial_config: DashboardConfigView::default(),
             admin_credentials: None,
         }

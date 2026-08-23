@@ -42,6 +42,9 @@ use tokio::sync::RwLock;
 use tokio::sync::RwLockReadGuard;
 use tokio::sync::oneshot;
 
+#[path = "history_file_store.rs"]
+mod history_file_store;
+
 const FORMAT_VERSION: u32 = 1;
 const MIN_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -71,6 +74,7 @@ impl FileDirectoryLock {
             return Err(PersistenceError::LockUnavailable);
         }
         recover_incomplete_snapshot_transactions(root)?;
+        history_file_store::recover_history_file_operations(root)?;
         initialize_manifest(root)?;
         Ok(Self { _file: file })
     }
@@ -261,6 +265,8 @@ pub struct FilePersistence {
     unavailable: Arc<AtomicBool>,
     write_lock: Arc<RwLock<()>>,
     mutation_blocker: Arc<FileMutationBlocker>,
+    #[cfg(test)]
+    history_replace_failpoint: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl FilePersistence {
@@ -284,6 +290,8 @@ impl FilePersistence {
             unavailable: Arc::new(AtomicBool::new(false)),
             write_lock: Arc::new(RwLock::new(())),
             mutation_blocker: Arc::new(FileMutationBlocker::default()),
+            #[cfg(test)]
+            history_replace_failpoint: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         })
     }
 
@@ -305,6 +313,11 @@ impl FilePersistence {
     #[cfg(test)]
     pub(crate) fn clear_test_committed_cleanup_blocker(&self) {
         self.mutation_blocker.clear_committed_cleanup();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_history_replace_failpoint(&self, point: u8) {
+        self.history_replace_failpoint.store(point, AtomicOrdering::SeqCst);
     }
 
     pub async fn write_snapshot(
@@ -711,7 +724,7 @@ impl FilePersistence {
         match self.run_blocking_mutation(name, operation).await {
             FileMutationDispatch::Completed(Ok(outcome)) => self.finalize_file_mutation(outcome).await,
             FileMutationDispatch::Completed(Err(error)) => {
-                let recovery = self.recover_incomplete_transactions_owned().await;
+                let recovery = self.recover_incomplete_file_operations_owned().await;
                 if recovery.is_err() {
                     self.unavailable.store(true, AtomicOrdering::Release);
                 }
@@ -733,7 +746,7 @@ impl FilePersistence {
                     // transaction can still be recovered, but without an
                     // acknowledgement a single-snapshot result is unknown,
                     // so the instance remains poisoned either way.
-                    Err(_) => (false, self.recover_incomplete_transactions_owned().await),
+                    Err(_) => (false, self.recover_incomplete_file_operations_owned().await),
                 };
                 if acknowledged && recovered.is_ok() {
                     self.unavailable.store(false, AtomicOrdering::Release);
@@ -748,7 +761,7 @@ impl FilePersistence {
                 // closure has started. It is never safe to classify it as a
                 // queue rejection or allow this instance to keep serving.
                 self.unavailable.store(true, AtomicOrdering::Release);
-                let _ = self.recover_incomplete_transactions_owned().await;
+                let _ = self.recover_incomplete_file_operations_owned().await;
                 Err(PersistenceError::Runtime(error))
             }
         }
@@ -816,7 +829,7 @@ impl FilePersistence {
     /// than serving a possibly unacknowledged aggregate.
     async fn fail_closed_after_finalize<T>(&self, error: PersistenceError) -> Result<T, PersistenceError> {
         self.unavailable.store(true, AtomicOrdering::Release);
-        let _ = self.recover_incomplete_transactions_owned().await;
+        let _ = self.recover_incomplete_file_operations_owned().await;
         Err(error)
     }
 
@@ -867,13 +880,14 @@ impl FilePersistence {
         }
     }
 
-    /// Replays marker-owned deletion while the repository write gate is held.
-    /// A successful return guarantees that no staged snapshot from a failed
-    /// multi-collection publication remains visible to this process.
-    async fn recover_incomplete_transactions_owned(&self) -> Result<(), PersistenceError> {
+    /// Replays all marker-owned file operations while the repository write
+    /// gate is held. This includes history rewrites, so a failed append never
+    /// leaves a live File instance serving a temporarily absent day segment.
+    async fn recover_incomplete_file_operations_owned(&self) -> Result<(), PersistenceError> {
         let root = self.root.clone();
-        self.run_recovery_operation_owned("dashboard-file-storage-recover-snapshot-transaction", move || {
-            recover_incomplete_snapshot_transactions(&root)
+        self.run_recovery_operation_owned("dashboard-file-storage-recover-file-operations", move || {
+            recover_incomplete_snapshot_transactions(&root)?;
+            history_file_store::recover_history_file_operations(&root)
         })
         .await
     }

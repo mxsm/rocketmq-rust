@@ -82,8 +82,8 @@ CREATE TABLE IF NOT EXISTS dashboard_audit_event (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS dashboard_task_lease (
-    lease_name VARCHAR(128) PRIMARY KEY,
-    holder_id VARCHAR(128) NOT NULL,
+    lease_name VARBINARY(128) PRIMARY KEY,
+    holder_id VARBINARY(128) NOT NULL,
     expires_at_ms BIGINT NOT NULL,
     fencing_token BIGINT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

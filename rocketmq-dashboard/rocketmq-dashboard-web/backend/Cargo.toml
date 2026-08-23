@@ -32,3 +32,4 @@ rocketmq-runtime = { version = "1.0.0", path = "../../../rocketmq-runtime" }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
