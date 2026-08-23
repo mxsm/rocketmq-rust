@@ -101,8 +101,8 @@
 ## Validation policy
 
 - Validation routes are cumulative: run every profile, project rule, and specialized gate whose trigger matches.
-- During iteration, use the smallest useful formatter, check, and test scope. Full workspace commands are
-  final/pre-PR gates, not requirements after every small edit.
+- During iteration, use the smallest useful formatter, check, and test scope. Full workspace validation commands
+  are final/pre-PR gates, not requirements after every small edit.
 - Before PR submission or final handoff of Rust code, complete a successful format check and applicable Clippy pass for every affected Cargo project.
 - Do not run a mutating workspace-wide formatter while unrelated dirty Rust files are present. Format only
   intended files while iterating, then use the non-mutating final checks below.
@@ -116,14 +116,16 @@
 
 ### Root workspace Rust profile
 
-Run from the repository root:
+Run from the repository root. Repeat the format check for every affected root-workspace package, replacing
+`<package>` with its Cargo package name:
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt -p <package> -- --check
 cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 ```
 
-Package-level checks are useful while iterating, but they do not replace the final workspace profile for root workspace Rust changes.
+Do not use `cargo fmt --all -- --check` for root-workspace changes. Package-scoped format checks for every affected
+package, together with the workspace Clippy command, form the final root-workspace profile.
 
 ### Standalone Cargo fallback profile
 
