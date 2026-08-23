@@ -34,7 +34,7 @@ export default function SettingsSectionNav({ activeSection, onSelect }: Settings
             <Icon size={16} aria-hidden="true" />
             <span>
               <strong>{section.label}</strong>
-              <small>{section.description}</small>
+              <small className="sr-only">{section.description}</small>
             </span>
           </Button>
         );

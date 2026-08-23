@@ -4,11 +4,14 @@ import type {
   BoolSettingRequest,
   ConfigMutationResult,
   DashboardConfigView,
+  NameserverAvailabilityView,
   NameserverListRequest
 } from '../types/config';
 
 export const configApi = {
   getConfig: () => apiClient.get<DashboardConfigView>('/api/config'),
+  getNameserverAvailability: () =>
+    apiClient.get<NameserverAvailabilityView>('/api/config/nameservers'),
   replaceNameservers: (request: NameserverListRequest) =>
     apiClient.put<ConfigMutationResult>('/api/config/nameservers', request),
   addNameserver: (request: AddressRequest) =>

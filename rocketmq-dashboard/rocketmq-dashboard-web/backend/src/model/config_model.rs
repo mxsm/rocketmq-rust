@@ -51,6 +51,27 @@ pub struct DashboardConfigView {
     pub storage_backend: StorageBackend,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum NameserverAvailabilityStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NameserverEndpointAvailability {
+    pub address: String,
+    pub status: NameserverAvailabilityStatus,
+    pub checked_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NameserverAvailabilityView {
+    pub endpoints: Vec<NameserverEndpointAvailability>,
+}
+
 impl Default for DashboardConfigView {
     fn default() -> Self {
         Self {

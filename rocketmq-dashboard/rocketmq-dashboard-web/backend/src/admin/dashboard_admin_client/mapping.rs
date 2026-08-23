@@ -52,6 +52,15 @@ pub(super) fn map_broker_info(item: core::DashboardBrokerInfo) -> BrokerInfo {
     }
 }
 
+pub(super) fn map_producer_connection(item: core::DashboardProducerConnection) -> ProducerConnectionInfo {
+    ProducerConnectionInfo {
+        client_id: item.client_id,
+        client_addr: item.client_addr,
+        language: item.language,
+        version: item.version_desc,
+    }
+}
+
 pub(super) fn broker_target(value: &str) -> core::DashboardBrokerTarget {
     if value.contains(':') {
         core::DashboardBrokerTarget {
@@ -312,9 +321,11 @@ mod tests {
     use std::thread;
 
     use rocketmq_admin_core::core::dashboard::DashboardMessage;
+    use rocketmq_admin_core::core::dashboard::DashboardProducerConnection;
 
     use super::csv_escape;
     use super::map_message;
+    use super::map_producer_connection;
     use super::unique_admin_group;
 
     #[test]
@@ -374,6 +385,19 @@ mod tests {
             mapped.properties.get("STORE_MESSAGE_ID").map(String::as_str),
             Some("store-id")
         );
+    }
+
+    #[test]
+    fn maps_producer_version_description_instead_of_protocol_ordinal() {
+        let mapped = map_producer_connection(DashboardProducerConnection {
+            client_id: "client-a".to_string(),
+            client_addr: "127.0.0.1:10911".to_string(),
+            language: "RUST".to_string(),
+            version: 474,
+            version_desc: "V5_3_1_SNAPSHOT".to_string(),
+        });
+
+        assert_eq!(mapped.version, "V5_3_1_SNAPSHOT");
     }
 
     #[test]

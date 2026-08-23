@@ -17,6 +17,7 @@ use crate::model::ApiResponse;
 use crate::model::BoolSettingRequest;
 use crate::model::ConfigMutationResult;
 use crate::model::DashboardConfigView;
+use crate::model::NameserverAvailabilityView;
 use crate::model::NameserverListRequest;
 use crate::service::delete_proxy as delete_proxy_service;
 use crate::service::get_config as get_config_service;
@@ -32,6 +33,14 @@ pub async fn get_config(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<DashboardConfigView>>, DashboardError> {
     Ok(Json(ApiResponse::success(get_config_service(&state).await)))
+}
+
+pub async fn get_nameserver_availability(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<NameserverAvailabilityView>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        crate::service::get_nameserver_availability(&state).await,
+    )))
 }
 
 pub async fn replace_nameservers(
