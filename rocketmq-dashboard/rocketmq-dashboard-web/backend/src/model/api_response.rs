@@ -40,6 +40,15 @@ impl<T> ApiResponse<T> {
             data: None,
         }
     }
+
+    pub fn failure_with_data(code: impl Into<String>, message: impl Into<String>, data: T) -> Self {
+        Self {
+            success: false,
+            code: code.into(),
+            message: message.into(),
+            data: Some(data),
+        }
+    }
 }
 
 impl ApiResponse<serde_json::Value> {

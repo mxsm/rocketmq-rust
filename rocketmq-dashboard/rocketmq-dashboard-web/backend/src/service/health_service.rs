@@ -12,9 +12,73 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::HealthStatus;
+use crate::persistence::DashboardPersistence;
+use crate::persistence::StorageHealth;
+use crate::persistence::StorageStatus;
 
-pub fn health_status() -> HealthStatus {
+pub fn liveness_status() -> HealthStatus {
     HealthStatus {
         status: "UP".to_string(),
+        storage: None,
+    }
+}
+
+pub async fn readiness_status(persistence: &DashboardPersistence) -> HealthStatus {
+    readiness_status_from_storage(persistence.storage_health().await)
+}
+
+pub fn readiness_status_from_storage(storage: StorageHealth) -> HealthStatus {
+    HealthStatus {
+        status: if storage.status == StorageStatus::Available {
+            "UP".to_string()
+        } else {
+            "DOWN".to_string()
+        },
+        storage: Some(storage),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readiness_status_from_storage;
+    use crate::model::StorageBackend;
+    use crate::persistence::StorageHealth;
+    use crate::persistence::StorageMode;
+    use crate::persistence::StorageStatus;
+
+    #[test]
+    fn unavailable_storage_makes_readiness_down() {
+        let status = readiness_status_from_storage(StorageHealth {
+            backend: StorageBackend::Postgres,
+            mode: StorageMode::MultiNode,
+            status: StorageStatus::Unavailable,
+            schema_version: None,
+            last_successful_write_at: None,
+            available_bytes: None,
+            pool_size: None,
+            idle_connections: None,
+        });
+
+        assert_eq!(status.status, "DOWN");
+        assert_eq!(
+            status.storage.expect("storage status").status,
+            StorageStatus::Unavailable
+        );
+    }
+
+    #[test]
+    fn degraded_storage_makes_readiness_down() {
+        let status = readiness_status_from_storage(StorageHealth {
+            backend: StorageBackend::File,
+            mode: StorageMode::SingleNode,
+            status: StorageStatus::Degraded,
+            schema_version: Some(1),
+            last_successful_write_at: None,
+            available_bytes: Some(1),
+            pool_size: None,
+            idle_connections: None,
+        });
+
+        assert_eq!(status.status, "DOWN");
     }
 }

@@ -1,0 +1,77 @@
+name: rocketmq-dashboard-storage-test
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: rocketmq_dashboard_storage_test
+      MYSQL_USER: rocketmq_storage_test
+      MYSQL_PASSWORD: rocketmq_storage_test_password
+      MYSQL_ROOT_PASSWORD: rocketmq_storage_test_root_password
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping --host=127.0.0.1 --user=rocketmq_storage_test --password=rocketmq_storage_test_password --silent
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      - storage-test
+    volumes:
+      - rocketmq_dashboard_storage_test_mysql_data:/var/lib/mysql
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: rocketmq_dashboard_storage_test
+      POSTGRES_USER: rocketmq_storage_test
+      POSTGRES_PASSWORD: rocketmq_storage_test_password
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --host=127.0.0.1 --username=rocketmq_storage_test --dbname=rocketmq_dashboard_storage_test
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - storage-test
+    volumes:
+      - rocketmq_dashboard_storage_test_postgres_data:/var/lib/postgresql/data
+
+  storage-test-runner:
+    build:
+      context: ../..
+      dockerfile: rocketmq-dashboard/rocketmq-dashboard-web/deploy/storage-test.Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL: mysql://rocketmq_storage_test:rocketmq_storage_test_password@mysql:3306/rocketmq_dashboard_storage_test
+      ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL: postgres://rocketmq_storage_test:rocketmq_storage_test_password@postgres:5432/rocketmq_dashboard_storage_test
+      ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH: /storage/sqlite/dashboard-storage-test.db
+      ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH: /storage/file
+    networks:
+      - storage-test
+    volumes:
+      - rocketmq_dashboard_storage_test_sqlite_data:/storage/sqlite
+      - rocketmq_dashboard_storage_test_file_data:/storage/file
+
+networks:
+  storage-test:
+    name: rocketmq-dashboard-storage-test
+
+volumes:
+  rocketmq_dashboard_storage_test_mysql_data:
+    name: rocketmq-dashboard-storage-test-mysql-data
+  rocketmq_dashboard_storage_test_postgres_data:
+    name: rocketmq-dashboard-storage-test-postgres-data
+  rocketmq_dashboard_storage_test_sqlite_data:
+    name: rocketmq-dashboard-storage-test-sqlite-data
+  rocketmq_dashboard_storage_test_file_data:
+    name: rocketmq-dashboard-storage-test-file-data

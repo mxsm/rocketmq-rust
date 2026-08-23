@@ -186,10 +186,12 @@ async fn persist_config<F>(state: &AppState, operation: F) -> Result<DashboardCo
 where
     F: FnOnce(&mut DashboardConfigView),
 {
-    let mut config = state.dashboard_config.write().await;
-    operation(&mut config);
-    state.config_store.save(&config)?;
-    Ok(config.clone())
+    let _mutation = state.config_mutation_lock.lock().await;
+    let mut candidate = state.dashboard_config.read().await.clone();
+    operation(&mut candidate);
+    state.config_store.save(&candidate).await?;
+    *state.dashboard_config.write().await = candidate.clone();
+    Ok(candidate)
 }
 
 fn normalize_address_list(values: &[String], label: &str) -> Result<Vec<String>, DashboardError> {

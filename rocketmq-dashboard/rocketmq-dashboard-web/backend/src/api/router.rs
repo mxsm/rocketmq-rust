@@ -149,6 +149,8 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/health", get(health_api::health))
+        .route("/api/health/live", get(health_api::live))
+        .route("/api/health/ready", get(health_api::ready))
         .route("/api/auth/session", get(auth_api::session))
         .route("/api/auth/login", post(auth_api::login))
         .route("/api/auth/logout", post(auth_api::logout))

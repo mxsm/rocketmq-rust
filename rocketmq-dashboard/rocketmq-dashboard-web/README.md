@@ -39,7 +39,8 @@ $env:DASHBOARD_WEB_HOST="127.0.0.1"
 $env:DASHBOARD_WEB_PORT="8082"
 $env:NAMESRV_ADDR="127.0.0.1:9876"
 $env:DASHBOARD_WEB_STORAGE_BACKEND="file"
-$env:DASHBOARD_WEB_STORAGE_PATH="data/dashboard-config.json"
+$env:DASHBOARD_WEB_STORAGE_PATH="data/dashboard"
+$env:DASHBOARD_WEB_INTERIM_CONFIG_PATH="data/dashboard-interim-config.json"
 $env:DASHBOARD_WEB_LOGIN_REQUIRED="false"
 $env:DASHBOARD_WEB_USERNAME="admin"
 $env:DASHBOARD_WEB_PASSWORD="rocketmq"
@@ -53,11 +54,79 @@ $env:DASHBOARD_WEB_ROCKETMQ_SECRET_KEY="<secret-key>"
 The RocketMQ access and secret key variables are optional, but they must be
 configured together when the target cluster enforces ACL authentication.
 
-For SQLite storage:
+## Persistence configuration
+
+The storage backend is selected strictly at startup. Valid values are `file`,
+`sqlite`, `mysql`, and `postgres`; an unknown backend or missing server
+database URL prevents startup. The compatibility configuration file remains
+separate from the selected backend until the dashboard configuration repository
+is introduced, so a MySQL or PostgreSQL selection never silently falls back to
+local File storage.
+
+File storage uses a data **directory** and takes an exclusive lock for the
+process lifetime:
+
+```powershell
+$env:DASHBOARD_WEB_STORAGE_BACKEND="file"
+$env:DASHBOARD_WEB_STORAGE_PATH="data/dashboard"
+```
+
+SQLite storage uses an on-disk database file. In-memory SQLite locations such
+as `:memory:` and `file::memory:` are intentionally rejected:
 
 ```powershell
 $env:DASHBOARD_WEB_STORAGE_BACKEND="sqlite"
 $env:DASHBOARD_WEB_STORAGE_PATH="data/dashboard.db"
+```
+
+MySQL and PostgreSQL use `DASHBOARD_WEB_DATABASE_URL`; do not place database
+credentials in source files or logs:
+
+```powershell
+$env:DASHBOARD_WEB_STORAGE_BACKEND="mysql"
+$env:DASHBOARD_WEB_DATABASE_URL="mysql://<user>:<password>@127.0.0.1:3306/rocketmq_dashboard"
+
+$env:DASHBOARD_WEB_STORAGE_BACKEND="postgres"
+$env:DASHBOARD_WEB_DATABASE_URL="postgres://<user>:<password>@127.0.0.1:5432/rocketmq_dashboard"
+```
+
+Production MySQL and PostgreSQL endpoints must use TLS with certificate
+verification. Configure a verified server name and a CA path in the URL, for
+example `mysql://...?...&ssl-mode=verify_identity&ssl-ca=/run/secrets/mysql-ca.pem`
+or `postgres://...?sslmode=verify-full&sslrootcert=/run/secrets/postgres-ca.pem`.
+Keep CA material and credentials in a platform secret store or mounted secret,
+not in the repository or dashboard configuration response.
+
+Optional pool controls are `DASHBOARD_WEB_DB_MIN_CONNECTIONS`,
+`DASHBOARD_WEB_DB_MAX_CONNECTIONS`, `DASHBOARD_WEB_DB_CONNECT_TIMEOUT_MS`,
+`DASHBOARD_WEB_DB_ACQUIRE_TIMEOUT_MS`, `DASHBOARD_WEB_DB_IDLE_TIMEOUT_SECS`,
+and `DASHBOARD_WEB_DB_MAX_LIFETIME_SECS`. All values must be positive and the
+minimum may not exceed the maximum.
+
+Storage-aware readiness is exposed through `GET /api/health/ready`; `GET
+/api/health/live` only reports process liveness, and `GET /api/health` remains
+the compatible readiness endpoint.
+
+## Storage integration test environment
+
+`docker-compose.storage-test.yml` is the single local integration-test entry
+point. It verifies fresh and repeated initialization against a File volume, a
+real SQLite file, MySQL 8.4, and PostgreSQL 15:
+
+```powershell
+cd rocketmq-dashboard/rocketmq-dashboard-web
+docker compose -f docker-compose.storage-test.yml config
+docker compose -f docker-compose.storage-test.yml up -d mysql postgres
+docker compose -f docker-compose.storage-test.yml run --build --rm storage-test-runner
+docker compose -f docker-compose.storage-test.yml down -v --remove-orphans
+```
+
+The final command intentionally removes the four named test volumes so the
+next run again exercises an empty database and the `0001` migrations. To run
+all services as one command while preserving the runner's exit code, use:
+
+```powershell
+docker compose -f docker-compose.storage-test.yml up --build --abort-on-container-exit --exit-code-from storage-test-runner
 ```
 
 ## Frontend Development
@@ -106,7 +175,9 @@ npm run build
 - Rust Axum backend project scaffold.
 - Unified `ApiResponse<T>` response shape.
 - Health API: `GET /api/health`.
-- Config API with file and SQLite persistence.
+- Config API with an explicit interim File compatibility store and a separate
+  File/SQLite/MySQL/PostgreSQL persistence foundation. Domain repositories
+  continue to use their existing stores until they are migrated deliberately.
 - REST route surface for Dashboard, Topic, Consumer, Producer, Broker, Message, and Config.
 - Live read-only RocketMQ Admin wiring for:
   - Dashboard overview with `DOWN` fallback when the configured NameServer is unreachable.
