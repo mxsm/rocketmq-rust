@@ -15,8 +15,15 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from unittest import mock
 
 from scripts import module_maintainability_guard as guard
 
@@ -66,6 +73,79 @@ def decision_section(path: str, *, outcome: str = "retained") -> str:
 
 
 class ModuleMaintainabilityGuardTests(unittest.TestCase):
+    def test_history_window_uses_utc_calendar_year_and_clamps_leap_day(self) -> None:
+        anchor = datetime(2024, 2, 29, 23, 59, 58, tzinfo=timezone.utc)
+        completed = subprocess.CompletedProcess([], 0, f"{int(anchor.timestamp())}\n", "")
+
+        with mock.patch.object(guard.subprocess, "run", return_value=completed) as run:
+            cutoff_epoch, anchor_epoch = guard.history_window(Path("fixture"))
+
+        self.assertEqual(int(anchor.timestamp()), anchor_epoch)
+        self.assertEqual(
+            int(datetime(2023, 2, 28, 23, 59, 58, tzinfo=timezone.utc).timestamp()),
+            cutoff_epoch,
+        )
+        self.assertEqual(
+            ["git", "show", "-s", "--format=%ct", "HEAD"],
+            run.call_args.args[0],
+        )
+
+    def test_same_head_uses_fixed_history_arguments_independent_of_wall_clock(self) -> None:
+        anchor_epoch = int(datetime(2025, 3, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+        history = "@@commit\tauthor@example.test\tfix fixture\nfixture.rs\n"
+
+        def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if command[1] == "show":
+                return subprocess.CompletedProcess(command, 0, f"{anchor_epoch}\n", "")
+            return subprocess.CompletedProcess(command, 0, history, "")
+
+        with mock.patch.object(guard.subprocess, "run", side_effect=run) as mocked:
+            first = guard.git_history(Path("fixture"))
+            second = guard.git_history(Path("fixture"))
+
+        self.assertEqual(first, second)
+        log_commands = [call.args[0] for call in mocked.call_args_list if call.args[0][1] == "log"]
+        self.assertEqual(2, len(log_commands))
+        self.assertEqual(log_commands[0], log_commands[1])
+
+    def test_history_log_is_bounded_to_the_fixed_head_window(self) -> None:
+        anchor_epoch = int(datetime(2025, 3, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+
+        def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if command[1] == "show":
+                return subprocess.CompletedProcess(command, 0, f"{anchor_epoch}\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(guard.subprocess, "run", side_effect=run) as mocked:
+            guard.git_history(Path("fixture"))
+
+        log_command = next(call.args[0] for call in mocked.call_args_list if call.args[0][1] == "log")
+        self.assertIn("--since=@1709251200", log_command)
+        self.assertIn("--until=@1740787200", log_command)
+        self.assertNotIn("--since=12 months ago", log_command)
+
+    def test_invalid_head_timestamp_fails_closed_without_running_git_log(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "not-a-timestamp\n", "")
+
+        with mock.patch.object(guard.subprocess, "run", return_value=completed) as run:
+            self.assertEqual({}, guard.git_history(Path("fixture")))
+
+        self.assertEqual(1, run.call_count)
+        self.assertEqual(["git", "show", "-s", "--format=%ct", "HEAD"], run.call_args.args[0])
+
+    def test_nonrepresentable_head_timestamp_fails_closed_without_running_git_log(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "9223372036854775807\n", "")
+
+        with (
+            mock.patch.object(guard.subprocess, "run", return_value=completed) as run,
+            mock.patch.object(guard, "datetime") as date_time,
+        ):
+            date_time.fromtimestamp.side_effect = OverflowError("timestamp out of range")
+            self.assertEqual({}, guard.git_history(Path("fixture")))
+
+        self.assertEqual(1, run.call_count)
+        self.assertEqual(["git", "show", "-s", "--format=%ct", "HEAD"], run.call_args.args[0])
+
     def test_ranking_uses_history_and_ownership_not_only_lines(self) -> None:
         large_static = guard.score_metrics(1_000, 0, 0, 0, 1, 0, guard.History())
         smaller_high_churn = guard.score_metrics(
@@ -187,6 +267,93 @@ pub struct RuntimeState;
         findings = guard.validate_decision_ledger([hotspot], document)
 
         self.assertEqual({"incomplete-hotspot-decision"}, {finding.code for finding in findings})
+
+
+class GitHistoryWindowTests(unittest.TestCase):
+    def init_repo(self) -> Path:
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        for command in (
+            ["git", "init", "--quiet"],
+            ["git", "config", "user.name", "Fixture Author"],
+            ["git", "config", "user.email", "fixture@example.test"],
+        ):
+            subprocess.run(command, cwd=directory, check=True)
+        return directory
+
+    def commit(
+        self,
+        root: Path,
+        timestamp: str,
+        body: str = "pub struct Fixture;\n",
+        *,
+        path: str = "fixture.rs",
+    ) -> None:
+        (root / path).write_text(body, encoding="utf-8")
+        environment = os.environ | {
+            "GIT_AUTHOR_DATE": timestamp,
+            "GIT_COMMITTER_DATE": timestamp,
+        }
+        subprocess.run(["git", "add", path], cwd=root, check=True)
+        subprocess.run(
+            ["git", "commit", "--quiet", "-m", "fixture history"],
+            cwd=root,
+            check=True,
+            env=environment,
+        )
+
+    def test_history_includes_fixed_window_boundaries(self) -> None:
+        root = self.init_repo()
+        self.commit(root, "2020-01-01T00:00:00+0000", path="initial.rs")
+        self.commit(
+            root,
+            "2024-02-29T23:59:59+0000",
+            "pub struct BeforeCutoff;\n",
+            path="before_cutoff.rs",
+        )
+        self.commit(
+            root,
+            "2024-03-01T00:00:00+0000",
+            "pub struct Cutoff;\n",
+            path="cutoff.rs",
+        )
+        self.commit(
+            root,
+            "2025-03-01T00:00:00+0000",
+            "pub struct Anchor;\n",
+            path="anchor.rs",
+        )
+
+        history = guard.git_history(root)
+
+        self.assertEqual(guard.History(commits=1, contributors=1, defects=0), history["cutoff.rs"])
+        self.assertEqual(guard.History(commits=1, contributors=1, defects=0), history["anchor.rs"])
+        self.assertNotIn("before_cutoff.rs", history)
+
+    def test_history_excludes_a_future_dated_ancestor(self) -> None:
+        root = self.init_repo()
+        self.commit(root, "2020-01-01T00:00:00+0000", path="initial.rs")
+        self.commit(root, "2024-03-01T00:00:00+0000", path="cutoff.rs")
+        self.commit(root, "2025-03-01T00:00:01+0000", path="future.rs")
+        self.commit(root, "2025-03-01T00:00:00+0000", path="anchor.rs")
+
+        history = guard.git_history(root)
+
+        self.assertIn("cutoff.rs", history)
+        self.assertIn("anchor.rs", history)
+        self.assertNotIn("future.rs", history)
+
+    def test_new_head_advances_window_and_counts_its_commit(self) -> None:
+        root = self.init_repo()
+        self.commit(root, "2024-06-01T00:00:00+0000")
+        self.commit(root, "2025-01-01T00:00:00+0000", "pub struct FirstHead;\n")
+
+        before = guard.git_history(root)
+        self.commit(root, "2025-02-01T00:00:00+0000", "pub struct SecondHead;\n")
+        after = guard.git_history(root)
+
+        self.assertEqual(2, before["fixture.rs"].commits)
+        self.assertEqual(3, after["fixture.rs"].commits)
 
 
 class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
