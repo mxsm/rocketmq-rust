@@ -11,14 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::persistence::StorageHealth;
-use serde::Deserialize;
-use serde::Serialize;
+use crate::model::StorageBackend;
+use crate::persistence::file_store::FilePersistence;
+use crate::persistence::sql_store::SqlPersistence;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct HealthStatus {
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage: Option<StorageHealth>,
+pub enum PersistenceBackend {
+    File(Box<FilePersistence>),
+    Sql(SqlPersistence),
+}
+
+impl PersistenceBackend {
+    pub const fn storage_backend(&self) -> StorageBackend {
+        match self {
+            Self::File(_) => StorageBackend::File,
+            Self::Sql(store) => store.storage_backend(),
+        }
+    }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::ApiResponse;
+use crate::persistence::error::PersistenceError;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -50,6 +51,8 @@ pub enum DashboardError {
     NotImplemented(String),
     #[error("{0}")]
     Internal(String),
+    #[error(transparent)]
+    Storage(#[from] PersistenceError),
     #[error("{message}")]
     InternalSource {
         message: &'static str,
@@ -113,6 +116,7 @@ impl DashboardError {
             Self::Auth(_) => Cow::Borrowed("AUTH_ERROR"),
             Self::NotImplemented(_) => Cow::Borrowed("NOT_IMPLEMENTED"),
             Self::Internal(_) | Self::InternalSource { .. } => Cow::Borrowed("INTERNAL_ERROR"),
+            Self::Storage(error) => Cow::Borrowed(error.stable_code()),
         }
     }
 
@@ -131,6 +135,15 @@ impl DashboardError {
             Self::Auth(_) => StatusCode::UNAUTHORIZED,
             Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             Self::Internal(_) | Self::InternalSource { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Storage(PersistenceError::InvalidConfig(_)) => StatusCode::BAD_REQUEST,
+            Self::Storage(PersistenceError::NotFound) => StatusCode::NOT_FOUND,
+            Self::Storage(PersistenceError::Capacity) => StatusCode::INSUFFICIENT_STORAGE,
+            Self::Storage(PersistenceError::LockUnavailable | PersistenceError::ConnectionUnavailable) => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::Storage(PersistenceError::Timeout) => StatusCode::GATEWAY_TIMEOUT,
+            Self::Storage(PersistenceError::Conflict) => StatusCode::CONFLICT,
+            Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -147,6 +160,7 @@ impl DashboardError {
                 .map(str::to_string)
                 .unwrap_or_else(|| rocketmq_response_message(error)),
             Self::Admin(error) => admin_response_message(error),
+            Self::Storage(error) => storage_response_message(error).to_string(),
         }
     }
 }
@@ -228,6 +242,25 @@ fn admin_response_message(error: &AdminError) -> String {
             .filter(|context| !context.is_empty())
             .map_or_else(|| reason.clone(), |context| format!("{reason} ({context})")),
         _ => error.to_string(),
+    }
+}
+
+fn storage_response_message(error: &PersistenceError) -> &'static str {
+    match error {
+        PersistenceError::InvalidConfig(_) => "Storage configuration is invalid",
+        PersistenceError::LockUnavailable => "Storage data directory is already in use",
+        PersistenceError::UnsupportedLayout => "Storage layout is unsupported",
+        PersistenceError::CorruptedData => "Storage data is corrupted",
+        PersistenceError::NotFound => "Storage record was not found",
+        PersistenceError::Capacity => "Storage capacity is insufficient",
+        PersistenceError::ConnectionUnavailable => "Storage backend is unavailable",
+        PersistenceError::MigrationFailed => "Storage migration failed",
+        PersistenceError::Timeout => "Storage operation timed out",
+        PersistenceError::Conflict => "Storage write conflict",
+        PersistenceError::Io(_)
+        | PersistenceError::Serialization(_)
+        | PersistenceError::Query(_)
+        | PersistenceError::Runtime(_) => "Storage operation failed",
     }
 }
 

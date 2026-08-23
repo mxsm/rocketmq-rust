@@ -19,6 +19,7 @@ pub mod config;
 pub mod error;
 pub mod middleware;
 pub mod model;
+pub mod persistence;
 pub mod service;
 pub mod state;
 

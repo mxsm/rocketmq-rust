@@ -19,13 +19,22 @@ use serde::Serialize;
 pub enum StorageBackend {
     File,
     Sqlite,
+    #[serde(rename = "mysql")]
+    MySql,
+    #[serde(rename = "postgres")]
+    Postgres,
 }
 
 impl StorageBackend {
-    pub fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "sqlite" | "sqlite3" => Self::Sqlite,
-            _ => Self::File,
+            "file" => Ok(Self::File),
+            "sqlite" | "sqlite3" => Ok(Self::Sqlite),
+            "mysql" => Ok(Self::MySql),
+            "postgres" | "postgresql" => Ok(Self::Postgres),
+            _ => Err(format!(
+                "unsupported storage backend `{value}`; expected file, sqlite, mysql, or postgres"
+            )),
         }
     }
 
@@ -33,7 +42,13 @@ impl StorageBackend {
         match self {
             Self::File => "file",
             Self::Sqlite => "sqlite",
+            Self::MySql => "mysql",
+            Self::Postgres => "postgres",
         }
+    }
+
+    pub const fn is_sql(self) -> bool {
+        matches!(self, Self::Sqlite | Self::MySql | Self::Postgres)
     }
 }
 
