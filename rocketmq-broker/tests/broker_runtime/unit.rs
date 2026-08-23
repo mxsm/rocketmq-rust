@@ -6382,6 +6382,10 @@ async fn three_controller_two_broker_controller_mode_failover_reregisters_namesr
     configure_namesrv(&mut rejoining_broker, &namesrv_addr).await;
     initialize_controller_mode_broker(&mut rejoining_broker, "rejoining broker").await;
     rejoining_broker.start().await.expect("rejoining broker should start");
+    assert!(
+        rejoining_broker.composition.state.broker_pre_online_service.is_none(),
+        "controller mode must not start the slave-acting-master pre-online service",
+    );
     let current_leader_manager = controllers
         .iter()
         .find(|manager| manager.is_leader())
