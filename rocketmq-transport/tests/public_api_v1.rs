@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::api::v1::ClientShutdownReport;
 use rocketmq_transport::api::v1::ClientSnapshot;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
@@ -59,6 +60,12 @@ fn assert_stable_async_methods(client: &TransportClient<DefaultRequestProcessor>
     let _: &dyn std::future::Future<Output = rocketmq_error::RocketMQResult<SendReceipt>> = &oneway_future;
 }
 
+fn assert_stable_shutdown_methods(client: &TransportClient<DefaultRequestProcessor>) {
+    let graceful = client.shutdown_graceful(ShutdownDeadline::after(Duration::from_millis(1)));
+    let _: &dyn std::future::Future<Output = ClientShutdownReport> = &graceful;
+    let _: fn(&TransportClient<DefaultRequestProcessor>) -> ClientShutdownReport = TransportClient::shutdown_now;
+}
+
 fn assert_prelude_processor<T: PreludeRequestProcessor>() {}
 
 #[test]
@@ -86,6 +93,7 @@ async fn versioned_api_constructs_canonical_client_and_server() {
     .build()
     .unwrap();
     assert_stable_async_methods(&transport, RequestTarget::NameServer);
+    assert_stable_shutdown_methods(&transport);
 
     let remoting = RemotingClient::builder(
         config,

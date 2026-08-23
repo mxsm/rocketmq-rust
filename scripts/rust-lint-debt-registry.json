@@ -1237,18 +1237,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs:item:fn start:unused_variables:0",
-      "item": "fn start",
-      "lints": [
-        "unused_variables"
-      ],
-      "owner": "rocketmq-transport",
-      "path": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-transport/src/remoting.rs:module:mod inner:unused_variables:0",
       "item": "mod inner",
       "lints": [
@@ -1309,7 +1297,7 @@
       "scope": "item"
     }
   ],
-  "maximum_entries": 109,
+  "maximum_entries": 108,
   "schema_version": 2,
   "scope": "core-release",
   "too_many_arguments": {
