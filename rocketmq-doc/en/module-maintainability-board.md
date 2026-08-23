@@ -8,26 +8,26 @@ A high rank is a review priority, not evidence that line count alone is a defect
 
 | Rank | File | Score | Production LOC | Churn | Authors | Defects | Public | Locks | State owners | Fan-out |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | `rocketmq-broker/src/broker_runtime.rs` | 742.925 | 767 | 234 | 12 | 2 | 1 | 9 | 2 | 29 |
+| 1 | `rocketmq-broker/src/broker_runtime.rs` | 733.175 | 717 | 230 | 12 | 2 | 2 | 9 | 2 | 29 |
 | 2 | `rocketmq-client/src/producer/default_mq_producer.rs` | 665.904 | 2138 | 99 | 14 | 1 | 182 | 0 | 0 | 10 |
-| 3 | `rocketmq-store/src/message_store/local_file_message_store.rs` | 634.100 | 2344 | 181 | 5 | 4 | 5 | 22 | 0 | 27 |
-| 4 | `rocketmq-store/src/log_file/commit_log.rs` | 548.108 | 2521 | 115 | 5 | 4 | 71 | 10 | 0 | 17 |
+| 3 | `rocketmq-store/src/message_store/local_file_message_store.rs` | 621.600 | 2344 | 176 | 5 | 4 | 5 | 22 | 0 | 27 |
+| 4 | `rocketmq-store/src/log_file/commit_log.rs` | 543.108 | 2521 | 113 | 5 | 4 | 71 | 10 | 0 | 17 |
 | 5 | `rocketmq-observability/src/semantic.rs` | 501.000 | 300 | 20 | 1 | 0 | 293 | 0 | 0 | 0 |
-| 6 | `rocketmq-client/src/factory/mq_client_instance.rs` | 460.311 | 2474 | 82 | 3 | 3 | 78 | 14 | 0 | 14 |
-| 7 | `rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs` | 448.406 | 2962 | 48 | 1 | 0 | 104 | 46 | 1 | 12 |
+| 6 | `rocketmq-client/src/factory/mq_client_instance.rs` | 462.861 | 2476 | 83 | 3 | 3 | 78 | 14 | 0 | 14 |
+| 7 | `rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs` | 450.956 | 2964 | 49 | 1 | 0 | 104 | 46 | 1 | 12 |
 | 8 | `rocketmq-client/src/consumer/default_mq_push_consumer.rs` | 436.167 | 1163 | 33 | 3 | 0 | 190 | 0 | 0 | 9 |
 | 9 | `rocketmq-store/src/config/message_store_config.rs` | 425.890 | 2211 | 43 | 2 | 1 | 150 | 0 | 0 | 6 |
 | 10 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs` | 395.100 | 2864 | 6 | 1 | 0 | 199 | 0 | 0 | 3 |
-| 11 | `rocketmq-broker/src/config/broker_config.rs` | 389.975 | 1899 | 13 | 1 | 1 | 190 | 0 | 0 | 4 |
+| 11 | `rocketmq-broker/src/config/broker_config.rs` | 366.196 | 1718 | 14 | 1 | 1 | 177 | 0 | 0 | 3 |
 | 12 | `rocketmq-store/src/timer/timer_message_store.rs` | 362.254 | 2167 | 44 | 1 | 0 | 53 | 53 | 2 | 13 |
 | 13 | `rocketmq-client/src/implementation/mq_client_api_impl.rs` | 360.175 | 407 | 109 | 10 | 0 | 6 | 4 | 1 | 13 |
-| 14 | `rocketmq-broker/src/out_api/broker_outer_api.rs` | 339.225 | 1609 | 68 | 6 | 2 | 50 | 0 | 0 | 7 |
-| 15 | `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs` | 332.725 | 2239 | 57 | 2 | 1 | 41 | 19 | 0 | 13 |
-| 16 | `rocketmq-broker/src/processor/send_message_processor.rs` | 320.998 | 1852 | 75 | 6 | 3 | 8 | 0 | 0 | 13 |
+| 14 | `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs` | 340.448 | 2240 | 58 | 2 | 2 | 41 | 19 | 0 | 13 |
+| 15 | `rocketmq-broker/src/out_api/broker_outer_api.rs` | 339.225 | 1609 | 68 | 6 | 2 | 50 | 0 | 0 | 7 |
+| 16 | `rocketmq-broker/src/processor/send_message_processor.rs` | 319.973 | 1811 | 75 | 6 | 3 | 8 | 0 | 0 | 13 |
 | 17 | `rocketmq-client/src/consumer/default_lite_pull_consumer.rs` | 317.312 | 1306 | 22 | 1 | 0 | 126 | 4 | 0 | 10 |
 | 18 | `rocketmq-namesrv/src/bootstrap.rs` | 315.467 | 1569 | 66 | 2 | 0 | 31 | 9 | 1 | 14 |
-| 19 | `rocketmq-broker/src/processor/pop_message_processor.rs` | 308.950 | 1688 | 57 | 3 | 2 | 29 | 19 | 1 | 10 |
-| 20 | `rocketmq-client/src/producer/producer_impl/default_mq_producer_impl.rs` | 300.625 | 345 | 84 | 5 | 1 | 1 | 10 | 3 | 14 |
+| 19 | `rocketmq-broker/src/processor/pop_message_processor.rs` | 311.375 | 1685 | 58 | 3 | 2 | 29 | 19 | 1 | 10 |
+| 20 | `rocketmq-client/src/producer/producer_impl/default_mq_producer_impl.rs` | 303.125 | 345 | 85 | 5 | 1 | 1 | 10 | 3 | 14 |
 
 ## Ownership and extraction contracts
 
@@ -135,20 +135,20 @@ A high rank is a review priority, not evidence that line count alone is a defect
 - Tests: Run focused `rocketmq-client` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
 - Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
 
-### `rocketmq-broker/src/out_api/broker_outer_api.rs`
-
-- Owner: rocketmq-broker maintainers.
-- Use-case boundaries: `broker outer api`, `lifecycle`, `request execution`, `result projection`.
-- State ownership: `broker_outer_api` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.
-- Tests: Run focused `rocketmq-broker` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
-- Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
-
 ### `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs`
 
 - Owner: rocketmq-client maintainers.
 - Use-case boundaries: `lifecycle`, `assignment and routing`, `message flow`, `offset and shutdown`.
 - State ownership: `default_mq_push_consumer_impl` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.
 - Tests: Run focused `rocketmq-client` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
+- Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
+
+### `rocketmq-broker/src/out_api/broker_outer_api.rs`
+
+- Owner: rocketmq-broker maintainers.
+- Use-case boundaries: `broker outer api`, `lifecycle`, `request execution`, `result projection`.
+- State ownership: `broker_outer_api` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.
+- Tests: Run focused `rocketmq-broker` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
 - Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
 
 ### `rocketmq-broker/src/processor/send_message_processor.rs`
