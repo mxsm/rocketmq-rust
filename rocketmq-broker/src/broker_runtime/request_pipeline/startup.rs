@@ -236,7 +236,11 @@ impl BrokerRuntime {
             topic_route_info_manager.start();
         }
 
-        if self.composition.state.broker_pre_online_service.is_none() {
+        let broker_config = self.composition.state.broker_config();
+        if broker_config.enable_slave_acting_master
+            && !broker_config.skip_pre_online
+            && self.composition.state.broker_pre_online_service.is_none()
+        {
             self.composition.state.broker_pre_online_service = Some(
                 self.composition
                     .state
