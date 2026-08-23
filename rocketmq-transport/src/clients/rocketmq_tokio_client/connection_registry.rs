@@ -17,6 +17,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 
+use super::compatibility::CachedConnectionState;
 use super::connect_flight::ConnectFlight;
 use super::endpoint_state::EndpointLease;
 use crate::clients::TransportSession;
@@ -205,12 +206,18 @@ where
         })
     }
 
-    pub(super) fn remove_unhealthy_session(&self, identity: &CheetahString) -> bool {
-        self.sessions
-            .remove_if(&RegistryKey::direct(identity.clone()), |_, current| {
-                !current.session().connection().is_healthy()
-            })
-            .is_some()
+    /// Reconciles one direct entry while holding the entry lock for its full observation and removal.
+    pub(super) fn reconcile_direct_session(&self, identity: &CheetahString) -> CachedConnectionState {
+        match self.sessions.entry(RegistryKey::direct(identity.clone())) {
+            dashmap::mapref::entry::Entry::Vacant(_) => CachedConnectionState::Absent,
+            dashmap::mapref::entry::Entry::Occupied(entry) if entry.get().session().connection().is_healthy() => {
+                CachedConnectionState::Healthy
+            }
+            dashmap::mapref::entry::Entry::Occupied(entry) => {
+                entry.remove();
+                CachedConnectionState::UnhealthyRetired
+            }
+        }
     }
 
     #[cfg(test)]
@@ -366,13 +373,18 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Barrier;
     use std::time::Duration;
 
     use rocketmq_error::RocketMQError;
+    use rocketmq_runtime::RuntimeContext;
+    use tokio::net::TcpListener;
 
     use super::*;
+    use crate::clients::rocketmq_tokio_client::TransportClient;
     use crate::deadline::RequestDeadline;
     use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+    use crate::runtime::config::client_config::TransportClientConfig;
 
     #[test]
     fn connect_flight_failure_cleanup_is_identity_conditional() {
@@ -414,11 +426,74 @@ mod tests {
             panic!("shutdown completion must preserve the typed shared error");
         };
         assert!(matches!(snapshot.as_error(), RocketMQError::ClientNotStarted));
-
         let (replacement, replacement_leader) = registry.acquire_flight(identity.clone(), None);
         assert!(replacement_leader);
         registry.remove_flight_if_matches(&identity, &retired);
         assert_eq!(registry.flight_count(), 1);
         assert!(!Arc::ptr_eq(&retired, &replacement));
+    }
+    #[tokio::test]
+    async fn direct_reconciliation_keeps_a_concurrent_healthy_replacement() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.expect("accept first client");
+            let (second, _) = listener.accept().await.expect("accept replacement client");
+            let _connections = (first, second);
+            let _ = release_rx.await;
+        });
+        let client = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            RuntimeContext::from_current("registry-reconcile-first").service_context("client"),
+        ));
+        client.start().await.expect("start first client");
+        let replacement_owner = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            RuntimeContext::from_current("registry-reconcile-replacement").service_context("client"),
+        ));
+        replacement_owner.start().await.expect("start replacement owner");
+        let identity = CheetahString::from_string(address.to_string());
+        let original = client
+            .create_client(&identity, Duration::from_secs(1))
+            .await
+            .expect("create original session");
+        let replacement = replacement_owner
+            .create_client(&identity, Duration::from_secs(1))
+            .await
+            .expect("create replacement session");
+        original.retire_after_timeout().await;
+        let registry_for_reconcile = Arc::clone(&client.connection_registry);
+        let registry_for_replace = Arc::clone(&client.connection_registry);
+        let replacement_for_replace = replacement.clone();
+        let reconcile_barrier = Arc::new(Barrier::new(2));
+        let replacement_barrier = Arc::clone(&reconcile_barrier);
+        let state = std::thread::scope(|scope| {
+            let reconcile = scope.spawn(|| {
+                reconcile_barrier.wait();
+                registry_for_reconcile.reconcile_direct_session(&identity)
+            });
+            let replace = scope.spawn(|| {
+                replacement_barrier.wait();
+                registry_for_replace.insert_session(identity.clone(), replacement_for_replace, None, || true);
+            });
+            replace.join().expect("replacement thread");
+            reconcile.join().expect("reconciliation thread")
+        });
+        assert!(matches!(
+            state,
+            CachedConnectionState::Healthy | CachedConnectionState::UnhealthyRetired
+        ));
+        let cached = client
+            .connection_registry
+            .healthy_session(&identity, None)
+            .expect("healthy replacement must remain cached");
+        assert!(cached.is_same_registry_session(&replacement));
+        let _ = client.shutdown_now();
+        let _ = replacement_owner.shutdown_now();
+        let _ = release_tx.send(());
+        server.await.expect("server task");
     }
 }

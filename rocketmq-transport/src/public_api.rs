@@ -31,6 +31,7 @@ pub use crate::clients::nameserver_endpoint::diff_name_server_endpoints;
 pub use crate::clients::nameserver_endpoint::ConnectTarget;
 pub use crate::clients::nameserver_endpoint::NameServerEndpoint;
 pub use crate::clients::nameserver_endpoint::NameServerEndpointDiff;
+pub use crate::clients::rocketmq_tokio_client::CachedConnectionState;
 pub use crate::clients::rocketmq_tokio_client::ClientShutdownReport;
 pub use crate::clients::rocketmq_tokio_client::ClientSnapshot;
 pub use crate::clients::rocketmq_tokio_client::ClientStartReport;

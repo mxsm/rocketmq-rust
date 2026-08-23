@@ -40,6 +40,7 @@ use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsConfig;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
+use super::CachedConnectionState;
 use super::TransportClient;
 
 /// Builds a persistent endpoint client without exposing positional optional capabilities.
@@ -453,6 +454,23 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         .await
     }
 
+    /// Reconciles one direct cached connection without performing network I/O.
+    ///
+    /// The returned state only describes the direct-session cache at this instant.
+    /// It is not a DNS, socket, or network reachability probe.
+    pub fn reconcile_cached_connection(&self, addr: &CheetahString) -> CachedConnectionState {
+        self.reconcile_cached_connection_inner(addr)
+    }
+
+    /// Retained compatibility facade for direct cached-session cleanup.
+    ///
+    /// This method is not a DNS, socket, or network reachability probe. Use
+    /// [`Self::reconcile_cached_connection`] when the caller needs the typed
+    /// cache state.
+    #[deprecated(
+        since = "1.0.0",
+        note = "use TransportClient::reconcile_cached_connection; is_address_reachable is not a network probe"
+    )]
     pub fn is_address_reachable(&self, addr: &CheetahString) {
         self.is_address_reachable_inner(addr);
     }
@@ -461,6 +479,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         self.close_clients_inner(addrs);
     }
 
+    /// Retained compatibility facade for request processors fixed at construction.
+    ///
+    /// Use [`TransportClient::builder`] or [`RemotingClient::builder`] and
+    /// propagate the fallible `build()?` result instead.
+    #[deprecated(
+        since = "1.0.0",
+        note = "request processors are fixed at construction; use TransportClient::builder(...).build()? or RemotingClient::builder(...).build()?"
+    )]
     pub fn register_processor(&self, processor: impl RequestProcessor + Sync) {
         self.register_processor_inner(processor);
     }

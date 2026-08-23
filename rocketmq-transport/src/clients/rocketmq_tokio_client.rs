@@ -27,8 +27,6 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 #[cfg(test)]
 use rocketmq_runtime::TaskGroupLifecycleState;
-use tracing::debug;
-use tracing::info;
 use tracing::warn;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
@@ -53,6 +51,7 @@ use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsConfig;
 
 mod api;
+mod compatibility;
 mod connect_flight;
 mod connection_registry;
 mod endpoint_state;
@@ -64,6 +63,7 @@ pub use api::{
     ClientShutdownReport, ClientSnapshot, ClientStartReport, ConnectionShutdownReport, PendingUsage, RemotingClient,
     RemotingClientBuilder, RequestTarget, SendReceipt, TransportClientBuilder,
 };
+pub use compatibility::CachedConnectionState;
 
 use connection_registry::ConnectionRegistry;
 use endpoint_state::EndpointStateStore;
@@ -438,33 +438,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         }) {
             warn!("[SCAN] Removed idle/unhealthy connection: {}", addr);
         }
-    }
-}
-
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
-    fn is_address_reachable_inner(&self, addr: &CheetahString) {
-        if self.connection_registry.healthy_session(addr, None).is_some() {
-            return;
-        }
-        if self.connection_registry.remove_unhealthy_session(addr) {
-            warn!("Removed unhealthy connection for {}", addr);
-        } else {
-            debug!("No connection found for {}", addr);
-        }
-    }
-
-    fn close_clients_inner(&self, addrs: Vec<String>) {
-        for addr in &addrs {
-            let key = CheetahString::from(addr.as_str());
-            if !self.connection_registry.remove_sessions_by_identity(&key).is_empty() {
-                info!("Closed client connection for {}", addr);
-            }
-        }
-    }
-
-    fn register_processor_inner(&self, processor: impl RequestProcessor + Sync) {
-        let _ = &processor;
-        warn!("dynamic request processor registration is not supported by TransportClient after construction");
     }
 }
 

@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::CachedConnectionState;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::FileTransferMode;
 use rocketmq_transport::api::v1::FrameLimits;
@@ -876,6 +877,9 @@ fn api_v1_reexports_versioned_capabilities_and_dtos() {
     let _: Option<TransportClient<DefaultRequestProcessor>> = None;
     let _: Option<RemotingClient<DefaultRequestProcessor>> = None;
     let _: Option<TransportServer<DefaultRequestProcessor>> = None;
+    let _: CachedConnectionState = CachedConnectionState::Absent;
+    let _ = CachedConnectionState::Healthy;
+    let _ = CachedConnectionState::UnhealthyRetired;
     let _ = RequestDeadline::after(Duration::from_millis(1));
     assert_serialization_contract::<String>();
     assert_processor_contract::<DefaultRequestProcessor>();

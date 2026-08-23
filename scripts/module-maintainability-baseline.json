@@ -105,8 +105,8 @@
       "reexports": 90
     },
     "rocketmq-transport": {
-      "public_items": 644,
-      "reexports": 178
+      "public_items": 646,
+      "reexports": 180
     }
   },
   "files": {
@@ -10931,13 +10931,18 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client.rs": {
-      "production_lines": 325,
+      "production_lines": 301,
       "public_items": 1,
-      "reexports": 1
+      "reexports": 2
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/api.rs": {
-      "production_lines": 339,
-      "public_items": 49,
+      "production_lines": 351,
+      "public_items": 50,
+      "reexports": 0
+    },
+    "rocketmq-transport/src/clients/rocketmq_tokio_client/compatibility.rs": {
+      "production_lines": 37,
+      "public_items": 1,
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/connect_flight.rs": {
@@ -10946,7 +10951,7 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/connection_registry.rs": {
-      "production_lines": 314,
+      "production_lines": 320,
       "public_items": 0,
       "reexports": 0
     },
@@ -11151,9 +11156,9 @@
       "reexports": 0
     },
     "rocketmq-transport/src/public_api.rs": {
-      "production_lines": 137,
+      "production_lines": 138,
       "public_items": 0,
-      "reexports": 132
+      "reexports": 133
     },
     "rocketmq-transport/src/remoting.rs": {
       "production_lines": 304,

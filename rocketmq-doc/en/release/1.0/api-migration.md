@@ -41,6 +41,31 @@ let runtime = ClientRuntime::new(config);
 let runtime = ClientRuntime::try_new(service_context, config, telemetry_handle)?;
 ```
 
+### Tokio client cached-session reconciliation
+
+`TransportClient::is_address_reachable` is retained as a deprecated
+compatibility facade, but it has never performed a DNS, socket, or network
+reachability probe. It only inspected the direct cached session and removed an
+unhealthy entry.
+
+Use `reconcile_cached_connection` when application logic needs the typed cache
+result:
+
+```rust,ignore
+use rocketmq_transport::api::v1::CachedConnectionState;
+
+match client.reconcile_cached_connection(&address) {
+    CachedConnectionState::Healthy => {}
+    CachedConnectionState::UnhealthyRetired => reconnect_after_cleanup(),
+    CachedConnectionState::Absent => connect_if_needed(),
+}
+```
+
+Request processors are fixed when a client is built. Replace the deprecated
+`register_processor` compatibility call with
+`TransportClient::builder(...).build()?` or
+`RemotingClient::builder(...).build()?` so configuration failures remain typed.
+
 Applications own the runtime and pass an `Arc<ClientRuntime>` to producers and
 consumers. Client APIs do not create hidden Tokio runtimes.
 
