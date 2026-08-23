@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use rocketmq_client_rust::pop_retry_subscription_topics;
 use rocketmq_client_rust::resolve_pop_retry_topic;
 use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
