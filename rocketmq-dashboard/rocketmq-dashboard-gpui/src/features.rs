@@ -12,22 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! UI components for the RocketMQ Dashboard
+//! Feature-local state for the first dashboard delivery.
 
-#[path = "ui/dashboard_view.rs"]
-pub mod dashboard_view;
-
-#[path = "ui/cluster_view.rs"]
-pub mod cluster_view;
-
-#[path = "ui/topic_view.rs"]
-pub mod topic_view;
-
-#[path = "ui/consumer_view.rs"]
-pub mod consumer_view;
-
-#[path = "ui/producer_view.rs"]
-pub mod producer_view;
-
-#[path = "ui/message_view.rs"]
-pub mod message_view;
+#[path = "features/login.rs"]
+pub mod login;

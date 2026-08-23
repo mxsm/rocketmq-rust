@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! UI components for the RocketMQ Dashboard
+//! Small semantic status label used by the Topbar and future page headers.
 
-#[path = "ui/dashboard_view.rs"]
-pub mod dashboard_view;
+use gpui::{Div, Hsla, ParentElement as _, Styled as _, div};
+use gpui_component::StyledExt as _;
 
-#[path = "ui/cluster_view.rs"]
-pub mod cluster_view;
-
-#[path = "ui/topic_view.rs"]
-pub mod topic_view;
-
-#[path = "ui/consumer_view.rs"]
-pub mod consumer_view;
-
-#[path = "ui/producer_view.rs"]
-pub mod producer_view;
-
-#[path = "ui/message_view.rs"]
-pub mod message_view;
+/// A thin status badge that inherits semantic colors from the active theme.
+pub fn render(label: &str, background: Hsla, foreground: Hsla) -> Div {
+    div()
+        .px_2()
+        .py_1()
+        .rounded_full()
+        .text_xs()
+        .font_medium()
+        .bg(background)
+        .text_color(foreground)
+        .child(label.to_owned())
+}

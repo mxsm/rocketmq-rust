@@ -12,22 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! UI components for the RocketMQ Dashboard
+//! Notification helpers backed by the root-owned `gpui-component` queue.
 
-#[path = "ui/dashboard_view.rs"]
-pub mod dashboard_view;
+use gpui::Window;
+use gpui_component::{WindowExt as _, notification::Notification};
 
-#[path = "ui/cluster_view.rs"]
-pub mod cluster_view;
+/// Thin dashboard façade over the root-owned official notification queue.
+pub struct ToastHost;
 
-#[path = "ui/topic_view.rs"]
-pub mod topic_view;
-
-#[path = "ui/consumer_view.rs"]
-pub mod consumer_view;
-
-#[path = "ui/producer_view.rs"]
-pub mod producer_view;
-
-#[path = "ui/message_view.rs"]
-pub mod message_view;
+impl ToastHost {
+    /// Pushes a safe error summary through the root-owned notification host.
+    pub fn error(summary: impl Into<gpui::SharedString>, window: &mut Window, cx: &mut gpui::App) {
+        window.push_notification(Notification::error(summary), cx);
+    }
+}
