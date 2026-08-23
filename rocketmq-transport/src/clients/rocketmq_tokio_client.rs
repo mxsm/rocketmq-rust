@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -31,12 +30,12 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
+#[cfg(test)]
 use rocketmq_runtime::TaskGroup;
+#[cfg(test)]
 use rocketmq_runtime::TaskGroupLifecycleState;
-use rocketmq_runtime::TaskId;
 use serde::Serialize;
 use tokio::time;
-use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -51,7 +50,6 @@ use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::clients::TransportSession;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
-use crate::error_helpers::remote_error;
 use crate::remoting::inner::RemotingGeneralHandler;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 #[cfg(test)]
@@ -71,12 +69,18 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 mod connection_registry;
 mod endpoint_state;
+mod lifecycle;
 mod nameserver;
 
 use connection_registry::ConnectionRegistry;
 use endpoint_state::EndpointLease;
 use endpoint_state::EndpointStateStore;
+use lifecycle::ClientLifecycle;
+use lifecycle::ConnectionCommitFence;
 use nameserver::NameServerHealth;
+
+#[cfg(test)]
+use lifecycle::LifecycleTestBarrier;
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -202,17 +206,17 @@ pub struct TransportClient<PR = DefaultRequestProcessor> {
     direct_circuit_breakers: Arc<dashmap::DashMap<CheetahString, crate::clients::reconnect::CircuitBreaker>>,
     #[cfg(test)]
     connect_completion_test_hook: Arc<Mutex<Option<EndpointCompletionTestHook>>>,
+    #[cfg(test)]
+    leader_before_worker_spawn_test_hook: Arc<Mutex<Option<LifecycleTestBarrier>>>,
 
-    /// Token used to signal graceful shutdown of background tasks.
-    ///
-    /// Cancelling this token stops the nameserver scan and idle connection
-    /// scan loops spawned in [`start()`].
-    shutdown_token: CancellationToken,
+    /// Serializes task ownership, startup, and shutdown generations.
+    lifecycle: Arc<Mutex<ClientLifecycle>>,
 
-    /// Task group that owns long-lived background maintenance tasks.
+    // Existing in-module tests inspect these task groups. Production ownership
+    // stays exclusively inside `lifecycle`.
+    #[cfg(test)]
     background_task_group: Arc<Mutex<Option<TaskGroup>>>,
-
-    /// Task group that owns short-lived client worker tasks.
+    #[cfg(test)]
     worker_task_group: Arc<Mutex<Option<TaskGroup>>>,
 
     /// Optional parent service context for structured client task ownership.
@@ -329,8 +333,12 @@ where
         self.transport.start().await
     }
 
+    /// Gracefully shuts down the canonical transport by the caller's absolute deadline.
+    ///
+    /// This forwards the same deadline without converting it to a new duration,
+    /// so nested lifecycle owners share one drain budget.
     pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> RocketMQResult<ClientShutdownReport> {
-        Ok(self.transport.shutdown_with_report(deadline.remaining()).await)
+        Ok(self.transport.shutdown_graceful(deadline).await)
     }
 }
 
@@ -468,8 +476,12 @@ impl<PR> Clone for TransportClient<PR> {
             direct_circuit_breakers: self.direct_circuit_breakers.clone(),
             #[cfg(test)]
             connect_completion_test_hook: self.connect_completion_test_hook.clone(),
-            shutdown_token: self.shutdown_token.clone(),
+            #[cfg(test)]
+            leader_before_worker_spawn_test_hook: self.leader_before_worker_spawn_test_hook.clone(),
+            lifecycle: self.lifecycle.clone(),
+            #[cfg(test)]
             background_task_group: self.background_task_group.clone(),
+            #[cfg(test)]
             worker_task_group: self.worker_task_group.clone(),
             service_context: self.service_context.clone(),
             cmd_handler: self.cmd_handler.clone(),
@@ -546,8 +558,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             direct_circuit_breakers: Arc::new(dashmap::DashMap::with_capacity(64)),
             #[cfg(test)]
             connect_completion_test_hook: Arc::new(Mutex::new(None)),
-            shutdown_token: CancellationToken::new(),
+            #[cfg(test)]
+            leader_before_worker_spawn_test_hook: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(Mutex::new(ClientLifecycle::new())),
+            #[cfg(test)]
             background_task_group: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             worker_task_group: Arc::new(Mutex::new(None)),
             service_context,
             cmd_handler: Arc::new(handler),
@@ -654,35 +670,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         self.apply_name_server_endpoint_snapshot(endpoints, drain_timeout);
     }
 
-    fn get_or_create_worker_task_group(&self) -> Option<TaskGroup> {
-        if self.shutdown_token.is_cancelled() {
-            return None;
-        }
-
-        let mut task_group_guard = self.worker_task_group.lock();
-        if let Some(task_group) = task_group_guard.as_ref() {
-            if task_group.lifecycle_state() == TaskGroupLifecycleState::Open {
-                return Some(task_group.clone());
-            }
-        }
-
-        let task_group = self
-            .service_context
-            .component("rocketmq-transport.client.workers")
-            .task_group()
-            .clone();
-        *task_group_guard = Some(task_group.clone());
-        Some(task_group)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn worker_task_group(&self) -> Option<TaskGroup> {
-        self.worker_task_group.lock().as_ref().cloned()
-    }
-
     #[cfg(test)]
     pub(crate) fn install_connect_completion_test_hook(&self, hook: EndpointCompletionTestHook) {
         *self.connect_completion_test_hook.lock() = Some(hook);
+    }
+
+    #[cfg(test)]
+    fn install_leader_before_worker_spawn_test_hook(&self, hook: LifecycleTestBarrier) {
+        *self.leader_before_worker_spawn_test_hook.lock() = Some(hook);
     }
 
     #[cfg(test)]
@@ -695,22 +690,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         }
     }
 
-    pub(crate) fn spawn_worker_task<F>(&self, name: impl Into<Arc<str>>, future: F) -> Option<TaskId>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let name = name.into();
-        let task_group = self.get_or_create_worker_task_group()?;
-        match task_group.spawn_service(name.clone(), future) {
-            Ok(task_id) => Some(task_id),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    task = %name,
-                    "failed to spawn RemotingClient worker task"
-                );
-                None
-            }
+    #[cfg(test)]
+    async fn wait_for_leader_before_worker_spawn_test_hook(&self) {
+        let hook = self.leader_before_worker_spawn_test_hook.lock().clone();
+        if let Some(hook) = hook {
+            hook.pause().await;
         }
     }
 }
@@ -838,29 +822,48 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             return Ok(Some(client));
         }
 
+        // Capture the exact worker owner before publishing a connection flight.
+        // A shutdown advances the worker epoch, so a request admitted before a
+        // restart can never spawn or commit through a replacement worker group.
+        let worker_owner = self
+            .capture_worker_task_owner()
+            .ok_or(RocketMQError::ClientNotStarted)?;
         let (flight, leader) = self.connection_registry.acquire_flight(addr.clone(), lease.clone());
         if leader {
+            #[cfg(test)]
+            self.wait_for_leader_before_worker_spawn_test_hook().await;
             let client = self.clone();
             let flight_for_task = flight.clone();
             let target = addr.clone();
             let connect_timeout = self.tokio_client_config.connect.timeout;
             let target_for_task = target.clone();
             let lease_for_task = lease.clone();
-            let spawned = self.spawn_worker_task(format!("rocketmq.transport.connect.{target}"), async move {
-                client.connect_attempts.fetch_add(1, Ordering::Relaxed);
-                let result = client
-                    .connect_endpoint_until(
-                        &target_for_task,
-                        configured_nameserver,
-                        lease_for_task,
-                        RequestDeadline::after(connect_timeout),
-                    )
-                    .await;
-                flight_for_task.complete(result);
-                client
-                    .connection_registry
-                    .remove_flight_if_matches(&target_for_task, &flight_for_task);
-            });
+            let commit_fence = worker_owner.commit_fence();
+            let spawned = self.spawn_worker_task_with_owner(
+                &worker_owner,
+                format!("rocketmq.transport.connect.{target}"),
+                async move {
+                    client.connect_attempts.fetch_add(1, Ordering::Relaxed);
+                    let result = client
+                        .connect_endpoint_until(
+                            &target_for_task,
+                            configured_nameserver,
+                            lease_for_task,
+                            RequestDeadline::after(connect_timeout),
+                            &commit_fence,
+                        )
+                        .await;
+                    let result = if client.matches_connection_commit_fence(&commit_fence) {
+                        result
+                    } else {
+                        Err(RocketMQError::ClientNotStarted)
+                    };
+                    flight_for_task.complete(result);
+                    client
+                        .connection_registry
+                        .remove_flight_if_matches(&target_for_task, &flight_for_task);
+                },
+            );
             if spawned.is_none() {
                 flight.complete(Err(RocketMQError::ClientNotStarted));
                 self.connection_registry.remove_flight_if_matches(&target, &flight);
@@ -875,8 +878,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         configured_nameserver: Option<NameServerEndpoint>,
         lease: Option<EndpointLease>,
         deadline: RequestDeadline,
+        commit_fence: &ConnectionCommitFence,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
+        if !self.matches_connection_commit_fence(commit_fence) {
+            return Err(RocketMQError::ClientNotStarted);
+        }
         if !self.can_commit_endpoint_lease(lease.as_ref()) {
             return Ok(None);
         }
@@ -930,8 +937,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         match connect_result {
             Ok(new_client) => {
                 #[cfg(test)]
-                if lease.is_some() {
-                    self.wait_for_connect_completion_test_hook().await;
+                self.wait_for_connect_completion_test_hook().await;
+                if !self.matches_connection_commit_fence(commit_fence) {
+                    new_client.begin_drain();
+                    let _ = new_client.close_with_report(Duration::from_secs(1)).await;
+                    return Err(RocketMQError::ClientNotStarted);
                 }
                 if !self.can_commit_endpoint_lease(lease.as_ref()) {
                     new_client.begin_drain();
@@ -952,7 +962,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 match self
                     .connection_registry
                     .insert_session(addr.clone(), new_client.clone(), lease, || {
-                        self.can_commit_endpoint_lease(session_lease.as_ref())
+                        self.matches_connection_commit_fence(commit_fence)
+                            && self.can_commit_endpoint_lease(session_lease.as_ref())
                     }) {
                     Some(client) => {
                         info!("Successfully created client for {}", addr);
@@ -961,12 +972,19 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     None => {
                         new_client.begin_drain();
                         let _ = new_client.close_with_report(Duration::from_secs(1)).await;
-                        Ok(None)
+                        if self.matches_connection_commit_fence(commit_fence) {
+                            Ok(None)
+                        } else {
+                            Err(RocketMQError::ClientNotStarted)
+                        }
                     }
                 }
             }
             Err(error) => {
                 error!(remote_addr = %addr, error = ?error, "Failed to connect");
+                if !self.matches_connection_commit_fence(commit_fence) {
+                    return Err(RocketMQError::ClientNotStarted);
+                }
                 match lease.as_ref() {
                     Some(lease) => self
                         .nameserver_health
@@ -996,139 +1014,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             warn!("[SCAN] Removed idle/unhealthy connection: {}", addr);
         }
     }
-
-    pub async fn shutdown_with_report(&self, timeout: Duration) -> ClientShutdownReport {
-        let deadline = ShutdownDeadline::after(timeout);
-        self.shutdown_token.cancel();
-
-        let background_task_group = { self.background_task_group.lock().take() };
-        let worker_task_group = { self.worker_task_group.lock().take() };
-
-        let background = match background_task_group {
-            Some(task_group) => Some(task_group.shutdown_until(deadline).await),
-            None => None,
-        };
-        let workers = match worker_task_group {
-            Some(task_group) => Some(task_group.shutdown_until(deadline).await),
-            None => None,
-        };
-
-        let clients = self.connection_registry.take_all_sessions();
-
-        let mut connections = Vec::with_capacity(clients.len());
-        for (addr, client) in clients {
-            let report = client.close_with_report(deadline.remaining()).await;
-            connections.push(ConnectionShutdownReport { addr, report });
-        }
-
-        self.nameserver_health
-            .with_mutation_lock(|| self.endpoint_state.replace_topology(Vec::new()));
-
-        ClientShutdownReport {
-            background,
-            workers,
-            connections,
-        }
-    }
 }
 
-#[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
-    pub async fn start(self: &Arc<Self>) -> RocketMQResult<ClientStartReport> {
-        let task_group = {
-            let mut task_group_guard = self.background_task_group.lock();
-            if let Some(task_group) = task_group_guard.as_ref() {
-                if task_group.lifecycle_state() == TaskGroupLifecycleState::Open {
-                    debug!("TransportClient background tasks are already running");
-                    return Ok(ClientStartReport {
-                        background_tasks_started: 0,
-                        already_running: true,
-                    });
-                }
-            }
-
-            let task_group = self
-                .service_context
-                .component("rocketmq-transport.client")
-                .task_group()
-                .clone();
-            *task_group_guard = Some(task_group.clone());
-            task_group
-        };
-
-        let connect_scan_interval = Self::NAMESERVER_SCAN_INTERVAL;
-        let token = self.shutdown_token.clone();
-        let mut background_tasks_started = 0;
-
-        let client_for_scan = Arc::clone(self);
-        let scan_token = token.clone();
-        task_group
-            .spawn_service("remoting.client.namesrv-scan", async move {
-                loop {
-                    tokio::select! {
-                        () = scan_token.cancelled() => break,
-                        () = async {
-                            client_for_scan.scan_available_name_srv().await;
-                            time::sleep(connect_scan_interval).await;
-                        } => {}
-                    }
-                }
-            })
-            .map_err(|error| remote_error(format!("failed to spawn nameserver scan task: {error}")))?;
-        background_tasks_started += 1;
-
-        if let Some(idle_scan_interval) = self.tokio_client_config.maintenance.idle_scan_interval {
-            let idle_token = token.clone();
-            let client = Arc::clone(self);
-            task_group
-                .spawn_service("remoting.client.idle-scan", async move {
-                    loop {
-                        tokio::select! {
-                            () = idle_token.cancelled() => break,
-                            () = time::sleep(idle_scan_interval) => {
-                                client.scan_idle_connections();
-                            }
-                        }
-                    }
-                })
-                .map_err(|error| remote_error(format!("failed to spawn idle connection scan task: {error}")))?;
-            background_tasks_started += 1;
-        }
-
-        Ok(ClientStartReport {
-            background_tasks_started,
-            already_running: false,
-        })
-    }
-
-    pub fn shutdown(&self) {
-        self.shutdown_token.cancel();
-        if let Some(task_group) = self.background_task_group.lock().take() {
-            let report = task_group.shutdown_now();
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "RemotingClient background task shutdown report is unhealthy"
-                );
-            }
-        }
-        if let Some(task_group) = self.worker_task_group.lock().take() {
-            let report = task_group.shutdown_now();
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "RemotingClient worker task shutdown report is unhealthy"
-                );
-            }
-        }
-        self.connection_registry.take_all_sessions();
-        self.connection_registry.clear_flights();
-        self.nameserver_health
-            .with_mutation_lock(|| self.endpoint_state.replace_topology(Vec::new()));
-
-        info!("RemotingClient shutdown complete");
-    }
-
     pub fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
         self.cmd_handler.register_rpc_hook(hook);
     }
@@ -1206,7 +1094,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         permit: Option<ResourcePermit>,
     ) -> RocketMQResult<()> {
         deadline.ensure_before_send(addr.to_string())?;
-        if self.shutdown_token.is_cancelled() {
+        if self.is_stopping() {
             return Err(RocketMQError::ClientNotStarted);
         }
         let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
@@ -1215,7 +1103,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 "one-way client unavailable",
             ));
         };
-        if self.shutdown_token.is_cancelled() {
+        if self.is_stopping() {
             return Err(RocketMQError::ClientNotStarted);
         }
 
@@ -1446,7 +1334,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
         })?;
 
-        if self.shutdown_token.is_cancelled() {
+        if self.is_stopping() {
             return Err(RocketMQError::ClientNotStarted);
         }
 
