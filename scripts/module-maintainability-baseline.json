@@ -10926,7 +10926,7 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client.rs": {
-      "production_lines": 976,
+      "production_lines": 736,
       "public_items": 2,
       "reexports": 1
     },
@@ -10941,7 +10941,12 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/connection_registry.rs": {
-      "production_lines": 369,
+      "production_lines": 314,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-transport/src/clients/rocketmq_tokio_client/connect_flight.rs": {
+      "production_lines": 357,
       "public_items": 0,
       "reexports": 0
     },

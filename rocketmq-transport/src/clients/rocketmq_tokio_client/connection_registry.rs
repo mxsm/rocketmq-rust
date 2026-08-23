@@ -16,14 +16,10 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SharedRocketMQError;
 
+use super::connect_flight::ConnectFlight;
 use super::endpoint_state::EndpointLease;
 use crate::clients::TransportSession;
-use crate::deadline::RequestDeadline;
 use crate::runtime::processor::RequestProcessor;
 
 /// Session ownership separates direct broker sessions from nameserver sessions
@@ -87,68 +83,6 @@ impl<PR> RegisteredSession<PR> {
         self.lease
             .as_ref()
             .is_some_and(|candidate| candidate.same_generation(lease))
-    }
-}
-
-enum ConnectFlightState<PR> {
-    Connecting,
-    Complete(Box<Result<Option<TransportSession<PR>>, SharedRocketMQError>>),
-}
-
-/// A shared connection attempt associated with one endpoint generation.
-pub(super) struct ConnectFlight<PR> {
-    lease: Option<EndpointLease>,
-    state: Mutex<ConnectFlightState<PR>>,
-    changed: tokio::sync::Notify,
-}
-
-impl<PR> ConnectFlight<PR>
-where
-    PR: RequestProcessor + Sync + Clone + Send + 'static,
-{
-    fn new(lease: Option<EndpointLease>) -> Self {
-        Self {
-            lease,
-            state: Mutex::new(ConnectFlightState::Connecting),
-            changed: tokio::sync::Notify::new(),
-        }
-    }
-
-    pub(super) fn belongs_to(&self, lease: Option<&EndpointLease>) -> bool {
-        match (self.lease.as_ref(), lease) {
-            (None, None) => true,
-            (Some(current), Some(expected)) => current.same_generation(expected),
-            _ => false,
-        }
-    }
-
-    pub(super) fn complete(&self, result: RocketMQResult<Option<TransportSession<PR>>>) {
-        let mut state = self.state.lock();
-        if matches!(*state, ConnectFlightState::Complete(_)) {
-            return;
-        }
-        *state = ConnectFlightState::Complete(Box::new(result.map_err(SharedRocketMQError::new)));
-        drop(state);
-        self.changed.notify_waiters();
-    }
-
-    pub(super) async fn wait(
-        &self,
-        deadline: RequestDeadline,
-        target: &CheetahString,
-    ) -> RocketMQResult<Option<TransportSession<PR>>> {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if let ConnectFlightState::Complete(result) = &*self.state.lock() {
-                return (**result).clone().map_err(SharedRocketMQError::into_error);
-            }
-            deadline
-                .timeout(changed)
-                .await
-                .map_err(|_| RocketMQError::network_connection_timeout(target.to_string(), deadline.budget_millis()))?;
-        }
     }
 }
 
@@ -337,7 +271,8 @@ where
             }
             dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                 let flight = Arc::new(ConnectFlight::new(lease));
-                entry.insert(Arc::clone(&flight));
+                let retired = entry.insert(Arc::clone(&flight));
+                retired.complete_without_session();
                 (flight, true)
             }
             dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -350,16 +285,18 @@ where
 
     pub(super) fn remove_flight_if_matches(&self, identity: &CheetahString, expected: &Arc<ConnectFlight<PR>>) {
         self.flights.remove_if(
-            &RegistryKey::from_lease(identity.clone(), expected.lease.as_ref()),
+            &RegistryKey::from_lease(identity.clone(), expected.lease()),
             |_, current| Arc::ptr_eq(current, expected),
         );
     }
 
     pub(super) fn remove_flight_for_lease(&self, identity: &CheetahString, lease: &EndpointLease) {
-        self.flights
-            .remove_if(&RegistryKey::from_lease(identity.clone(), Some(lease)), |_, current| {
-                current.belongs_to(Some(lease))
-            });
+        let key = RegistryKey::from_lease(identity.clone(), Some(lease));
+        let expected = self.flights.get(&key).map(|entry| Arc::clone(entry.value()));
+        if let Some(expected) = expected.filter(|flight| flight.belongs_to(Some(lease))) {
+            expected.complete_without_session();
+            self.remove_flight_if_matches(identity, &expected);
+        }
     }
 
     pub(super) fn remove_unhealthy_or_idle(
@@ -413,6 +350,7 @@ where
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect::<Vec<_>>();
         for (key, expected) in entries {
+            expected.complete_not_started();
             self.remove_flight_if_matches(&key.identity, &expected);
         }
     }
@@ -427,138 +365,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error as _;
-    use std::io;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use std::time::Duration;
 
-    use rocketmq_error::DomainError;
-    use tokio::sync::Barrier;
-    use tokio::sync::Notify;
-    use tokio::task::JoinSet;
+    use rocketmq_error::RocketMQError;
 
     use super::*;
     use crate::deadline::RequestDeadline;
     use crate::request_processor::default_request_processor::DefaultRequestProcessor;
-
-    async fn assert_connect_flight_preserves_failure(error: RocketMQError) {
-        const WAITERS: usize = 3;
-
-        let expected_kind = error.kind();
-        let expected_context = error.context();
-        let expected_boundary = error.boundary_view();
-        let expected_retry = error.retry();
-        let expected_severity = error.severity();
-        let expected_redaction = error.redaction();
-        let expected_display = error.to_string();
-        let expected_source = error.source().map(ToString::to_string);
-
-        let flight = Arc::new(ConnectFlight::<DefaultRequestProcessor>::new(None));
-        let target = CheetahString::from_static_str("127.0.0.1:10911");
-        let barrier = Arc::new(Barrier::new(WAITERS + 1));
-        let ready_count = Arc::new(AtomicUsize::new(0));
-        let waiters_ready = Arc::new(Notify::new());
-        let mut tasks = JoinSet::new();
-
-        {
-            let barrier = Arc::clone(&barrier);
-            let flight = Arc::clone(&flight);
-            let target = target.clone();
-            let waiters_ready = Arc::clone(&waiters_ready);
-            tasks.spawn(async move {
-                barrier.wait().await;
-                waiters_ready.notified().await;
-                flight.complete(Err(error));
-                flight
-                    .wait(RequestDeadline::after(Duration::from_secs(1)), &target)
-                    .await
-            });
-        }
-
-        for _ in 0..WAITERS {
-            let barrier = Arc::clone(&barrier);
-            let flight = Arc::clone(&flight);
-            let target = target.clone();
-            let ready_count = Arc::clone(&ready_count);
-            let waiters_ready = Arc::clone(&waiters_ready);
-            tasks.spawn(async move {
-                barrier.wait().await;
-                if ready_count.fetch_add(1, Ordering::AcqRel) + 1 == WAITERS {
-                    waiters_ready.notify_one();
-                }
-                flight
-                    .wait(RequestDeadline::after(Duration::from_secs(1)), &target)
-                    .await
-            });
-        }
-
-        let mut snapshots = Vec::with_capacity(WAITERS + 1);
-        while let Some(result) = tasks.join_next().await {
-            let error = match result.expect("connect-flight task must complete") {
-                Err(error) => error,
-                Ok(_) => panic!("connect flight must return the shared failure"),
-            };
-            let RocketMQError::Shared(snapshot) = error else {
-                panic!("connect flight must return a shared typed error");
-            };
-            snapshots.push(snapshot);
-        }
-
-        let first = snapshots.first().expect("leader and waiters return snapshots");
-        for snapshot in &snapshots {
-            assert_eq!(snapshot.kind(), expected_kind);
-            assert_eq!(snapshot.context(), expected_context);
-            assert_eq!(snapshot.boundary_view(), expected_boundary);
-            assert_eq!(snapshot.retry(), expected_retry);
-            assert_eq!(snapshot.severity(), expected_severity);
-            assert_eq!(snapshot.redaction(), expected_redaction);
-            assert_eq!(snapshot.to_string(), expected_display);
-            assert!(std::ptr::eq(first.as_error(), snapshot.as_error()));
-
-            let source = snapshot.source().expect("shared error source");
-            let original = source
-                .downcast_ref::<RocketMQError>()
-                .expect("shared source must be the original error");
-            assert!(std::ptr::eq(snapshot.as_error(), original));
-            assert_eq!(source.to_string(), expected_display);
-            assert_eq!(source.source().map(ToString::to_string), expected_source);
-        }
-
-        flight.complete(Err(RocketMQError::ClientNotStarted));
-        let error = match flight
-            .wait(RequestDeadline::after(Duration::from_secs(1)), &target)
-            .await
-        {
-            Err(error) => error,
-            Ok(_) => panic!("a completed flight cannot be overwritten"),
-        };
-        let RocketMQError::Shared(snapshot) = error else {
-            panic!("completed flight must retain its shared error");
-        };
-        assert!(std::ptr::eq(first.as_error(), snapshot.as_error()));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn connect_flight_shares_exact_typed_failures_with_leader_and_waiters() {
-        assert_connect_flight_preserves_failure(RocketMQError::network_connection_failed(
-            "127.0.0.1:10911",
-            "connection refused",
-        ))
-        .await;
-        assert_connect_flight_preserves_failure(RocketMQError::ConfigInvalidValue {
-            key: "connect.timeout",
-            value: "invalid".to_owned(),
-            reason: "must be positive".to_owned(),
-        })
-        .await;
-        assert_connect_flight_preserves_failure(RocketMQError::ClientNotStarted).await;
-        assert_connect_flight_preserves_failure(RocketMQError::from(io::Error::new(
-            io::ErrorKind::ConnectionRefused,
-            io::Error::new(io::ErrorKind::TimedOut, "inner connect timeout"),
-        )))
-        .await;
-    }
 
     #[test]
     fn connect_flight_failure_cleanup_is_identity_conditional() {
@@ -567,7 +381,7 @@ mod tests {
         let (failed, leader) = registry.acquire_flight(identity.clone(), None);
         assert!(leader);
 
-        failed.complete(Err(RocketMQError::ClientNotStarted));
+        failed.complete_not_started();
         registry.remove_flight_if_matches(&identity, &failed);
         assert_eq!(registry.flight_count(), 0);
 
@@ -579,5 +393,32 @@ mod tests {
 
         registry.remove_flight_if_matches(&identity, &replacement);
         assert_eq!(registry.flight_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn clearing_flights_completes_waiters_without_removing_a_replacement() {
+        let registry = ConnectionRegistry::<DefaultRequestProcessor>::new();
+        let identity = CheetahString::from_static_str("127.0.0.1:10911");
+        let (retired, leader) = registry.acquire_flight(identity.clone(), None);
+        assert!(leader);
+
+        registry.clear_flights();
+        let error = match retired
+            .wait(RequestDeadline::after(Duration::from_secs(1)), &identity)
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("shutdown must complete retired flight waiters"),
+        };
+        let RocketMQError::Shared(snapshot) = error else {
+            panic!("shutdown completion must preserve the typed shared error");
+        };
+        assert!(matches!(snapshot.as_error(), RocketMQError::ClientNotStarted));
+
+        let (replacement, replacement_leader) = registry.acquire_flight(identity.clone(), None);
+        assert!(replacement_leader);
+        registry.remove_flight_if_matches(&identity, &retired);
+        assert_eq!(registry.flight_count(), 1);
+        assert!(!Arc::ptr_eq(&retired, &replacement));
     }
 }
