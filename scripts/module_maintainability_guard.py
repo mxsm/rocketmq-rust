@@ -27,6 +27,8 @@ import sys
 from collections import defaultdict
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -135,18 +137,40 @@ def crate_name(relative: Path) -> str:
     return parts[0]
 
 
-def git_history(root: Path) -> dict[str, History]:
-    command = [
-        "git",
-        "log",
-        "--since=12 months ago",
-        "--format=@@%H%x09%ae%x09%s",
-        "--name-only",
-        "--no-renames",
-        "--",
-        "*.rs",
-    ]
+def history_window(root: Path) -> tuple[int, int]:
+    """Return the UTC calendar-year window anchored to the checked-out HEAD."""
+    result = subprocess.run(
+        ["git", "show", "-s", "--format=%ct", "HEAD"],
+        cwd=root,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=True,
+    )
+    anchor_epoch = int(result.stdout.strip())
+    anchor = datetime.fromtimestamp(anchor_epoch, tz=timezone.utc)
     try:
+        cutoff = anchor.replace(year=anchor.year - 1)
+    except ValueError:
+        cutoff = anchor.replace(year=anchor.year - 1, day=28)
+    return int(cutoff.timestamp()), anchor_epoch
+
+
+def git_history(root: Path) -> dict[str, History]:
+    try:
+        cutoff_epoch, anchor_epoch = history_window(root)
+        command = [
+            "git",
+            "log",
+            f"--since=@{cutoff_epoch}",
+            f"--until=@{anchor_epoch}",
+            "--format=@@%H%x09%ae%x09%s",
+            "--name-only",
+            "--no-renames",
+            "--",
+            "*.rs",
+        ]
         result = subprocess.run(
             command,
             cwd=root,
@@ -156,7 +180,7 @@ def git_history(root: Path) -> dict[str, History]:
             capture_output=True,
             check=True,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, OverflowError, ValueError, subprocess.CalledProcessError):
         return {}
 
     commits: dict[str, set[str]] = defaultdict(set)
