@@ -278,12 +278,6 @@ impl UiError {
         &self.summary
     }
 
-    /// Returns the stable category used for UI decisions.
-    #[cfg(test)]
-    pub const fn code(&self) -> UiErrorCode {
-        self.code
-    }
-
     /// Returns whether retry is appropriate without changing user input.
     pub const fn is_retryable(&self) -> bool {
         self.retryable

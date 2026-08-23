@@ -22,6 +22,8 @@ pub fn render(label: &str, background: Hsla, foreground: Hsla) -> Div {
     div()
         .px_2()
         .py_1()
+        .flex_shrink_0()
+        .whitespace_nowrap()
         .rounded_full()
         .text_xs()
         .font_medium()
