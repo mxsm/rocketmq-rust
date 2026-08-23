@@ -2,8 +2,12 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { vi } from 'vitest';
+import { ApiClientError } from '../api/client';
+import { configApi } from '../api/config_api';
 import { monitorApi } from '../api/monitor_api';
 import { renderAtRoute } from '../test/render';
+import type { DashboardConfigView } from '../types/config';
+import type { ConsumerMonitorView } from '../types/monitor';
 import MonitorPage from './MonitorPage';
 
 vi.mock('../api/monitor_api', () => ({
@@ -14,14 +18,32 @@ vi.mock('../api/monitor_api', () => ({
   }
 }));
 
+vi.mock('../api/config_api', () => ({ configApi: { getConfig: vi.fn() } }));
+
 describe('MonitorPage', () => {
-  const rules = [
-    { consumerGroup: 'order-service', minCount: 4, maxDiffTotal: 1200 },
-    { consumerGroup: 'payment-worker', minCount: 2, maxDiffTotal: 800 }
+  const environmentId = 'environment-default';
+  const config: DashboardConfigView = {
+    environmentId,
+    environmentName: 'Default',
+    revision: 7,
+    endpoints: [],
+    currentNamesrv: null,
+    namesrvAddrList: [],
+    useVIPChannel: false,
+    useTLS: false,
+    currentProxyAddr: null,
+    proxyAddrList: [],
+    storageBackend: 'sqlite',
+    storageMode: 'singleNode'
+  };
+  const rules: ConsumerMonitorView[] = [
+    { environmentId, consumerGroup: 'order-service', minCount: 4, maxDiffTotal: 1200, revision: 11 },
+    { environmentId, consumerGroup: 'payment-worker', minCount: 2, maxDiffTotal: 800, revision: 12 }
   ];
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(configApi.getConfig).mockResolvedValue(config);
     vi.mocked(monitorApi.listConsumerMonitors).mockResolvedValue(rules);
     vi.mocked(monitorApi.saveConsumerMonitor).mockResolvedValue({ message: 'saved', item: rules[0] });
     vi.mocked(monitorApi.deleteConsumerMonitor).mockResolvedValue({ message: 'deleted', item: null });
@@ -35,6 +57,7 @@ describe('MonitorPage', () => {
     expect(screen.getByRole('group', { name: 'Rules: 2' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Min Count range: 2–4' })).toBeInTheDocument();
     expect(screen.getByRole('row', { name: /order-service 4 1200/ })).toBeInTheDocument();
+    expect(monitorApi.listConsumerMonitors).toHaveBeenCalledWith(environmentId);
     expect(screen.queryByText(/active alerts|event history|firing/i)).not.toBeInTheDocument();
   });
 
@@ -74,7 +97,7 @@ describe('MonitorPage', () => {
     await user.click(within(createDialog).getByRole('button', { name: 'Save rule' }));
 
     await waitFor(() => expect(monitorApi.saveConsumerMonitor).toHaveBeenCalledWith({
-      consumerGroup: 'inventory-worker', minCount: 5, maxDiffTotal: 3000
+      environmentId, consumerGroup: 'inventory-worker', minCount: 5, maxDiffTotal: 3000, expectedRevision: 0
     }));
     expect(monitorApi.listConsumerMonitors).toHaveBeenCalledTimes(2);
 
@@ -86,7 +109,7 @@ describe('MonitorPage', () => {
     await user.click(within(editDialog).getByRole('button', { name: 'Save rule' }));
 
     await waitFor(() => expect(monitorApi.saveConsumerMonitor).toHaveBeenLastCalledWith({
-      consumerGroup: 'order-service', minCount: 4, maxDiffTotal: 1500
+      environmentId, consumerGroup: 'order-service', minCount: 4, maxDiffTotal: 1500, expectedRevision: 11
     }));
   });
 
@@ -148,7 +171,7 @@ describe('MonitorPage', () => {
     confirmation = screen.getByRole('alertdialog', { name: 'Delete rule?' });
     await user.click(within(confirmation).getByRole('button', { name: 'Delete rule' }));
 
-    await waitFor(() => expect(monitorApi.deleteConsumerMonitor).toHaveBeenCalledWith('order-service'));
+    await waitFor(() => expect(monitorApi.deleteConsumerMonitor).toHaveBeenCalledWith(environmentId, 'order-service', 11));
     expect(monitorApi.listConsumerMonitors).toHaveBeenCalledTimes(2);
   });
 
@@ -184,9 +207,51 @@ describe('MonitorPage', () => {
     renderAtRoute(<MonitorPage />, '/monitor');
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
-    resolveRefresh([{ consumerGroup: 'new-rule', minCount: 9, maxDiffTotal: 999 }]);
+    resolveRefresh([{ environmentId, consumerGroup: 'new-rule', minCount: 9, maxDiffTotal: 999, revision: 1 }]);
     expect(await screen.findByRole('row', { name: /new-rule 9 999/ })).toBeInTheDocument();
     resolveInitial(rules);
     await waitFor(() => expect(screen.queryByRole('row', { name: /order-service 4 1200/ })).not.toBeInTheDocument());
+  });
+
+  it('preserves the monitor draft and tells the operator to refresh before retrying a revision conflict', async () => {
+    const user = userEvent.setup();
+    vi.mocked(monitorApi.saveConsumerMonitor).mockRejectedValueOnce(new ApiClientError('STORAGE_CONFLICT', 'Rule revision is stale.'));
+    renderAtRoute(<MonitorPage />, '/monitor');
+    await screen.findByRole('heading', { name: 'Monitor' });
+
+    await user.click(screen.getByRole('button', { name: 'Create rule' }));
+    const dialog = screen.getByRole('dialog', { name: 'Create rule' });
+    await user.type(within(dialog).getByRole('textbox', { name: 'Group' }), 'inventory-worker');
+    await user.click(within(dialog).getByRole('button', { name: 'Save rule' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('refresh before retrying');
+    expect(within(dialog).getByRole('textbox', { name: 'Group' })).toHaveValue('inventory-worker');
+    expect(monitorApi.saveConsumerMonitor).toHaveBeenCalledWith({
+      environmentId, consumerGroup: 'inventory-worker', minCount: 1, maxDiffTotal: 1000, expectedRevision: 0
+    });
+  });
+
+  it('loads the current delete revision and requires a new confirmation before retrying', async () => {
+    const user = userEvent.setup();
+    const updatedRule = { ...rules[0], revision: 13, minCount: 6 };
+    vi.mocked(monitorApi.deleteConsumerMonitor)
+      .mockRejectedValueOnce(new ApiClientError('STORAGE_CONFLICT', 'Rule revision is stale.'))
+      .mockResolvedValueOnce({ message: 'deleted', item: null });
+    vi.mocked(monitorApi.listConsumerMonitors)
+      .mockResolvedValueOnce(rules)
+      .mockResolvedValueOnce([updatedRule, rules[1]]);
+    renderAtRoute(<MonitorPage />, '/monitor');
+    await screen.findByRole('heading', { name: 'Monitor' });
+
+    await user.click(screen.getByRole('button', { name: 'Delete rule for order-service' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete rule' }));
+
+    expect(await screen.findByText(/current rule revision is loaded/i)).toBeInTheDocument();
+    expect(monitorApi.deleteConsumerMonitor).toHaveBeenCalledWith(environmentId, 'order-service', 11);
+    await user.click(screen.getByRole('button', { name: 'Review delete' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('order-service');
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete rule' }));
+
+    await waitFor(() => expect(monitorApi.deleteConsumerMonitor).toHaveBeenLastCalledWith(environmentId, 'order-service', 13));
   });
 });

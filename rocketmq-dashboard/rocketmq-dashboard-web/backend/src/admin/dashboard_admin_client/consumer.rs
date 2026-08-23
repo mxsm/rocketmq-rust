@@ -22,7 +22,7 @@ use crate::model::*;
 
 impl DashboardAdminClient {
     pub async fn consumer_group_list(&self, query: ConsumerQuery) -> Result<ConsumerGroupListView, DashboardError> {
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         let scope = resolve_consumer_query_scope(&config, &query)?;
         let address = scope.address.clone();
         let skip_system = query.skip_system.unwrap_or(false);
@@ -54,7 +54,7 @@ impl DashboardAdminClient {
         query: ConsumerQuery,
     ) -> Result<ConsumerSummaryView, DashboardError> {
         let group = normalize_consumer_group(group)?;
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         let scope = resolve_consumer_query_scope(&config, &query)?;
         let address = scope.address.clone();
         let list = run_consumer_admin_rpc!(self, |admin| async move {
@@ -79,7 +79,7 @@ impl DashboardAdminClient {
         query: ConsumerQuery,
     ) -> Result<ConsumerConnectionView, DashboardError> {
         let group = normalize_consumer_group(group)?;
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         let scope = resolve_consumer_query_scope(&config, &query)?;
         let address = scope.address.clone();
         let connection = run_consumer_admin_rpc!(self, |admin| async move {
@@ -99,7 +99,7 @@ impl DashboardAdminClient {
         query: ConsumerQuery,
     ) -> Result<ConsumerProgressView, DashboardError> {
         let group = normalize_consumer_group(group)?;
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         let scope = resolve_consumer_query_scope(&config, &query)?;
         let address = scope.address.clone();
         let progress = run_consumer_admin_rpc!(self, |admin| async move {
@@ -119,7 +119,7 @@ impl DashboardAdminClient {
         query: ConsumerQuery,
     ) -> Result<ConsumerConfigView, DashboardError> {
         let group = normalize_consumer_group(group)?;
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         let scope = resolve_consumer_query_scope(&config, &query)?;
         let group_owned = group.clone();
         let fetches = run_consumer_admin_rpc!(self, |admin| async move {
@@ -186,7 +186,7 @@ impl DashboardAdminClient {
         query: ConsumerQuery,
         include_jstack: bool,
     ) -> Result<ConsumerRunningInfoView, DashboardError> {
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         let _scope = resolve_consumer_query_scope(&config, &query)?;
         let group = group.to_string();
         let client_id = client_id.trim().to_string();

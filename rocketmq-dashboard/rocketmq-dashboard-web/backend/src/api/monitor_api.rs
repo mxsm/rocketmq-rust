@@ -16,17 +16,21 @@ use crate::model::ApiResponse;
 use crate::model::ConsumerMonitorMutationResult;
 use crate::model::ConsumerMonitorUpsertRequest;
 use crate::model::ConsumerMonitorView;
+use crate::model::MonitorDeleteQuery;
+use crate::model::MonitorEnvironmentQuery;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::State;
 
 pub async fn list_consumer_monitors(
     State(state): State<AppState>,
+    Query(scope): Query<MonitorEnvironmentQuery>,
 ) -> Result<Json<ApiResponse<Vec<ConsumerMonitorView>>>, DashboardError> {
     Ok(Json(ApiResponse::success(
-        service::list_consumer_monitors(&state).await?,
+        service::list_consumer_monitors(&state, &scope.environment_id).await?,
     )))
 }
 
@@ -42,8 +46,10 @@ pub async fn create_consumer_monitor(
 pub async fn delete_consumer_monitor(
     State(state): State<AppState>,
     Path(consumer_group): Path<String>,
+    Query(query): Query<MonitorDeleteQuery>,
 ) -> Result<Json<ApiResponse<ConsumerMonitorMutationResult>>, DashboardError> {
     Ok(Json(ApiResponse::success(
-        service::delete_consumer_monitor(&state, &consumer_group).await?,
+        service::delete_consumer_monitor(&state, &query.environment_id, &consumer_group, query.expected_revision)
+            .await?,
     )))
 }

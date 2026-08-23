@@ -37,7 +37,6 @@ ENV DASHBOARD_WEB_HOST=0.0.0.0 \
     DASHBOARD_WEB_PORT=8082 \
     DASHBOARD_WEB_STORAGE_BACKEND=sqlite \
     DASHBOARD_WEB_STORAGE_PATH=/var/lib/rocketmq-dashboard/dashboard.db \
-    DASHBOARD_WEB_MONITOR_STORE_PATH=/var/lib/rocketmq-dashboard/consumer-monitor-config.json \
     RUST_LOG=info
 
 EXPOSE 8082

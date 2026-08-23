@@ -16,10 +16,8 @@ use crate::model::DashboardConfigView;
 use crate::model::StorageBackend;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::REDACTED;
-use rocketmq_runtime::BlockingExecutor;
 use std::env;
 use std::fmt;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -27,12 +25,7 @@ use std::path::PathBuf;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub storage: StorageConfig,
-    /// Compatibility configuration location. It is deliberately independent
-    /// of the selected backend so server SQL never silently falls back to a
-    /// local storage backend.
-    pub interim_config_path: PathBuf,
     pub auth: AuthConfig,
-    pub monitor_store_path: PathBuf,
     pub dashboard_history_interval_secs: u64,
     pub initial_config: DashboardConfigView,
     pub admin_credentials: Option<AdminCredentials>,
@@ -44,9 +37,7 @@ impl fmt::Debug for AppConfig {
             .debug_struct("AppConfig")
             .field("server", &self.server)
             .field("storage", &self.storage)
-            .field("interim_config_path", &self.interim_config_path)
             .field("auth", &self.auth)
-            .field("monitor_store_path", &self.monitor_store_path)
             .field("dashboard_history_interval_secs", &self.dashboard_history_interval_secs)
             .field("initial_config", &self.initial_config)
             .field("admin_credentials", &self.admin_credentials.as_ref().map(|_| REDACTED))
@@ -253,18 +244,12 @@ impl AppConfig {
                 host: env::var("DASHBOARD_WEB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
                 port: parse_u16_env("DASHBOARD_WEB_PORT", 8082)?,
             },
-            interim_config_path: env::var("DASHBOARD_WEB_INTERIM_CONFIG_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("data/dashboard-interim-config.json")),
             storage,
             auth: AuthConfig {
                 login_required: parse_bool_env("DASHBOARD_WEB_LOGIN_REQUIRED", false),
                 username: env::var("DASHBOARD_WEB_USERNAME").unwrap_or_else(|_| "admin".to_string()),
                 password: env::var("DASHBOARD_WEB_PASSWORD").unwrap_or_else(|_| "rocketmq".to_string()),
             },
-            monitor_store_path: env::var("DASHBOARD_WEB_MONITOR_STORE_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("data/monitor/consumer-monitor-config.json")),
             dashboard_history_interval_secs: parse_u64_env("DASHBOARD_WEB_HISTORY_INTERVAL_SECS", 60)?,
             initial_config,
             admin_credentials: admin_credentials_from_env()?,
@@ -341,68 +326,6 @@ fn parse_u64_env(name: &str, default_value: u64) -> Result<u64, DashboardError> 
         .map(|value| value.unwrap_or(default_value))
 }
 
-/// Compatibility configuration store with all filesystem access routed through
-/// the injected storage I/O executor.
-#[derive(Debug, Clone)]
-pub struct ConfigStore {
-    path: PathBuf,
-    storage_io: BlockingExecutor,
-}
-
-impl ConfigStore {
-    pub fn new(path: PathBuf, storage_io: BlockingExecutor) -> Self {
-        Self { path, storage_io }
-    }
-
-    pub async fn load_or_init(
-        &self,
-        default_config: &DashboardConfigView,
-    ) -> Result<DashboardConfigView, DashboardError> {
-        let path = self.path.clone();
-        let default_config = default_config.clone();
-        self.storage_io
-            .spawn_io("dashboard-compatibility-config-load", move || {
-                load_or_init_file(&path, &default_config)
-            })
-            .await
-            .map_err(|error| DashboardError::internal_source("Could not read compatibility config", error))?
-    }
-
-    pub async fn save(&self, config: &DashboardConfigView) -> Result<(), DashboardError> {
-        let path = self.path.clone();
-        let config = config.clone();
-        self.storage_io
-            .spawn_io("dashboard-compatibility-config-save", move || save_file(&path, &config))
-            .await
-            .map_err(|error| DashboardError::internal_source("Could not write compatibility config", error))?
-    }
-}
-
-fn load_or_init_file(
-    path: &PathBuf,
-    default_config: &DashboardConfigView,
-) -> Result<DashboardConfigView, DashboardError> {
-    if !path.exists() {
-        save_file(path, default_config)?;
-        return Ok(default_config.clone());
-    }
-    let content = fs::read_to_string(path)
-        .map_err(|error| DashboardError::config_source("Failed to read compatibility config file", error))?;
-    serde_json::from_str(&content)
-        .map_err(|error| DashboardError::config_source("Failed to parse compatibility config file", error))
-}
-
-fn save_file(path: &PathBuf, config: &DashboardConfigView) -> Result<(), DashboardError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| DashboardError::config_source("Failed to create compatibility config directory", error))?;
-    }
-    let content = serde_json::to_string_pretty(config)
-        .map_err(|error| DashboardError::internal_source("Failed to serialize compatibility config", error))?;
-    fs::write(path, content)
-        .map_err(|error| DashboardError::config_source("Failed to write compatibility config file", error))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,36 +348,6 @@ mod tests {
             };
             assert!(config.validate().is_err(), "{path} must be rejected");
         }
-    }
-
-    #[test]
-    fn interim_store_round_trips_config_without_selecting_a_storage_backend() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let owner =
-            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::default()).expect("runtime owner");
-        owner.block_on(async {
-            let store = ConfigStore::new(
-                dir.path().join("interim-config.json"),
-                owner
-                    .root_context()
-                    .component("compatibility-config-test")
-                    .storage_io()
-                    .clone(),
-            );
-            let config = DashboardConfigView {
-                current_namesrv: Some("localhost:9876".to_string()),
-                storage_backend: StorageBackend::Postgres,
-                ..DashboardConfigView::default()
-            };
-            store.save(&config).await.expect("save config");
-            let loaded = store
-                .load_or_init(&DashboardConfigView::default())
-                .await
-                .expect("load config");
-            assert_eq!(loaded.current_namesrv.as_deref(), Some("localhost:9876"));
-            assert_eq!(loaded.storage_backend, StorageBackend::Postgres);
-        });
-        owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
     #[test]
@@ -495,13 +388,11 @@ mod tests {
                 database_url: Some("mysql://dashboard:database-secret@localhost/dashboard".to_string()),
                 pool: SqlPoolConfig::default(),
             },
-            interim_config_path: "data/interim-config.json".into(),
             auth: AuthConfig {
                 login_required: true,
                 username: "admin".to_string(),
                 password: "dashboard-secret".to_string(),
             },
-            monitor_store_path: "monitor-config.json".into(),
             dashboard_history_interval_secs: 60,
             initial_config: DashboardConfigView::default(),
             admin_credentials: Some(

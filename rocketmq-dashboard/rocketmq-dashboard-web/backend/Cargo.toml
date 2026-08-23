@@ -22,6 +22,7 @@ tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tracing = "0.1"
 fs4 = "0.13"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "mysql", "postgres", "migrate", "chrono", "json"] }
+uuid = { version = "1", features = ["v7"] }
 
 rocketmq-dashboard-common = { version = "1.0.0", path = "../../rocketmq-dashboard-common", features = ["admin"] }
 rocketmq-admin-core = { version = "1.0.0", path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }

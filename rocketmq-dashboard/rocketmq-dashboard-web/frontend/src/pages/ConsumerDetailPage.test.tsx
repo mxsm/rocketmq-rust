@@ -16,13 +16,18 @@ describe('ConsumerDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(configApi.getConfig).mockResolvedValue({
+      environmentId: 'environment-default',
+      environmentName: 'Default',
+      revision: 1,
+      endpoints: [{ endpointId: 'nameserver-1', endpointType: 'nameserver', address: '127.0.0.1:9876', role: 'primary', isEnabled: true, isActive: true, sortOrder: 0 }],
       currentNamesrv: '127.0.0.1:9876',
       namesrvAddrList: ['127.0.0.1:9876'],
       useVIPChannel: false,
       useTLS: false,
       currentProxyAddr: null,
       proxyAddrList: [],
-      storageBackend: 'sqlite'
+      storageBackend: 'sqlite',
+      storageMode: 'singleNode'
     });
     vi.mocked(consumerApi.summary).mockResolvedValue({
       group: 'order-service',

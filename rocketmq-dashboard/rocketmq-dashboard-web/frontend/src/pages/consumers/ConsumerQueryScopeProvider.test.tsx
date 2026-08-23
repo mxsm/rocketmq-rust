@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
@@ -9,13 +9,21 @@ import { ConsumerQueryScopeProvider, useConsumerQueryScope } from './ConsumerQue
 vi.mock('../../api/config_api', () => ({ configApi: { getConfig: vi.fn() } }));
 
 const configured: DashboardConfigView = {
+  environmentId: 'environment-default',
+  environmentName: 'Default',
+  revision: 3,
+  endpoints: [
+    { endpointId: 'nameserver-1', endpointType: 'nameserver', address: '127.0.0.1:9876', role: 'primary', isEnabled: true, isActive: true, sortOrder: 0 },
+    { endpointId: 'proxy-a', endpointType: 'proxy', address: 'proxy-a:8081', role: 'primary', isEnabled: true, isActive: true, sortOrder: 0 }
+  ],
   currentNamesrv: '127.0.0.1:9876',
   namesrvAddrList: ['127.0.0.1:9876'],
   useVIPChannel: false,
   useTLS: false,
   currentProxyAddr: 'proxy-a:8081',
   proxyAddrList: ['proxy-a:8081'],
-  storageBackend: 'sqlite'
+  storageBackend: 'sqlite',
+  storageMode: 'singleNode'
 };
 
 function ScopeProbe() {
@@ -59,12 +67,34 @@ describe('ConsumerQueryScopeProvider', () => {
   it('fails closed when proxy mode has no current endpoint', async () => {
     vi.mocked(configApi.getConfig).mockResolvedValue({
       ...configured,
-      currentProxyAddr: null,
-      proxyAddrList: []
+      endpoints: configured.endpoints.filter((endpoint) => endpoint.endpointType !== 'proxy')
     });
     render(<ConsumerQueryScopeProvider><ScopeProbe /></ConsumerQueryScopeProvider>);
 
     await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
     expect(screen.getByTestId('available')).toHaveTextContent('false');
+  });
+
+  it('refreshes endpoint scope after a persisted configuration update event', async () => {
+    vi.mocked(configApi.getConfig)
+      .mockResolvedValueOnce(configured)
+      .mockResolvedValueOnce({
+        ...configured,
+        revision: 4,
+        endpoints: [
+          ...configured.endpoints.filter((endpoint) => endpoint.endpointType !== 'proxy'),
+          { endpointId: 'proxy-b', endpointType: 'proxy', address: 'proxy-b:8081', role: 'primary', isEnabled: true, isActive: true, sortOrder: 0 }
+        ]
+      });
+    const user = userEvent.setup();
+    render(<ConsumerQueryScopeProvider><ScopeProbe /></ConsumerQueryScopeProvider>);
+    await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+    await user.click(screen.getByRole('button', { name: 'Use proxy' }));
+    expect(screen.getByTestId('scope')).toHaveTextContent('proxy:proxy-a:8081');
+
+    act(() => { window.dispatchEvent(new CustomEvent('rocketmq-config-updated')); });
+
+    await waitFor(() => expect(screen.getByTestId('scope')).toHaveTextContent('proxy:proxy-b:8081'));
+    expect(configApi.getConfig).toHaveBeenCalledTimes(2);
   });
 });

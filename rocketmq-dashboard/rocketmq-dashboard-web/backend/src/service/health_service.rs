@@ -72,7 +72,7 @@ mod tests {
             backend: StorageBackend::File,
             mode: StorageMode::SingleNode,
             status: StorageStatus::Degraded,
-            schema_version: Some(1),
+            schema_version: Some(2),
             last_successful_write_at: None,
             available_bytes: Some(1),
             pool_size: None,

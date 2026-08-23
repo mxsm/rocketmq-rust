@@ -31,7 +31,6 @@ use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OwnedMutexGuard;
-use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 
 use crate::error::DashboardError;
@@ -53,7 +52,6 @@ use crate::model::ConsumerListView;
 use crate::model::ConsumerProgress;
 use crate::model::ConsumerQueueProgress;
 use crate::model::ConsumerResetOffsetRequest;
-use crate::model::DashboardConfigView;
 use crate::model::DashboardOverview;
 use crate::model::DashboardTopicCurrent;
 use crate::model::DlqBatchResendRequest;
@@ -71,6 +69,7 @@ use crate::model::MutationResult;
 use crate::model::ProducerConnectionInfo;
 use crate::model::ProducerConnectionView;
 use crate::model::ProducerInfo;
+use crate::model::PublishedEnvironment;
 use crate::model::TopicCurrentMetric;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
@@ -86,7 +85,7 @@ use self::mapping::*;
 
 #[derive(Clone)]
 pub struct DashboardAdminClient {
-    config: Arc<RwLock<DashboardConfigView>>,
+    published_environment: Arc<std::sync::RwLock<PublishedEnvironment>>,
     client_runtime: Arc<ClientRuntime>,
     admin_credentials: Option<AdminCredentials>,
     admin_session: Arc<Mutex<Option<Arc<ManagedAdminSession>>>>,
@@ -156,9 +155,9 @@ macro_rules! run_topic_admin_rpc {
             .session_tasks
             .spawn_service(format!("topic-admin-rpc-{admin_group}"), async move {
                 let result = run_topic_mutation_with_guard(mutation_guard, async move {
-                    run_tracked_topic_admin_service(
+                    run_tracked_published_topic_admin_service(
                         &client.topic_admin_sessions,
-                        &client.config,
+                        &client.published_environment,
                         snapshot,
                         config_cancellation.cancelled(),
                         guard_cancellation.cancelled(),
@@ -176,10 +175,10 @@ macro_rules! run_topic_admin_rpc {
                 .await;
                 let _ = response_tx.send(result);
             })
-            .map_err(|error| DashboardError::Internal(format!("Could not start topic admin RPC: {error}")))?;
-        response_rx
-            .await
-            .map_err(|_| DashboardError::Internal("Topic admin RPC stopped before returning a result".to_string()))?
+            .map_err(|error| DashboardError::internal_source("Could not start topic admin RPC", error))?;
+        response_rx.await.map_err(|error| {
+            DashboardError::internal_source("Topic admin RPC stopped before returning a result", error)
+        })?
     }};
 }
 
@@ -202,9 +201,9 @@ macro_rules! run_consumer_admin_rpc {
             .session_tasks
             .spawn_service(format!("consumer-admin-rpc-{admin_group}"), async move {
                 let result = run_topic_mutation_with_guard(mutation_guard, async move {
-                    run_tracked_topic_admin_service(
+                    run_tracked_published_topic_admin_service(
                         &client.topic_admin_sessions,
-                        &client.config,
+                        &client.published_environment,
                         snapshot,
                         config_cancellation.cancelled(),
                         guard_cancellation.cancelled(),
@@ -222,10 +221,10 @@ macro_rules! run_consumer_admin_rpc {
                 .await;
                 let _ = response_tx.send(result);
             })
-            .map_err(|error| DashboardError::Internal(format!("Could not start consumer admin RPC: {error}")))?;
-        response_rx
-            .await
-            .map_err(|_| DashboardError::Internal("Consumer admin RPC stopped before returning a result".to_string()))?
+            .map_err(|error| DashboardError::internal_source("Could not start consumer admin RPC", error))?;
+        response_rx.await.map_err(|error| {
+            DashboardError::internal_source("Consumer admin RPC stopped before returning a result", error)
+        })?
     }};
 }
 
@@ -300,13 +299,13 @@ impl Drop for AdminSessionLease {
 
 impl DashboardAdminClient {
     pub fn new(
-        config: Arc<RwLock<DashboardConfigView>>,
+        published_environment: Arc<std::sync::RwLock<PublishedEnvironment>>,
         client_runtime: Arc<ClientRuntime>,
         admin_credentials: Option<AdminCredentials>,
     ) -> Self {
         let session_tasks = client_runtime.component("dashboard-admin-session");
         Self {
-            config,
+            published_environment,
             client_runtime,
             admin_credentials,
             admin_session: Arc::new(Mutex::new(None)),
@@ -324,6 +323,13 @@ impl DashboardAdminClient {
 
     pub(crate) async fn acquire_consumer_mutation_lock(&self) -> OwnedMutexGuard<()> {
         Arc::clone(&self.consumer_mutation_lock).lock_owned().await
+    }
+
+    fn published_environment(&self) -> PublishedEnvironment {
+        match self.published_environment.read() {
+            Ok(published) => published.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -346,7 +352,7 @@ impl DashboardAdminClient {
     }
 
     pub async fn dashboard_overview(&self) -> Result<DashboardOverview, DashboardError> {
-        let config = self.config.read().await.clone();
+        let config = self.published_environment().config;
         if config.current_namesrv.is_none() {
             return Ok(DashboardOverview {
                 current_namesrv: None,
@@ -878,7 +884,7 @@ impl DashboardAdminClient {
     }
 
     async fn admin_config_snapshot(&self) -> Result<AdminConfigSnapshot, DashboardError> {
-        admin_config_snapshot(&self.config).await
+        admin_published_config_snapshot(&self.published_environment)
     }
 
     async fn build_topic_admin_guard(
@@ -900,8 +906,28 @@ impl DashboardAdminClient {
     }
 }
 
+pub(super) fn admin_published_config_snapshot(
+    published_environment: &std::sync::RwLock<PublishedEnvironment>,
+) -> Result<AdminConfigSnapshot, DashboardError> {
+    let published = match published_environment.read() {
+        Ok(published) => published,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let config = &published.config;
+    let namesrv_addr = config
+        .current_namesrv
+        .clone()
+        .ok_or_else(|| DashboardError::Config("No active NameServer is configured".to_string()))?;
+    Ok(AdminConfigSnapshot {
+        namesrv_addr,
+        use_vip_channel: config.use_vip_channel,
+        use_tls: config.use_tls,
+    })
+}
+
+#[cfg(test)]
 pub(super) async fn admin_config_snapshot(
-    config: &RwLock<DashboardConfigView>,
+    config: &tokio::sync::RwLock<crate::model::DashboardConfigView>,
 ) -> Result<AdminConfigSnapshot, DashboardError> {
     let config = config.read().await;
     let namesrv_addr = config

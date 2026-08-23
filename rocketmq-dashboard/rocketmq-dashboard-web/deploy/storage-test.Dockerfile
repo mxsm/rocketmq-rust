@@ -23,4 +23,4 @@ COPY . .
 ENV CARGO_TERM_COLOR=always \
     RUST_BACKTRACE=1
 
-ENTRYPOINT ["cargo", "test", "--manifest-path", "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml", "--all-targets", "--all-features", "--", "--include-ignored", "--nocapture"]
+ENTRYPOINT ["cargo", "test", "--manifest-path", "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml", "--all-targets", "--all-features", "--", "--include-ignored", "--nocapture", "--test-threads=1"]

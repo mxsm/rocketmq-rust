@@ -49,7 +49,13 @@ export function ConsumerQueryScopeProvider({ children }: { children: ReactNode }
     try {
       const config = await configApi.getConfig();
       if (token !== requestToken.current) return;
-      applyConfig(config.currentProxyAddr ?? null, config.proxyAddrList);
+      const proxies = config.endpoints
+        .filter((endpoint) => endpoint.endpointType === 'proxy' && endpoint.isEnabled)
+        .sort((left, right) => left.sortOrder - right.sortOrder || left.endpointId.localeCompare(right.endpointId));
+      applyConfig(
+        proxies.find((endpoint) => endpoint.isActive)?.address ?? null,
+        proxies.map((endpoint) => endpoint.address)
+      );
     } catch (error) {
       if (token === requestToken.current) {
         setConfigError(error instanceof Error ? error.message : String(error));
@@ -66,6 +72,12 @@ export function ConsumerQueryScopeProvider({ children }: { children: ReactNode }
       mountedRef.current = false;
       requestToken.current += 1;
     };
+  }, [loadConfig]);
+
+  useEffect(() => {
+    const handleConfigUpdated = () => { void loadConfig(); };
+    window.addEventListener('rocketmq-config-updated', handleConfigUpdated);
+    return () => window.removeEventListener('rocketmq-config-updated', handleConfigUpdated);
   }, [loadConfig]);
 
   const setMode = useCallback((next: ConsumerQueryMode) => {
