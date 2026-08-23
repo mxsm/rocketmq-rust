@@ -25,6 +25,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_transport::api::v1::Channel;
@@ -115,18 +116,19 @@ impl DefaultBrokerHeartbeatManager {
         self.lifecycle_listeners.write().push(listener);
     }
 
-    pub(crate) async fn shutdown_gracefully(&self) {
-        let _ = self.shutdown_gracefully_with_report().await;
+    pub(crate) async fn shutdown_gracefully_with_report(&self) -> ShutdownReport {
+        self.shutdown_gracefully_until(ShutdownDeadline::after(SHUTDOWN_TIMEOUT))
+            .await
     }
 
-    pub(crate) async fn shutdown_gracefully_with_report(&self) -> ShutdownReport {
+    pub(crate) async fn shutdown_gracefully_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         let task_group = {
             let mut lifecycle = self.lifecycle.lock();
             lifecycle.scan_scheduled_tasks.take();
             lifecycle.scan_task_group.take()
         };
         if let Some(task_group) = task_group {
-            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
+            let report = task_group.shutdown_until(deadline).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),

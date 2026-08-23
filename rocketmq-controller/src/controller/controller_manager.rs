@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -87,11 +89,25 @@ impl BrokerInactiveListener {
     }
 }
 
+fn spawn_inactive_broker_worker<F>(task_group: &TaskGroup, future: F) -> rocketmq_runtime::RuntimeResult<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let operation = OperationContext::without_deadline(TaskKind::Worker);
+    task_group
+        .spawn_operation(&operation, "controller.broker-inactive", future)
+        .map(|_| ())
+}
+
 impl BrokerLifecycleListener for BrokerInactiveListener {
     fn on_broker_inactive(&self, cluster_name: Option<&str>, broker_name: &str, broker_id: Option<i64>) {
         let Some(controller_manager) = self.controller_manager.upgrade() else {
             return;
         };
+
+        if !controller_manager.is_running() {
+            return;
+        }
 
         let cluster_name = cluster_name.map(str::to_owned);
         let broker_name = CheetahString::from_string(broker_name.to_owned());
@@ -105,7 +121,7 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
             return;
         };
 
-        if let Err(error) = task_group.spawn("controller.broker-inactive", TaskKind::Worker, async move {
+        if let Err(error) = spawn_inactive_broker_worker(&task_group, async move {
             if !controller_manager.is_leader() {
                 warn!(
                     "Broker inactive event ignored on follower controller, cluster={:?}, broker={}, broker_id={:?}",
@@ -921,18 +937,21 @@ impl ControllerManager {
         if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
             let _ = shutdown_tx.send(());
         }
+        let heartbeat_report = self.heartbeat_manager.shutdown_gracefully_until(deadline).await;
+        if heartbeat_report.is_healthy() {
+            info!("Heartbeat manager shut down");
+        } else {
+            let detail = heartbeat_report.to_json();
+            warn!(report = %detail, "Heartbeat manager shutdown was unhealthy");
+            failures.push(format!("heartbeat manager: {detail}"));
+        }
+
         if let Err(error) = self.apply_leadership_state(false).await {
             warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
             failures.push(format!("leadership scheduling: {error}"));
         }
         if !self.shutdown_manager_tasks(deadline).await {
             failures.push("manager tasks did not stop cleanly".to_string());
-        }
-
-        // Shutdown heartbeat manager
-        {
-            self.heartbeat_manager.shutdown_gracefully().await;
-            info!("Heartbeat manager shut down");
         }
 
         if let Some(security) = &self.security {
@@ -1415,6 +1434,31 @@ mod tests {
 
     fn test_service_context() -> ChildServiceContext {
         rocketmq_runtime::RuntimeContext::from_current("controller-manager-test").service_context("controller-manager")
+    }
+
+    #[tokio::test]
+    async fn inactive_broker_worker_observes_manager_cancellation() {
+        let task_group = test_service_context()
+            .component("inactive-broker-worker-cancellation")
+            .task_group()
+            .clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let started_task = started.clone();
+
+        spawn_inactive_broker_worker(&task_group, async move {
+            started_task.notify_one();
+            std::future::pending::<()>().await;
+        })
+        .expect("spawn inactive broker worker");
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("inactive broker worker should start");
+
+        let report = task_group.shutdown(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "shutdown report: {}", report.to_json());
+        assert_eq!(report.cancelled, 1);
+        assert_eq!(task_group.task_count(), 0);
     }
 
     #[tokio::test]
