@@ -79,7 +79,7 @@ pub fn error_state(
     foreground: Hsla,
     muted_foreground: Hsla,
     retry: Option<impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>,
-    open_config: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    open_config: Option<impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static>,
 ) -> Div {
     div()
         .w(px(520.))
@@ -105,10 +105,12 @@ pub fn error_state(
         .when_some(retry, |this, retry| {
             this.child(Button::new("retry-startup").label("Retry").primary().on_click(retry))
         })
-        .child(
-            Button::new("open-config-location")
-                .label("Open configuration")
-                .outline()
-                .on_click(open_config),
-        )
+        .when_some(open_config, |this, open_config| {
+            this.child(
+                Button::new("open-config-location")
+                    .label("Open configuration")
+                    .outline()
+                    .on_click(open_config),
+            )
+        })
 }

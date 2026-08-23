@@ -50,11 +50,6 @@ pub fn navigation_groups() -> Vec<SidebarGroup> {
                     icon: IconName::LayoutDashboard,
                 },
                 SidebarItem {
-                    route: AppRoute::NameServers,
-                    label: "NameServers",
-                    icon: IconName::Globe,
-                },
-                SidebarItem {
                     route: AppRoute::Brokers,
                     label: "Brokers",
                     icon: IconName::Building2,
@@ -129,7 +124,6 @@ pub const fn is_active(item: &SidebarItem, current: &AppRoute) -> bool {
     matches!(
         (&item.route, current),
         (AppRoute::Dashboard, AppRoute::Dashboard)
-            | (AppRoute::NameServers, AppRoute::NameServers)
             | (AppRoute::Brokers, AppRoute::Brokers | AppRoute::BrokerDetail { .. })
             | (AppRoute::Topics, AppRoute::Topics | AppRoute::TopicDetail { .. })
             | (

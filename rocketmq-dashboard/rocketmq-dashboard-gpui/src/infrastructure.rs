@@ -1,4 +1,4 @@
-// Copyright 2025 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Feature-local state for the first dashboard delivery.
+//! Desktop infrastructure owned by the application composition root.
 
-#[path = "features/login.rs"]
-pub mod login;
-
-#[path = "features/ops.rs"]
-pub mod ops;
-
-#[path = "features/proxy.rs"]
-pub mod proxy;
+#[path = "infrastructure/admin_provider.rs"]
+pub mod admin_provider;
+#[path = "infrastructure/auth_state.rs"]
+pub mod auth_state;
+#[path = "infrastructure/client_runtime.rs"]
+pub mod client_runtime;
+#[path = "infrastructure/config_store.rs"]
+pub mod config_store;
+#[path = "infrastructure/history_store.rs"]
+pub mod history_store;
+#[path = "infrastructure/monitor_store.rs"]
+pub mod monitor_store;

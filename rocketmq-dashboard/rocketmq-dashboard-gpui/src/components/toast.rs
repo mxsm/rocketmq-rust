@@ -21,6 +21,11 @@ use gpui_component::{WindowExt as _, notification::Notification};
 pub struct ToastHost;
 
 impl ToastHost {
+    /// Pushes a successful operation summary through the root-owned notification host.
+    pub fn success(summary: impl Into<gpui::SharedString>, window: &mut Window, cx: &mut gpui::App) {
+        window.push_notification(Notification::success(summary), cx);
+    }
+
     /// Pushes a safe error summary through the root-owned notification host.
     pub fn error(summary: impl Into<gpui::SharedString>, window: &mut Window, cx: &mut gpui::App) {
         window.push_notification(Notification::error(summary), cx);

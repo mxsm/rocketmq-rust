@@ -86,8 +86,6 @@ pub enum AppRoute {
     Login,
     /// Dashboard landing page.
     Dashboard,
-    /// NameServer list.
-    NameServers,
     /// Broker list.
     Brokers,
     /// A broker detail page.
@@ -128,7 +126,7 @@ impl AppRoute {
             [] => Ok(Self::Dashboard),
             ["login"] => Ok(Self::Login),
             ["dashboard"] => Ok(Self::Dashboard),
-            ["nameservers"] => Ok(Self::NameServers),
+            ["nameservers"] => Ok(Self::OpsSettings),
             ["brokers"] => Ok(Self::Brokers),
             ["brokers", broker, tab] => Ok(Self::BrokerDetail {
                 broker: RouteKey::parse(*broker)?,
@@ -165,7 +163,6 @@ impl AppRoute {
         match self {
             Self::Login => "/login".to_owned(),
             Self::Dashboard => "/dashboard".to_owned(),
-            Self::NameServers => "/nameservers".to_owned(),
             Self::Brokers => "/brokers".to_owned(),
             Self::BrokerDetail { broker, tab } => {
                 format!("/brokers/{}/{tab}", broker.as_str())
@@ -190,7 +187,6 @@ impl AppRoute {
         match self {
             Self::Login => "Sign in",
             Self::Dashboard => "Dashboard",
-            Self::NameServers => "NameServers",
             Self::Brokers | Self::BrokerDetail { .. } => "Brokers",
             Self::Topics | Self::TopicDetail { .. } => "Topics",
             Self::Consumers | Self::ConsumerDetail { .. } => "Consumers",
@@ -286,6 +282,16 @@ impl NavigationHistory {
         &self.current
     }
 
+    /// Returns the route that Back would select without mutating history.
+    pub fn back_target(&self) -> Option<&AppRoute> {
+        self.back.last()
+    }
+
+    /// Returns the route that Forward would select without mutating history.
+    pub fn forward_target(&self) -> Option<&AppRoute> {
+        self.forward.last()
+    }
+
     /// Navigates normally, preserving the old route for Back and discarding Forward.
     pub fn navigate(&mut self, route: AppRoute) {
         if self.current != route {
@@ -363,7 +369,6 @@ mod tests {
         let routes = [
             AppRoute::Login,
             AppRoute::Dashboard,
-            AppRoute::NameServers,
             AppRoute::Brokers,
             AppRoute::BrokerDetail {
                 broker: RouteKey::parse("broker-a").expect("valid broker key"),
@@ -398,6 +403,7 @@ mod tests {
     fn aliases_are_parse_only_compatibility() {
         assert_eq!(AppRoute::parse("/"), Ok(AppRoute::Dashboard));
         assert_eq!(AppRoute::parse("/ops"), Ok(AppRoute::OpsSettings));
+        assert_eq!(AppRoute::parse("/nameservers"), Ok(AppRoute::OpsSettings));
         assert_eq!(AppRoute::parse("/cluster"), Ok(AppRoute::Brokers));
         assert_eq!(AppRoute::parse("/dlq"), Ok(AppRoute::DlqMessages));
         assert_eq!(AppRoute::OpsSettings.format_path(), "/ops-settings");

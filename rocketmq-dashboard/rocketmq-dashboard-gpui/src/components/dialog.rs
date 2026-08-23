@@ -25,18 +25,19 @@ use gpui_component::{
 /// Opens a confirmation dialog using the root-owned official dialog stack.
 pub fn open_confirm(
     title: &'static str,
-    description: &'static str,
+    description: impl Into<gpui::SharedString>,
     confirm_label: &'static str,
     on_confirm: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) -> bool + 'static,
     window: &mut Window,
     cx: &mut gpui::App,
 ) {
     let on_confirm = Rc::new(on_confirm);
+    let description = description.into();
     window.open_dialog(cx, move |dialog: Dialog, _, _| {
         let on_confirm = on_confirm.clone();
         dialog
             .title(title)
-            .child(div().text_sm().child(description))
+            .child(div().text_sm().child(description.clone()))
             .confirm()
             .button_props(DialogButtonProps::default().ok_text(confirm_label))
             .on_ok(move |event, window, cx| on_confirm(event, window, cx))

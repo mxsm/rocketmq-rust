@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 //! RocketMQ Dashboard - Modern GUI for Apache RocketMQ monitoring
 //!
 //! This application provides a real-time dashboard for monitoring
@@ -21,16 +23,35 @@ mod app;
 mod assets;
 mod components;
 mod features;
+mod infrastructure;
 mod route;
 mod services;
 mod state;
 mod theme;
 mod ui;
 
+use std::sync::Arc;
+
 use app::RocketmqDashboard;
 use gpui::*;
 use gpui_component::Root;
+use infrastructure::{
+    admin_provider::GpuiAdminProvider, auth_state::DesktopAuthState, client_runtime::DesktopClientRuntime,
+    config_store::DesktopConfigStore,
+};
+use services::AppServices;
 use tracing::{error, info};
+
+const SMOKE_EXIT_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_SMOKE_EXIT";
+const SMOKE_WIDTH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_SMOKE_WIDTH";
+
+fn initial_window_width() -> f32 {
+    std::env::var(SMOKE_WIDTH_ENV)
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|width| width.is_finite() && *width >= 640.0)
+        .unwrap_or(1440.0)
+}
 
 /// Main entry point for the RocketMQ Dashboard application
 fn main() -> anyhow::Result<()> {
@@ -58,7 +79,25 @@ fn main() -> anyhow::Result<()> {
 
     info!("Starting RocketMQ Dashboard");
 
+    let runtime = DesktopClientRuntime::new(telemetry_guard.handle())?;
+    let auth = DesktopAuthState::from_process_environment();
+    let config_store = DesktopConfigStore::from_environment(runtime.component("config-store"))?;
+    let provider = GpuiAdminProvider::new(
+        runtime.provider_component("admin-provider"),
+        runtime.client_runtime(),
+        Arc::clone(&auth),
+    );
+    let services = AppServices::desktop(
+        config_store,
+        Arc::clone(&provider),
+        auth,
+        runtime.component("services"),
+        runtime.component("history"),
+        runtime.component("monitor"),
+    );
+
     let app = Application::new().with_assets(assets::component_assets());
+    let initial_width = initial_window_width();
 
     app.run(move |cx| {
         // This must be called before using any GPUI Component features.
@@ -73,7 +112,7 @@ fn main() -> anyhow::Result<()> {
                         y: px(100.0),
                     },
                     size: gpui::Size {
-                        width: px(1440.0),
+                        width: px(initial_width),
                         height: px(900.0),
                     },
                 })),
@@ -85,7 +124,7 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             },
             |window, cx| {
-                let view = cx.new(|cx| RocketmqDashboard::new(window, cx));
+                let view = cx.new(|cx| RocketmqDashboard::with_services(window, services.clone(), cx));
                 // This first level on the window, should be a Root.
                 cx.new(|cx| Root::new(view, window, cx))
             },
@@ -93,6 +132,13 @@ fn main() -> anyhow::Result<()> {
             error!(error = %error, "Unable to create the RocketMQ Dashboard window");
         }
     });
-    telemetry_guard.shutdown().into_result()?;
+    let runtime_shutdown = runtime.shutdown(provider);
+    match &runtime_shutdown {
+        Ok(report) => info!(shutdown_report = %report.to_json(), "GPUI runtime shutdown completed"),
+        Err(error) => error!(error = %error, "GPUI runtime shutdown failed"),
+    }
+    let telemetry_shutdown = telemetry_guard.shutdown().into_result();
+    runtime_shutdown?;
+    telemetry_shutdown?;
     Ok(())
 }

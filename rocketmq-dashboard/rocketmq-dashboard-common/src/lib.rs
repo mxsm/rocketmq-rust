@@ -21,6 +21,7 @@
 pub mod admin;
 pub mod api;
 pub mod cluster;
+pub mod connection;
 pub mod consumer;
 pub mod dashboard;
 pub mod error;
@@ -36,6 +37,7 @@ pub mod topic;
 pub use admin::*;
 pub use api::*;
 pub use cluster::*;
+pub use connection::*;
 pub use consumer::*;
 pub use dashboard::*;
 pub use error::*;

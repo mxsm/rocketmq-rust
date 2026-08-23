@@ -33,7 +33,9 @@ resolver     = "3"
 [dependencies]
 # Shared common code
 rocketmq-dashboard-common = { version = "1.0.0", path = "../rocketmq-dashboard-common" }
+rocketmq-admin-core = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", features = ["read-client-adapter"] }
 rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
+rocketmq-runtime = { version = "1.0.0", path = "../../rocketmq-runtime" }
 
 # GPUI framework
 gpui                   = { version = "=0.2.2" }
@@ -74,3 +76,4 @@ anyhow = "1.0.103"
 [dev-dependencies]
 # Enables GPUI's in-memory window harness for application-level lifecycle tests only.
 gpui = { version = "=0.2.2", features = ["test-support"] }
+tempfile = "3.23"
