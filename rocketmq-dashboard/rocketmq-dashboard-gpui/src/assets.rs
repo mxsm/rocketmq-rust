@@ -12,22 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! UI components for the RocketMQ Dashboard
+//! Asset registration for the GPUI dashboard.
 
-#[path = "ui/dashboard_view.rs"]
-pub mod dashboard_view;
-
-#[path = "ui/cluster_view.rs"]
-pub mod cluster_view;
-
-#[path = "ui/topic_view.rs"]
-pub mod topic_view;
-
-#[path = "ui/consumer_view.rs"]
-pub mod consumer_view;
-
-#[path = "ui/producer_view.rs"]
-pub mod producer_view;
-
-#[path = "ui/message_view.rs"]
-pub mod message_view;
+/// Returns the official GPUI Component icon asset source.
+///
+/// RocketMQ-specific artwork will be added here only when it cannot be expressed with the
+/// component library's built-in [`gpui_component::IconName`] icons.
+pub fn component_assets() -> gpui_component_assets::Assets {
+    gpui_component_assets::Assets
+}

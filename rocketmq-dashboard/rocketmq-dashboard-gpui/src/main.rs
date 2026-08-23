@@ -17,35 +17,20 @@
 //! This application provides a real-time dashboard for monitoring
 //! and managing RocketMQ clusters, topics, and message flows.
 
+mod app;
+mod assets;
+mod components;
+mod features;
+mod route;
+mod services;
+mod state;
+mod theme;
 mod ui;
 
+use app::RocketmqDashboard;
 use gpui::*;
 use gpui_component::Root;
-use tracing::info;
-use ui::dashboard_view::DashboardView;
-
-/// Main dashboard application struct
-pub struct RocketmqDashboard {
-    dashboard_view: Entity<DashboardView>,
-}
-
-impl RocketmqDashboard {
-    fn new(cx: &mut Context<Self>) -> Self {
-        Self {
-            dashboard_view: cx.new(|_| DashboardView::new()),
-        }
-    }
-}
-
-impl Render for RocketmqDashboard {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .bg(rgb(0xF5F5F7))
-            .child(self.dashboard_view.clone())
-    }
-}
+use tracing::{error, info};
 
 /// Main entry point for the RocketMQ Dashboard application
 fn main() -> anyhow::Result<()> {
@@ -73,40 +58,40 @@ fn main() -> anyhow::Result<()> {
 
     info!("Starting RocketMQ Dashboard");
 
-    let app = Application::new();
+    let app = Application::new().with_assets(assets::component_assets());
 
     app.run(move |cx| {
         // This must be called before using any GPUI Component features.
         gpui_component::init(cx);
+        theme::apply_dark_theme(cx);
 
-        cx.spawn(async move |cx| {
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds {
-                        origin: Point {
-                            x: px(100.0),
-                            y: px(100.0),
-                        },
-                        size: gpui::Size {
-                            width: px(1440.0),
-                            height: px(900.0),
-                        },
-                    })),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("RocketMQ Dashboard".into()),
-                        appears_transparent: false,
-                        traffic_light_position: None,
-                    }),
-                    ..Default::default()
-                },
-                |window, cx| {
-                    let view = cx.new(RocketmqDashboard::new);
-                    // This first level on the window, should be a Root.
-                    cx.new(|cx| Root::new(view, window, cx))
-                },
-            )
-        })
-        .detach();
+        if let Err(error) = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: Point {
+                        x: px(100.0),
+                        y: px(100.0),
+                    },
+                    size: gpui::Size {
+                        width: px(1440.0),
+                        height: px(900.0),
+                    },
+                })),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("RocketMQ Dashboard".into()),
+                    appears_transparent: false,
+                    traffic_light_position: None,
+                }),
+                ..Default::default()
+            },
+            |window, cx| {
+                let view = cx.new(|cx| RocketmqDashboard::new(window, cx));
+                // This first level on the window, should be a Root.
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        ) {
+            error!(error = %error, "Unable to create the RocketMQ Dashboard window");
+        }
     });
     telemetry_guard.shutdown().into_result()?;
     Ok(())

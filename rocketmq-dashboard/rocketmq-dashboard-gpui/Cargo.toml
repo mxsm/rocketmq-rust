@@ -36,8 +36,9 @@ rocketmq-dashboard-common = { version = "1.0.0", path = "../rocketmq-dashboard-c
 rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
 
 # GPUI framework
-gpui           = { version = "0.2.2" }
-gpui-component = { version = "0.5.1" }
+gpui                   = { version = "=0.2.2" }
+gpui-component         = { version = "=0.5.1" }
+gpui-component-assets  = { version = "=0.5.1" }
 # Async runtime
 tokio        = { version = "1.49", features = ["full"] }
 tokio-util   = { version = "0.7.18", features = ["full"] }
@@ -69,3 +70,7 @@ cfg-if  = "1.0.4"
 
 [build-dependencies]
 anyhow = "1.0.103"
+
+[dev-dependencies]
+# Enables GPUI's in-memory window harness for application-level lifecycle tests only.
+gpui = { version = "=0.2.2", features = ["test-support"] }

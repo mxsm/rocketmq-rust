@@ -404,11 +404,7 @@ impl MessageView {
             .rounded(px(8.0))
             .bg(rgb(0x007AFF))
             .cursor_pointer()
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                println!(
-                    "Search messages - Topic: {}, Key: {}, ID: {}",
-                    this.selected_topic, this.message_key_input, this.message_id_input
-                );
+            .on_click(cx.listener(|_this, _event, _window, cx| {
                 cx.notify();
             }))
             .child(
