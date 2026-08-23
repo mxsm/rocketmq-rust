@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::model::DashboardHistoryHealth;
 use crate::persistence::StorageHealth;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,4 +22,6 @@ pub struct HealthStatus {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<DashboardHistoryHealth>,
 }

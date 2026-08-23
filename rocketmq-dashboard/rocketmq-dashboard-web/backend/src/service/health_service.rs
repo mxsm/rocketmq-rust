@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::model::DashboardHistoryHealth;
 use crate::model::HealthStatus;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::StorageHealth;
@@ -20,11 +21,14 @@ pub fn liveness_status() -> HealthStatus {
     HealthStatus {
         status: "UP".to_string(),
         storage: None,
+        history: None,
     }
 }
 
-pub async fn readiness_status(persistence: &DashboardPersistence) -> HealthStatus {
-    readiness_status_from_storage(persistence.storage_health().await)
+pub async fn readiness_status(persistence: &DashboardPersistence, history: DashboardHistoryHealth) -> HealthStatus {
+    let mut status = readiness_status_from_storage(persistence.storage_health().await);
+    status.history = Some(history);
+    status
 }
 
 pub fn readiness_status_from_storage(storage: StorageHealth) -> HealthStatus {
@@ -35,6 +39,7 @@ pub fn readiness_status_from_storage(storage: StorageHealth) -> HealthStatus {
             "DOWN".to_string()
         },
         storage: Some(storage),
+        history: None,
     }
 }
 

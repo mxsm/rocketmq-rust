@@ -15,12 +15,18 @@ pub mod backend;
 pub mod environment_repository;
 pub mod error;
 pub mod file_store;
+pub mod history_repository;
+pub mod lease_repository;
 pub mod migration;
 pub mod monitor_repository;
 pub mod sql_store;
 
 #[cfg(test)]
 mod contract_tests;
+
+#[cfg(test)]
+#[path = "persistence/history_capacity_tests.rs"]
+mod history_capacity_tests;
 
 use crate::config::StorageConfig;
 use crate::model::StorageBackend;

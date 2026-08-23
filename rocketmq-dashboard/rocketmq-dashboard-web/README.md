@@ -44,6 +44,9 @@ $env:DASHBOARD_WEB_LOGIN_REQUIRED="false"
 $env:DASHBOARD_WEB_USERNAME="admin"
 $env:DASHBOARD_WEB_PASSWORD="rocketmq"
 $env:DASHBOARD_WEB_HISTORY_INTERVAL_SECS="60"
+$env:DASHBOARD_WEB_HISTORY_RETENTION_DAYS="30"
+$env:DASHBOARD_WEB_HISTORY_RETENTION_BATCH_SIZE="500"
+$env:DASHBOARD_WEB_HISTORY_LEASE_TTL_SECS="30"
 $env:DASHBOARD_WEB_USE_VIP_CHANNEL="false"
 $env:DASHBOARD_WEB_USE_TLS="false"
 $env:DASHBOARD_WEB_ROCKETMQ_ACCESS_KEY="<access-key>"
@@ -191,10 +194,29 @@ npm run build
 - DLQ query by key/messageId, bounded page-scan query, batch direct-consume resend, and JSON/CSV export payloads.
 - Web service modules use the feature-gated common `DashboardAdminFacade` for core Dashboard, Topic, Consumer, Producer, Broker, and Message operations.
 - Auth/session API with optional environment-driven login requirement, protected API middleware, and frontend login flow.
-- Dashboard history APIs backed by an in-memory background collector; set `DASHBOARD_WEB_HISTORY_INTERVAL_SECS=0` to disable collection.
+- Dashboard history APIs persist UTC-day JSONL segments for File and durable rows for SQLite, MySQL, and PostgreSQL. Set `DASHBOARD_WEB_HISTORY_INTERVAL_SECS=0` to disable collection. Retention removes samples older than `DASHBOARD_WEB_HISTORY_RETENTION_DAYS` in bounded batches; File retention removes complete UTC-day segments, so it can retain part of the cutoff day until the next day. SQL collectors use a database-clock task lease, while the File backend uses its data-directory lock.
+- History capacity coverage uses a 500-sample append batch, 200-row first and continuation pages, and 10,000 rows of bounded retention work. The SQL query and retention indexes are `dashboard_history_sample_query_idx` and `dashboard_history_sample_retention_idx`.
 - React + TypeScript + Vite frontend.
 - Dashboard app shell with sidebar, top status bar, light/dark theme, dense tables, search, pagination, loading/error/empty states, confirmation dialogs, and message detail drawer.
 - Frontend routes for Dashboard, Topics, Consumers, Producers, Brokers, Messages, DLQ, ACL, Monitors, and Config.
+
+### History storage capacity baseline
+
+The following 2026-08-24 baseline was measured on a local Windows Docker Desktop host with fresh named volumes. It writes 10,000 samples in batches of at most 500, reads a 200-row first and continuation page, then converges 10,000 expired rows. Container scheduling, host load, and filesystem performance affect the timings, so these are recorded measurements rather than latency limits.
+
+| Backend | Append 500 | First page 200 | Continuation 200 | Retention 10,000 | Query-plan evidence |
+| --- | ---: | ---: | ---: | ---: | --- |
+| File (mounted volume) | 19 ms | 37 ms | 39 ms | 56 ms | UTC environment/day JSONL segments; no SQL plan |
+| SQLite (mounted database) | 11 ms | 1 ms | 1 ms | 89 ms | `dashboard_history_sample_query_idx` |
+| MySQL 8.4 | 43 ms | 2 ms | 3 ms | 381 ms | `dashboard_history_sample_retention_idx`, `range`, no `ALL` scan |
+| PostgreSQL 15 | 22 ms | 3 ms | 2 ms | 78 ms | `Index Scan` on `dashboard_history_sample_retention_idx` |
+
+Reproduce the complete File, mounted SQLite, MySQL, and PostgreSQL functional and capacity matrix from this directory:
+
+```bash
+docker compose -f docker-compose.storage-test.yml up --build --abort-on-container-exit --exit-code-from storage-test-runner
+docker compose -f docker-compose.storage-test.yml down -v --remove-orphans
+```
 
 ## TODO
 

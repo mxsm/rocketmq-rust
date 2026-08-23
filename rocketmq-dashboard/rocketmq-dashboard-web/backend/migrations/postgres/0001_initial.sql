@@ -77,8 +77,8 @@ CREATE TABLE IF NOT EXISTS dashboard_audit_event (
 CREATE INDEX IF NOT EXISTS dashboard_audit_event_created_idx ON dashboard_audit_event(created_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS dashboard_task_lease (
-    lease_name VARCHAR(128) PRIMARY KEY,
-    holder_id VARCHAR(128) NOT NULL,
+    lease_name VARCHAR(128) COLLATE "C" PRIMARY KEY,
+    holder_id VARCHAR(128) COLLATE "C" NOT NULL,
     expires_at_ms BIGINT NOT NULL,
     fencing_token BIGINT NOT NULL
 );

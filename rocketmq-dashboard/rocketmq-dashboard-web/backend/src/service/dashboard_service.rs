@@ -12,21 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::model::DashboardHistoryHealth;
 use crate::model::DashboardHistoryPoint;
 use crate::model::DashboardHistoryQuery;
 use crate::model::DashboardHistorySeries;
 use crate::model::DashboardOverview;
 use crate::model::DashboardTopicCurrent;
+use crate::model::EnvironmentId;
+use crate::model::MetricDimension;
+use crate::model::MetricSample;
+use crate::model::StorageBackend;
+use crate::persistence::DashboardPersistence;
+use crate::persistence::TimeRange;
+use crate::persistence::history_repository::HistoryQuery;
+use crate::persistence::lease_repository::HistoryLease;
 use crate::state::AppState;
 use crate::state::WebAdminFacade;
+#[path = "history_collector_schedule.rs"]
+mod history_collector_schedule;
+use chrono::NaiveDate;
 use chrono::Utc;
-use std::collections::VecDeque;
-use std::future::Future;
+use history_collector_schedule::HistoryCollectorSchedule;
+use history_collector_schedule::HistoryCollectorState;
+use rocketmq_runtime::ChildServiceContext;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::task::AbortHandle;
-use tokio::time::Duration;
+use tokio::time::MissedTickBehavior;
+
+const DEFAULT_HISTORY_PAGE_SIZE: u32 = 1_440;
 
 pub async fn overview(state: &AppState) -> Result<DashboardOverview, DashboardError> {
     state.admin_facade().dashboard_overview().await
@@ -40,282 +53,352 @@ pub async fn broker_history(
     state: &AppState,
     query: DashboardHistoryQuery,
 ) -> Result<DashboardHistorySeries, DashboardError> {
-    Ok(state.history_store.broker_series(query).await)
+    history_series(state, query, "broker-count", "broker", Vec::new()).await
 }
 
 pub async fn topic_history(
     state: &AppState,
     query: DashboardHistoryQuery,
 ) -> Result<DashboardHistorySeries, DashboardError> {
-    Ok(state.history_store.topic_series(query).await)
+    let metric = if query.topic_name.is_some() {
+        "topic-total-messages"
+    } else {
+        "topic-count"
+    };
+    let dimensions = query
+        .topic_name
+        .as_deref()
+        .map(|topic| {
+            vec![MetricDimension {
+                key: "topic".to_string(),
+                value: topic.to_string(),
+            }]
+        })
+        .unwrap_or_default();
+    history_series(state, query, metric, "topic", dimensions).await
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DashboardHistoryStore {
-    samples: Arc<RwLock<VecDeque<DashboardHistorySample>>>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct DashboardTaskManager {
-    inner: Arc<DashboardTaskManagerInner>,
-}
-
-#[derive(Debug, Default)]
-struct DashboardTaskManagerInner {
-    abort_handles: Mutex<Vec<AbortHandle>>,
-}
-
-impl DashboardTaskManager {
-    pub fn spawn<F>(&self, task_name: &'static str, task: F) -> Result<(), DashboardError>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let mut abort_handles = self.inner.abort_handles.lock().map_err(|_| {
-            DashboardError::Internal(format!(
-                "dashboard task manager lock poisoned while spawning {task_name}"
-            ))
-        })?;
-        let handle = tokio::task::spawn(async move {
-            tracing::debug!(task = task_name, "Dashboard background task started");
-            task.await;
-            tracing::debug!(task = task_name, "Dashboard background task stopped");
-        });
-        abort_handles.push(handle.abort_handle());
-        drop(handle);
-        Ok(())
-    }
-}
-
-impl Drop for DashboardTaskManagerInner {
-    fn drop(&mut self) {
-        if let Ok(abort_handles) = self.abort_handles.get_mut() {
-            for abort_handle in abort_handles.drain(..) {
-                abort_handle.abort();
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DashboardHistorySample {
-    date: String,
-    timestamp: i64,
-    broker_count: f64,
-    topic_count: f64,
-    topics: Vec<TopicHistorySample>,
-}
-
-#[derive(Debug, Clone)]
-struct TopicHistorySample {
-    topic: String,
-    total_msg: f64,
-}
-
-impl DashboardHistoryStore {
-    const MAX_SAMPLES: usize = 2_880;
-
-    pub async fn record(&self, overview: DashboardOverview, topic_current: DashboardTopicCurrent) {
-        let now = Utc::now();
-        let sample = DashboardHistorySample {
-            date: now.format("%Y-%m-%d").to_string(),
-            timestamp: now.timestamp_millis(),
-            broker_count: overview.broker_count as f64,
-            topic_count: topic_current.total_topics as f64,
-            topics: topic_current
-                .top_topics
-                .into_iter()
-                .map(|topic| TopicHistorySample {
-                    topic: topic.topic,
-                    total_msg: topic.total_msg as f64,
-                })
-                .collect(),
-        };
-
-        let mut samples = self.samples.write().await;
-        samples.push_back(sample);
-        while samples.len() > Self::MAX_SAMPLES {
-            samples.pop_front();
-        }
-    }
-
-    pub async fn broker_series(&self, query: DashboardHistoryQuery) -> DashboardHistorySeries {
-        let samples = self.samples.read().await;
-        let points = samples
-            .iter()
-            .filter(|sample| sample.date == query.date)
-            .map(|sample| DashboardHistoryPoint {
-                timestamp: sample.timestamp,
-                value: sample.broker_count,
-            })
-            .collect::<Vec<_>>();
-        DashboardHistorySeries {
-            date: query.date,
-            metric: "broker".to_string(),
-            topic_name: None,
-            collected: !points.is_empty(),
-            points,
-        }
-    }
-
-    pub async fn topic_series(&self, query: DashboardHistoryQuery) -> DashboardHistorySeries {
-        let samples = self.samples.read().await;
-        let points = samples
-            .iter()
-            .filter(|sample| sample.date == query.date)
-            .filter_map(|sample| {
-                let value = match query.topic_name.as_deref() {
-                    Some(topic_name) => sample
-                        .topics
-                        .iter()
-                        .find(|topic| topic.topic == topic_name)
-                        .map(|topic| topic.total_msg),
-                    None => Some(sample.topic_count),
-                }?;
-                Some(DashboardHistoryPoint {
-                    timestamp: sample.timestamp,
-                    value,
-                })
-            })
-            .collect::<Vec<_>>();
-        DashboardHistorySeries {
-            date: query.date,
-            metric: "topic".to_string(),
-            topic_name: query.topic_name,
-            collected: !points.is_empty(),
-            points,
-        }
-    }
-}
-
-pub fn spawn_dashboard_history_collector(
-    task_manager: &DashboardTaskManager,
-    admin_facade: WebAdminFacade,
-    history_store: DashboardHistoryStore,
-    interval_secs: u64,
-) -> Result<(), DashboardError> {
-    task_manager.spawn("dashboard-history-collector", async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
-        loop {
-            interval.tick().await;
-            match collect_history_sample(&admin_facade, &history_store).await {
-                Ok(()) => {}
-                Err(error) => {
-                    tracing::debug!(error = %error, "Dashboard history sample collection failed");
-                }
-            }
-        }
+async fn history_series(
+    state: &AppState,
+    query: DashboardHistoryQuery,
+    storage_metric: &str,
+    response_metric: &str,
+    dimensions: Vec<MetricDimension>,
+) -> Result<DashboardHistorySeries, DashboardError> {
+    let history = state
+        .persistence
+        .query_history(HistoryQuery {
+            environment_id: state.published().environment.environment_id,
+            metric: storage_metric.to_string(),
+            range: query_date_range(&query.date)?,
+            dimensions,
+            limit: query.limit.unwrap_or(DEFAULT_HISTORY_PAGE_SIZE),
+            cursor: query.cursor,
+        })
+        .await?;
+    let points = history
+        .samples
+        .into_iter()
+        .map(|sample| DashboardHistoryPoint {
+            timestamp: sample.bucket_ms,
+            value: sample.value,
+        })
+        .collect::<Vec<_>>();
+    Ok(DashboardHistorySeries {
+        date: query.date,
+        metric: response_metric.to_string(),
+        topic_name: query.topic_name,
+        collected: !points.is_empty(),
+        points,
+        next_cursor: history.next_cursor,
+        health: state.history_runtime.health().await,
     })
 }
 
+fn query_date_range(value: &str) -> Result<TimeRange, DashboardError> {
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| DashboardError::Validation("history date must use YYYY-MM-DD".to_string()))?;
+    let start_ms = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| DashboardError::Validation("history date is invalid".to_string()))?
+        .and_utc()
+        .timestamp_millis();
+    Ok(TimeRange {
+        start_ms,
+        end_ms: start_ms + 86_400_000 - 1,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct DashboardHistoryRuntime {
+    state: Arc<RwLock<DashboardHistoryHealth>>,
+}
+
+impl DashboardHistoryRuntime {
+    pub fn new(backend: StorageBackend) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(DashboardHistoryHealth {
+                backend,
+                connectivity: "available".to_string(),
+                role: "standby".to_string(),
+                lease_expires_at_ms: None,
+                last_collection_at_ms: None,
+                last_append_at_ms: None,
+                last_retention_at_ms: None,
+                recent_error: None,
+            })),
+        }
+    }
+
+    pub async fn health(&self) -> DashboardHistoryHealth {
+        self.state.read().await.clone()
+    }
+
+    async fn set_leader(&self, expiry: Option<i64>) {
+        let mut health = self.state.write().await;
+        health.connectivity = "available".to_string();
+        health.role = "leader".to_string();
+        health.lease_expires_at_ms = expiry;
+        health.recent_error = None;
+    }
+
+    async fn set_standby(&self) {
+        let mut health = self.state.write().await;
+        health.connectivity = "available".to_string();
+        health.role = "standby".to_string();
+        health.lease_expires_at_ms = None;
+        health.recent_error = None;
+    }
+
+    /// Records a lease loss without hiding the storage failure that caused it.
+    async fn set_standby_after_error(&self) {
+        let mut health = self.state.write().await;
+        health.role = "standby".to_string();
+        health.lease_expires_at_ms = None;
+    }
+
+    async fn success(&self) {
+        let now = Utc::now().timestamp_millis();
+        let mut health = self.state.write().await;
+        health.connectivity = "available".to_string();
+        health.last_collection_at_ms = Some(now);
+        health.last_append_at_ms = Some(now);
+        health.recent_error = None;
+    }
+
+    async fn retention(&self) {
+        self.state.write().await.last_retention_at_ms = Some(Utc::now().timestamp_millis());
+    }
+
+    async fn unavailable(&self, message: &'static str) {
+        let mut health = self.state.write().await;
+        health.connectivity = "unavailable".to_string();
+        health.recent_error = Some(message.to_string());
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HistoryCollectorConfig {
+    pub interval_secs: u64,
+    pub retention_days: u32,
+    pub retention_batch_size: u32,
+    pub lease_ttl_secs: u64,
+}
+
+pub fn start_dashboard_history_collector(
+    service_context: ChildServiceContext,
+    persistence: Arc<DashboardPersistence>,
+    admin_facade: WebAdminFacade,
+    environment_id: EnvironmentId,
+    config: HistoryCollectorConfig,
+    runtime: DashboardHistoryRuntime,
+) -> Result<(), DashboardError> {
+    if config.interval_secs == 0 {
+        return Ok(());
+    }
+    let cancellation = service_context.task_group().cancellation_token();
+    service_context
+        .spawn_service("dashboard-history-collector", async move {
+            let holder_id = uuid::Uuid::now_v7().to_string();
+            let ttl_ms = i64::try_from(config.lease_ttl_secs)
+                .ok()
+                .and_then(|seconds| seconds.checked_mul(1_000))
+                .filter(|ttl| *ttl > 0)
+                .unwrap_or(30_000);
+            let schedule = HistoryCollectorSchedule::new(config.interval_secs, ttl_ms);
+            let mut renewal = tokio::time::interval(schedule.renewal_period());
+            renewal.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut collection = tokio::time::interval(schedule.collection_period());
+            collection.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut retention = tokio::time::interval(schedule.retention_period());
+            retention.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut lease: Option<HistoryLease> = None;
+            let mut collector = HistoryCollectorState::default();
+
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => break,
+                    _ = renewal.tick() => {
+                        let mut lease_failed = false;
+                        if persistence.history_uses_sql_lease() {
+                            lease = match lease.take() {
+                                Some(current) => match persistence.renew_history_lease(&current, ttl_ms).await {
+                                    Ok(renewed) => renewed,
+                                    Err(_) => {
+                                        runtime.unavailable("history lease is unavailable").await;
+                                        lease_failed = true;
+                                        None
+                                    }
+                                },
+                                None => match persistence.acquire_history_lease(&environment_id, &holder_id, ttl_ms).await {
+                                    Ok(acquired) => acquired,
+                                    Err(_) => {
+                                        runtime.unavailable("history lease is unavailable").await;
+                                        lease_failed = true;
+                                        None
+                                    }
+                                },
+                            };
+                        }
+                        if persistence.history_uses_sql_lease() && lease.is_none() {
+                            collector.lost_lease();
+                            if lease_failed {
+                                runtime.set_standby_after_error().await;
+                            } else {
+                                runtime.set_standby().await;
+                            }
+                            continue;
+                        }
+                        collector.became_leader();
+                        runtime.set_leader(lease.as_ref().map(HistoryLease::expires_at_ms)).await;
+                    }
+                    _ = collection.tick(), if collector.can_collect() => {
+                        match collect_history_sample(&persistence, &admin_facade, &environment_id, config.interval_secs, lease.as_ref()).await {
+                            Ok(()) => {
+                                runtime.success().await;
+                            }
+                            Err(_) => {
+                                runtime.unavailable("history collection is unavailable").await;
+                                if persistence.history_uses_sql_lease() {
+                                    lease = None;
+                                    collector.lost_lease();
+                                    runtime.set_standby_after_error().await;
+                                }
+                            }
+                        }
+                    }
+                    _ = retention.tick(), if collector.is_leader() => collector.retention_due(),
+                    _ = tokio::task::yield_now(), if collector.can_retain() => {
+                        let cutoff = Utc::now().timestamp_millis()
+                            .saturating_sub(i64::from(config.retention_days) * 86_400_000);
+                        match persistence
+                            .delete_history_before(&environment_id, cutoff, config.retention_batch_size, lease.as_ref())
+                            .await
+                        {
+                            Ok(result) => {
+                                runtime.retention().await;
+                                collector.completed_retention_batch(result.has_more);
+                            }
+                            Err(_) => {
+                                collector.completed_retention_batch(false);
+                                runtime.unavailable("history retention is unavailable").await;
+                                if persistence.history_uses_sql_lease() {
+                                    lease = None;
+                                    collector.lost_lease();
+                                    runtime.set_standby_after_error().await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            runtime.set_standby().await;
+            if let Some(lease) = collector.cancel(&mut lease) {
+                let _ = persistence.release_history_lease(&lease).await;
+            }
+        })
+        .map_err(|error| DashboardError::internal_source("Could not start history collector", error))?;
+    Ok(())
+}
+
 async fn collect_history_sample(
+    persistence: &DashboardPersistence,
     admin_facade: &WebAdminFacade,
-    history_store: &DashboardHistoryStore,
+    environment_id: &EnvironmentId,
+    interval_secs: u64,
+    lease: Option<&HistoryLease>,
 ) -> Result<(), DashboardError> {
     let overview = admin_facade.dashboard_overview().await?;
-    let topic_current = match admin_facade.provider().topic_current().await {
-        Ok(topic_current) => topic_current,
-        Err(error) => {
-            tracing::debug!(error = %error, "Topic current collection failed; recording empty topic history sample");
-            DashboardTopicCurrent {
-                total_topics: 0,
-                top_topics: Vec::new(),
-            }
-        }
-    };
-    history_store.record(overview, topic_current).await;
+    let interval_ms = i64::try_from(interval_secs)
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000))
+        .filter(|value| *value > 0)
+        .ok_or_else(|| DashboardError::Config("history interval is invalid".to_string()))?;
+    let now = Utc::now().timestamp_millis();
+    let bucket_ms = now - now.rem_euclid(interval_ms);
+    let mut samples = vec![MetricSample {
+        environment_id: environment_id.clone(),
+        metric: "broker-count".to_string(),
+        bucket_ms,
+        dimensions: Vec::new(),
+        value: overview.broker_count as f64,
+    }];
+    if let Ok(topics) = admin_facade.provider().topic_current().await {
+        samples.push(MetricSample {
+            environment_id: environment_id.clone(),
+            metric: "topic-count".to_string(),
+            bucket_ms,
+            dimensions: Vec::new(),
+            value: topics.total_topics as f64,
+        });
+        samples.extend(topics.top_topics.into_iter().map(|topic| MetricSample {
+            environment_id: environment_id.clone(),
+            metric: "topic-total-messages".to_string(),
+            bucket_ms,
+            dimensions: vec![MetricDimension {
+                key: "topic".to_string(),
+                value: topic.topic,
+            }],
+            value: topic.total_msg as f64,
+        }));
+    }
+    persistence.append_history(samples, lease).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::DashboardHistoryStore;
-    use super::DashboardTaskManager;
-    use crate::model::DashboardHistoryQuery;
-    use crate::model::DashboardOverview;
-    use crate::model::DashboardTopicCurrent;
-    use crate::model::TopicCurrentMetric;
-    use chrono::Utc;
-    use std::future;
-    use tokio::sync::oneshot;
-    use tokio::time::Duration;
-    use tokio::time::timeout;
+    use super::DashboardHistoryRuntime;
+    use super::query_date_range;
+    use crate::model::StorageBackend;
 
-    struct DropSignal(Option<oneshot::Sender<()>>);
-
-    impl Drop for DropSignal {
-        fn drop(&mut self) {
-            if let Some(sender) = self.0.take() {
-                let _ = sender.send(());
-            }
-        }
+    #[test]
+    fn history_date_is_a_single_utc_day() {
+        let range = query_date_range("2026-08-24").expect("date range");
+        assert_eq!(range.end_ms - range.start_ms, 86_399_999);
     }
 
     #[tokio::test]
-    async fn dashboard_task_manager_drop_aborts_spawned_tasks() {
-        let manager = DashboardTaskManager::default();
-        let (started_tx, started_rx) = oneshot::channel();
-        let (dropped_tx, dropped_rx) = oneshot::channel();
+    async fn lease_error_remains_visible_until_a_normal_standby_or_leader_transition() {
+        let runtime = DashboardHistoryRuntime::new(StorageBackend::Sqlite);
+        runtime.unavailable("history lease is unavailable").await;
+        runtime.set_standby_after_error().await;
+        let failed = runtime.health().await;
+        assert_eq!(failed.connectivity, "unavailable");
+        assert_eq!(failed.role, "standby");
+        assert_eq!(failed.recent_error.as_deref(), Some("history lease is unavailable"));
 
-        manager
-            .spawn("dashboard-test-task", async move {
-                let _drop_signal = DropSignal(Some(dropped_tx));
-                let _ = started_tx.send(());
-                future::pending::<()>().await;
-            })
-            .expect("dashboard task should spawn");
+        runtime.set_standby().await;
+        let standby = runtime.health().await;
+        assert_eq!(standby.connectivity, "available");
+        assert!(standby.recent_error.is_none());
 
-        started_rx.await.expect("task should start");
-        drop(manager);
-
-        timeout(Duration::from_secs(1), dropped_rx)
-            .await
-            .expect("task should be aborted when manager is dropped")
-            .expect("drop signal should be sent");
-    }
-
-    #[tokio::test]
-    async fn history_store_returns_broker_and_topic_points() {
-        let store = DashboardHistoryStore::default();
-        let date = Utc::now().format("%Y-%m-%d").to_string();
-        store
-            .record(
-                DashboardOverview {
-                    current_namesrv: Some("127.0.0.1:9876".to_string()),
-                    broker_count: 3,
-                    topic_count: 2,
-                    consumer_group_count: 1,
-                    producer_count: 1,
-                    message_backlog: 0,
-                    system_status: "UP".to_string(),
-                },
-                DashboardTopicCurrent {
-                    total_topics: 2,
-                    top_topics: vec![TopicCurrentMetric {
-                        topic: "TopicTest".to_string(),
-                        total_msg: 42,
-                        in_tps: 0.0,
-                        out_tps: 0.0,
-                    }],
-                },
-            )
-            .await;
-
-        let broker_series = store
-            .broker_series(DashboardHistoryQuery {
-                date: date.clone(),
-                topic_name: None,
-            })
-            .await;
-        assert!(broker_series.collected);
-        assert_eq!(broker_series.points[0].value, 3.0);
-
-        let topic_series = store
-            .topic_series(DashboardHistoryQuery {
-                date,
-                topic_name: Some("TopicTest".to_string()),
-            })
-            .await;
-        assert!(topic_series.collected);
-        assert_eq!(topic_series.points[0].value, 42.0);
+        runtime.unavailable("history collection is unavailable").await;
+        runtime.set_leader(Some(1_000)).await;
+        let leader = runtime.health().await;
+        assert_eq!(leader.connectivity, "available");
+        assert_eq!(leader.role, "leader");
+        assert!(leader.recent_error.is_none());
     }
 }

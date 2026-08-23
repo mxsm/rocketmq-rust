@@ -337,8 +337,8 @@ function HistoryCard({ title, description, series, error, loading, errorTitle, d
           <CardDescription>{description}</CardDescription>
         </div>
         <StatusBadge
-          status={loading ? 'Loading' : error ? 'Unavailable' : series?.collected ? 'Collected' : 'Warming up'}
-          tone={loading ? undefined : error ? 'danger' : series?.collected ? 'success' : 'warning'}
+          status={historyStatus(series, loading, error)}
+          tone={loading ? undefined : error ? 'danger' : series?.health?.connectivity === 'unavailable' ? 'danger' : series?.collected ? 'success' : 'warning'}
         />
       </CardHeader>
       <CardContent>
@@ -360,6 +360,17 @@ function HistoryCard({ title, description, series, error, loading, errorTitle, d
       </CardContent>
     </Card>
   );
+}
+
+function historyStatus(series: DashboardHistorySeries | null, loading: boolean, error: string | null) {
+  if (loading) return 'Loading';
+  if (error) return 'Unavailable';
+  if (series?.health) {
+    return series.health.connectivity === 'available'
+      ? `${series.health.backend} · ${series.health.role}`
+      : `${series.health.backend} · unavailable`;
+  }
+  return series?.collected ? 'Collected' : 'Warming up';
 }
 
 function HistoryUnavailable({ title, detail }: { title: string; detail: string }) {
