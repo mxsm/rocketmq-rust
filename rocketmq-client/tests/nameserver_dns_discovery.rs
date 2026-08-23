@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
 #![cfg(all(feature = "nameserver-dns-discovery", feature = "test-support"))]
 
 use rocketmq_client_rust::test_support::run_nameserver_discovery_lifecycle_probe;
