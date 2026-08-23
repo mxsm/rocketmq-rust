@@ -1,6 +1,7 @@
 import { CheckCircle2, Plus, RefreshCw, Route, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
+import { ApiClientError } from '../api/client';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -11,10 +12,11 @@ import { Button } from '../components/ui/Button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Dialog';
 import { Input } from '../components/ui/Input';
 import { Label } from '../components/ui/Label';
-import type { ConfigMutationResult, DashboardConfigView } from '../types/config';
+import type { ConfigMutationResult, DashboardConfigView, EndpointView } from '../types/config';
 import { getProxyEndpointLabel, isDuplicateProxyAddress, normalizeProxyAddress } from './proxy/proxy-model';
 
 type NoticeTone = 'success' | 'warning' | 'danger';
+type ProxyRetryMutation = { kind: 'switch' | 'delete'; endpointId: string };
 
 export default function ProxyPage() {
   const [config, setConfig] = useState<DashboardConfigView | null>(null);
@@ -25,6 +27,8 @@ export default function ProxyPage() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [proxyAddress, setProxyAddress] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
+  const [addConflictReady, setAddConflictReady] = useState(false);
+  const [retryProxyMutation, setRetryProxyMutation] = useState<ProxyRetryMutation | null>(null);
   const mutationInFlight = useRef(false);
   const proxyAddressInputRef = useRef<HTMLInputElement>(null);
 
@@ -51,11 +55,18 @@ export default function ProxyPage() {
 
   const applyMutation = (result: ConfigMutationResult) => {
     setConfig(result.config);
+    setAddConflictReady(false);
+    setRetryProxyMutation(null);
     setNotice({ tone: 'success', message: result.message || 'Proxy configuration updated.' });
     window.dispatchEvent(new CustomEvent('rocketmq-config-updated'));
   };
 
-  const runMutation = async (request: () => Promise<ConfigMutationResult>, onSuccess?: () => void, onError?: (message: string) => void) => {
+  const runMutation = async (
+    request: () => Promise<ConfigMutationResult>,
+    onSuccess?: () => void,
+    onError?: (message: string) => void,
+    onConflict?: (error: ApiClientError) => Promise<void>
+  ) => {
     if (mutationInFlight.current) return;
 
     mutationInFlight.current = true;
@@ -65,6 +76,17 @@ export default function ProxyPage() {
       applyMutation(await request());
       onSuccess?.();
     } catch (requestError) {
+      if (requestError instanceof ApiClientError && requestError.code === 'STORAGE_CONFLICT' && onConflict) {
+        try {
+          await onConflict(requestError);
+          return;
+        } catch (refreshError) {
+          const message = `${requestError.message} Your draft is preserved; refresh before retrying.`;
+          setNotice({ tone: 'danger', message });
+          onError?.(message);
+          return;
+        }
+      }
       const message = getErrorMessage(requestError);
       setNotice({ tone: 'danger', message });
       onError?.(message);
@@ -75,43 +97,92 @@ export default function ProxyPage() {
   };
 
   const addProxy = () => {
+    if (!config) return;
     const address = normalizeProxyAddress(proxyAddress);
     if (!address) {
       setAddError('Enter a proxy endpoint.');
       proxyAddressInputRef.current?.focus();
       return;
     }
-    if (isDuplicateProxyAddress(address, config?.proxyAddrList ?? [])) {
+    if (isDuplicateProxyAddress(address, config.proxyAddrList)) {
       setAddError('This proxy endpoint is already configured.');
       return;
     }
 
     void runMutation(
-      () => configApi.addProxy({ address }),
+      () => configApi.addProxy({ address, expectedRevision: config.revision }),
       () => {
         setProxyAddress('');
         setAddError(null);
+        setAddConflictReady(false);
         setAddDialogOpen(false);
       },
       (message) => {
+        setAddError(message);
+        proxyAddressInputRef.current?.focus();
+      },
+      async (conflict) => {
+        const authoritative = await configApi.getConfig();
+        setConfig(authoritative);
+        setAddConflictReady(true);
+        const message = `${conflict.message} The latest configuration revision is loaded and your proxy address is preserved. Review and retry add.`;
+        setNotice({ tone: 'warning', message });
         setAddError(message);
         proxyAddressInputRef.current?.focus();
       }
     );
   };
 
-  const switchProxy = (address: string) => {
-    if (pending || getProxyEndpointLabel(address, config?.currentProxyAddr) === 'Current') return;
-    void runMutation(() => configApi.switchProxy({ address }));
+  const refreshProxyConflict = async (conflict: ApiClientError, retry: ProxyRetryMutation) => {
+    const authoritative = await configApi.getConfig();
+    setConfig(authoritative);
+    const endpoint = authoritative.endpoints.find((item) => item.endpointId === retry.endpointId);
+    if (!endpoint) {
+      setRetryProxyMutation(null);
+      setNotice({
+        tone: 'warning',
+        message: `${conflict.message} The endpoint no longer exists in the latest configuration. Refresh before taking another action.`
+      });
+      return;
+    }
+    if (retry.kind === 'switch' && endpoint.isActive) {
+      setRetryProxyMutation(null);
+      setNotice({
+        tone: 'success',
+        message: `${conflict.message} The latest configuration already selects this proxy endpoint.`
+      });
+      return;
+    }
+    setRetryProxyMutation(retry);
+    setNotice({
+      tone: 'warning',
+      message: `${conflict.message} The latest configuration revision is loaded. Review and explicitly retry ${retry.kind === 'switch' ? 'the switch' : 'the delete'}.`
+    });
   };
 
-  const deleteProxy = (address: string) => {
-    if (pending) return;
-    void runMutation(() => configApi.deleteProxy(address));
+  const switchProxy = (endpoint: EndpointView) => {
+    if (!config || pending || endpoint.isActive) return;
+    void runMutation(
+      () => configApi.switchProxy({ endpointId: endpoint.endpointId, expectedRevision: config.revision }),
+      undefined,
+      undefined,
+      (conflict) => refreshProxyConflict(conflict, { kind: 'switch', endpointId: endpoint.endpointId })
+    );
+  };
+
+  const deleteProxy = (endpoint: EndpointView) => {
+    if (!config || pending) return;
+    void runMutation(
+      () => configApi.deleteProxy(endpoint.endpointId, config.revision),
+      undefined,
+      undefined,
+      (conflict) => refreshProxyConflict(conflict, { kind: 'delete', endpointId: endpoint.endpointId })
+    );
   };
 
   const openAddDialog = () => {
     setAddError(null);
+    setAddConflictReady(false);
     setAddDialogOpen(true);
   };
 
@@ -119,8 +190,8 @@ export default function ProxyPage() {
   if (error) return <ErrorState message={error} onRetry={load} />;
   if (!config) return null;
 
-  const proxies = config.proxyAddrList;
-  const currentProxy = config.currentProxyAddr ?? null;
+  const proxies = config.endpoints.filter((endpoint) => endpoint.endpointType === 'proxy');
+  const currentProxy = proxies.find((endpoint) => endpoint.isActive)?.address ?? null;
 
   return (
     <>
@@ -172,11 +243,14 @@ export default function ProxyPage() {
                 </tr>
               </thead>
               <tbody>
-                {proxies.map((address) => {
+                {proxies.map((endpoint) => {
+                  const { address } = endpoint;
                   const label = getProxyEndpointLabel(address, currentProxy);
-                  const isCurrent = label === 'Current';
+                  const isCurrent = endpoint.isActive;
+                  const retryingSwitch = retryProxyMutation?.kind === 'switch' && retryProxyMutation.endpointId === endpoint.endpointId;
+                  const retryingDelete = retryProxyMutation?.kind === 'delete' && retryProxyMutation.endpointId === endpoint.endpointId;
                   return (
-                    <tr className={isCurrent ? 'proxy-endpoint-current' : undefined} key={address}>
+                    <tr className={isCurrent ? 'proxy-endpoint-current' : undefined} key={endpoint.endpointId}>
                       <td><code>{address}</code></td>
                       <td><StatusBadge status={label} tone={isCurrent ? 'success' : 'neutral'} /></td>
                       <td className="proxy-actions">
@@ -184,21 +258,23 @@ export default function ProxyPage() {
                           type="button"
                           variant="secondary"
                           size="sm"
-                          onClick={() => switchProxy(address)}
+                          onClick={() => switchProxy(endpoint)}
                           disabled={pending || isCurrent}
                           aria-label={isCurrent ? `Current proxy ${address}` : `Set current proxy ${address}`}
                         >
                           {isCurrent ? <CheckCircle2 size={14} aria-hidden="true" /> : <Route size={14} aria-hidden="true" />}
-                          {isCurrent ? 'Current' : 'Set current'}
+                          {isCurrent ? 'Current' : retryingSwitch ? 'Retry set current' : 'Set current'}
                         </Button>
                         <ConfirmDialog
                           title="Delete proxy"
-                          description={`Delete proxy ${address}? This removes the endpoint from the configured list.`}
-                          confirmLabel="Delete proxy"
-                          onConfirm={() => deleteProxy(address)}
+                          description={retryingDelete
+                            ? `Delete proxy ${address} using the refreshed configuration revision?`
+                            : `Delete proxy ${address}? This removes the endpoint from the configured list.`}
+                          confirmLabel={retryingDelete ? 'Retry delete proxy' : 'Delete proxy'}
+                          onConfirm={() => deleteProxy(endpoint)}
                         >
                           <Button type="button" variant="destructive" size="sm" disabled={pending} aria-label={`Delete proxy ${address}`}>
-                            <Trash2 size={14} aria-hidden="true" /> Delete
+                            <Trash2 size={14} aria-hidden="true" /> {retryingDelete ? 'Retry delete' : 'Delete'}
                           </Button>
                         </ConfirmDialog>
                       </td>
@@ -226,13 +302,18 @@ export default function ProxyPage() {
               ref={proxyAddressInputRef}
               value={proxyAddress}
               placeholder="127.0.0.1:8080"
-              onChange={(event) => { setProxyAddress(event.target.value); setAddError(null); }}
+              onChange={(event) => {
+                setProxyAddress(event.target.value);
+                setAddError(null);
+              }}
               disabled={pending}
             />
             {addError ? <div className="inline-validation" role="alert">{addError}</div> : null}
             <DialogFooter>
               <Button type="button" variant="secondary" onClick={() => setAddDialogOpen(false)} disabled={pending}>Cancel</Button>
-              <Button type="submit" disabled={pending}>Add proxy endpoint</Button>
+              <Button type="submit" disabled={pending}>
+                {addConflictReady ? 'Retry add proxy endpoint' : 'Add proxy endpoint'}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -242,5 +323,8 @@ export default function ProxyPage() {
 }
 
 function getErrorMessage(error: unknown) {
+  if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
+    return `${error.message} Your draft is still preserved; refresh before retrying.`;
+  }
   return error instanceof Error ? error.message : 'Unable to update proxy configuration.';
 }

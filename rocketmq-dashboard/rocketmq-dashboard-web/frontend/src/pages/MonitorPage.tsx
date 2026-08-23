@@ -1,5 +1,7 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { configApi } from '../api/config_api';
+import { ApiClientError } from '../api/client';
 import { monitorApi } from '../api/monitor_api';
 import DataTable, { type DataTableColumn } from '../components/DataTable';
 import ErrorState from '../components/ErrorState';
@@ -21,6 +23,7 @@ interface MutationError {
 
 export default function MonitorPage() {
   const [rows, setRows] = useState<ConsumerMonitorView[]>([]);
+  const [environmentId, setEnvironmentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<MutationError | null>(null);
@@ -44,7 +47,9 @@ export default function MonitorPage() {
     setLoading(true);
     setListError(null);
     try {
-      const nextRows = await monitorApi.listConsumerMonitors();
+      const config = await configApi.getConfig();
+      setEnvironmentId(config.environmentId);
+      const nextRows = await monitorApi.listConsumerMonitors(config.environmentId);
       if (mounted.current && request === listRequest.current) setRows(nextRows);
     } catch (error) {
       if (mounted.current && request === listRequest.current) {
@@ -57,7 +62,22 @@ export default function MonitorPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const refreshRule = useCallback(async (ruleEnvironmentId: string, consumerGroup: string) => {
+    const config = await configApi.getConfig();
+    if (config.environmentId !== ruleEnvironmentId) {
+      throw new Error('The monitor environment changed. Refresh before retrying.');
+    }
+    const authoritativeRows = await monitorApi.listConsumerMonitors(ruleEnvironmentId);
+    if (mounted.current) {
+      setEnvironmentId(config.environmentId);
+      setRows(authoritativeRows);
+    }
+    return authoritativeRows.find((item) => item.consumerGroup === consumerGroup) ?? null;
+  }, []);
+
   const saveRule = async (request: ConsumerMonitorUpsertRequest) => {
+    if (!environmentId) throw new Error('No environment is available for monitor rules.');
+    if (request.environmentId !== environmentId) throw new Error('The monitor rule environment changed. Refresh before retrying the save.');
     await monitorApi.saveConsumerMonitor(request);
     void load();
   };
@@ -66,17 +86,34 @@ export default function MonitorPage() {
     setDeleting(true);
     setMutationError(null);
     try {
-      await monitorApi.deleteConsumerMonitor(rule.consumerGroup);
+      await monitorApi.deleteConsumerMonitor(rule.environmentId, rule.consumerGroup, rule.revision);
       if (!mounted.current) return;
       setDeleteTarget(null);
       void load();
     } catch (error) {
       if (mounted.current) {
         setDeleteTarget(null);
+        let retryRule: ConsumerMonitorView | null = rule;
+        let message = mutationErrorMessage(error, 'Unable to delete the monitor rule.');
+        if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
+          retryRule = null;
+          try {
+            retryRule = await refreshRule(rule.environmentId, rule.consumerGroup);
+            message = retryRule
+              ? `${error.message} The current rule revision is loaded; review it and retry delete.`
+              : `${error.message} The rule was already removed. Refresh before taking another action.`;
+          } catch {
+            message = `${error.message} Refresh before retrying.`;
+          }
+        }
         setMutationError({
-          message: error instanceof Error ? error.message : 'Unable to delete the monitor rule.',
-          retry: () => { void deleteRule(rule); },
-          retryLabel: 'Retry delete'
+          message,
+          retry: () => {
+            setMutationError(null);
+            if (retryRule) setDeleteTarget(retryRule);
+            else void load();
+          },
+          retryLabel: retryRule ? 'Review delete' : 'Refresh rules'
         });
       }
     } finally {
@@ -138,7 +175,18 @@ export default function MonitorPage() {
         <DataTable rows={rows} columns={columns} getRowId={(row) => row.consumerGroup} searchPlaceholder="Filter monitor rules" emptyTitle="No monitor rules" />
       ) : null}
 
-      <MonitorDialog open={dialogOpen} rule={selectedRule} onOpenChange={setDialogOpen} onSubmit={saveRule} />
+      <MonitorDialog
+        open={dialogOpen}
+        environmentId={environmentId ?? ''}
+        rule={selectedRule}
+        onOpenChange={setDialogOpen}
+        onSubmit={saveRule}
+        onConflict={async (consumerGroup) => {
+          const authoritative = await refreshRule(environmentId ?? '', consumerGroup);
+          if (authoritative) setSelectedRule(authoritative);
+          return authoritative;
+        }}
+      />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => {
         if (!open && !deleting) setDeleteTarget(null);
@@ -161,4 +209,11 @@ export default function MonitorPage() {
       </AlertDialog>
     </>
   );
+}
+
+function mutationErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
+    return `${error.message} The saved state changed elsewhere; refresh before retrying.`;
+  }
+  return error instanceof Error ? error.message : fallback;
 }

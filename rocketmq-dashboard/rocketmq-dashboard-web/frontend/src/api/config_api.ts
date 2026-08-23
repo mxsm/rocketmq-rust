@@ -4,6 +4,7 @@ import type {
   BoolSettingRequest,
   ConfigMutationResult,
   DashboardConfigView,
+  EndpointRequest,
   NameserverAvailabilityView,
   NameserverListRequest
 } from '../types/config';
@@ -16,12 +17,16 @@ export const configApi = {
     apiClient.put<ConfigMutationResult>('/api/config/nameservers', request),
   addNameserver: (request: AddressRequest) =>
     apiClient.post<ConfigMutationResult>('/api/config/nameservers', request),
+  switchNameserver: (request: EndpointRequest) =>
+    apiClient.put<ConfigMutationResult>('/api/config/nameservers/current', request),
+  deleteNameserver: (endpointId: string, expectedRevision: number) =>
+    apiClient.delete<ConfigMutationResult>(`/api/config/nameservers/${encodeURIComponent(endpointId)}?expectedRevision=${expectedRevision}`),
   setVipChannel: (request: BoolSettingRequest) =>
     apiClient.put<ConfigMutationResult>('/api/config/vip-channel', request),
   setTls: (request: BoolSettingRequest) => apiClient.put<ConfigMutationResult>('/api/config/tls', request),
   addProxy: (request: AddressRequest) => apiClient.post<ConfigMutationResult>('/api/config/proxies', request),
-  switchProxy: (request: AddressRequest) =>
+  switchProxy: (request: EndpointRequest) =>
     apiClient.put<ConfigMutationResult>('/api/config/proxies/current', request),
-  deleteProxy: (address: string) =>
-    apiClient.delete<ConfigMutationResult>(`/api/config/proxies/${encodeURIComponent(address)}`)
+  deleteProxy: (endpointId: string, expectedRevision: number) =>
+    apiClient.delete<ConfigMutationResult>(`/api/config/proxies/${encodeURIComponent(endpointId)}?expectedRevision=${expectedRevision}`)
 };

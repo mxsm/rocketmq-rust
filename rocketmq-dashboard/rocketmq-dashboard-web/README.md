@@ -40,7 +40,6 @@ $env:DASHBOARD_WEB_PORT="8082"
 $env:NAMESRV_ADDR="127.0.0.1:9876"
 $env:DASHBOARD_WEB_STORAGE_BACKEND="file"
 $env:DASHBOARD_WEB_STORAGE_PATH="data/dashboard"
-$env:DASHBOARD_WEB_INTERIM_CONFIG_PATH="data/dashboard-interim-config.json"
 $env:DASHBOARD_WEB_LOGIN_REQUIRED="false"
 $env:DASHBOARD_WEB_USERNAME="admin"
 $env:DASHBOARD_WEB_PASSWORD="rocketmq"
@@ -58,10 +57,8 @@ configured together when the target cluster enforces ACL authentication.
 
 The storage backend is selected strictly at startup. Valid values are `file`,
 `sqlite`, `mysql`, and `postgres`; an unknown backend or missing server
-database URL prevents startup. The compatibility configuration file remains
-separate from the selected backend until the dashboard configuration repository
-is introduced, so a MySQL or PostgreSQL selection never silently falls back to
-local File storage.
+database URL prevents startup. Configuration and monitor rules are stored only
+by the selected backend; the dashboard never falls back to local File storage.
 
 File storage uses a data **directory** and takes an exclusive lock for the
 process lifetime:
@@ -105,7 +102,7 @@ minimum may not exceed the maximum.
 
 Storage-aware readiness is exposed through `GET /api/health/ready`; `GET
 /api/health/live` only reports process liveness, and `GET /api/health` remains
-the compatible readiness endpoint.
+the readiness endpoint.
 
 ## Storage integration test environment
 
@@ -175,9 +172,8 @@ npm run build
 - Rust Axum backend project scaffold.
 - Unified `ApiResponse<T>` response shape.
 - Health API: `GET /api/health`.
-- Config API with an explicit interim File compatibility store and a separate
-  File/SQLite/MySQL/PostgreSQL persistence foundation. Domain repositories
-  continue to use their existing stores until they are migrated deliberately.
+- Config and monitor APIs backed by the Environment/Endpoint/Monitor
+  repositories, with File, SQLite, MySQL, and PostgreSQL implementations.
 - REST route surface for Dashboard, Topic, Consumer, Producer, Broker, Message, and Config.
 - Live read-only RocketMQ Admin wiring for:
   - Dashboard overview with `DOWN` fallback when the configured NameServer is unreachable.
@@ -191,7 +187,7 @@ npm run build
 - Live Consumer reset offset by topic and timestamp.
 - Live Message resend through direct consume when topic and consumer group are provided.
 - Live Message trace lookup through RocketMQ track-detail admin when topic and message ID are provided.
-- ACL user list/create/update/delete, ACL policy list/create/update/delete, and local JSON consumer monitor rule storage.
+- ACL user list/create/update/delete, ACL policy list/create/update/delete, and environment-scoped consumer monitor rules.
 - DLQ query by key/messageId, bounded page-scan query, batch direct-consume resend, and JSON/CSV export payloads.
 - Web service modules use the feature-gated common `DashboardAdminFacade` for core Dashboard, Topic, Consumer, Producer, Broker, and Message operations.
 - Auth/session API with optional environment-driven login requirement, protected API middleware, and frontend login flow.

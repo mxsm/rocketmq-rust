@@ -1,5 +1,7 @@
 import type { ConsumerMonitorUpsertRequest, ConsumerMonitorView } from '../../types/monitor';
 
+export type ConsumerMonitorDraftRequest = Omit<ConsumerMonitorUpsertRequest, 'environmentId' | 'expectedRevision'>;
+
 export interface ConsumerMonitorDraft {
   consumerGroup: string;
   minCount: string;
@@ -7,7 +9,7 @@ export interface ConsumerMonitorDraft {
 }
 
 export type ConsumerMonitorDraftResult =
-  | { ok: true; value: ConsumerMonitorUpsertRequest }
+  | { ok: true; value: ConsumerMonitorDraftRequest }
   | { ok: false; errors: Partial<Record<keyof ConsumerMonitorDraft, string>> };
 
 export interface ConsumerMonitorMetrics {

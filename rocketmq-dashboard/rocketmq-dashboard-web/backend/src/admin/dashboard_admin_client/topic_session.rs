@@ -25,12 +25,17 @@ use rocketmq_admin_core::client_adapter::AdminGuard;
 use rocketmq_runtime::TaskGroup;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
+#[cfg(test)]
 use tokio::sync::RwLock;
 
 use super::AdminConfigSnapshot;
+#[cfg(test)]
 use super::admin_config_snapshot;
+use super::admin_published_config_snapshot;
 use crate::error::DashboardError;
+#[cfg(test)]
 use crate::model::DashboardConfigView;
+use crate::model::PublishedEnvironment;
 
 impl TopicAdminSessionGuard for AdminGuard {
     fn shutdown_in_place<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
@@ -439,6 +444,7 @@ where
     report
 }
 
+#[cfg(test)]
 pub(super) async fn run_tracked_topic_admin_service<
     G,
     T,
@@ -525,6 +531,93 @@ where
             .await;
         }
         Err(error) => return retire_and_return(sessions, lease, error).await,
+    }
+    drop(lease);
+    sessions.reap_retired().await;
+    result
+}
+
+pub(super) async fn run_tracked_published_topic_admin_service<
+    G,
+    T,
+    Build,
+    BuildFuture,
+    ConfigCancellation,
+    GuardCancellation,
+    OperationCancellation,
+    Operation,
+>(
+    sessions: &TopicAdminSessionRegistry<G>,
+    published_environment: &std::sync::RwLock<PublishedEnvironment>,
+    snapshot: AdminConfigSnapshot,
+    config_cancellation: ConfigCancellation,
+    guard_cancellation: GuardCancellation,
+    operation_cancellation: OperationCancellation,
+    build: Build,
+    operation: Operation,
+) -> Result<T, DashboardError>
+where
+    G: TopicAdminSessionGuard,
+    Build: FnOnce() -> BuildFuture,
+    BuildFuture: Future<Output = Result<G, DashboardError>>,
+    ConfigCancellation: Future<Output = ()>,
+    GuardCancellation: Future<Output = ()>,
+    OperationCancellation: Future<Output = ()>,
+    Operation:
+        for<'guard> FnOnce(&'guard mut G) -> Pin<Box<dyn Future<Output = Result<T, DashboardError>> + Send + 'guard>>,
+{
+    let lease = sessions.acquire(snapshot, build).await?;
+    #[cfg(test)]
+    sessions.pause_before_guard_if_requested().await;
+    let session_snapshot = lease.session().snapshot.clone();
+    let operation_result: Result<Option<Result<T, DashboardError>>, DashboardError> = {
+        let mut guard = tokio::select! {
+            biased;
+            _ = guard_cancellation => return Err(cancellation_error()),
+            guard = lease.session().guard.lock() => guard,
+        };
+        match guard.as_mut() {
+            Some(guard) => {
+                if admin_published_config_snapshot(published_environment)? == session_snapshot {
+                    Ok(Some(tokio::select! {
+                        biased;
+                        _ = config_cancellation => Err(cancellation_error()),
+                        _ = operation_cancellation => Err(cancellation_error()),
+                        result = operation(guard) => result,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Err(missing_topic_session_guard_error()),
+        }
+    };
+    let result = match operation_result {
+        Ok(Some(result)) => result,
+        Ok(None) => {
+            return retire_and_return(
+                sessions,
+                lease,
+                DashboardError::Config(
+                    "Dashboard admin configuration changed while opening a topic admin session; retry the request"
+                        .to_string(),
+                ),
+            )
+            .await;
+        }
+        Err(error) => return retire_and_return(sessions, lease, error).await,
+    };
+
+    if admin_published_config_snapshot(published_environment)? != session_snapshot {
+        return retire_and_return(
+            sessions,
+            lease,
+            DashboardError::Config(
+                "Dashboard admin configuration changed while executing a topic admin session; retry the request"
+                    .to_string(),
+            ),
+        )
+        .await;
     }
     drop(lease);
     sessions.reap_retired().await;

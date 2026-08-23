@@ -44,7 +44,10 @@ export default function Header({ menuButtonRef, onMenuOpen }: HeaderProps) {
     return configApi
       .getConfig()
       .then((config) => {
-        setNamesrv(config.currentNamesrv ?? 'unconfigured');
+        const nameserver = config.endpoints.find((endpoint) => (
+          endpoint.endpointType === 'nameserver' && endpoint.isEnabled && endpoint.isActive
+        ));
+        setNamesrv(nameserver?.address ?? 'unconfigured');
         setTls(config.useTLS);
       })
       .catch(() => {

@@ -6,9 +6,12 @@ import type {
 } from '../types/monitor';
 
 export const monitorApi = {
-  listConsumerMonitors: () => apiClient.get<ConsumerMonitorView[]>('/api/monitors/consumers'),
+  listConsumerMonitors: (environmentId: string) =>
+    apiClient.get<ConsumerMonitorView[]>(`/api/monitors/consumers?environmentId=${encodeURIComponent(environmentId)}`),
   saveConsumerMonitor: (payload: ConsumerMonitorUpsertRequest) =>
     apiClient.post<ConsumerMonitorMutationResult>('/api/monitors/consumers', payload),
-  deleteConsumerMonitor: (consumerGroup: string) =>
-    apiClient.delete<ConsumerMonitorMutationResult>(`/api/monitors/consumers/${encodeURIComponent(consumerGroup)}`)
+  deleteConsumerMonitor: (environmentId: string, consumerGroup: string, expectedRevision: number) =>
+    apiClient.delete<ConsumerMonitorMutationResult>(
+      `/api/monitors/consumers/${encodeURIComponent(consumerGroup)}?environmentId=${encodeURIComponent(environmentId)}&expectedRevision=${expectedRevision}`
+    )
 };

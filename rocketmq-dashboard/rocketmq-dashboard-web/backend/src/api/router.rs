@@ -140,11 +140,16 @@ pub fn build_router(state: AppState) -> Router {
                 .post(config_api::add_nameserver)
                 .put(config_api::replace_nameservers),
         )
+        .route("/api/config/nameservers/current", put(config_api::switch_nameserver))
+        .route(
+            "/api/config/nameservers/{endpoint_id}",
+            delete(config_api::delete_nameserver),
+        )
         .route("/api/config/vip-channel", put(config_api::set_vip_channel))
         .route("/api/config/tls", put(config_api::set_tls))
         .route("/api/config/proxies", post(config_api::add_proxy))
         .route("/api/config/proxies/current", put(config_api::switch_proxy))
-        .route("/api/config/proxies/{address}", delete(config_api::delete_proxy))
+        .route("/api/config/proxies/{endpoint_id}", delete(config_api::delete_proxy))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     Router::new()

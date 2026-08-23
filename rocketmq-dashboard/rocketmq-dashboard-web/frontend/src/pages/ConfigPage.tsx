@@ -1,6 +1,7 @@
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
+import { ApiClientError } from '../api/client';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
@@ -33,14 +34,20 @@ export default function ConfigPage() {
   const mutationInFlight = useRef(false);
   const availabilityRequest = useRef(0);
 
-  const load = () => {
-    if (isDirty) return;
+  const isDirty = useMemo(
+    () => Boolean(nameserverDraft && savedDraft && isNameserverDraftDirty(nameserverDraft, savedDraft)),
+    [nameserverDraft, savedDraft]
+  );
+
+  const load = (preserveDirtyDraft = false) => {
+    if (isDirty && !preserveDirtyDraft) return;
+    const draftToPreserve = preserveDirtyDraft && isDirty ? nameserverDraft : null;
     setLoading(true);
     setError(null);
     configApi
       .getConfig()
       .then((nextConfig) => {
-        applyConfig(nextConfig);
+        applyConfig(nextConfig, undefined, draftToPreserve);
         void checkNameserverAvailability();
       })
       .catch((requestError: Error) => setError(requestError.message))
@@ -51,19 +58,14 @@ export default function ConfigPage() {
     load();
   }, []);
 
-  const isDirty = useMemo(
-    () => Boolean(nameserverDraft && savedDraft && isNameserverDraftDirty(nameserverDraft, savedDraft)),
-    [nameserverDraft, savedDraft]
-  );
-
-  function applyConfig(nextConfig: DashboardConfigView, message?: string) {
+  function applyConfig(nextConfig: DashboardConfigView, message?: string, preservedDraft?: NameserverDraft | null) {
     const nextDraft = normalizeNameserverDraft({
       namesrvAddrList: nextConfig.namesrvAddrList,
       currentNamesrv: nextConfig.currentNamesrv ?? null
     });
     setConfig(nextConfig);
     setSavedDraft(nextDraft);
-    setNameserverDraft(nextDraft);
+    setNameserverDraft(preservedDraft ?? nextDraft);
     if (message) setNotice({ tone: 'success', message });
   }
 
@@ -96,7 +98,10 @@ export default function ConfigPage() {
       window.dispatchEvent(new CustomEvent('rocketmq-config-updated'));
       void checkNameserverAvailability();
     } catch (requestError) {
-      setNotice({ tone: 'danger', message: requestError instanceof Error ? requestError.message : 'Configuration update failed.' });
+      setNotice({ tone: 'danger', message: mutationErrorMessage(requestError, 'Configuration update failed.') });
+      if (requestError instanceof ApiClientError && requestError.code === 'STORAGE_CONFLICT') {
+        load(true);
+      }
     } finally {
       mutationInFlight.current = false;
       setPending(false);
@@ -119,27 +124,37 @@ export default function ConfigPage() {
   }
 
   function addNameserver() {
-    if (isDirty || mutationInFlight.current) return;
+    if (!config || isDirty || mutationInFlight.current) return;
     const address = newNameserver.trim();
     if (!address) {
       setNotice({ tone: 'warning', message: 'NameServer address is required.' });
       return;
     }
-    void runMutation(() => configApi.addNameserver({ address }), () => setNewNameserver(''));
+    void runMutation(() => configApi.addNameserver({ address, expectedRevision: config.revision }), () => setNewNameserver(''));
   }
 
   function saveNameservers() {
-    if (!nameserverDraft) return;
-    void runMutation(() => configApi.replaceNameservers(normalizeNameserverDraft(nameserverDraft)));
+    if (!config || !nameserverDraft) return;
+    const activeEndpoint = config.endpoints.find((endpoint) => (
+      endpoint.endpointType === 'nameserver' && endpoint.address === nameserverDraft.currentNamesrv
+    ));
+    if (!activeEndpoint) {
+      setNotice({ tone: 'warning', message: 'Select a configured NameServer before applying the active endpoint.' });
+      return;
+    }
+    void runMutation(() => configApi.switchNameserver({ endpointId: activeEndpoint.endpointId, expectedRevision: config.revision }));
   }
 
   function removeNameserver() {
-    if (isDirty || !nameserverDraft || !nameserverToRemove) return;
-    const namesrvAddrList = nameserverDraft.namesrvAddrList.filter((address) => address !== nameserverToRemove);
-    const currentNamesrv = nameserverDraft.currentNamesrv === nameserverToRemove
-      ? namesrvAddrList[0] ?? null
-      : nameserverDraft.currentNamesrv;
-    void runMutation(() => configApi.replaceNameservers({ namesrvAddrList, currentNamesrv }), () => setNameserverToRemove(null));
+    if (!config || isDirty || !nameserverDraft || !nameserverToRemove) return;
+    const endpoint = config.endpoints.find((item) => (
+      item.endpointType === 'nameserver' && item.address === nameserverToRemove
+    ));
+    if (!endpoint) {
+      setNotice({ tone: 'warning', message: 'The selected NameServer no longer exists. Refresh before retrying.' });
+      return;
+    }
+    void runMutation(() => configApi.deleteNameserver(endpoint.endpointId, config.revision), () => setNameserverToRemove(null));
   }
 
   if (loading) return <LoadingState label="Loading OPS settings" />;
@@ -153,15 +168,15 @@ export default function ConfigPage() {
       <PageHeader
         title="OPS settings"
         description="Configure NameServer connectivity, transport security, and dashboard storage for this RocketMQ environment."
-        actions={<><StatusBadge status={`storage ${storageBackend}`} /><Button type="button" variant="ghost" size="icon" title="Reload OPS settings" aria-label="Reload OPS settings" onClick={load} disabled={pending || isDirty}><RefreshCw className={pending ? 'spin' : undefined} size={15} aria-hidden="true" /></Button></>}
+        actions={<><StatusBadge status={`storage ${storageBackend}`} /><Button type="button" variant="ghost" size="icon" title="Reload OPS settings" aria-label="Reload OPS settings" onClick={() => load(true)} disabled={pending}><RefreshCw className={pending ? 'spin' : undefined} size={15} aria-hidden="true" /></Button></>}
       />
       {notice ? <div className={`notice notice-${notice.tone}`} role={notice.tone === 'danger' ? 'alert' : 'status'}>{notice.message}</div> : null}
       <div className="settings-workspace">
         <SettingsSectionNav activeSection={activeSection} onSelect={requestSectionChange} />
         <div className="settings-section-content">
           {activeSection === 'connection' ? <ConnectionSettingsSection draft={nameserverDraft} savedCurrentNamesrv={savedDraft?.currentNamesrv ?? null} newNameserver={newNameserver} dirty={isDirty} pending={pending} availability={nameserverAvailability} availabilityLoading={availabilityLoading} availabilityError={availabilityError} onDraftChange={setNameserverDraft} onNewNameserverChange={setNewNameserver} onAdd={addNameserver} onRemove={setNameserverToRemove} onSave={saveNameservers} onReset={() => setNameserverDraft(savedDraft)} onCheckAvailability={() => void checkNameserverAvailability()} /> : null}
-          {activeSection === 'security' ? <SecuritySection useVIPChannel={config.useVIPChannel} useTLS={config.useTLS} pending={pending} onToggleVip={() => void runMutation(() => configApi.setVipChannel({ enabled: !config.useVIPChannel }))} onToggleTls={() => void runMutation(() => configApi.setTls({ enabled: !config.useTLS }))} /> : null}
-          {activeSection === 'storage' ? <StorageSection storageBackend={storageBackend} /> : null}
+          {activeSection === 'security' ? <SecuritySection useVIPChannel={config.useVIPChannel} useTLS={config.useTLS} pending={pending} onToggleVip={() => void runMutation(() => configApi.setVipChannel({ enabled: !config.useVIPChannel, expectedRevision: config.revision }))} onToggleTls={() => void runMutation(() => configApi.setTls({ enabled: !config.useTLS, expectedRevision: config.revision }))} /> : null}
+          {activeSection === 'storage' ? <StorageSection storageBackend={storageBackend} storageMode={config.storageMode} /> : null}
         </div>
       </div>
       <AlertDialog open={requestedSection !== null} onOpenChange={(open) => !open && setRequestedSection(null)}>
@@ -182,6 +197,13 @@ export default function ConfigPage() {
   );
 }
 
+function mutationErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
+    return `${error.message} Your draft is still preserved; refresh before retrying.`;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 interface SecuritySectionProps { useVIPChannel: boolean; useTLS: boolean; pending: boolean; onToggleVip: () => void; onToggleTls: () => void; }
 
 function SecuritySection({ useVIPChannel, useTLS, pending, onToggleVip, onToggleTls }: SecuritySectionProps) {
@@ -193,6 +215,6 @@ function SettingToggle({ label, description, enabled, pending, onClick }: { labe
   return <div className="settings-toggle-row"><div><strong>{label}</strong><p>{description}</p></div><Button type="button" variant={enabled ? 'default' : 'outline'} onClick={onClick} disabled={pending} aria-pressed={enabled}>{action}</Button></div>;
 }
 
-function StorageSection({ storageBackend }: { storageBackend: string }) {
-  return <Card className="settings-card"><CardHeader><div><CardTitle>Storage</CardTitle><CardDescription>Persistence is reported by the connected dashboard backend and cannot be changed here.</CardDescription></div></CardHeader><CardContent className="settings-card-content"><dl className="settings-storage-detail"><div><dt>Storage backend</dt><dd><StatusBadge status={storageBackend} /></dd></div><div><dt>Configuration mode</dt><dd>Read-only</dd></div></dl></CardContent></Card>;
+function StorageSection({ storageBackend, storageMode }: { storageBackend: string; storageMode: DashboardConfigView['storageMode'] }) {
+  return <Card className="settings-card"><CardHeader><div><CardTitle>Storage</CardTitle><CardDescription>Persistence is reported by the connected dashboard backend and cannot be changed here.</CardDescription></div></CardHeader><CardContent className="settings-card-content"><dl className="settings-storage-detail"><div><dt>Storage backend</dt><dd><StatusBadge status={storageBackend} /></dd></div><div><dt>Deployment mode</dt><dd><StatusBadge status={storageMode === 'multiNode' ? 'multi-node' : 'single-node'} tone={storageMode === 'multiNode' ? 'info' : 'neutral'} /></dd></div><div><dt>Configuration mode</dt><dd>Read-only</dd></div></dl></CardContent></Card>;
 }

@@ -1,5 +1,6 @@
 import { Save } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
+import { ApiClientError } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/Dialog';
 import { Input } from '../../components/ui/Input';
@@ -9,9 +10,11 @@ import { parseConsumerMonitorDraft, type ConsumerMonitorDraft } from './monitor-
 
 interface MonitorDialogProps {
   open: boolean;
+  environmentId: string;
   rule?: ConsumerMonitorView | null;
   onOpenChange: (open: boolean) => void;
   onSubmit: (request: ConsumerMonitorUpsertRequest) => Promise<void>;
+  onConflict?: (consumerGroup: string) => Promise<ConsumerMonitorView | null>;
 }
 
 const emptyDraft: ConsumerMonitorDraft = {
@@ -20,18 +23,31 @@ const emptyDraft: ConsumerMonitorDraft = {
   maxDiffTotal: '1000'
 };
 
-export default function MonitorDialog({ open, rule, onOpenChange, onSubmit }: MonitorDialogProps) {
+export default function MonitorDialog({ open, environmentId, rule, onOpenChange, onSubmit, onConflict }: MonitorDialogProps) {
   const [draft, setDraft] = useState<ConsumerMonitorDraft>(emptyDraft);
   const [validationErrors, setValidationErrors] = useState<Partial<Record<keyof ConsumerMonitorDraft, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [retryRevision, setRetryRevision] = useState<number | null>(null);
+  const [retryRequiresAuthoritativeRule, setRetryRequiresAuthoritativeRule] = useState(false);
   const formId = useId();
   const requestGeneration = useRef(0);
+  const preserveDraftOnRuleChange = useRef(false);
   const ruleKey = rule?.consumerGroup;
 
   useEffect(() => {
+    if (!open) {
+      requestGeneration.current += 1;
+      preserveDraftOnRuleChange.current = false;
+      setRetryRevision(null);
+      setRetryRequiresAuthoritativeRule(false);
+      return;
+    }
+    // Conflict refreshes update the selected row in the parent. Keep the
+    // operator's open draft and its authoritative retry revision intact when
+    // that row identity changes from an unselected concurrent create.
+    if (preserveDraftOnRuleChange.current || retryRevision !== null || retryRequiresAuthoritativeRule) return;
     requestGeneration.current += 1;
-    if (!open) return;
     setDraft(rule ? {
       consumerGroup: rule.consumerGroup,
       minCount: String(rule.minCount),
@@ -40,7 +56,9 @@ export default function MonitorDialog({ open, rule, onOpenChange, onSubmit }: Mo
     setValidationErrors({});
     setSubmitError(null);
     setSubmitting(false);
-  }, [open, ruleKey]);
+    setRetryRevision(null);
+    setRetryRequiresAuthoritativeRule(false);
+  }, [open, retryRequiresAuthoritativeRule, retryRevision, rule, ruleKey]);
 
   const submit = async () => {
     const parsed = parseConsumerMonitorDraft(draft);
@@ -50,15 +68,55 @@ export default function MonitorDialog({ open, rule, onOpenChange, onSubmit }: Mo
     }
 
     const generation = requestGeneration.current;
+    if (retryRequiresAuthoritativeRule && retryRevision === null) {
+      setSubmitError('The current rule could not be loaded. Your draft is preserved; refresh before retrying.');
+      return;
+    }
     setValidationErrors({});
     setSubmitError(null);
     setSubmitting(true);
     try {
-      await onSubmit(parsed.value);
+      await onSubmit({
+        ...parsed.value,
+        environmentId,
+        expectedRevision: retryRevision ?? rule?.revision ?? 0
+      });
       if (generation === requestGeneration.current) onOpenChange(false);
     } catch (error) {
       if (generation === requestGeneration.current) {
-        setSubmitError(error instanceof Error ? error.message : 'Unable to save the monitor rule.');
+        if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
+          // Set this before awaiting the parent refresh: a concurrent create
+          // can synchronously select the authoritative row and otherwise
+          // hydrate over the still-open operator draft.
+          preserveDraftOnRuleChange.current = true;
+          if (!onConflict) {
+            setRetryRevision(null);
+            setRetryRequiresAuthoritativeRule(true);
+            setSubmitError(submitErrorMessage(error));
+            return;
+          }
+          try {
+            const authoritative = await onConflict(parsed.value.consumerGroup);
+            if (generation !== requestGeneration.current) return;
+            if (authoritative) {
+              setRetryRevision(authoritative.revision);
+              setRetryRequiresAuthoritativeRule(false);
+              setSubmitError(`${error.message} The current revision is loaded and your draft is preserved. Reapply your draft, then retry save.`);
+            } else {
+              setRetryRevision(null);
+              setRetryRequiresAuthoritativeRule(true);
+              setSubmitError(`${error.message} The rule no longer exists. Your draft is preserved; refresh before retrying as a new rule.`);
+            }
+          } catch {
+            if (generation === requestGeneration.current) {
+              setRetryRevision(null);
+              setRetryRequiresAuthoritativeRule(true);
+              setSubmitError(`${error.message} Your draft is preserved; refresh before retrying.`);
+            }
+          }
+        } else {
+          setSubmitError(submitErrorMessage(error));
+        }
       }
     } finally {
       if (generation === requestGeneration.current) setSubmitting(false);
@@ -124,7 +182,13 @@ export default function MonitorDialog({ open, rule, onOpenChange, onSubmit }: Mo
         {submitError ? (
           <div className="inline-validation" role="alert">
             <span>{submitError}</span>
-            <Button type="button" variant="secondary" size="sm" onClick={() => void submit()} disabled={submitting}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void submit()}
+              disabled={submitting || (retryRequiresAuthoritativeRule && retryRevision === null)}
+            >
               Retry save
             </Button>
           </div>
@@ -139,4 +203,11 @@ export default function MonitorDialog({ open, rule, onOpenChange, onSubmit }: Mo
       </DialogContent>
     </Dialog>
   );
+}
+
+function submitErrorMessage(error: unknown) {
+  if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
+    return `${error.message} Your draft is still preserved; refresh before retrying.`;
+  }
+  return error instanceof Error ? error.message : 'Unable to save the monitor rule.';
 }

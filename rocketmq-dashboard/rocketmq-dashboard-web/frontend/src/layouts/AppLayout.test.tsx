@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import { useLocation } from 'react-router-dom';
@@ -105,7 +105,11 @@ describe('AppLayout', () => {
     const user = userEvent.setup();
     vi.mocked(configApi.getConfig)
       .mockResolvedValueOnce(configuredDashboard)
-      .mockResolvedValueOnce({ ...configuredDashboard, currentNamesrv: '10.0.0.8:9876' });
+      .mockResolvedValueOnce({
+        ...configuredDashboard,
+        revision: 2,
+        endpoints: [{ endpointId: 'nameserver-2', endpointType: 'nameserver', address: '10.0.0.8:9876', role: 'primary', isEnabled: true, isActive: true, sortOrder: 0 }]
+      });
     renderAtRoute(<AppLayout><h1>Dashboard content</h1></AppLayout>);
 
     expect(await screen.findByText(/127\.0\.0\.1:9876/)).toBeInTheDocument();
@@ -113,6 +117,22 @@ describe('AppLayout', () => {
 
     expect(await screen.findByText(/10\.0\.0\.8:9876/)).toBeInTheDocument();
     expect(configApi.getConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes the Header from typed endpoints after a persisted configuration update event', async () => {
+    vi.mocked(configApi.getConfig)
+      .mockResolvedValueOnce(configuredDashboard)
+      .mockResolvedValueOnce({
+        ...configuredDashboard,
+        revision: 2,
+        endpoints: [{ endpointId: 'nameserver-2', endpointType: 'nameserver', address: '10.0.0.9:9876', role: 'primary', isEnabled: true, isActive: true, sortOrder: 0 }]
+      });
+    renderAtRoute(<AppLayout><h1>Dashboard content</h1></AppLayout>);
+    expect(await screen.findByText(/127\.0\.0\.1:9876/)).toBeInTheDocument();
+
+    act(() => { window.dispatchEvent(new CustomEvent('rocketmq-config-updated')); });
+
+    expect(await screen.findByText(/10\.0\.0\.9:9876/)).toBeInTheDocument();
   });
 
   it('navigates signed-out operators to the sign-in route', async () => {

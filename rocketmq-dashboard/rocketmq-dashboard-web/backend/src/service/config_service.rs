@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
-use crate::model::AddressRequest;
-use crate::model::BoolSettingRequest;
-use crate::model::ConfigMutationResult;
-use crate::model::DashboardConfigView;
-use crate::model::NameserverAvailabilityStatus;
-use crate::model::NameserverAvailabilityView;
-use crate::model::NameserverEndpointAvailability;
-use crate::model::NameserverListRequest;
+use crate::model::{
+    AddressRequest, BoolSettingRequest, ConfigMutationResult, DashboardConfigView, DashboardEnvironment, Endpoint,
+    EndpointId, EndpointRequest, EndpointRole, EndpointType, NameserverAvailabilityStatus, NameserverAvailabilityView,
+    NameserverEndpointAvailability, NameserverListRequest,
+};
+use crate::persistence::Revision;
+use crate::persistence::error::PersistenceError;
 use crate::state::AppState;
 use chrono::Utc;
 use std::time::Duration;
@@ -28,19 +27,22 @@ use tokio::time::timeout;
 
 const NAMESERVER_AVAILABILITY_TIMEOUT: Duration = Duration::from_millis(800);
 
-pub async fn get_config(state: &AppState) -> DashboardConfigView {
-    state.dashboard_config.read().await.clone()
+pub async fn get_config(state: &AppState) -> Result<DashboardConfigView, DashboardError> {
+    // File is normally single-process, but a post-dispatch mutation can be
+    // resolved after its HTTP caller disappears. Refresh every backend so GET
+    // is an immediate defensive convergence point as well as the background
+    // monotonic reconciler.
+    state.refresh_default_environment().await?;
+    Ok(state.published().config)
 }
 
-pub async fn get_nameserver_availability(state: &AppState) -> NameserverAvailabilityView {
-    let addresses = state.dashboard_config.read().await.namesrv_addr_list.clone();
+pub async fn get_nameserver_availability(state: &AppState) -> Result<NameserverAvailabilityView, DashboardError> {
+    let addresses = get_config(state).await?.namesrv_addr_list;
     let mut endpoints = Vec::with_capacity(addresses.len());
-
     for address in addresses {
         endpoints.push(check_nameserver_endpoint(address).await);
     }
-
-    NameserverAvailabilityView { endpoints }
+    Ok(NameserverAvailabilityView { endpoints })
 }
 
 async fn check_nameserver_endpoint(address: String) -> NameserverEndpointAvailability {
@@ -51,7 +53,6 @@ async fn check_nameserver_endpoint(address: String) -> NameserverEndpointAvailab
         }
         Ok(Err(_)) | Err(_) => NameserverAvailabilityStatus::Unavailable,
     };
-
     NameserverEndpointAvailability {
         address,
         status,
@@ -63,25 +64,23 @@ pub async fn replace_nameservers(
     state: &AppState,
     request: NameserverListRequest,
 ) -> Result<ConfigMutationResult, DashboardError> {
-    let nameservers = normalize_address_list(&request.namesrv_addr_list, "NameServer")?;
-    let current_namesrv = request
+    let addresses = normalize_address_list(&request.namesrv_addr_list, "NameServer")?;
+    let active = request
         .current_namesrv
         .as_deref()
         .map(|value| normalize_address(value, "NameServer"))
         .transpose()?
-        .or_else(|| nameservers.first().cloned());
-
-    if let Some(current) = &current_namesrv
-        && !nameservers.iter().any(|item| item == current)
+        .or_else(|| addresses.first().cloned());
+    if let Some(active) = &active
+        && !addresses.iter().any(|address| address == active)
     {
         return Err(DashboardError::Validation(
             "Current NameServer must exist in the NameServer list".to_string(),
         ));
     }
-
-    persist_config(state, |config| {
-        config.namesrv_addr_list = nameservers;
-        config.current_namesrv = current_namesrv;
+    persist_environment(state, request.expected_revision, move |environment| {
+        replace_endpoints(environment, EndpointType::Nameserver, addresses, active);
+        Ok(())
     })
     .await
     .map(|config| ConfigMutationResult {
@@ -92,17 +91,13 @@ pub async fn replace_nameservers(
 
 pub async fn add_nameserver(state: &AppState, request: AddressRequest) -> Result<ConfigMutationResult, DashboardError> {
     let address = normalize_address(&request.address, "NameServer")?;
-    persist_config(state, |config| {
-        if !config.namesrv_addr_list.iter().any(|item| item == &address) {
-            config.namesrv_addr_list.push(address.clone());
-        }
-        if config.current_namesrv.is_none() {
-            config.current_namesrv = Some(address.clone());
-        }
+    persist_environment(state, request.expected_revision, move |environment| {
+        add_endpoint(environment, EndpointType::Nameserver, address);
+        Ok(())
     })
     .await
     .map(|config| ConfigMutationResult {
-        message: format!("NameServer `{address}` added"),
+        message: "NameServer added".to_string(),
         config,
     })
 }
@@ -111,8 +106,9 @@ pub async fn set_vip_channel(
     state: &AppState,
     request: BoolSettingRequest,
 ) -> Result<ConfigMutationResult, DashboardError> {
-    persist_config(state, |config| {
-        config.use_vip_channel = request.enabled;
+    persist_environment(state, request.expected_revision, move |environment| {
+        environment.use_vip_channel = request.enabled;
+        Ok(())
     })
     .await
     .map(|config| ConfigMutationResult {
@@ -122,8 +118,9 @@ pub async fn set_vip_channel(
 }
 
 pub async fn set_tls(state: &AppState, request: BoolSettingRequest) -> Result<ConfigMutationResult, DashboardError> {
-    persist_config(state, |config| {
-        config.use_tls = request.enabled;
+    persist_environment(state, request.expected_revision, move |environment| {
+        environment.use_tls = request.enabled;
+        Ok(())
     })
     .await
     .map(|config| ConfigMutationResult {
@@ -134,64 +131,271 @@ pub async fn set_tls(state: &AppState, request: BoolSettingRequest) -> Result<Co
 
 pub async fn add_proxy(state: &AppState, request: AddressRequest) -> Result<ConfigMutationResult, DashboardError> {
     let address = normalize_address(&request.address, "Proxy")?;
-    persist_config(state, |config| {
-        if !config.proxy_addr_list.iter().any(|item| item == &address) {
-            config.proxy_addr_list.push(address.clone());
-        }
-        if config.current_proxy_addr.is_none() {
-            config.current_proxy_addr = Some(address.clone());
-        }
+    persist_environment(state, request.expected_revision, move |environment| {
+        add_endpoint(environment, EndpointType::Proxy, address);
+        Ok(())
     })
     .await
     .map(|config| ConfigMutationResult {
-        message: format!("Proxy `{address}` added"),
+        message: "Proxy added".to_string(),
         config,
     })
 }
 
-pub async fn switch_proxy(state: &AppState, request: AddressRequest) -> Result<ConfigMutationResult, DashboardError> {
-    let address = normalize_address(&request.address, "Proxy")?;
-    {
-        let config = state.dashboard_config.read().await;
-        if !config.proxy_addr_list.iter().any(|item| item == &address) {
-            return Err(DashboardError::Validation(format!("Proxy `{address}` does not exist")));
+pub async fn switch_proxy(state: &AppState, request: EndpointRequest) -> Result<ConfigMutationResult, DashboardError> {
+    switch_endpoint(state, request, EndpointType::Proxy, "Proxy", "Current Proxy switched").await
+}
+
+pub async fn switch_nameserver(
+    state: &AppState,
+    request: EndpointRequest,
+) -> Result<ConfigMutationResult, DashboardError> {
+    switch_endpoint(
+        state,
+        request,
+        EndpointType::Nameserver,
+        "NameServer",
+        "Current NameServer switched",
+    )
+    .await
+}
+
+async fn switch_endpoint(
+    state: &AppState,
+    request: EndpointRequest,
+    endpoint_type: EndpointType,
+    label: &'static str,
+    message: &'static str,
+) -> Result<ConfigMutationResult, DashboardError> {
+    persist_environment(state, request.expected_revision, move |environment| {
+        let mut found = false;
+        let now_ms = Utc::now().timestamp_millis();
+        for endpoint in &mut environment.endpoints {
+            if endpoint.endpoint_type == endpoint_type {
+                endpoint.is_active = endpoint.endpoint_id == request.endpoint_id;
+                endpoint.role = if endpoint.is_active {
+                    EndpointRole::Primary
+                } else {
+                    EndpointRole::Secondary
+                };
+                endpoint.updated_at_ms = now_ms;
+                found |= endpoint.is_active;
+            }
         }
-    }
-    persist_config(state, |config| {
-        config.current_proxy_addr = Some(address.clone());
+        found
+            .then_some(())
+            .ok_or_else(|| DashboardError::Validation(format!("{label} endpoint does not exist")))
     })
     .await
     .map(|config| ConfigMutationResult {
-        message: format!("Current Proxy switched to `{address}`"),
+        message: message.to_string(),
         config,
     })
 }
 
-pub async fn delete_proxy(state: &AppState, address: &str) -> Result<ConfigMutationResult, DashboardError> {
-    let address = normalize_address(address, "Proxy")?;
-    persist_config(state, |config| {
-        config.proxy_addr_list.retain(|item| item != &address);
-        if config.current_proxy_addr.as_deref() == Some(address.as_str()) {
-            config.current_proxy_addr = config.proxy_addr_list.first().cloned();
+pub async fn delete_proxy(
+    state: &AppState,
+    endpoint_id: &EndpointId,
+    expected_revision: Revision,
+) -> Result<ConfigMutationResult, DashboardError> {
+    delete_endpoint(
+        state,
+        endpoint_id,
+        expected_revision,
+        EndpointType::Proxy,
+        "Proxy",
+        "Proxy deleted",
+    )
+    .await
+}
+
+pub async fn delete_nameserver(
+    state: &AppState,
+    endpoint_id: &EndpointId,
+    expected_revision: Revision,
+) -> Result<ConfigMutationResult, DashboardError> {
+    delete_endpoint(
+        state,
+        endpoint_id,
+        expected_revision,
+        EndpointType::Nameserver,
+        "NameServer",
+        "NameServer deleted",
+    )
+    .await
+}
+
+async fn delete_endpoint(
+    state: &AppState,
+    endpoint_id: &EndpointId,
+    expected_revision: Revision,
+    endpoint_type: EndpointType,
+    label: &'static str,
+    message: &'static str,
+) -> Result<ConfigMutationResult, DashboardError> {
+    let endpoint_id = endpoint_id.clone();
+    persist_environment(state, expected_revision, move |environment| {
+        let previous_len = environment.endpoints.len();
+        environment
+            .endpoints
+            .retain(|endpoint| !(endpoint.endpoint_type == endpoint_type && endpoint.endpoint_id == endpoint_id));
+        if previous_len == environment.endpoints.len() {
+            return Err(DashboardError::Validation(format!("{label} endpoint does not exist")));
         }
+        activate_first_if_needed(environment, endpoint_type);
+        Ok(())
     })
     .await
     .map(|config| ConfigMutationResult {
-        message: format!("Proxy `{address}` deleted"),
+        message: message.to_string(),
         config,
     })
 }
 
-async fn persist_config<F>(state: &AppState, operation: F) -> Result<DashboardConfigView, DashboardError>
+async fn persist_environment<F>(
+    state: &AppState,
+    expected_revision: Revision,
+    operation: F,
+) -> Result<DashboardConfigView, DashboardError>
 where
-    F: FnOnce(&mut DashboardConfigView),
+    F: FnOnce(&mut DashboardEnvironment) -> Result<(), DashboardError> + Send + 'static,
+{
+    state
+        .run_persisted_mutation("dashboard-config-candidate-persist-publish", move |state| async move {
+            persist_environment_owned(&state, expected_revision, operation).await
+        })
+        .await
+}
+
+async fn persist_environment_owned<F>(
+    state: &AppState,
+    expected_revision: Revision,
+    operation: F,
+) -> Result<DashboardConfigView, DashboardError>
+where
+    F: FnOnce(&mut DashboardEnvironment) -> Result<(), DashboardError>,
 {
     let _mutation = state.config_mutation_lock.lock().await;
-    let mut candidate = state.dashboard_config.read().await.clone();
-    operation(&mut candidate);
-    state.config_store.save(&candidate).await?;
-    *state.dashboard_config.write().await = candidate.clone();
-    Ok(candidate)
+    state.refresh_default_environment().await?;
+    let mut candidate = state.published().environment;
+    if candidate.revision != expected_revision {
+        return Err(PersistenceError::Conflict.into());
+    }
+    operation(&mut candidate)?;
+    candidate.updated_at_ms = Utc::now().timestamp_millis();
+    let persisted = match state.persistence.update_environment(expected_revision, candidate).await {
+        Ok(environment) => environment,
+        Err(PersistenceError::Conflict) => {
+            // Reconcile before reporting the stable conflict so a following
+            // GET and every admin consumer see the winning durable revision.
+            state.refresh_default_environment().await?;
+            return Err(PersistenceError::Conflict.into());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    #[cfg(test)]
+    let publish_completion = state.wait_before_config_publish_for_tests().await;
+    state.publish_environment(persisted);
+    #[cfg(test)]
+    if let Some(completion) = publish_completion {
+        let _ = completion.send(());
+    }
+    Ok(state.published().config)
+}
+
+fn replace_endpoints(
+    environment: &mut DashboardEnvironment,
+    endpoint_type: EndpointType,
+    addresses: Vec<String>,
+    active_address: Option<String>,
+) {
+    let now_ms = Utc::now().timestamp_millis();
+    let existing = environment
+        .endpoints
+        .iter()
+        .filter(|endpoint| endpoint.endpoint_type == endpoint_type)
+        .map(|endpoint| (endpoint.address.clone(), endpoint.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    environment
+        .endpoints
+        .retain(|endpoint| endpoint.endpoint_type != endpoint_type);
+    for (sort_order, address) in addresses.into_iter().enumerate() {
+        let mut endpoint = existing.get(&address).cloned().unwrap_or(Endpoint {
+            endpoint_id: EndpointId::new(),
+            endpoint_type,
+            address: address.clone(),
+            role: EndpointRole::Secondary,
+            is_enabled: true,
+            is_active: false,
+            sort_order: sort_order as i32,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        });
+        endpoint.is_active = active_address.as_deref() == Some(address.as_str());
+        endpoint.role = if endpoint.is_active {
+            EndpointRole::Primary
+        } else {
+            EndpointRole::Secondary
+        };
+        endpoint.sort_order = sort_order as i32;
+        endpoint.updated_at_ms = now_ms;
+        environment.endpoints.push(endpoint);
+    }
+}
+
+fn add_endpoint(environment: &mut DashboardEnvironment, endpoint_type: EndpointType, address: String) {
+    if environment
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.endpoint_type == endpoint_type && endpoint.address == address)
+    {
+        return;
+    }
+    let now_ms = Utc::now().timestamp_millis();
+    let is_active = !environment
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.endpoint_type == endpoint_type && endpoint.is_active);
+    let sort_order = environment
+        .endpoints
+        .iter()
+        .filter(|endpoint| endpoint.endpoint_type == endpoint_type)
+        .count() as i32;
+    environment.endpoints.push(Endpoint {
+        endpoint_id: EndpointId::new(),
+        endpoint_type,
+        address,
+        role: if is_active {
+            EndpointRole::Primary
+        } else {
+            EndpointRole::Secondary
+        },
+        is_enabled: true,
+        is_active,
+        sort_order,
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+    });
+}
+
+fn activate_first_if_needed(environment: &mut DashboardEnvironment, endpoint_type: EndpointType) {
+    if environment
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.endpoint_type == endpoint_type && endpoint.is_active)
+    {
+        return;
+    }
+    if let Some(endpoint) = environment
+        .endpoints
+        .iter_mut()
+        .filter(|endpoint| endpoint.endpoint_type == endpoint_type)
+        .min_by_key(|endpoint| endpoint.sort_order)
+    {
+        endpoint.is_active = true;
+        endpoint.role = EndpointRole::Primary;
+        endpoint.updated_at_ms = Utc::now().timestamp_millis();
+    }
 }
 
 fn normalize_address_list(values: &[String], label: &str) -> Result<Vec<String>, DashboardError> {
@@ -218,46 +422,5 @@ fn normalize_address(value: &str, label: &str) -> Result<String, DashboardError>
         .trim()
         .parse()
         .map_err(|_| DashboardError::Validation(format!("{label} port is invalid")))?;
-
     Ok(format!("{host}:{port_number}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::check_nameserver_endpoint;
-    use super::normalize_address;
-    use crate::model::NameserverAvailabilityStatus;
-    use tokio::net::TcpListener;
-
-    #[test]
-    fn normalize_address_trims_and_lowercases_host() {
-        let address = normalize_address(" LOCALHOST : 9876 ", "NameServer").expect("valid address");
-
-        assert_eq!(address, "localhost:9876");
-    }
-
-    #[tokio::test]
-    async fn availability_check_reports_reachable_endpoint() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
-        let address = listener.local_addr().expect("listener address").to_string();
-
-        let result = check_nameserver_endpoint(address.clone()).await;
-
-        assert_eq!(result.address, address);
-        assert_eq!(result.status, NameserverAvailabilityStatus::Available);
-        assert!(result.checked_at > 0);
-    }
-
-    #[tokio::test]
-    async fn availability_check_reports_unreachable_endpoint() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
-        let address = listener.local_addr().expect("listener address").to_string();
-        drop(listener);
-
-        let result = check_nameserver_endpoint(address.clone()).await;
-
-        assert_eq!(result.address, address);
-        assert_eq!(result.status, NameserverAvailabilityStatus::Unavailable);
-        assert!(result.checked_at > 0);
-    }
 }

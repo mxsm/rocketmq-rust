@@ -268,6 +268,7 @@ fn storage_response_message(error: &PersistenceError) -> &'static str {
 mod tests {
     use super::DashboardError;
     use crate::model::ApiResponse;
+    use crate::persistence::error::PersistenceError;
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -368,6 +369,17 @@ mod tests {
         assert_eq!(body.code, "METADATA_IO_SATURATED");
         assert_eq!(body.message, "Metadata persistence is temporarily saturated");
         assert!(!body.message.contains("32"));
+    }
+
+    #[tokio::test]
+    async fn storage_conflict_is_a_stable_redacted_409_response() {
+        let (status, body) = failure_response(DashboardError::from(PersistenceError::Conflict)).await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.code, "STORAGE_CONFLICT");
+        assert_eq!(body.message, "Storage write conflict");
+        assert!(!body.message.contains(':'));
+        assert!(!body.message.contains('/'));
     }
 
     #[test]
