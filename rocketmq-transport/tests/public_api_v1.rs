@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_transport::api::v1::CachedConnectionState;
 use rocketmq_transport::api::v1::ClientShutdownReport;
 use rocketmq_transport::api::v1::ClientSnapshot;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
@@ -66,6 +67,22 @@ fn assert_stable_shutdown_methods(client: &TransportClient<DefaultRequestProcess
     let _: fn(&TransportClient<DefaultRequestProcessor>) -> ClientShutdownReport = TransportClient::shutdown_now;
 }
 
+fn assert_cached_connection_state(state: CachedConnectionState) {
+    assert!(matches!(
+        state,
+        CachedConnectionState::Healthy | CachedConnectionState::UnhealthyRetired | CachedConnectionState::Absent
+    ));
+}
+
+/// This compatibility assertion intentionally exercises retained deprecated names.
+#[allow(deprecated)]
+fn assert_legacy_compatibility_methods(client: &TransportClient<DefaultRequestProcessor>) {
+    let address = "127.0.0.1:10911".into();
+    client.is_address_reachable(&address);
+    client.close_clients(Vec::new());
+    client.register_processor(DefaultRequestProcessor);
+}
+
 fn assert_prelude_processor<T: PreludeRequestProcessor>() {}
 
 #[test]
@@ -94,6 +111,8 @@ async fn versioned_api_constructs_canonical_client_and_server() {
     .unwrap();
     assert_stable_async_methods(&transport, RequestTarget::NameServer);
     assert_stable_shutdown_methods(&transport);
+    assert_cached_connection_state(transport.reconcile_cached_connection(&"127.0.0.1:10911".into()));
+    assert_legacy_compatibility_methods(&transport);
 
     let remoting = RemotingClient::builder(
         config,

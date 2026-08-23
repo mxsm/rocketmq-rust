@@ -6168,6 +6168,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::clients::rocketmq_tokio_client::CachedConnectionState",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::clients::rocketmq_tokio_client::CachedConnectionState",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::clients::rocketmq_tokio_client::ClientShutdownReport",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::clients::rocketmq_tokio_client::ClientShutdownReport",
           "owner": "transport",
@@ -7202,7 +7211,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 144
+      "maximum_exports": 145
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",
