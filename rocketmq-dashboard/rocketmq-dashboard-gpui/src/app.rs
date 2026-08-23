@@ -15,11 +15,11 @@
 //! Root application entity, startup lifecycle, shell composition, and page cache ownership.
 
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Task, WeakEntity, Window,
-    div, prelude::FluentBuilder as _, px,
+    AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName, StyledExt as _, WindowExt as _,
+    ActiveTheme as _, IconName, Root, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     sidebar::{Sidebar, SidebarGroup as GpuiSidebarGroup, SidebarMenu, SidebarMenuItem},
 };
@@ -183,6 +183,7 @@ pub struct RocketmqDashboard {
     history: NavigationHistory,
     session: SessionState,
     login: LoginForm,
+    navigation_trigger_focus: FocusHandle,
     legacy_pages: LegacyPageCache,
     sensitive_feature_cache: SensitiveFeatureCache,
     last_intent: Option<ServiceIntent>,
@@ -206,6 +207,7 @@ impl RocketmqDashboard {
             history: NavigationHistory::new(AppRoute::Login),
             session: SessionState::signed_out(),
             login: LoginForm::new(window, cx),
+            navigation_trigger_focus: cx.focus_handle().tab_stop(true),
             legacy_pages: LegacyPageCache::new(window, cx),
             sensitive_feature_cache: SensitiveFeatureCache::default(),
             last_intent: None,
@@ -376,6 +378,9 @@ impl RocketmqDashboard {
     }
 
     fn open_navigation_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Buttons intentionally avoid taking mouse focus. Set the stable trigger focus first so
+        // Root can restore it after the Sheet closes.
+        self.navigation_trigger_focus.focus(window);
         let current = self.history.current().clone();
         let view = cx.entity().downgrade();
         window.open_sheet(cx, move |sheet, _window, _cx| {
@@ -535,13 +540,19 @@ impl RocketmqDashboard {
             .border_color(theme.border)
             .when(show_menu, |this| {
                 this.child(
-                    Button::new("open-navigation")
-                        .icon(IconName::Menu)
-                        .ghost()
-                        .tooltip("Open navigation")
+                    div()
+                        .id("open-navigation-trigger")
+                        .track_focus(&self.navigation_trigger_focus)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_navigation_drawer(window, cx);
-                        })),
+                        }))
+                        .child(
+                            Button::new("open-navigation")
+                                .tab_stop(false)
+                                .icon(IconName::Menu)
+                                .ghost()
+                                .tooltip("Open navigation"),
+                        ),
                 )
             })
             .child(
@@ -676,12 +687,23 @@ const fn page_target(route: &AppRoute) -> PageTarget {
 
 impl Render for RocketmqDashboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        match self.startup_state {
+        let content = match self.startup_state {
             StartupState::Booting => self.render_startup_loading(cx),
             StartupState::Failed(_) => self.render_startup_failure(cx),
             StartupState::Ready(ReadyScreen::Login) => self.render_login(cx),
             StartupState::Ready(ReadyScreen::MainShell) => self.render_app_shell(window, cx),
-        }
+        };
+        let sheet_layer = Root::render_sheet_layer(window, cx);
+        let notification_layer = Root::render_notification_layer(window, cx);
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+
+        div()
+            .relative()
+            .size_full()
+            .child(content)
+            .children(sheet_layer)
+            .children(notification_layer)
+            .children(dialog_layer)
     }
 }
 
@@ -732,7 +754,8 @@ fn drawer_sidebar_group(
 mod tests {
     use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-    use gpui::AppContext as _;
+    use gpui::{AppContext as _, KeyUpEvent, Keystroke, point, px, size};
+    use gpui_component::{Root, WindowExt as _, dialog::Dialog, notification::Notification};
 
     use super::{LegacyPageCache, PageTarget, ReadyScreen, SensitiveFeatureCache, StartupRequest, StartupState};
     use crate::{
@@ -1058,6 +1081,88 @@ mod tests {
                 cx.notify();
             });
         });
+    }
+
+    #[gpui::test]
+    fn root_owned_sheet_notification_and_dialog_layers_render_and_handle_input(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(crate::theme::apply_dark_theme);
+        let dashboard_handle = Rc::new(RefCell::new(None));
+        let dashboard_capture = dashboard_handle.clone();
+        let (root, cx) = cx.add_window_view(move |window, cx| {
+            let dashboard = cx.new(|cx| super::RocketmqDashboard::new(window, cx));
+            dashboard_capture.replace(Some(dashboard.clone()));
+            Root::new(dashboard, window, cx)
+        });
+        let _dashboard = dashboard_handle
+            .borrow_mut()
+            .take()
+            .expect("test root retains the dashboard entity");
+
+        cx.update(|window, app| {
+            window.open_sheet(app, |sheet, _, _| sheet.title("Navigation"));
+            assert!(window.has_active_sheet(app));
+        });
+        cx.draw(point(px(0.), px(0.)), size(px(1024.), px(640.)), |_, _| root.clone());
+        cx.simulate_keystrokes("escape");
+        cx.update(|window, app| {
+            assert!(!window.has_active_sheet(app));
+            window.open_dialog(app, |dialog: Dialog, _, _| dialog.title("Confirm").alert());
+            assert!(window.has_active_dialog(app));
+        });
+        cx.draw(point(px(0.), px(0.)), size(px(1024.), px(640.)), |_, _| root.clone());
+        cx.simulate_keystrokes("enter");
+        cx.update(|window, app| {
+            assert!(!window.has_active_dialog(app));
+            window.push_notification(Notification::info("Configuration requires attention."), app);
+            assert_eq!(window.notifications(app).len(), 1);
+            assert!(Root::render_notification_layer(window, app).is_some());
+        });
+        cx.draw(point(px(0.), px(0.)), size(px(1024.), px(640.)), |_, _| root.clone());
+    }
+
+    #[gpui::test]
+    fn navigation_trigger_restores_focus_after_drawer_close_and_reopens_with_keyboard(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(crate::theme::apply_dark_theme);
+        let dashboard_handle = Rc::new(RefCell::new(None));
+        let dashboard_capture = dashboard_handle.clone();
+        let (root, cx) = cx.add_window_view(move |window, cx| {
+            let dashboard = cx.new(|cx| super::RocketmqDashboard::new(window, cx));
+            dashboard_capture.replace(Some(dashboard.clone()));
+            Root::new(dashboard, window, cx)
+        });
+        let dashboard = dashboard_handle
+            .borrow_mut()
+            .take()
+            .expect("test root retains the dashboard entity");
+
+        cx.simulate_resize(size(px(960.), px(640.)));
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        cx.simulate_click(point(px(32.), px(28.)), gpui::Modifiers::default());
+        cx.update(|window, app| assert!(window.has_active_sheet(app)));
+
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        cx.simulate_keystrokes("escape");
+        cx.update(|window, app| {
+            assert!(!window.has_active_sheet(app));
+            assert!(dashboard.read(app).navigation_trigger_focus.tab_stop);
+            assert!(dashboard.read(app).navigation_trigger_focus.is_focused(window));
+        });
+
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        cx.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("enter is a valid GPUI keystroke"),
+        });
+        cx.update(|window, app| assert!(window.has_active_sheet(app)));
+
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        cx.simulate_keystrokes("escape");
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        cx.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("space").expect("space is a valid GPUI keystroke"),
+        });
+        cx.update(|window, app| assert!(window.has_active_sheet(app)));
     }
 
     #[test]
