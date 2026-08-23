@@ -272,6 +272,21 @@ impl Drop for DrainingEndpointGuard {
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    /// Records request completion only while the selected endpoint lease is current.
+    pub(super) fn record_nameserver_outcome(
+        &self,
+        addr: Option<&CheetahString>,
+        lease: Option<&EndpointLease>,
+        latency: Duration,
+        success: bool,
+    ) {
+        let (Some(addr), Some(lease)) = (addr, lease) else {
+            return;
+        };
+        self.nameserver_health
+            .record_outcome_if_current(addr, lease, latency, success, || self.endpoint_state.is_current(lease));
+    }
+
     pub(super) fn apply_name_server_endpoint_snapshot(
         &self,
         endpoints: Vec<NameServerEndpoint>,

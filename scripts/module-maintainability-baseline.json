@@ -10926,8 +10926,8 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client.rs": {
-      "production_lines": 736,
-      "public_items": 2,
+      "production_lines": 326,
+      "public_items": 1,
       "reexports": 1
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/api.rs": {
@@ -10956,8 +10956,13 @@
       "reexports": 0
     },
     "rocketmq-transport/src/clients/rocketmq_tokio_client/nameserver.rs": {
-      "production_lines": 468,
+      "production_lines": 481,
       "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-transport/src/clients/rocketmq_tokio_client/request.rs": {
+      "production_lines": 397,
+      "public_items": 1,
       "reexports": 0
     },
     "rocketmq-transport/src/codec.rs": {
