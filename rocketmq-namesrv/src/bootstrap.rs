@@ -665,7 +665,7 @@ impl NameServerRuntime {
         self.start_with_shutdown_report(None).await.map(|_| ())
     }
 
-    #[instrument(skip(self), name = "runtime_start_with_shutdown_report")]
+    #[instrument(skip(self, lifecycle), name = "runtime_start_with_shutdown_report")]
     async fn start_with_shutdown_report(
         &mut self,
         lifecycle: Option<&ServiceLifecycle>,
