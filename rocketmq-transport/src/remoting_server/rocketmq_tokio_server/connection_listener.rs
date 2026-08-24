@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::connection_handler::ConnectionHandler;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::InterceptingConnectionHandler;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::SessionCommandInterceptor;
 use super::lifecycle_events::LifecycleEventPublisher;
 use super::*;
@@ -76,6 +78,7 @@ pub(super) struct ConnectionListener<RP> {
     pub(super) proxy_protocol: ProxyProtocolConfig,
 
     pub(super) transport_principal: Option<Principal>,
+    #[cfg(all(test, not(doctest)))]
     pub(super) command_interceptor: Arc<dyn SessionCommandInterceptor>,
     pub(super) telemetry: TransportTelemetry,
     pub(super) lifecycle_dispatcher_task: Option<TaskId>,
@@ -126,17 +129,25 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
         .try_with_frame_limits(self.frame_limits)?
         .try_with_proxy_protocol(self.proxy_protocol.clone())?
         .with_telemetry(self.telemetry.clone());
-        transport
-            .run(Arc::new(InterceptingConnectionHandler {
-                inner: ConnectionHandler {
-                    shutdown_complete_tx: self.shutdown_complete_tx.clone(),
-                    conn_disconnect_notify: self.conn_disconnect_notify.clone(),
-                    dispatcher: self.dispatcher.clone(),
-                    event_publisher,
-                    sessions: dashmap::DashMap::new(),
-                },
-                command_interceptor: self.command_interceptor.clone(),
-            }))
-            .await
+        #[cfg(all(test, not(doctest)))]
+        let connection_handler = Arc::new(InterceptingConnectionHandler {
+            inner: ConnectionHandler {
+                shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                conn_disconnect_notify: self.conn_disconnect_notify.clone(),
+                dispatcher: self.dispatcher.clone(),
+                event_publisher,
+                sessions: dashmap::DashMap::new(),
+            },
+            command_interceptor: self.command_interceptor.clone(),
+        });
+        #[cfg(not(all(test, not(doctest))))]
+        let connection_handler = Arc::new(ConnectionHandler {
+            shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+            conn_disconnect_notify: self.conn_disconnect_notify.clone(),
+            dispatcher: self.dispatcher.clone(),
+            event_publisher,
+            sessions: dashmap::DashMap::new(),
+        });
+        transport.run(connection_handler).await
     }
 }

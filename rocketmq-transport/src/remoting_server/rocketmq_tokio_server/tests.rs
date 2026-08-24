@@ -33,9 +33,13 @@ use crate::request_processor::default_request_processor::DefaultRequestProcessor
 use crate::runtime::config::client_config::TransportClientConfig;
 
 use self::runtime_test_support::test_service_context;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::SessionCommandInterceptor;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::TestDeferredResponse;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::TestRequestHook;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::TestRequestHookResult;
 use super::launch::run_with_report;
 use super::launch::run_with_report_with_service_context;
@@ -55,6 +59,7 @@ mod runtime_test_support {
     }
 }
 
+#[cfg(all(test, not(doctest)))]
 impl SessionCommandInterceptor for Option<TestRequestHook> {
     fn intercept(&self, code: i32, opaque: i32, channel: Channel, request_executor_group: TaskGroup) -> bool {
         let Some(hook) = self.as_ref() else {
@@ -80,6 +85,7 @@ struct ConnectSignalListener {
 
 struct SlowLifecycleListener {
     first_delivery: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    disconnected_delivery: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     deliveries: std::sync::atomic::AtomicUsize,
 }
@@ -143,7 +149,7 @@ async fn lifecycle_event_queue_reports_closed_dispatcher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_event() {
+async fn timed_out_lifecycle_listener_allows_later_callback_before_release() {
     let context = RuntimeContext::from_current("remoting-lifecycle-overload-test");
     let service = context.service_context("remoting-lifecycle-overload");
     let task_group = service.task_group().clone();
@@ -154,8 +160,10 @@ async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_ev
     let remote_addr = harness.remote_address();
     let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     let (first_delivery_tx, first_delivery_rx) = oneshot::channel();
+    let (disconnected_delivery_tx, disconnected_delivery_rx) = oneshot::channel();
     let listener = Arc::new(SlowLifecycleListener {
         first_delivery: std::sync::Mutex::new(Some(first_delivery_tx)),
+        disconnected_delivery: std::sync::Mutex::new(Some(disconnected_delivery_tx)),
         release: Arc::clone(&release),
         deliveries: std::sync::atomic::AtomicUsize::new(0),
     });
@@ -165,7 +173,7 @@ async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_ev
         queue_capacity: 1,
         publish_timeout: Duration::from_millis(5),
         drain_timeout: Duration::from_millis(100),
-        listener_warn_threshold: Duration::from_millis(1),
+        listener_callback_budget: Duration::from_millis(1),
     };
     let telemetry = TransportTelemetry::noop();
     task_group
@@ -176,6 +184,7 @@ async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_ev
                 listener.clone(),
                 cancellation.clone(),
                 config,
+                service.metadata_io().clone(),
                 telemetry.clone(),
             ),
         )
@@ -210,16 +219,10 @@ async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_ev
             .await,
         LifecycleEventPublishOutcome::Queued
     );
-    assert_eq!(
-        publisher
-            .publish(TokioEvent::new(
-                ConnectionNetEvent::DISCONNECTED,
-                remote_addr,
-                channel.clone(),
-            ))
-            .await,
-        LifecycleEventPublishOutcome::DeadlineExpired
-    );
+    tokio::time::timeout(Duration::from_secs(1), disconnected_delivery_rx)
+        .await
+        .expect("disconnected callback should run after the first callback deadline")
+        .expect("disconnected callback should be delivered before release");
 
     {
         let (released, condition) = release.as_ref();
@@ -227,12 +230,12 @@ async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_ev
         condition.notify_all();
     }
     tokio::time::timeout(Duration::from_secs(1), async {
-        while listener.deliveries.load(std::sync::atomic::Ordering::Acquire) < 2 {
+        while service.metadata_io().snapshot().blocking_still_running != 0 {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("queued lifecycle event should be delivered");
+    .expect("timed-out lifecycle callback should leave the blocking executor after release");
 
     let channel_report = channel.close_with_report(Duration::from_secs(1)).await;
     assert!(channel_report.is_healthy(), "{}", channel_report.to_json());
@@ -294,6 +297,14 @@ impl ChannelEventListener for SlowLifecycleListener {
 
     fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
         self.deliveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if let Some(sender) = self
+            .disconnected_delivery
+            .lock()
+            .expect("disconnect delivery lock")
+            .take()
+        {
+            let _ = sender.send(());
+        }
     }
 
     fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {}

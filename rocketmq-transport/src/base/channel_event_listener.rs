@@ -16,10 +16,15 @@ use crate::net::channel::Channel;
 
 /// Receives connection lifecycle notifications from the remoting event dispatcher.
 ///
-/// Callbacks execute serially on a Tokio service task and therefore must return promptly. A
-/// callback that needs blocking I/O should hand that work to the application's injected blocking
-/// executor instead of blocking this dispatcher. Slow callbacks are measured and logged by the
-/// transport runtime.
+/// The transport runtime runs callbacks on its injected, bounded blocking executor and applies a
+/// private callback deadline. A callback that exceeds that deadline is not cancelled because a
+/// synchronous closure cannot be forcefully stopped; the executor continues to track it until it
+/// returns and it continues to occupy its permit.
+///
+/// The event dispatcher proceeds after a callback deadline expires. Consequently, callbacks
+/// scheduled after a timed-out callback can overlap it and can complete in a different order than
+/// their lifecycle events. Implementations must therefore be thread-safe and should return
+/// promptly.
 pub trait ChannelEventListener: Sync + Send {
     fn on_channel_connect(&self, remote_addr: &str, channel: &Channel);
 

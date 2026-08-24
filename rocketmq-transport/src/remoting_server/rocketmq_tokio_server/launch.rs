@@ -17,6 +17,7 @@ use rocketmq_security_api::SecurityBootstrapProfile;
 use super::capabilities::PreparedServer;
 use super::capabilities::RemotingServerRunCapabilities;
 use super::capabilities::ServerSecurityState;
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::SessionCommandInterceptor;
 use super::connection_listener::ConnectionListener;
 use super::lifecycle_events::run_lifecycle_event_dispatcher;
@@ -392,8 +393,6 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
         #[cfg(all(test, not(doctest)))]
         let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(self.test_request_hook.clone());
-        #[cfg(not(test))]
-        let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(());
         let capabilities = RemotingServerRunCapabilities {
             tls_runtime,
             task_group: remoting_context.task_group().clone(),
@@ -404,6 +403,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
             transport_security: self.transport_security.clone(),
             transport_principal: self.transport_principal.clone(),
             admission: self.admission.clone(),
+            #[cfg(all(test, not(doctest)))]
             command_interceptor,
             telemetry: self.telemetry.clone(),
             lifecycle_event_config,
@@ -415,6 +415,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
             channel_event_listener,
             self.authorized_dispatcher.clone(),
             capabilities,
+            remoting_context.metadata_io().clone(),
         ) {
             Ok(prepared) => Ok(prepared),
             Err(error) => {
@@ -445,6 +446,7 @@ fn prepare_capabilities<RP: RequestProcessor + Sync + 'static + Clone>(
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     authorized_dispatcher: Option<Arc<AuthorizedCommandDispatcher<RP>>>,
     capabilities: RemotingServerRunCapabilities,
+    lifecycle_listener_blocking: BlockingExecutor,
 ) -> Result<PreparedServer<RP>, ServerStartError> {
     let RemotingServerRunCapabilities {
         tls_runtime,
@@ -456,6 +458,7 @@ fn prepare_capabilities<RP: RequestProcessor + Sync + 'static + Clone>(
         transport_security,
         transport_principal,
         admission,
+        #[cfg(all(test, not(doctest)))]
         command_interceptor,
         telemetry,
         lifecycle_event_config,
@@ -524,6 +527,7 @@ fn prepare_capabilities<RP: RequestProcessor + Sync + 'static + Clone>(
         &task_group,
         lifecycle_event_config,
         lifecycle_shutdown.clone(),
+        lifecycle_listener_blocking,
         telemetry.clone(),
     )?;
     info!(?security_state, "remoting server startup capabilities prepared");
@@ -539,6 +543,7 @@ fn prepare_capabilities<RP: RequestProcessor + Sync + 'static + Clone>(
             transport_security: None,
             transport_principal,
             admission: None,
+            #[cfg(all(test, not(doctest)))]
             command_interceptor,
             telemetry,
             lifecycle_event_config,
@@ -563,6 +568,7 @@ fn prepare_lifecycle_event_dispatcher(
     task_group: &TaskGroup,
     lifecycle_event_config: LifecycleEventConfig,
     lifecycle_shutdown: CancellationToken,
+    lifecycle_listener_blocking: BlockingExecutor,
     telemetry: TransportTelemetry,
 ) -> Result<(Option<LifecycleEventPublisher>, Option<TaskId>), ServerStartError> {
     let Some(listener) = channel_event_listener else {
@@ -583,6 +589,7 @@ fn prepare_lifecycle_event_dispatcher(
                 listener,
                 lifecycle_shutdown,
                 lifecycle_event_config,
+                lifecycle_listener_blocking,
                 telemetry,
             ),
         )
@@ -621,6 +628,7 @@ async fn serve_prepared<RP: RequestProcessor + Sync + 'static + Clone>(
         transport_security: _,
         transport_principal,
         admission: _,
+        #[cfg(all(test, not(doctest)))]
         command_interceptor,
         telemetry,
         lifecycle_event_config: _,
@@ -640,6 +648,7 @@ async fn serve_prepared<RP: RequestProcessor + Sync + 'static + Clone>(
         frame_limits,
         proxy_protocol,
         transport_principal,
+        #[cfg(all(test, not(doctest)))]
         command_interceptor,
         telemetry,
         lifecycle_dispatcher_task,
