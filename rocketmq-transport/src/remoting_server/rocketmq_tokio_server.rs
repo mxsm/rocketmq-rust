@@ -164,5 +164,5 @@ pub struct TransportServer<RP> {
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(doctest)))]
 mod tests;

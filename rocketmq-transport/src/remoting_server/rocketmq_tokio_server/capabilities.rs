@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(all(test, not(doctest)))]
 use super::connection_handler::SessionCommandInterceptor;
 use super::lifecycle_events::LifecycleEventConfig;
 use super::lifecycle_events::LifecycleEventPublisher;
@@ -43,6 +44,7 @@ pub(super) struct RemotingServerRunCapabilities {
     pub(super) transport_security: Option<Arc<TransportSecurity>>,
     pub(super) transport_principal: Option<Principal>,
     pub(super) admission: Option<Arc<AdmissionController>>,
+    #[cfg(all(test, not(doctest)))]
     pub(super) command_interceptor: Arc<dyn SessionCommandInterceptor>,
     pub(super) telemetry: TransportTelemetry,
     pub(super) lifecycle_event_config: LifecycleEventConfig,

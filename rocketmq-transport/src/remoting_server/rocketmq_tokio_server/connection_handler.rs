@@ -33,14 +33,9 @@ pub(super) type TestDeferredResponse = Box<
 pub(super) type TestRequestHook =
     Arc<dyn Fn(i32, i32, Channel, TaskGroup, TestDeferredResponse) -> TestRequestHookResult + Send + Sync>;
 
+#[cfg(all(test, not(doctest)))]
 pub(super) trait SessionCommandInterceptor: Send + Sync + 'static {
     fn intercept(&self, code: i32, opaque: i32, channel: Channel, request_executor_group: TaskGroup) -> bool;
-}
-
-impl SessionCommandInterceptor for () {
-    fn intercept(&self, _code: i32, _opaque: i32, _channel: Channel, _request_executor_group: TaskGroup) -> bool {
-        false
-    }
 }
 
 pub(super) struct ConnectionHandler<RP> {
@@ -51,6 +46,7 @@ pub(super) struct ConnectionHandler<RP> {
     pub(super) sessions: dashmap::DashMap<u64, RemotingSession<ConnectionHandlerContext>>,
 }
 
+#[cfg(all(test, not(doctest)))]
 pub(super) struct InterceptingConnectionHandler<RP> {
     pub(super) inner: ConnectionHandler<RP>,
     pub(super) command_interceptor: Arc<dyn SessionCommandInterceptor>,
@@ -71,7 +67,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
         &self,
         session: crate::server::SessionHandle,
         action: RemotingSessionAction,
-        command_interceptor: Option<&dyn SessionCommandInterceptor>,
+        #[cfg(all(test, not(doctest)))] command_interceptor: Option<&dyn SessionCommandInterceptor>,
     ) {
         let channel_id = match &action {
             RemotingSessionAction::Connect => format!("transport-session-{}", session.session_id()),
@@ -131,12 +127,13 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                 }
             }
             RemotingSessionAction::Command(command) => {
+                #[cfg(all(test, not(doctest)))]
                 if let Some(command_interceptor) = command_interceptor {
                     if command_interceptor.intercept(
                         command.code(),
                         command.opaque(),
                         remoting_session.context.channel().clone(),
-                        session.request_executor_group().clone(),
+                        session.task_group().clone(),
                     ) {
                         return;
                     }
@@ -151,7 +148,13 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
 impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for ConnectionHandler<RP> {
     fn connected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            self.run(session, RemotingSessionAction::Connect, None).await;
+            self.run(
+                session,
+                RemotingSessionAction::Connect,
+                #[cfg(all(test, not(doctest)))]
+                None,
+            )
+            .await;
         })
     }
 
@@ -168,7 +171,13 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
         command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            self.run(session, RemotingSessionAction::Command(command), None).await;
+            self.run(
+                session,
+                RemotingSessionAction::Command(command),
+                #[cfg(all(test, not(doctest)))]
+                None,
+            )
+            .await;
         })
     }
 
@@ -208,6 +217,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
     }
 }
 
+#[cfg(all(test, not(doctest)))]
 impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for InterceptingConnectionHandler<RP> {
     fn connected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.inner.connected(session)

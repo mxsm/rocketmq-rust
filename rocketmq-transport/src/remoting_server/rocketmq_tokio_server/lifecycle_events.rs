@@ -19,7 +19,7 @@ pub(super) struct LifecycleEventConfig {
     pub(super) queue_capacity: usize,
     pub(super) publish_timeout: Duration,
     pub(super) drain_timeout: Duration,
-    pub(super) listener_warn_threshold: Duration,
+    pub(super) listener_callback_budget: Duration,
 }
 
 impl Default for LifecycleEventConfig {
@@ -28,7 +28,7 @@ impl Default for LifecycleEventConfig {
             queue_capacity: 1024,
             publish_timeout: Duration::from_millis(10),
             drain_timeout: Duration::from_millis(250),
-            listener_warn_threshold: Duration::from_millis(50),
+            listener_callback_budget: Duration::from_millis(50),
         }
     }
 }
@@ -38,7 +38,10 @@ impl LifecycleEventConfig {
         validate_positive_config("channelEventQueueCapacity", self.queue_capacity)?;
         validate_duration_config("channelEventPublishTimeoutMillis", self.publish_timeout)?;
         validate_duration_config("channelEventDrainTimeoutMillis", self.drain_timeout)?;
-        validate_duration_config("channelEventListenerWarnMillis", self.listener_warn_threshold)?;
+        validate_duration_config(
+            "channelEventListenerCallbackBudgetMillis",
+            self.listener_callback_budget,
+        )?;
         Ok(self)
     }
 }
@@ -145,6 +148,7 @@ pub(super) async fn run_lifecycle_event_dispatcher(
     listener: Arc<dyn ChannelEventListener>,
     cancellation: CancellationToken,
     config: LifecycleEventConfig,
+    listener_blocking: BlockingExecutor,
     telemetry: TransportTelemetry,
 ) {
     loop {
@@ -153,11 +157,12 @@ pub(super) async fn run_lifecycle_event_dispatcher(
             _ = cancellation.cancelled() => break,
             event = receiver.recv() => match event {
                 Some(event) => dispatch_lifecycle_event(
-                    listener.as_ref(),
+                    Arc::clone(&listener),
                     event,
-                    config.listener_warn_threshold,
+                    ShutdownDeadline::after(config.listener_callback_budget),
+                    &listener_blocking,
                     &telemetry,
-                ),
+                ).await,
                 None => {
                     info!("Remoting lifecycle event dispatcher closed");
                     return;
@@ -171,7 +176,18 @@ pub(super) async fn run_lifecycle_event_dispatcher(
         let Ok(event) = receiver.try_recv() else {
             break;
         };
-        dispatch_lifecycle_event(listener.as_ref(), event, config.listener_warn_threshold, &telemetry);
+        let callback_deadline = Instant::now()
+            .checked_add(config.listener_callback_budget)
+            .unwrap_or(drain_deadline)
+            .min(drain_deadline);
+        dispatch_lifecycle_event(
+            Arc::clone(&listener),
+            event,
+            ShutdownDeadline::at(callback_deadline),
+            &listener_blocking,
+            &telemetry,
+        )
+        .await;
     }
 
     let dropped = receiver.len();
@@ -185,29 +201,55 @@ pub(super) async fn run_lifecycle_event_dispatcher(
     info!("Remoting lifecycle event dispatcher terminated");
 }
 
-fn dispatch_lifecycle_event(
-    listener: &dyn ChannelEventListener,
+async fn dispatch_lifecycle_event(
+    listener: Arc<dyn ChannelEventListener>,
     event: TokioEvent,
-    listener_warn_threshold: Duration,
+    deadline: ShutdownDeadline,
+    listener_blocking: &BlockingExecutor,
     telemetry: &TransportTelemetry,
 ) {
     let event_name = lifecycle_event_name(event.type_());
-    let addr = event.remote_addr().to_string();
-    let started = Instant::now();
-    match event.type_() {
-        ConnectionNetEvent::CONNECTED(_) => listener.on_channel_connect(&addr, event.channel()),
-        ConnectionNetEvent::DISCONNECTED => listener.on_channel_close(&addr, event.channel()),
-        ConnectionNetEvent::EXCEPTION => listener.on_channel_exception(&addr, event.channel()),
-        ConnectionNetEvent::IDLE => listener.on_channel_idle(&addr, event.channel()),
-    }
-    let elapsed = started.elapsed();
-    telemetry.record_lifecycle_event(event_name, "delivered");
-    telemetry.record_lifecycle_listener_latency(elapsed, event_name);
-    if elapsed >= listener_warn_threshold {
+    let wait_started = Instant::now();
+    let callback_telemetry = telemetry.clone();
+    let outcome = listener_blocking
+        .spawn_io_until("rocketmq.remoting.lifecycle_listener", deadline, move || {
+            let callback_started = Instant::now();
+            let addr = event.remote_addr().to_string();
+            match event.type_() {
+                ConnectionNetEvent::CONNECTED(_) => listener.on_channel_connect(&addr, event.channel()),
+                ConnectionNetEvent::DISCONNECTED => listener.on_channel_close(&addr, event.channel()),
+                ConnectionNetEvent::EXCEPTION => listener.on_channel_exception(&addr, event.channel()),
+                ConnectionNetEvent::IDLE => listener.on_channel_idle(&addr, event.channel()),
+            }
+            callback_telemetry.record_lifecycle_listener_latency(callback_started.elapsed(), event_name);
+        })
+        .await;
+    let wait_elapsed = wait_started.elapsed();
+    let outcome_label = match outcome {
+        Ok(()) => "delivered",
+        Err(rocketmq_runtime::RuntimeError::BlockingTaskTimeoutStillRunning { .. }) => "callback_timeout_still_running",
+        Err(
+            rocketmq_runtime::RuntimeError::BlockingQueueTimeout { .. }
+            | rocketmq_runtime::RuntimeError::BlockingQueueFull { .. },
+        ) => "executor_deadline_or_rejected",
+        Err(rocketmq_runtime::RuntimeError::BlockingJoin { .. }) => "callback_join_failure",
+        Err(error) => {
+            warn!(
+                event = event_name,
+                elapsed_ms = wait_elapsed.as_millis(),
+                cause = %error,
+                "Remoting lifecycle listener executor failed"
+            );
+            "executor_failure"
+        }
+    };
+    telemetry.record_lifecycle_event(event_name, outcome_label);
+    if outcome_label != "delivered" {
         warn!(
             event = event_name,
-            elapsed_ms = elapsed.as_millis(),
-            "Slow remoting lifecycle listener callback"
+            outcome = outcome_label,
+            elapsed_ms = wait_elapsed.as_millis(),
+            "Remoting lifecycle listener callback was not delivered within its deadline"
         );
     }
 }

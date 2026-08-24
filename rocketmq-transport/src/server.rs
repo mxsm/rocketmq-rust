@@ -200,10 +200,6 @@ impl SessionHandle {
         snapshot
     }
 
-    pub(crate) fn request_executor_group(&self) -> &TaskGroup {
-        &self.send.task_group
-    }
-
     pub fn operation_context(&self) -> &OperationContext {
         &self.request_operation
     }
