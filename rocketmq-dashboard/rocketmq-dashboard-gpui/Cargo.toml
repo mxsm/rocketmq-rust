@@ -33,7 +33,7 @@ resolver     = "3"
 [dependencies]
 # Shared common code
 rocketmq-dashboard-common = { version = "1.0.0", path = "../rocketmq-dashboard-common" }
-rocketmq-admin-core = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", features = ["read-client-adapter"] }
+rocketmq-admin-core = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
 rocketmq-runtime = { version = "1.0.0", path = "../../rocketmq-runtime" }
 

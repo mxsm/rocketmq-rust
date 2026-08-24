@@ -12,94 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Read-only Admin provider with one serialized session and revision-aware results.
+//! Revision-aware Admin provider with concurrent queries and serialized CAS writes.
 
-use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
+use std::{future::Future, sync::Arc, time::SystemTime};
 
-use rocketmq_admin_core::{
-    core::{
-        AdminError, AdminResult,
-        security::AdminCredentials,
-        topic::{ListTopicsRequest, TopicQueryAdmin},
-    },
-    read_client_adapter::{ClientRuntime, ReadAdminBuilder, ReadAdminSession},
-};
+use rocketmq_admin_core::{client_adapter::ClientRuntime, core::AdminError};
 use rocketmq_dashboard_common::{
     AdminSessionStatus, AdminSessionSummary, ConnectionScope, ConnectionSnapshot, EndpointAvailability, EndpointHealth,
 };
 use rocketmq_runtime::{ChildServiceContext, TaskKind};
 use tokio_util::sync::CancellationToken;
 
-use super::auth_state::{AuthStateError, DesktopAuthState};
+use super::{
+    admin_session::{
+        DashboardMutationSession, DashboardQuerySession, DashboardSessionFactory, RealDashboardSessionFactory,
+    },
+    auth_state::{AuthStateError, DesktopAuthState},
+};
 
-type SessionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+#[path = "admin_provider/delivery03.rs"]
+mod delivery03;
+
+pub(crate) use delivery03::{
+    SafeBrokerInfo, SafeBrokerList, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
+};
 
 struct CancelOnDrop(CancellationToken);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.0.cancel();
-    }
-}
-
-trait AdminHealthSession: Send {
-    fn health(&mut self) -> SessionFuture<'_, AdminResult<()>>;
-    fn shutdown(&mut self) -> SessionFuture<'_, ()>;
-}
-
-struct ReadHealthSession {
-    inner: ReadAdminSession,
-}
-
-impl AdminHealthSession for ReadHealthSession {
-    fn health(&mut self) -> SessionFuture<'_, AdminResult<()>> {
-        Box::pin(async {
-            TopicQueryAdmin::list_topics(&mut self.inner, &ListTopicsRequest::default())
-                .await
-                .map(|_| ())
-        })
-    }
-
-    fn shutdown(&mut self) -> SessionFuture<'_, ()> {
-        Box::pin(self.inner.shutdown())
-    }
-}
-
-trait AdminSessionFactory: Send + Sync {
-    fn create(
-        &self,
-        snapshot: &ConnectionSnapshot,
-        credentials: Option<AdminCredentials>,
-    ) -> SessionFuture<'_, AdminResult<Box<dyn AdminHealthSession>>>;
-}
-
-struct ReadSessionFactory {
-    client_runtime: Arc<ClientRuntime>,
-}
-
-impl AdminSessionFactory for ReadSessionFactory {
-    fn create(
-        &self,
-        snapshot: &ConnectionSnapshot,
-        credentials: Option<AdminCredentials>,
-    ) -> SessionFuture<'_, AdminResult<Box<dyn AdminHealthSession>>> {
-        let mut builder = ReadAdminBuilder::new(Arc::clone(&self.client_runtime))
-            .vip_channel_enabled(snapshot.transport.use_vip_channel)
-            .use_tls(snapshot.transport.use_tls)
-            .timeout_millis(5_000)
-            .instance_name(format!("gpui-read-{}", snapshot.revision));
-        if let Some(nameserver) = snapshot.nameserver.as_deref() {
-            builder = builder.namesrv_addr(nameserver);
-        }
-        if let Some(credentials) = credentials {
-            builder = builder.credentials(credentials);
-        }
-        Box::pin(async move {
-            builder
-                .build_and_start()
-                .await
-                .map(|inner| Box::new(ReadHealthSession { inner }) as Box<dyn AdminHealthSession>)
-        })
     }
 }
 
@@ -121,7 +63,6 @@ impl HealthClock for SystemHealthClock {
 struct ProviderState {
     snapshot: Option<ConnectionSnapshot>,
     summary: AdminSessionSummary,
-    session: Option<Box<dyn AdminHealthSession>>,
 }
 
 impl ProviderState {
@@ -133,9 +74,18 @@ impl ProviderState {
                 status: AdminSessionStatus::NotConfigured,
                 credential_source: Default::default(),
             },
-            session: None,
         }
     }
+}
+
+struct RevisionedQuerySession {
+    revision: u64,
+    session: Box<dyn DashboardQuerySession>,
+}
+
+struct RevisionedMutationSession {
+    revision: u64,
+    session: Box<dyn DashboardMutationSession>,
 }
 
 /// Stable safe provider failure categories.
@@ -145,7 +95,7 @@ pub enum ProviderErrorCode {
     NotConfigured,
     /// Environment-backed credentials are absent or invalid.
     Authentication,
-    /// The real Admin session or health call failed.
+    /// A real Admin operation failed.
     Unavailable,
     /// Owner cancellation won the operation race.
     Cancelled,
@@ -155,7 +105,7 @@ pub enum ProviderErrorCode {
     Runtime,
 }
 
-/// Redacted provider error. Source bodies and connection snapshots are never retained.
+/// Redacted provider error. Backend bodies and connection snapshots are never retained.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{summary}")]
 pub struct ProviderError {
@@ -184,17 +134,21 @@ impl ProviderError {
     }
 
     fn cancelled() -> Self {
-        Self::new(
-            ProviderErrorCode::Cancelled,
-            "The connection check was cancelled.",
-            true,
-        )
+        Self::new(ProviderErrorCode::Cancelled, "The Admin operation was cancelled.", true)
     }
 
     fn runtime() -> Self {
         Self::new(
             ProviderErrorCode::Runtime,
             "The dashboard runtime is shutting down.",
+            false,
+        )
+    }
+
+    fn stale() -> Self {
+        Self::new(
+            ProviderErrorCode::StaleRevision,
+            "A newer connection revision is already active.",
             false,
         )
     }
@@ -209,13 +163,16 @@ impl ProviderError {
     }
 }
 
-/// GPUI-specific Admin provider backed by the read-only Admin adapter.
+/// GPUI-specific Admin provider backed by application-owned query and mutation sessions.
 pub struct GpuiAdminProvider {
     context: ChildServiceContext,
-    factory: Arc<dyn AdminSessionFactory>,
+    factory: Arc<dyn DashboardSessionFactory>,
     auth: Arc<DesktopAuthState>,
     clock: Arc<dyn HealthClock>,
-    state: tokio::sync::Mutex<ProviderState>,
+    state: parking_lot::RwLock<ProviderState>,
+    switch_gate: tokio::sync::Mutex<()>,
+    query_session: tokio::sync::RwLock<Option<RevisionedQuerySession>>,
+    mutation_session: tokio::sync::Mutex<Option<RevisionedMutationSession>>,
 }
 
 impl GpuiAdminProvider {
@@ -227,15 +184,20 @@ impl GpuiAdminProvider {
     ) -> Arc<Self> {
         Self::with_factory(
             context,
-            Arc::new(ReadSessionFactory { client_runtime }),
+            Arc::new(RealDashboardSessionFactory::new(client_runtime)),
             auth,
             Arc::new(SystemHealthClock),
         )
     }
 
+    /// Returns the currently published connection revision, if configured.
+    pub fn revision(&self) -> Option<u64> {
+        self.state.read().snapshot.as_ref().map(|snapshot| snapshot.revision)
+    }
+
     fn with_factory(
         context: ChildServiceContext,
-        factory: Arc<dyn AdminSessionFactory>,
+        factory: Arc<dyn DashboardSessionFactory>,
         auth: Arc<DesktopAuthState>,
         clock: Arc<dyn HealthClock>,
     ) -> Arc<Self> {
@@ -244,11 +206,14 @@ impl GpuiAdminProvider {
             factory,
             auth,
             clock,
-            state: tokio::sync::Mutex::new(ProviderState::new()),
+            state: parking_lot::RwLock::new(ProviderState::new()),
+            switch_gate: tokio::sync::Mutex::new(()),
+            query_session: tokio::sync::RwLock::new(None),
+            mutation_session: tokio::sync::Mutex::new(None),
         })
     }
 
-    /// Replaces the serialized Admin session for a persisted snapshot.
+    /// Replaces both session scopes for a persisted connection revision.
     pub async fn switch(self: &Arc<Self>, snapshot: ConnectionSnapshot) -> Result<AdminSessionSummary, ProviderError> {
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-switch", move |cancellation| async move {
@@ -257,11 +222,12 @@ impl GpuiAdminProvider {
         .await
     }
 
-    /// Checks the current NameServer with exactly one read-only `list_topics(Default)` call.
+    /// Checks the current NameServer through the concurrent query session.
     pub async fn check_health(self: &Arc<Self>) -> Result<EndpointHealth, ProviderError> {
+        let revision = self.current_snapshot()?.revision;
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-health", move |cancellation| async move {
-            this.health_inner(cancellation).await
+            this.health_inner(revision, cancellation).await
         })
         .await
     }
@@ -271,18 +237,19 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         cancellation: CancellationToken,
     ) -> Result<EndpointHealth, ProviderError> {
+        let revision = self.current_snapshot()?.revision;
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-health", move |owned_cancellation| async move {
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
-                result = this.health_inner(owned_cancellation) => result,
+                result = this.health_inner(revision, owned_cancellation) => result,
             }
         })
         .await
     }
 
-    /// Checks configured NameServers without changing the active provider snapshot.
+    /// Checks configured NameServers without changing the active provider revision.
     pub async fn check_endpoints(
         self: &Arc<Self>,
         snapshots: Vec<ConnectionSnapshot>,
@@ -294,7 +261,6 @@ impl GpuiAdminProvider {
                 if cancellation.is_cancelled() {
                     return Err(ProviderError::cancelled());
                 }
-                let _session_guard = this.state.lock().await;
                 results.push(this.check_snapshot_inner(snapshot, cancellation.clone()).await?);
             }
             Ok(results)
@@ -302,13 +268,13 @@ impl GpuiAdminProvider {
         .await
     }
 
-    /// Explicitly closes the old session before the client runtime is stopped.
+    /// Explicitly closes query and mutation sessions before the client runtime stops.
     pub async fn shutdown(&self) {
-        let mut state = self.state.lock().await;
-        if let Some(mut session) = state.session.take() {
-            session.shutdown().await;
-        }
-        state.summary.status = AdminSessionStatus::Closed;
+        let _switch = self.switch_gate.lock().await;
+        let mut query = self.query_session.write().await;
+        let mut mutation = self.mutation_session.lock().await;
+        shutdown_sessions(query.take(), mutation.take()).await;
+        self.state.write().summary.status = AdminSessionStatus::Closed;
     }
 
     async fn switch_inner(
@@ -316,107 +282,98 @@ impl GpuiAdminProvider {
         snapshot: ConnectionSnapshot,
         cancellation: CancellationToken,
     ) -> Result<AdminSessionSummary, ProviderError> {
-        let mut state = self.state.lock().await;
-        if let Some(current) = state.snapshot.as_ref() {
-            if current == &snapshot {
-                return Ok(state.summary.clone());
+        let _switch = self.switch_gate.lock().await;
+        {
+            let mut state = self.state.write();
+            if let Some(current) = state.snapshot.as_ref() {
+                if current == &snapshot {
+                    return Ok(state.summary.clone());
+                }
+                if snapshot.revision <= current.revision {
+                    return Err(ProviderError::stale());
+                }
             }
-            if snapshot.revision <= current.revision {
-                return Err(ProviderError::new(
-                    ProviderErrorCode::StaleRevision,
-                    "A newer connection revision is already active.",
-                    false,
-                ));
-            }
+            state.snapshot = Some(snapshot.clone());
+            state.summary = AdminSessionSummary {
+                revision: snapshot.revision,
+                status: AdminSessionStatus::Connecting,
+                credential_source: snapshot.credential_source,
+            };
         }
-        let credentials = self
-            .auth
-            .resolve_admin_credentials(snapshot.credential_source)
-            .map_err(map_auth_error)?;
-        state.summary = AdminSessionSummary {
-            revision: snapshot.revision,
-            status: AdminSessionStatus::Connecting,
-            credential_source: snapshot.credential_source,
+
+        // Publishing the revision first makes new callers reject the old slot. The write lock then
+        // waits for every in-flight query; the mutation lock serializes and drains CAS work.
+        let mut query = self.query_session.write().await;
+        let mut mutation = self.mutation_session.lock().await;
+        shutdown_sessions(query.take(), mutation.take()).await;
+
+        let Some(_) = snapshot.nameserver.as_ref() else {
+            self.state.write().summary.status = AdminSessionStatus::NotConfigured;
+            return Ok(self.state.read().summary.clone());
         };
-        if let Some(mut old_session) = state.session.take() {
-            old_session.shutdown().await;
-        }
-        if snapshot.nameserver.is_none() {
-            state.snapshot = Some(snapshot);
-            state.summary.status = AdminSessionStatus::NotConfigured;
-            return Ok(state.summary.clone());
-        }
+        let credentials = match self.auth.resolve_admin_credentials(snapshot.credential_source) {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                self.state.write().summary.status = AdminSessionStatus::Failed;
+                return Err(map_auth_error(error));
+            }
+        };
         let created = tokio::select! {
             biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::cancelled()),
-            created = self.factory.create(&snapshot, credentials) => created,
+            _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
+            created = self.factory.create_query(snapshot.clone(), credentials) => created.map_err(|error| map_admin_error(&error)),
         };
         match created {
             Ok(session) => {
-                state.session = Some(session);
-                state.snapshot = Some(snapshot);
-                state.summary.status = AdminSessionStatus::Connected;
-                Ok(state.summary.clone())
+                *query = Some(RevisionedQuerySession {
+                    revision: snapshot.revision,
+                    session,
+                });
+                self.state.write().summary.status = AdminSessionStatus::Connected;
+                Ok(self.state.read().summary.clone())
             }
             Err(error) => {
-                let safe = map_admin_error(&error);
-                state.snapshot = Some(snapshot);
-                state.summary.status = AdminSessionStatus::Failed;
-                Err(safe)
+                self.state.write().summary.status = AdminSessionStatus::Failed;
+                Err(error)
             }
         }
     }
 
-    async fn health_inner(&self, cancellation: CancellationToken) -> Result<EndpointHealth, ProviderError> {
-        let mut state = self.state.lock().await;
-        let snapshot = state.snapshot.clone().ok_or_else(|| {
-            ProviderError::new(ProviderErrorCode::NotConfigured, "No NameServer is configured.", false)
-        })?;
+    async fn health_inner(
+        &self,
+        revision: u64,
+        cancellation: CancellationToken,
+    ) -> Result<EndpointHealth, ProviderError> {
+        let snapshot = self.snapshot_for_revision(revision)?;
         if snapshot.scope == ConnectionScope::Proxy {
-            let endpoint = snapshot.proxy.clone().ok_or_else(|| {
-                ProviderError::new(ProviderErrorCode::NotConfigured, "No Proxy is configured.", false)
-            })?;
+            let endpoint = snapshot.proxy.clone().ok_or_else(not_configured)?;
             return Ok(EndpointHealth {
                 endpoint,
-                revision: snapshot.revision,
+                revision,
                 availability: EndpointAvailability::Unknown,
                 checked_at_epoch_ms: self.clock.now_epoch_ms(),
                 failure_summary: None,
             });
         }
-        let endpoint = snapshot.nameserver.clone().ok_or_else(|| {
-            ProviderError::new(ProviderErrorCode::NotConfigured, "No NameServer is configured.", false)
-        })?;
-        let session = state.session.as_mut().ok_or_else(|| {
-            ProviderError::new(
-                ProviderErrorCode::Unavailable,
-                "The Admin session is unavailable.",
-                true,
-            )
-        })?;
-        let result = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::cancelled()),
-            result = session.health() => result,
-        };
-        match result {
+        let endpoint = snapshot.nameserver.clone().ok_or_else(not_configured)?;
+        let guard = self.query_session.read().await;
+        let session = query_for_revision(&guard, revision)?;
+        match select_admin(cancellation, session.health()).await {
             Ok(()) => Ok(EndpointHealth {
                 endpoint,
-                revision: snapshot.revision,
+                revision,
                 availability: EndpointAvailability::Available,
                 checked_at_epoch_ms: self.clock.now_epoch_ms(),
                 failure_summary: None,
             }),
-            Err(error) => {
-                let safe = map_admin_error(&error);
-                Ok(EndpointHealth {
-                    endpoint,
-                    revision: snapshot.revision,
-                    availability: EndpointAvailability::Unavailable,
-                    checked_at_epoch_ms: self.clock.now_epoch_ms(),
-                    failure_summary: Some(safe.to_string()),
-                })
-            }
+            Err(error) if error.code() == ProviderErrorCode::Cancelled => Err(error),
+            Err(error) => Ok(EndpointHealth {
+                endpoint,
+                revision,
+                availability: EndpointAvailability::Unavailable,
+                checked_at_epoch_ms: self.clock.now_epoch_ms(),
+                failure_summary: Some(error.to_string()),
+            }),
         }
     }
 
@@ -425,6 +382,15 @@ impl GpuiAdminProvider {
         snapshot: ConnectionSnapshot,
         cancellation: CancellationToken,
     ) -> Result<EndpointHealth, ProviderError> {
+        if snapshot.scope == ConnectionScope::Proxy {
+            return Ok(EndpointHealth {
+                endpoint: snapshot.proxy.clone().unwrap_or_default(),
+                revision: snapshot.revision,
+                availability: EndpointAvailability::Unknown,
+                checked_at_epoch_ms: self.clock.now_epoch_ms(),
+                failure_summary: None,
+            });
+        }
         let endpoint = snapshot.nameserver.clone().unwrap_or_default();
         let credentials = match self.auth.resolve_admin_credentials(snapshot.credential_source) {
             Ok(credentials) => credentials,
@@ -440,9 +406,9 @@ impl GpuiAdminProvider {
         let created = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(ProviderError::cancelled()),
-            created = self.factory.create(&snapshot, credentials) => created,
+            created = self.factory.create_query(snapshot.clone(), credentials) => created,
         };
-        let mut session = match created {
+        let session = match created {
             Ok(session) => session,
             Err(error) => {
                 return Ok(unavailable_health(
@@ -453,11 +419,7 @@ impl GpuiAdminProvider {
                 ));
             }
         };
-        let result = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
-            result = session.health() => result.map_err(|error| map_admin_error(&error)),
-        };
+        let result = select_admin(cancellation, session.health()).await;
         session.shutdown().await;
         match result {
             Ok(()) => Ok(EndpointHealth {
@@ -469,6 +431,45 @@ impl GpuiAdminProvider {
             }),
             Err(error) if error.code() == ProviderErrorCode::Cancelled => Err(error),
             Err(error) => Ok(unavailable_health(&snapshot, endpoint, error, self.clock.as_ref())),
+        }
+    }
+
+    async fn ensure_mutation(
+        &self,
+        slot: &mut Option<RevisionedMutationSession>,
+        revision: u64,
+        cancellation: CancellationToken,
+    ) -> Result<(), ProviderError> {
+        if slot.as_ref().is_some_and(|session| session.revision == revision) {
+            return Ok(());
+        }
+        if let Some(session) = slot.take() {
+            session.session.shutdown().await;
+        }
+        let snapshot = self.snapshot_for_revision(revision)?;
+        let credentials = self
+            .auth
+            .resolve_admin_credentials(snapshot.credential_source)
+            .map_err(map_auth_error)?;
+        let session = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(ProviderError::cancelled()),
+            created = self.factory.create_mutation(snapshot, credentials) => created.map_err(|error| map_admin_error(&error))?,
+        };
+        *slot = Some(RevisionedMutationSession { revision, session });
+        Ok(())
+    }
+
+    fn current_snapshot(&self) -> Result<ConnectionSnapshot, ProviderError> {
+        self.state.read().snapshot.clone().ok_or_else(not_configured)
+    }
+
+    fn snapshot_for_revision(&self, revision: u64) -> Result<ConnectionSnapshot, ProviderError> {
+        let snapshot = self.current_snapshot()?;
+        if snapshot.revision == revision {
+            Ok(snapshot)
+        } else {
+            Err(ProviderError::stale())
         }
     }
 
@@ -502,6 +503,56 @@ impl GpuiAdminProvider {
     }
 }
 
+fn query_for_revision(
+    slot: &Option<RevisionedQuerySession>,
+    revision: u64,
+) -> Result<&dyn DashboardQuerySession, ProviderError> {
+    match slot {
+        Some(session) if session.revision == revision => Ok(session.session.as_ref()),
+        Some(_) => Err(ProviderError::stale()),
+        None => Err(ProviderError::new(
+            ProviderErrorCode::Unavailable,
+            "The Admin query session is unavailable.",
+            true,
+        )),
+    }
+}
+
+fn mutation_for_revision(
+    slot: &mut Option<RevisionedMutationSession>,
+    revision: u64,
+) -> Result<&mut dyn DashboardMutationSession, ProviderError> {
+    match slot {
+        Some(session) if session.revision == revision => Ok(session.session.as_mut()),
+        Some(_) => Err(ProviderError::stale()),
+        None => Err(ProviderError::new(
+            ProviderErrorCode::Unavailable,
+            "The Admin mutation session is unavailable.",
+            true,
+        )),
+    }
+}
+
+async fn select_admin<T>(
+    cancellation: CancellationToken,
+    future: impl Future<Output = Result<T, AdminError>>,
+) -> Result<T, ProviderError> {
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
+        result = future => result.map_err(|error| map_admin_error(&error)),
+    }
+}
+
+async fn shutdown_sessions(query: Option<RevisionedQuerySession>, mutation: Option<RevisionedMutationSession>) {
+    if let Some(query) = query {
+        query.session.shutdown().await;
+    }
+    if let Some(mutation) = mutation {
+        mutation.session.shutdown().await;
+    }
+}
+
 fn unavailable_health(
     snapshot: &ConnectionSnapshot,
     endpoint: String,
@@ -517,6 +568,10 @@ fn unavailable_health(
     }
 }
 
+fn not_configured() -> ProviderError {
+    ProviderError::new(ProviderErrorCode::NotConfigured, "No NameServer is configured.", false)
+}
+
 fn map_auth_error(_error: AuthStateError) -> ProviderError {
     ProviderError::new(
         ProviderErrorCode::Authentication,
@@ -529,262 +584,17 @@ fn map_admin_error(error: &AdminError) -> ProviderError {
     match error {
         AdminError::InvalidArgument { .. } => ProviderError::new(
             ProviderErrorCode::Unavailable,
-            "The Admin connection configuration is invalid.",
+            "The Admin operation configuration is invalid.",
             false,
         ),
         AdminError::NotFound { .. } | AdminError::Backend { .. } | AdminError::SessionClosed => ProviderError::new(
             ProviderErrorCode::Unavailable,
-            "The RocketMQ Admin health check failed.",
+            "The RocketMQ Admin operation failed.",
             error.is_retryable() || matches!(error, AdminError::SessionClosed),
         ),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use rocketmq_dashboard_common::{CredentialSourceKind, TransportSettings};
-    use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
-
-    use super::*;
-    use crate::infrastructure::auth_state::MapEnvironment;
-
-    struct FixedClock;
-
-    impl HealthClock for FixedClock {
-        fn now_epoch_ms(&self) -> Option<u64> {
-            Some(42)
-        }
-    }
-
-    struct FakeFactory {
-        health: Result<(), AdminError>,
-        shutdowns: Arc<AtomicUsize>,
-    }
-
-    impl AdminSessionFactory for FakeFactory {
-        fn create(
-            &self,
-            _snapshot: &ConnectionSnapshot,
-            _credentials: Option<AdminCredentials>,
-        ) -> SessionFuture<'_, AdminResult<Box<dyn AdminHealthSession>>> {
-            let health = self.health.clone();
-            let shutdowns = Arc::clone(&self.shutdowns);
-            Box::pin(async move { Ok(Box::new(FakeSession { health, shutdowns }) as Box<dyn AdminHealthSession>) })
-        }
-    }
-
-    struct FakeSession {
-        health: Result<(), AdminError>,
-        shutdowns: Arc<AtomicUsize>,
-    }
-
-    struct BlockingFactory {
-        entered: std::sync::mpsc::Sender<()>,
-        shutdown: std::sync::mpsc::Sender<()>,
-    }
-
-    impl AdminSessionFactory for BlockingFactory {
-        fn create(
-            &self,
-            _snapshot: &ConnectionSnapshot,
-            _credentials: Option<AdminCredentials>,
-        ) -> SessionFuture<'_, AdminResult<Box<dyn AdminHealthSession>>> {
-            let entered = self.entered.clone();
-            let shutdown = self.shutdown.clone();
-            Box::pin(async move {
-                let _ = entered.send(());
-                Ok(Box::new(BlockingSession { shutdown }) as Box<dyn AdminHealthSession>)
-            })
-        }
-    }
-
-    struct BlockingSession {
-        shutdown: std::sync::mpsc::Sender<()>,
-    }
-
-    impl AdminHealthSession for BlockingSession {
-        fn health(&mut self) -> SessionFuture<'_, AdminResult<()>> {
-            Box::pin(std::future::pending())
-        }
-
-        fn shutdown(&mut self) -> SessionFuture<'_, ()> {
-            let shutdown = self.shutdown.clone();
-            Box::pin(async move {
-                let _ = shutdown.send(());
-            })
-        }
-    }
-
-    impl AdminHealthSession for FakeSession {
-        fn health(&mut self) -> SessionFuture<'_, AdminResult<()>> {
-            Box::pin(std::future::ready(self.health.clone()))
-        }
-
-        fn shutdown(&mut self) -> SessionFuture<'_, ()> {
-            self.shutdowns.fetch_add(1, Ordering::SeqCst);
-            Box::pin(std::future::ready(()))
-        }
-    }
-
-    fn runtime() -> RuntimeOwner {
-        RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::for_parallelism("gpui-provider-test", 1),
-            ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory limit"),
-        )
-        .expect("test runtime")
-    }
-
-    fn snapshot(revision: u64, scope: ConnectionScope) -> ConnectionSnapshot {
-        ConnectionSnapshot {
-            revision,
-            nameserver: Some("localhost:9876".into()),
-            proxy: (scope == ConnectionScope::Proxy).then(|| "localhost:8080".into()),
-            scope,
-            transport: TransportSettings::default(),
-            credential_source: CredentialSourceKind::None,
-        }
-    }
-
-    fn provider(
-        runtime: &RuntimeOwner,
-        health: Result<(), AdminError>,
-        shutdowns: Arc<AtomicUsize>,
-    ) -> Arc<GpuiAdminProvider> {
-        GpuiAdminProvider::with_factory(
-            runtime.root_context().component("provider"),
-            Arc::new(FakeFactory { health, shutdowns }),
-            DesktopAuthState::new(Arc::new(MapEnvironment::new([]))),
-            Arc::new(FixedClock),
-        )
-    }
-
-    #[test]
-    fn health_uses_session_success_only_and_proxy_health_is_unknown() {
-        let runtime = runtime();
-        let provider = provider(&runtime, Ok(()), Arc::new(AtomicUsize::new(0)));
-        runtime.block_on(async {
-            provider
-                .switch(snapshot(1, ConnectionScope::NameServer))
-                .await
-                .expect("switch");
-            let health = provider.check_health().await.expect("health");
-            assert_eq!(health.availability, EndpointAvailability::Available);
-            assert_eq!(health.checked_at_epoch_ms, Some(42));
-            let mut proxy = snapshot(2, ConnectionScope::Proxy);
-            proxy.nameserver = None;
-            provider.switch(proxy).await.expect("switch");
-            let health = provider.check_health().await.expect("proxy health");
-            assert_eq!(health.availability, EndpointAvailability::Unknown);
-        });
-        runtime.block_on(provider.shutdown());
-        runtime.shutdown_runtime_blocking().expect("shutdown");
-    }
-
-    #[test]
-    fn backend_error_body_is_not_exposed_and_cancellation_wins_deterministically() {
-        let runtime = runtime();
-        let provider = provider(
-            &runtime,
-            Err(AdminError::backend("list_topics", "access-value secret-value")),
-            Arc::new(AtomicUsize::new(0)),
-        );
-        runtime.block_on(async {
-            provider
-                .switch(snapshot(1, ConnectionScope::NameServer))
-                .await
-                .expect("switch");
-            let health = provider.check_health().await.expect("failed health is a result");
-            let summary = health.failure_summary.expect("failure summary");
-            assert!(!summary.contains("access-value"));
-            assert!(!summary.contains("secret-value"));
-
-            let cancellation = CancellationToken::new();
-            cancellation.cancel();
-            let error = provider
-                .check_health_with_cancellation(cancellation)
-                .await
-                .expect_err("cancelled");
-            assert_eq!(error.code(), ProviderErrorCode::Cancelled);
-        });
-        runtime.block_on(provider.shutdown());
-        runtime.shutdown_runtime_blocking().expect("shutdown");
-    }
-
-    #[test]
-    fn switch_shuts_old_session_and_rejects_stale_revision() {
-        let runtime = runtime();
-        let shutdowns = Arc::new(AtomicUsize::new(0));
-        let provider = provider(&runtime, Ok(()), Arc::clone(&shutdowns));
-        runtime.block_on(async {
-            provider
-                .switch(snapshot(2, ConnectionScope::NameServer))
-                .await
-                .expect("first");
-            provider
-                .switch(snapshot(3, ConnectionScope::NameServer))
-                .await
-                .expect("second");
-            assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
-            provider
-                .switch(snapshot(3, ConnectionScope::NameServer))
-                .await
-                .expect("identical revision is idempotent");
-            assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
-            let stale = provider
-                .switch(snapshot(2, ConnectionScope::NameServer))
-                .await
-                .expect_err("stale");
-            assert_eq!(stale.code(), ProviderErrorCode::StaleRevision);
-        });
-        runtime.block_on(provider.shutdown());
-        assert_eq!(shutdowns.load(Ordering::SeqCst), 2);
-        runtime.shutdown_runtime_blocking().expect("shutdown");
-    }
-
-    #[test]
-    fn cancelling_the_calling_owner_stops_check_all_before_the_endpoint_timeout() {
-        let runtime = runtime();
-        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
-        let provider = GpuiAdminProvider::with_factory(
-            runtime.root_context().component("provider"),
-            Arc::new(BlockingFactory {
-                entered: entered_tx,
-                shutdown: shutdown_tx,
-            }),
-            DesktopAuthState::new(Arc::new(MapEnvironment::new([]))),
-            Arc::new(FixedClock),
-        );
-        let work = runtime.root_context().component("application-work");
-        let work_cancellation = work.task_spawner().cancellation_token();
-        let request_provider = Arc::clone(&provider);
-        work.spawn("check-all-caller", TaskKind::Other, async move {
-            tokio::select! {
-                biased;
-                _ = work_cancellation.cancelled() => {}
-                _ = request_provider.check_endpoints(vec![
-                    snapshot(1, ConnectionScope::NameServer),
-                    snapshot(1, ConnectionScope::NameServer),
-                ]) => {}
-            }
-        })
-        .expect("caller task");
-
-        entered_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect("first endpoint entered health");
-        runtime.block_on(async {
-            work.task_group().cancel();
-            let report = work.task_group().shutdown(std::time::Duration::from_secs(1)).await;
-            assert_eq!(report.timed_out, 0);
-            provider.shutdown().await;
-        });
-        shutdown_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect("ephemeral session shutdown completed");
-        assert!(entered_rx.try_recv().is_err(), "second endpoint must not start");
-        runtime.shutdown_runtime_blocking().expect("shutdown");
-    }
-}
+#[path = "admin_provider/tests.rs"]
+mod tests;

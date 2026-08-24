@@ -16,12 +16,16 @@
 
 #[path = "infrastructure/admin_provider.rs"]
 pub mod admin_provider;
+/// Real query/mutation Admin session adapters hidden behind the provider.
+pub mod admin_session;
 #[path = "infrastructure/auth_state.rs"]
 pub mod auth_state;
 #[path = "infrastructure/client_runtime.rs"]
 pub mod client_runtime;
 #[path = "infrastructure/config_store.rs"]
 pub mod config_store;
+#[path = "infrastructure/history_collector.rs"]
+pub mod history_collector;
 #[path = "infrastructure/history_store.rs"]
 pub mod history_store;
 #[path = "infrastructure/monitor_store.rs"]
