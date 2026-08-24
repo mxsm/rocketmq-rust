@@ -1249,13 +1249,13 @@
       "scope": "module"
     },
     {
-      "identity": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server.rs:item:fn run_with_report_with_service_context_and_telemetry:clippy::too_many_arguments:0",
+      "identity": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/launch.rs:item:fn run_with_report_with_service_context_and_telemetry:clippy::too_many_arguments:0",
       "item": "fn run_with_report_with_service_context_and_telemetry",
       "lints": [
         "clippy::too_many_arguments"
       ],
       "owner": "rocketmq-transport",
-      "path": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server.rs",
+      "path": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/launch.rs",
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
