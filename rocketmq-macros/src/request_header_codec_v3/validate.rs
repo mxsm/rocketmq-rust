@@ -19,11 +19,17 @@ use syn::spanned::Spanned;
 use syn::PathArguments;
 
 use super::combine_error;
+use super::model::CodecProfile;
 use super::model::{
     AliasConflict, FieldModel, HeaderModel, HeaderRange, LookupPlan, MissingPolicy, ValueKind, WireName,
 };
 
 pub(super) fn validate(model: &HeaderModel) -> syn::Result<()> {
+    match &model.profile {
+        CodecProfile::V3 => {}
+        CodecProfile::LegacyV2 { .. } => return super::legacy_v2::validate::validate(model),
+    }
+
     let mut errors = None;
     validate_container(model, &mut errors);
     validate_fields(model, &mut errors);

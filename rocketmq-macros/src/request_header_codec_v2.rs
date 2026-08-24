@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod attr;
-mod codegen;
-mod model;
-mod validate;
+pub(crate) mod attr;
 
 use syn::DeriveInput;
 
@@ -25,46 +22,5 @@ pub(super) fn request_header_codec_inner_v2(input: proc_macro::TokenStream) -> p
 
 fn expand(input: proc_macro::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let input = syn::parse::<DeriveInput>(input)?;
-    let model = model::HeaderModel::parse(input)?;
-    validate::validate(&model)?;
-    Ok(codegen::generate(model))
-}
-
-#[cfg(test)]
-mod tests {
-    use quote::quote;
-
-    use super::{codegen, model, validate};
-
-    #[test]
-    fn expansion_outline_preserves_generics_resolved_paths_and_borrowed_values() {
-        let input = syn::parse_quote! {
-            #[request_header_codec_v2(crate = "protocol_api")]
-            struct Header<T>
-            where
-                T: Default + ToString + std::str::FromStr + 'static,
-            {
-                #[serde(rename = "v", alias = "value")]
-                field: T,
-            }
-        };
-        let model = model::HeaderModel::parse(input).expect("model");
-        validate::validate(&model).expect("validation");
-        let compact = codegen::generate(model).to_string().replace(' ', "");
-
-        for expected in [
-            quote!(impl<T> protocol_api::protocol::command_custom_header::CommandCustomHeader for Header<T>)
-                .to_string(),
-            quote!(fn encode_into_map(&self, out: &mut protocol_api::HeaderMap)).to_string(),
-            quote!(let __request_header_codec_v2_field: Option<&protocol_api::__request_header_codec::CheetahString>)
-                .to_string(),
-            quote!(map.get(Self::FIELD).or_else(|| map.get("value"))).to_string(),
-        ] {
-            assert!(
-                compact.contains(&expected.replace(' ', "")),
-                "missing expansion outline: {expected}"
-            );
-        }
-        assert!(compact.contains("whereT:Default+ToString+std::str::FromStr+'static"));
-    }
+    crate::request_header_codec_v3::legacy_v2::expand(input)
 }

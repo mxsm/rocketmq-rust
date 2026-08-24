@@ -16,22 +16,22 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Expr, Ident, LitStr, Path, Token};
 
 #[derive(Default)]
-pub(super) struct ContainerAttrs {
-    pub(super) validation_method: Option<Ident>,
-    pub(super) protocol_path: Option<Path>,
+pub(crate) struct ContainerAttrs {
+    pub(crate) validation_method: Option<Ident>,
+    pub(crate) protocol_path: Option<Path>,
 }
 
 #[derive(Default)]
-pub(super) struct FieldAttrs {
-    pub(super) required: bool,
-    pub(super) flatten: bool,
-    pub(super) rename: Option<LitStr>,
-    pub(super) aliases: Vec<LitStr>,
-    pub(super) default_path: Option<Path>,
-    pub(super) has_default: bool,
+pub(crate) struct FieldAttrs {
+    pub(crate) required: bool,
+    pub(crate) flatten: bool,
+    pub(crate) rename: Option<LitStr>,
+    pub(crate) aliases: Vec<LitStr>,
+    pub(crate) default_path: Option<Path>,
+    pub(crate) has_default: bool,
 }
 
-pub(super) fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs> {
+pub(crate) fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs> {
     let mut parsed = ContainerAttrs::default();
     for attr in attrs {
         if !attr.path().is_ident("request_header") && !attr.path().is_ident("request_header_codec_v2") {
@@ -70,7 +70,7 @@ pub(super) fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<Containe
     Ok(parsed)
 }
 
-pub(super) fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
+pub(crate) fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
     let mut parsed = FieldAttrs::default();
     for attr in attrs {
         if attr.path().is_ident("required") {

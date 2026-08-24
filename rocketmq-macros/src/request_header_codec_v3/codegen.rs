@@ -20,9 +20,14 @@ use syn::Generics;
 use super::codegen_map;
 use super::codegen_schema;
 use super::codegen_shim;
-use super::model::{HeaderModel, LegacyShim, MissingPolicy};
+use super::model::{CodecProfile, HeaderModel, LegacyShim, MissingPolicy};
 
 pub(super) fn generate(model: &HeaderModel) -> TokenStream {
+    match &model.profile {
+        CodecProfile::V3 => {}
+        CodecProfile::LegacyV2 { .. } => return super::legacy_v2::codegen::generate(model),
+    }
+
     let ident = &model.ident;
     let protocol_path = &model.protocol_path;
     let codec_trait = quote!(#protocol_path::protocol::header_codec::HeaderCodec);
