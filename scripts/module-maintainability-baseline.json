@@ -105,8 +105,8 @@
       "reexports": 90
     },
     "rocketmq-transport": {
-      "public_items": 646,
-      "reexports": 180
+      "public_items": 651,
+      "reexports": 181
     }
   },
   "files": {
@@ -661,7 +661,7 @@
       "reexports": 0
     },
     "rocketmq-broker/src/broker_runtime.rs": {
-      "production_lines": 717,
+      "production_lines": 720,
       "public_items": 2,
       "reexports": 0
     },
@@ -2916,7 +2916,7 @@
       "reexports": 0
     },
     "rocketmq-controller/src/controller/controller_manager.rs": {
-      "production_lines": 927,
+      "production_lines": 1037,
       "public_items": 25,
       "reexports": 0
     },
@@ -4171,7 +4171,7 @@
       "reexports": 0
     },
     "rocketmq-namesrv/src/bootstrap.rs": {
-      "production_lines": 1569,
+      "production_lines": 1570,
       "public_items": 29,
       "reexports": 2
     },
@@ -6766,7 +6766,7 @@
       "reexports": 1
     },
     "rocketmq-proxy/src/remoting.rs": {
-      "production_lines": 2068,
+      "production_lines": 2126,
       "public_items": 17,
       "reexports": 1
     },
@@ -11076,7 +11076,7 @@
       "reexports": 10
     },
     "rocketmq-transport/src/dispatch/authorized_dispatcher.rs": {
-      "production_lines": 302,
+      "production_lines": 307,
       "public_items": 9,
       "reexports": 0
     },
@@ -11156,9 +11156,9 @@
       "reexports": 0
     },
     "rocketmq-transport/src/public_api.rs": {
-      "production_lines": 138,
+      "production_lines": 139,
       "public_items": 0,
-      "reexports": 133
+      "reexports": 134
     },
     "rocketmq-transport/src/remoting.rs": {
       "production_lines": 304,
@@ -11171,8 +11171,8 @@
       "reexports": 0
     },
     "rocketmq-transport/src/remoting_server/rocketmq_tokio_server.rs": {
-      "production_lines": 76,
-      "public_items": 1,
+      "production_lines": 127,
+      "public_items": 2,
       "reexports": 0
     },
     "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/builder.rs": {
@@ -11181,7 +11181,7 @@
       "reexports": 0
     },
     "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/capabilities.rs": {
-      "production_lines": 18,
+      "production_lines": 33,
       "public_items": 0,
       "reexports": 0
     },
@@ -11191,13 +11191,13 @@
       "reexports": 0
     },
     "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/connection_listener.rs": {
-      "production_lines": 90,
+      "production_lines": 55,
       "public_items": 0,
       "reexports": 0
     },
     "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/launch.rs": {
-      "production_lines": 410,
-      "public_items": 5,
+      "production_lines": 633,
+      "public_items": 9,
       "reexports": 0
     },
     "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/lifecycle_events.rs": {
@@ -11291,7 +11291,7 @@
       "reexports": 0
     },
     "rocketmq-transport/src/security.rs": {
-      "production_lines": 89,
+      "production_lines": 93,
       "public_items": 6,
       "reexports": 0
     },
@@ -11334,17 +11334,17 @@
   "hotspots": [
     {
       "metrics": {
-        "churn_commits": 230,
+        "churn_commits": 231,
         "contributors": 12,
         "crate": "rocketmq-broker",
         "defect_commits": 2,
         "fan_out": 29,
         "lock_sites": 9,
         "path": "rocketmq-broker/src/broker_runtime.rs",
-        "production_lines": 717,
+        "production_lines": 720,
         "public_items": 2,
         "reexports": 0,
-        "score": 733.175,
+        "score": 735.75,
         "state_owners": 2,
         "test_functions": 0
       },
@@ -11754,6 +11754,33 @@
     },
     {
       "metrics": {
+        "churn_commits": 68,
+        "contributors": 3,
+        "crate": "rocketmq-namesrv",
+        "defect_commits": 0,
+        "fan_out": 14,
+        "lock_sites": 9,
+        "path": "rocketmq-namesrv/src/bootstrap.rs",
+        "production_lines": 1570,
+        "public_items": 29,
+        "reexports": 2,
+        "score": 324.492,
+        "state_owners": 1,
+        "test_functions": 60
+      },
+      "owner": "rocketmq-namesrv maintainers",
+      "path": "rocketmq-namesrv/src/bootstrap.rs",
+      "removal_condition": "Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.",
+      "state_owner": "`bootstrap` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.",
+      "test_strategy": "Run focused `rocketmq-namesrv` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.",
+      "use_cases": [
+        "validation",
+        "composition and listener ownership",
+        "readiness and shutdown"
+      ]
+    },
+    {
+      "metrics": {
         "churn_commits": 75,
         "contributors": 6,
         "crate": "rocketmq-broker",
@@ -11806,33 +11833,6 @@
         "assignment and routing",
         "message flow",
         "offset and shutdown"
-      ]
-    },
-    {
-      "metrics": {
-        "churn_commits": 66,
-        "contributors": 2,
-        "crate": "rocketmq-namesrv",
-        "defect_commits": 0,
-        "fan_out": 14,
-        "lock_sites": 9,
-        "path": "rocketmq-namesrv/src/bootstrap.rs",
-        "production_lines": 1569,
-        "public_items": 29,
-        "reexports": 2,
-        "score": 315.467,
-        "state_owners": 1,
-        "test_functions": 60
-      },
-      "owner": "rocketmq-namesrv maintainers",
-      "path": "rocketmq-namesrv/src/bootstrap.rs",
-      "removal_condition": "Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.",
-      "state_owner": "`bootstrap` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.",
-      "test_strategy": "Run focused `rocketmq-namesrv` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.",
-      "use_cases": [
-        "validation",
-        "composition and listener ownership",
-        "readiness and shutdown"
       ]
     },
     {

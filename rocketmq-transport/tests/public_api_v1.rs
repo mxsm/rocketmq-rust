@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::v1::CachedConnectionState;
 use rocketmq_transport::api::v1::ClientShutdownReport;
 use rocketmq_transport::api::v1::ClientSnapshot;
@@ -27,6 +28,7 @@ use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::RequestTarget;
 use rocketmq_transport::api::v1::SendReceipt;
 use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::ServerStartError;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportServer;
@@ -85,6 +87,53 @@ fn assert_legacy_compatibility_methods(client: &TransportClient<DefaultRequestPr
 
 fn assert_prelude_processor<T: PreludeRequestProcessor>() {}
 
+async fn assert_checked_server_method_signatures() {
+    let runtime = RuntimeContext::try_from_current("transport-public-api-v1-checked-signatures").unwrap();
+    let config = Arc::new(ServerConfig::default());
+    let mut config_server = TransportServer::new(config.clone(), runtime.service_context("config-server"));
+    let config_future =
+        config_server.try_run_with_shutdown_report(DefaultRequestProcessor, None, std::future::pending::<()>());
+    let _: &dyn std::future::Future<Output = Result<ShutdownReport, ServerStartError>> = &config_future;
+    drop(config_future);
+
+    let mut config_startup_server = TransportServer::new(config.clone(), runtime.service_context("config-startup"));
+    let (config_startup_tx, _config_startup_rx) = oneshot::channel();
+    let config_startup_future = config_startup_server.try_run_with_shutdown_report_and_startup(
+        DefaultRequestProcessor,
+        None,
+        std::future::pending::<()>(),
+        config_startup_tx,
+    );
+    let _: &dyn std::future::Future<Output = Result<ShutdownReport, ServerStartError>> = &config_startup_future;
+    drop(config_startup_future);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut bound_server = TransportServer::new(config.clone(), runtime.service_context("bound-server"));
+    let bound_future = bound_server.try_serve_bound_listener_until(
+        listener,
+        DefaultRequestProcessor,
+        None,
+        None,
+        std::future::pending::<()>(),
+    );
+    let _: &dyn std::future::Future<Output = Result<ShutdownReport, ServerStartError>> = &bound_future;
+    drop(bound_future);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut bound_startup_server = TransportServer::new(config, runtime.service_context("bound-startup"));
+    let (bound_startup_tx, _bound_startup_rx) = oneshot::channel();
+    let bound_startup_future = bound_startup_server.try_serve_bound_listener_until_with_startup(
+        listener,
+        DefaultRequestProcessor,
+        None,
+        None,
+        std::future::pending::<()>(),
+        bound_startup_tx,
+    );
+    let _: &dyn std::future::Future<Output = Result<ShutdownReport, ServerStartError>> = &bound_startup_future;
+    drop(bound_startup_future);
+}
+
 #[test]
 fn prelude_reexports_the_curated_composition_root_surface() {
     let _ = PreludeServerConfig::default();
@@ -132,6 +181,8 @@ async fn versioned_api_constructs_canonical_client_and_server() {
         Arc::new(ServerConfig::default()),
         runtime.service_context("transport-server"),
     );
+    let _: Option<ServerStartError> = None;
+    assert_checked_server_method_signatures().await;
 }
 
 #[tokio::test]

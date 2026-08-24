@@ -14,7 +14,24 @@
 
 use super::connection_handler::SessionCommandInterceptor;
 use super::lifecycle_events::LifecycleEventConfig;
+use super::lifecycle_events::LifecycleEventPublisher;
 use super::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ServerSecurityState {
+    Unconfigured,
+    ExplicitInsecureLoopback,
+    Secure,
+}
+
+pub(super) struct PreparedServer<RP> {
+    pub(super) dispatcher: Arc<AuthorizedCommandDispatcher<RP>>,
+    pub(super) capabilities: RemotingServerRunCapabilities,
+    pub(super) event_publisher: Option<LifecycleEventPublisher>,
+    pub(super) lifecycle_shutdown: CancellationToken,
+    pub(super) lifecycle_dispatcher_task: Option<TaskId>,
+    pub(super) security_state: ServerSecurityState,
+}
 
 pub(super) struct RemotingServerRunCapabilities {
     pub(super) tls_runtime: TlsServerRuntime,

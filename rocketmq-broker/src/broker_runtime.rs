@@ -373,7 +373,7 @@ impl BrokerBlockingShutdownError {
 
 async fn await_remoting_server_startup(
     listener: &'static str,
-    receiver: oneshot::Receiver<rocketmq_error::RocketMQResult<SocketAddr>>,
+    receiver: oneshot::Receiver<Result<SocketAddr, rocketmq_transport::api::v1::ServerStartError>>,
     timeout: Duration,
 ) -> Result<SocketAddr, BrokerStartupError> {
     let startup = tokio::time::timeout(timeout, receiver)
@@ -383,7 +383,10 @@ async fn await_remoting_server_startup(
             detail: format!("startup acknowledgement exceeded {} ms", timeout.as_millis()),
         })?
         .map_err(|_| BrokerStartupError::ListenerStartupDropped { listener })?;
-    BrokerStartupError::listener_startup(listener, startup)
+    startup.map_err(|error| BrokerStartupError::ListenerStartup {
+        listener,
+        detail: error.to_string(),
+    })
 }
 
 async fn run_shutdown_blocking_operation<T, F>(

@@ -86,6 +86,7 @@ pub use crate::proxy_protocol::read_proxy_protocol;
 pub use crate::proxy_protocol::ProxyProtocolConfig;
 pub use crate::proxy_protocol::ProxyProtocolMetadata;
 pub use crate::proxy_protocol::UnknownTlvPolicy;
+pub use crate::remoting_server::rocketmq_tokio_server::ServerStartError;
 pub use crate::remoting_server::rocketmq_tokio_server::TransportServer;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;

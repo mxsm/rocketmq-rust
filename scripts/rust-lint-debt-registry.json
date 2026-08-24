@@ -1249,18 +1249,6 @@
       "scope": "module"
     },
     {
-      "identity": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/launch.rs:item:fn run_with_report_with_service_context_and_telemetry:clippy::too_many_arguments:0",
-      "item": "fn run_with_report_with_service_context_and_telemetry",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-transport",
-      "path": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server/launch.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-transport/src/server.rs:item:fn bind_with_capabilities:clippy::too_many_arguments:0",
       "item": "fn bind_with_capabilities",
       "lints": [
@@ -1297,7 +1285,7 @@
       "scope": "item"
     }
   ],
-  "maximum_entries": 108,
+  "maximum_entries": 107,
   "schema_version": 2,
   "scope": "core-release",
   "too_many_arguments": {

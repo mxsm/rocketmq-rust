@@ -97,7 +97,7 @@
         "scripts/rust-lint-debt-registry.json",
         "scripts/rust_lint_debt_guard.py"
       ],
-      "scope_count": 177
+      "scope_count": 176
     },
     {
       "id": "ARC-RUNTIME-001",

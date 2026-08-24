@@ -705,7 +705,7 @@ impl NameServerRuntime {
             .spawn_service("namesrv.server", async move {
                 debug!("Server task started");
                 let report = server
-                    .run_with_shutdown_report_and_startup(
+                    .try_run_with_shutdown_report_and_startup(
                         request_processor,
                         channel_event_listener,
                         async move {
@@ -714,10 +714,10 @@ impl NameServerRuntime {
                         server_startup_tx,
                     )
                     .await;
-                if let Some(report) = report.as_ref() {
+                if let Ok(report) = report.as_ref() {
                     report.log_if_unhealthy();
                 }
-                let _ = server_report_tx.send(report);
+                let _ = server_report_tx.send(report.ok());
                 debug!("Server task completed");
             })
             .map_err(|error| namesrv_startup_failed("spawn server task", error))?;
@@ -726,7 +726,8 @@ impl NameServerRuntime {
 
         let bound_address = server_startup_rx
             .await
-            .map_err(|error| namesrv_startup_failed("await listener startup acknowledgement", error))??;
+            .map_err(|error| namesrv_startup_failed("await listener startup acknowledgement", error))?
+            .map_err(|error| namesrv_startup_failed("start remoting listener", error))?;
 
         // Setup remoting client with name server address
         let local_address = NetworkUtil::get_local_address().unwrap_or_else(|| {
