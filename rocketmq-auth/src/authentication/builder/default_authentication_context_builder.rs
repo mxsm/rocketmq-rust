@@ -42,6 +42,7 @@ const X_MQ_DATE_TIME: &str = "x-mq-date-time";
 const DATE_TIME: &str = "DateTime";
 const TIMESTAMP: &str = "Timestamp";
 const TIMESTAMP_LOWERCASE: &str = "timestamp";
+const MALFORMED_GRPC_AUTHORIZATION_FRAGMENT_REASON: &str = "malformed_grpc_authorization_fragment";
 
 /// Separator constants
 const SPACE: char = ' ';
@@ -231,7 +232,10 @@ impl DefaultAuthenticationContextBuilder {
         for key_value in key_values {
             let kv: Vec<&str> = key_value.trim().splitn(2, EQUAL).collect();
             if kv.len() != 2 {
-                warn!("Skipping invalid authentication key-value pair: {}", key_value);
+                warn!(
+                    reason = MALFORMED_GRPC_AUTHORIZATION_FRAGMENT_REASON,
+                    "Ignoring malformed gRPC authorization fragment"
+                );
                 continue;
             }
 
@@ -352,6 +356,61 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct LogCapture {
+        output: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl LogCapture {
+        fn new() -> Self {
+            Self {
+                output: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn contents(&self) -> String {
+            String::from_utf8(
+                self.output
+                    .lock()
+                    .expect("test log capture lock should not be poisoned")
+                    .clone(),
+            )
+            .expect("test log output should be valid UTF-8")
+        }
+    }
+
+    struct LogCaptureWriter {
+        output: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for LogCaptureWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.output
+                .lock()
+                .expect("test log capture lock should not be poisoned")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogCapture {
+        type Writer = LogCaptureWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogCaptureWriter {
+                output: Arc::clone(&self.output),
+            }
+        }
+    }
 
     #[test]
     fn test_hex_to_base64() {
@@ -424,6 +483,45 @@ mod tests {
         assert_eq!(context.content(), Some(b"20231227T194619Z".as_slice()));
         assert_eq!(context.base.channel_id(), Some(&CheetahString::from("channel-a")));
         assert_eq!(context.request_timestamp_millis(), Some(1_703_706_379_000));
+    }
+
+    #[test]
+    fn malformed_grpc_authorization_fragment_is_not_logged() {
+        const SYNTHETIC_CREDENTIAL: &str = "SYNTHETIC_CREDENTIAL_9720";
+        const SYNTHETIC_FRAGMENT: &str = "SYNTHETIC_FRAGMENT_9720";
+        const SYNTHETIC_SIGNATURE_LIKE: &str = "SYNTHETIC_SIGNATURE_LIKE_9720";
+        const SYNTHETIC_TOKEN: &str = "SYNTHETIC_TOKEN_9720";
+        const SYNTHETIC_BODY: &str = "SYNTHETIC_BODY_9720";
+
+        let authorization = format!(
+            "MQv2-HMAC-SHA1 Credential={SYNTHETIC_CREDENTIAL}/scope, SignedHeaders=x-mq-date-time, {SYNTHETIC_FRAGMENT}:{SYNTHETIC_SIGNATURE_LIKE}:{SYNTHETIC_TOKEN}:{SYNTHETIC_BODY}"
+        );
+        let capture = LogCapture::new();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let builder = DefaultAuthenticationContextBuilder::new();
+        let mut metadata = HashMap::new();
+        metadata.insert("authorization".to_owned(), authorization.clone());
+        metadata.insert("x-mq-date-time".to_owned(), "20231227T194619Z".to_owned());
+
+        let context = builder.build_from_grpc_metadata_map(&metadata, &()).unwrap();
+
+        drop(guard);
+        let logs = capture.contents();
+        assert_eq!(context.username(), Some(&CheetahString::from(SYNTHETIC_CREDENTIAL)));
+        assert!(logs.contains(MALFORMED_GRPC_AUTHORIZATION_FRAGMENT_REASON));
+        assert!(logs.contains("Ignoring malformed gRPC authorization fragment"));
+        assert!(!logs.contains(SYNTHETIC_FRAGMENT));
+        assert!(!logs.contains(SYNTHETIC_SIGNATURE_LIKE));
+        assert!(!logs.contains(SYNTHETIC_TOKEN));
+        assert!(!logs.contains(SYNTHETIC_BODY));
+        assert!(!logs.contains(SYNTHETIC_CREDENTIAL));
+        assert!(!logs.contains(&authorization));
     }
 
     #[test]
