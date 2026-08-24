@@ -18,6 +18,7 @@ mod codegen;
 mod codegen_map;
 mod codegen_schema;
 mod codegen_shim;
+pub(crate) mod legacy_v1;
 pub(crate) mod legacy_v2;
 mod model;
 mod validate;

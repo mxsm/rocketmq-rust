@@ -61,6 +61,7 @@ pub(super) struct FieldModel {
 pub(super) enum CodecProfile {
     V3,
     LegacyV2 { validation_method: Option<Ident> },
+    LegacyV1,
 }
 
 #[derive(Clone)]
