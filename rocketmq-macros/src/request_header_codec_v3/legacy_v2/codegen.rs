@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,19 +15,25 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
-use super::model::{FieldModel, HeaderModel, TypeCategory};
+use super::super::canonical::{command_custom_header_trait, from_map_trait};
+use super::super::model::{CodecProfile, FieldModel, HeaderModel, MissingPolicy};
+use crate::get_type_name;
 
-pub(super) fn generate(model: HeaderModel) -> TokenStream {
+pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     let HeaderModel {
         ident,
         generics,
         fields,
-        validation_method,
         protocol_path,
+        ..
     } = model;
+    let validation_method = match &model.profile {
+        CodecProfile::LegacyV2 { validation_method } => validation_method.as_ref(),
+        CodecProfile::V3 => return TokenStream::new(),
+    };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let command_trait = quote!(#protocol_path::protocol::command_custom_header::CommandCustomHeader);
-    let from_map_trait = quote!(#protocol_path::protocol::command_custom_header::FromMap);
+    let command_trait = command_custom_header_trait(protocol_path);
+    let from_map_trait = from_map_trait(protocol_path);
     let map_type = quote!(#protocol_path::HeaderMap);
     let string_type = quote!(#protocol_path::__request_header_codec::CheetahString);
     let error_type = quote!(#protocol_path::__request_header_codec::RocketMQError);
@@ -75,13 +81,16 @@ pub(super) fn generate(model: HeaderModel) -> TokenStream {
     let required_string_checks = fields
         .iter()
         .filter(|field| {
-            field.required
-                && field.inner_type.is_none()
-                && matches!(field.category, TypeCategory::CheetahString | TypeCategory::String)
+            field.legacy_required
+                && field.option_inner.is_none()
+                && matches!(
+                    legacy_value_kind(field),
+                    LegacyValueKind::CheetahString | LegacyValueKind::String
+                )
         })
         .map(|field| {
             let field_ident = &field.ident;
-            let key = syn::LitStr::new(&field.wire_key, field.span);
+            let key = syn::LitStr::new(&field.key.value, field.span);
             quote! {
                 if self.#field_ident.is_empty() {
                     return Err(#error_type::request_header_error(
@@ -92,9 +101,12 @@ pub(super) fn generate(model: HeaderModel) -> TokenStream {
         });
     let custom_validation = validation_method.map(|method| quote!(self.#method()?;));
     let needs_check = fields.iter().any(|field| {
-        field.required
-            && field.inner_type.is_none()
-            && matches!(field.category, TypeCategory::CheetahString | TypeCategory::String)
+        field.legacy_required
+            && field.option_inner.is_none()
+            && matches!(
+                legacy_value_kind(field),
+                LegacyValueKind::CheetahString | LegacyValueKind::String
+            )
     }) || custom_validation.is_some();
     let check_fields = if needs_check {
         quote! {
@@ -157,14 +169,14 @@ pub(super) fn generate(model: HeaderModel) -> TokenStream {
 
 fn gen_const_decl(field: &FieldModel) -> TokenStream {
     let const_ident = const_ident(field);
-    let key = syn::LitStr::new(&field.wire_key, field.span);
+    let key = syn::LitStr::new(&field.key.value, field.span);
     quote!(const #const_ident: &'static str = #key;)
 }
 
 fn gen_encode(field: &FieldModel, command_trait: &TokenStream, string_type: &TokenStream) -> TokenStream {
     let field_ident = &field.ident;
     if field.flattened {
-        return if field.inner_type.is_some() {
+        return if field.option_inner.is_some() {
             quote! {
                 if let Some(value) = &self.#field_ident {
                     #command_trait::encode_into_map(value, out);
@@ -184,23 +196,23 @@ fn gen_encode(field: &FieldModel, command_trait: &TokenStream, string_type: &Tok
             );
         }
     };
-    match (field.category, field.inner_type.is_some()) {
-        (TypeCategory::CheetahString, true) => {
+    match (legacy_value_kind(field), field.option_inner.is_some()) {
+        (LegacyValueKind::CheetahString, true) => {
             let insert = insert(quote!(value.clone()));
             quote!(if let Some(value) = &self.#field_ident { #insert })
         }
-        (TypeCategory::CheetahString, false) => insert(quote!(self.#field_ident.clone())),
-        (TypeCategory::String, true) => {
+        (LegacyValueKind::CheetahString, false) => insert(quote!(self.#field_ident.clone())),
+        (LegacyValueKind::String, true) => {
             let insert = insert(quote!(#string_type::from_string(value.clone())));
             quote!(if let Some(value) = &self.#field_ident { #insert })
         }
-        (TypeCategory::String, false) => insert(quote!(#string_type::from_string(self.#field_ident.clone()))),
-        (TypeCategory::Primitive, true) => {
+        (LegacyValueKind::String, false) => insert(quote!(#string_type::from_string(self.#field_ident.clone()))),
+        (LegacyValueKind::Primitive, true) => {
             let insert = insert(quote!(#string_type::from_string(value.to_string())));
             quote!(if let Some(value) = &self.#field_ident { #insert })
         }
-        (TypeCategory::Primitive, false) => insert(quote!(#string_type::from_string(self.#field_ident.to_string()))),
-        (TypeCategory::Flattened, _) => {
+        (LegacyValueKind::Primitive, false) => insert(quote!(#string_type::from_string(self.#field_ident.to_string()))),
+        (LegacyValueKind::Flattened, _) => {
             debug_assert!(field.flattened, "flattened category must set the flattened flag");
             TokenStream::new()
         }
@@ -222,7 +234,7 @@ fn gen_local_decl(
     let aliases: Vec<_> = field
         .aliases
         .iter()
-        .map(|alias| syn::LitStr::new(alias, field.span))
+        .map(|alias| syn::LitStr::new(&alias.value, field.span))
         .collect();
     let _ = map_type;
     quote! {
@@ -234,14 +246,14 @@ fn gen_local_decl(
 
 fn gen_scan_arm(field: &FieldModel) -> TokenStream {
     let local = local_ident(field);
-    let key = syn::LitStr::new(&field.wire_key, field.span);
+    let key = syn::LitStr::new(&field.key.value, field.span);
     quote!(#key => #local = Some(value),)
 }
 
 fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &TokenStream) -> TokenStream {
     let field_ident = &field.ident;
     if field.flattened {
-        return if let Some(inner) = &field.inner_type {
+        return if let Some(inner) = &field.option_inner {
             quote!(#field_ident: Some(<#inner as #from_map_trait>::from(map)?),)
         } else {
             let ty = &field.ty;
@@ -250,33 +262,37 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
     }
 
     let local = local_ident(field);
-    let missing = syn::LitStr::new(&format!("Missing {} field", field.wire_key), field.span);
-    let parse_error = syn::LitStr::new(&format!("Parse {} field error", field.wire_key), field.span);
-    let default = field.default_path.as_ref().map_or_else(
-        || {
+    let missing = syn::LitStr::new(&format!("Missing {} field", field.key.value), field.span);
+    let parse_error = syn::LitStr::new(&format!("Parse {} field error", field.key.value), field.span);
+    let default = match &field.missing {
+        Some(MissingPolicy::DefaultWith(path)) => quote!(#path()),
+        _ => {
             let ty = &field.ty;
             quote!(<#ty as Default>::default())
-        },
-        |path| quote!(#path()),
-    );
+        }
+    };
 
-    match (field.category, field.inner_type.as_ref(), field.required) {
-        (TypeCategory::CheetahString, Some(_), _) => quote!(#field_ident: #local.cloned(),),
-        (TypeCategory::CheetahString, None, true) => quote! {
+    match (
+        legacy_value_kind(field),
+        field.option_inner.as_ref(),
+        field.legacy_required,
+    ) {
+        (LegacyValueKind::CheetahString, Some(_), _) => quote!(#field_ident: #local.cloned(),),
+        (LegacyValueKind::CheetahString, None, true) => quote! {
             #field_ident: #local.cloned().ok_or_else(|| #error_type::request_header_error(#missing.to_string()))?,
         },
-        (TypeCategory::CheetahString, None, false) => {
+        (LegacyValueKind::CheetahString, None, false) => {
             quote!(#field_ident: #local.cloned().unwrap_or_else(|| #default),)
         }
-        (TypeCategory::String, Some(_), _) => quote!(#field_ident: #local.map(ToString::to_string),),
-        (TypeCategory::String, None, true) => quote! {
+        (LegacyValueKind::String, Some(_), _) => quote!(#field_ident: #local.map(ToString::to_string),),
+        (LegacyValueKind::String, None, true) => quote! {
             #field_ident: #local.map(ToString::to_string)
                 .ok_or_else(|| #error_type::request_header_error(#missing.to_string()))?,
         },
-        (TypeCategory::String, None, false) => quote! {
+        (LegacyValueKind::String, None, false) => quote! {
             #field_ident: #local.map(ToString::to_string).unwrap_or_else(|| #default),
         },
-        (TypeCategory::Primitive, Some(inner), _) => quote! {
+        (LegacyValueKind::Primitive, Some(inner), _) => quote! {
             #field_ident: match #local {
                 Some(value) => value.as_str().parse::<#inner>()
                     .map(Some)
@@ -284,7 +300,7 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
                 None => None,
             },
         },
-        (TypeCategory::Primitive, None, true) => {
+        (LegacyValueKind::Primitive, None, true) => {
             let ty = &field.ty;
             quote! {
                 #field_ident: #local
@@ -294,7 +310,7 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
                     .map_err(|_| #error_type::request_header_error(#parse_error.to_string()))?,
             }
         }
-        (TypeCategory::Primitive, None, false) => {
+        (LegacyValueKind::Primitive, None, false) => {
             let ty = &field.ty;
             quote! {
                 #field_ident: match #local {
@@ -304,10 +320,31 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
                 },
             }
         }
-        (TypeCategory::Flattened, _, _) => {
+        (LegacyValueKind::Flattened, _, _) => {
             debug_assert!(field.flattened, "flattened category must set the flattened flag");
             TokenStream::new()
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LegacyValueKind {
+    CheetahString,
+    String,
+    Primitive,
+    Flattened,
+}
+
+fn legacy_value_kind(field: &FieldModel) -> LegacyValueKind {
+    if field.flattened {
+        return LegacyValueKind::Flattened;
+    }
+
+    let base_type = field.option_inner.as_ref().unwrap_or(&field.ty);
+    match get_type_name(base_type).as_str() {
+        "CheetahString" => LegacyValueKind::CheetahString,
+        "String" => LegacyValueKind::String,
+        _ => LegacyValueKind::Primitive,
     }
 }
 

@@ -16,13 +16,14 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Generics;
 
+use super::canonical::{command_custom_header_trait, from_map_trait};
 use super::model::HeaderModel;
 
 pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &TokenStream) -> TokenStream {
     let ident = &model.ident;
     let protocol_path = &model.protocol_path;
-    let command_trait = quote!(#protocol_path::protocol::command_custom_header::CommandCustomHeader);
-    let from_map_trait = quote!(#protocol_path::protocol::command_custom_header::FromMap);
+    let command_trait = command_custom_header_trait(protocol_path);
+    let from_map_trait = from_map_trait(protocol_path);
     let map_type = quote!(#protocol_path::HeaderMap);
     let field_source = quote!(#protocol_path::protocol::header_codec::HeaderFieldSource);
     let codec_error = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);

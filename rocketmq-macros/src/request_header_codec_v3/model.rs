@@ -16,9 +16,10 @@ use std::collections::HashSet;
 
 use proc_macro2::Span;
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields, GenericArgument, Generics, Ident, LitStr, Path, PathArguments, Type};
+use syn::{Data, DeriveInput, Fields, Generics, Ident, LitStr, Path, PathArguments, Type};
 
 use super::attr::{parse_container_attrs, parse_field_attrs, FieldAttrs};
+use super::canonical::{option_inner, resolve_protocol_path};
 use super::combine_error;
 use crate::snake_to_camel_case;
 
@@ -33,6 +34,7 @@ pub(super) struct HeaderModel {
     pub(super) protocol_path: Path,
     pub(super) fast: bool,
     pub(super) fields: Vec<FieldModel>,
+    pub(super) profile: CodecProfile,
 }
 
 pub(super) struct FieldModel {
@@ -52,7 +54,13 @@ pub(super) struct FieldModel {
     pub(super) source_order: u16,
     pub(super) kind: ValueKind,
     pub(super) legacy_required: bool,
+    pub(super) legacy_v2_default_declared: bool,
     pub(super) span: Span,
+}
+
+pub(super) enum CodecProfile {
+    V3,
+    LegacyV2 { validation_method: Option<Ident> },
 }
 
 #[derive(Clone)]
@@ -164,7 +172,7 @@ impl HeaderModel {
         let legacy_shim = parse_legacy_shim(attrs.legacy_shim, &mut errors);
         let protocol_path = match attrs.protocol_path {
             Some(path) => path,
-            None => match resolve_protocol_path(input.ident.span()) {
+            None => match resolve_protocol_path(input.ident.span(), "#[header(crate = \"path::to::protocol\")]") {
                 Ok(path) => path,
                 Err(error) => {
                     combine_error(&mut errors, error);
@@ -241,6 +249,7 @@ impl HeaderModel {
             protocol_path,
             fast: attrs.fast.is_some(),
             fields,
+            profile: CodecProfile::V3,
         });
         (model, errors)
     }
@@ -323,6 +332,7 @@ impl FieldModel {
             source_order,
             kind,
             legacy_required: attrs.legacy_required.is_some(),
+            legacy_v2_default_declared: false,
             span,
         })
     }
@@ -542,27 +552,7 @@ fn validate_field_attribute_shape(
     }
 }
 
-fn option_inner(ty: &Type) -> Option<&Type> {
-    let Type::Path(type_path) = ty else {
-        return None;
-    };
-    let segment = type_path.path.segments.last()?;
-    if segment.ident != "Option" {
-        return None;
-    }
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return None;
-    };
-    if arguments.args.len() != 1 {
-        return None;
-    }
-    match arguments.args.first()? {
-        GenericArgument::Type(inner) => Some(inner),
-        _ => None,
-    }
-}
-
-fn classify_type(ty: &Type, generic_types: &HashSet<String>, flattened: bool) -> ValueKind {
+pub(super) fn classify_type(ty: &Type, generic_types: &HashSet<String>, flattened: bool) -> ValueKind {
     let Type::Path(type_path) = ty else {
         return ValueKind::Unsupported;
     };
@@ -592,21 +582,5 @@ fn classify_type(ty: &Type, generic_types: &HashSet<String>, flattened: bool) ->
         "BoundaryType" => ValueKind::BoundaryType,
         _ if flattened => ValueKind::Nested,
         _ => ValueKind::Unsupported,
-    }
-}
-
-fn resolve_protocol_path(span: Span) -> syn::Result<Path> {
-    use proc_macro_crate::{crate_name, FoundCrate};
-
-    match crate_name("rocketmq-protocol") {
-        Ok(FoundCrate::Itself) => Ok(syn::parse_quote!(crate)),
-        Ok(FoundCrate::Name(name)) => {
-            let ident = Ident::new(&name.replace('-', "_"), span);
-            Ok(syn::parse_quote!(::#ident))
-        }
-        Err(error) => Err(syn::Error::new(
-            span,
-            format!("unable to resolve rocketmq-protocol ({error}); use #[header(crate = \"path::to::protocol\")]"),
-        )),
     }
 }
