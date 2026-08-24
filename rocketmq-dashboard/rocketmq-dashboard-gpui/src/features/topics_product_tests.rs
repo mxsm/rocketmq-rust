@@ -339,7 +339,7 @@ fn visible_detail_buttons_open_and_submit_the_six_exact_mutation_intents(cx: &mu
                     && clusters == &["cluster-a".to_owned(), "cluster-b".to_owned()]
         ));
         reset_form.update(app, |form, cx| {
-            form.set_reset_timestamp(1234, window, cx);
+            form.set_reset_timestamp(1_700_000_000_000, window, cx);
             form.select_exact_cluster("cluster-b", cx);
         });
     });
@@ -397,7 +397,7 @@ fn visible_detail_buttons_open_and_submit_the_six_exact_mutation_intents(cx: &mu
     assert_eq!(calls.delete_broker[0].2, target("cluster-a", "broker-a", 10911));
     assert_eq!(calls.reset.len(), 1);
     assert_eq!(calls.reset[0].cluster_name, "cluster-b");
-    assert_eq!(calls.reset[0].timestamp, Some(1234));
+    assert_eq!(calls.reset[0].timestamp, Some(1_700_000_000_000));
     assert_eq!(calls.skip.len(), 1);
     assert_eq!(calls.skip[0].cluster_name, "cluster-a");
     assert_eq!(calls.delete.len(), 1);
@@ -539,7 +539,7 @@ fn remaining_six_dialogs_render_and_reach_the_coordinator_with_exact_commands(cx
     let form = cx.read(|app| topics.read(app).dialog_form_for_test().expect("Reset form"));
     cx.update(|window, app| {
         form.update(app, |form, cx| {
-            form.set_reset_timestamp(1234, window, cx);
+            form.set_reset_timestamp(1_700_000_000_000, window, cx);
             form.select_exact_cluster("cluster-b", cx);
         });
     });
@@ -587,7 +587,7 @@ fn remaining_six_dialogs_render_and_reach_the_coordinator_with_exact_commands(cx
     assert_eq!(calls.send[0].body_length, "ephemeral body".len());
     assert!(calls.send[0].has_key && calls.send[0].has_tag);
     assert_eq!(calls.reset[0].cluster_name, "cluster-b");
-    assert_eq!(calls.reset[0].timestamp, Some(1234));
+    assert_eq!(calls.reset[0].timestamp, Some(1_700_000_000_000));
     assert!(calls.reset[0].force);
     assert_eq!(calls.skip[0].cluster_name, "cluster-a");
     assert_eq!(calls.skip[0].timestamp, None);

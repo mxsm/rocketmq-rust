@@ -47,6 +47,7 @@ use crate::core::AdminResult;
 
 mod mutation;
 mod query;
+mod workspace;
 
 use self::mutation::consumer_internal_topics;
 use self::mutation::resolve_consumer_target_broker_names;

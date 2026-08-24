@@ -17,6 +17,11 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+#[path = "producer/domain.rs"]
+mod domain;
+
+pub use domain::*;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerTopicOptionsRequest {}

@@ -24,6 +24,18 @@ use rocketmq_admin_core::{
             BrokerMutationAdmin, PatchBrokerConfigOutcome, PatchBrokerConfigRequest,
             QueryBrokerConfigGenerationRequest, QueryBrokerConfigGenerationResult,
         },
+        consumer::{
+            ConsumerExactBatchDeleteRequest, ConsumerExactBatchMutationAdmin, ConsumerExactBatchUpsertMutationAdmin,
+            ConsumerExactBatchUpsertRequest, ConsumerMutationAdmin, DashboardConsumerBatchResult,
+            DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest, PatchSubscriptionGroupConfigOutcome,
+            PatchSubscriptionGroupConfigRequest,
+        },
+        consumer_workspace::{
+            ConsumerClientsResult, ConsumerConfigPresenceResult, ConsumerConfigurationResult,
+            ConsumerConnectionsAtTargetsResult, ConsumerExactTargetsRequest, ConsumerInventoryRequest,
+            ConsumerInventoryResult, ConsumerProgressResult, ConsumerResourceRequest, ConsumerWorkspaceAdmin,
+            ProducerConnectionsRequest, ProducerConnectionsResult, ProducerInventoryResult,
+        },
         dashboard::{
             DashboardAdmin, DashboardBrokerConfig, DashboardBrokerList, DashboardBrokerRuntime, DashboardBrokerTarget,
             DashboardConsumerList, DashboardProducerInfo, DashboardTopicList, DashboardTopicStats,
@@ -75,6 +87,57 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
     }
     fn topic_consumers<'a>(&'a self, _topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicConsumers>> {
         Box::pin(async { Err(unsupported_topic_session("topic_consumers")) })
+    }
+    fn consumer_inventory<'a>(
+        &'a self,
+        _request: &'a ConsumerInventoryRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerInventoryResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_inventory")) })
+    }
+    fn consumer_clients<'a>(
+        &'a self,
+        _request: &'a ConsumerResourceRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerClientsResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_clients")) })
+    }
+    fn consumer_progress<'a>(
+        &'a self,
+        _request: &'a ConsumerResourceRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerProgressResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_progress")) })
+    }
+    fn consumer_configuration<'a>(
+        &'a self,
+        _group: &'a str,
+    ) -> SessionFuture<'a, AdminResult<ConsumerConfigurationResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_configuration")) })
+    }
+    fn consumer_config_presence<'a>(
+        &'a self,
+        _request: &'a ConsumerExactTargetsRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerConfigPresenceResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_config_presence")) })
+    }
+    fn consumer_connections_at_targets<'a>(
+        &'a self,
+        _request: &'a ConsumerExactTargetsRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerConnectionsAtTargetsResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_connections_at_targets")) })
+    }
+    fn consumer_diagnostic<'a>(
+        &'a self,
+        _request: &'a DashboardConsumerRunningInfoRequest,
+    ) -> SessionFuture<'a, AdminResult<DashboardConsumerRunningInfo>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_diagnostic")) })
+    }
+    fn producer_inventory(&self) -> SessionFuture<'_, AdminResult<ProducerInventoryResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("producer_inventory")) })
+    }
+    fn producer_connections<'a>(
+        &'a self,
+        _request: &'a ProducerConnectionsRequest,
+    ) -> SessionFuture<'a, AdminResult<ProducerConnectionsResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("producer_connections")) })
     }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
 }
@@ -137,11 +200,36 @@ pub(crate) trait DashboardMutationSession: Send {
     ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
         Box::pin(async { Err(unsupported_topic_session("skip_topic_accumulated_detailed")) })
     }
+    fn upsert_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        _request: &'a ConsumerExactBatchUpsertRequest,
+    ) -> SessionFuture<'a, AdminResult<DashboardConsumerBatchResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("upsert_consumer_group_exact_batch")) })
+    }
+    fn delete_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        _request: &'a ConsumerExactBatchDeleteRequest,
+    ) -> SessionFuture<'a, AdminResult<DashboardConsumerBatchResult>> {
+        Box::pin(async { Err(unsupported_consumer_session("delete_consumer_group_exact_batch")) })
+    }
+    fn patch_consumer_config<'a>(
+        &'a mut self,
+        _request: &'a PatchSubscriptionGroupConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<PatchSubscriptionGroupConfigOutcome>> {
+        Box::pin(async { Err(unsupported_consumer_session("patch_consumer_config")) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
 }
 
 fn unsupported_topic_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
     rocketmq_admin_core::core::AdminError::backend(operation, "Topic capability is not implemented by this session")
+}
+
+fn unsupported_consumer_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
+    rocketmq_admin_core::core::AdminError::backend(
+        operation,
+        "Consumer or Producer capability is not implemented by this session",
+    )
 }
 
 /// Factory kept injectable so concurrency and shutdown are tested without a network.
@@ -287,6 +375,66 @@ impl DashboardQuerySession for RealQuerySession {
         TopicInspectionAdmin::inspect_topic_consumers(&self.inner, topic)
     }
 
+    fn consumer_inventory<'a>(
+        &'a self,
+        request: &'a ConsumerInventoryRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerInventoryResult>> {
+        ConsumerWorkspaceAdmin::consumer_inventory(&self.inner, request)
+    }
+
+    fn consumer_clients<'a>(
+        &'a self,
+        request: &'a ConsumerResourceRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerClientsResult>> {
+        ConsumerWorkspaceAdmin::consumer_clients(&self.inner, request)
+    }
+
+    fn consumer_progress<'a>(
+        &'a self,
+        request: &'a ConsumerResourceRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerProgressResult>> {
+        ConsumerWorkspaceAdmin::consumer_progress(&self.inner, request)
+    }
+
+    fn consumer_configuration<'a>(
+        &'a self,
+        group: &'a str,
+    ) -> SessionFuture<'a, AdminResult<ConsumerConfigurationResult>> {
+        ConsumerWorkspaceAdmin::consumer_configuration(&self.inner, group)
+    }
+
+    fn consumer_config_presence<'a>(
+        &'a self,
+        request: &'a ConsumerExactTargetsRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerConfigPresenceResult>> {
+        ConsumerWorkspaceAdmin::consumer_config_presence(&self.inner, request)
+    }
+
+    fn consumer_connections_at_targets<'a>(
+        &'a self,
+        request: &'a ConsumerExactTargetsRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerConnectionsAtTargetsResult>> {
+        ConsumerWorkspaceAdmin::consumer_connections_at_targets(&self.inner, request)
+    }
+
+    fn consumer_diagnostic<'a>(
+        &'a self,
+        request: &'a DashboardConsumerRunningInfoRequest,
+    ) -> SessionFuture<'a, AdminResult<DashboardConsumerRunningInfo>> {
+        ConsumerWorkspaceAdmin::consumer_diagnostic(&self.inner, request)
+    }
+
+    fn producer_inventory(&self) -> SessionFuture<'_, AdminResult<ProducerInventoryResult>> {
+        ConsumerWorkspaceAdmin::producer_inventory(&self.inner)
+    }
+
+    fn producer_connections<'a>(
+        &'a self,
+        request: &'a ProducerConnectionsRequest,
+    ) -> SessionFuture<'a, AdminResult<ProducerConnectionsResult>> {
+        ConsumerWorkspaceAdmin::producer_connections(&self.inner, request)
+    }
+
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })
     }
@@ -365,6 +513,27 @@ impl DashboardMutationSession for RealMutationSession {
         request: &'a TopicOffsetMutationRequest,
     ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
         TopicOffsetMutationAdmin::skip_accumulated_detailed(&mut self.inner, request)
+    }
+
+    fn upsert_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerExactBatchUpsertRequest,
+    ) -> SessionFuture<'a, AdminResult<DashboardConsumerBatchResult>> {
+        ConsumerExactBatchUpsertMutationAdmin::upsert_consumer_group_exact_batch(&mut self.inner, request)
+    }
+
+    fn delete_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerExactBatchDeleteRequest,
+    ) -> SessionFuture<'a, AdminResult<DashboardConsumerBatchResult>> {
+        ConsumerExactBatchMutationAdmin::delete_consumer_group_exact_batch(&mut self.inner, request)
+    }
+
+    fn patch_consumer_config<'a>(
+        &'a mut self,
+        request: &'a PatchSubscriptionGroupConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<PatchSubscriptionGroupConfigOutcome>> {
+        ConsumerMutationAdmin::patch_config_if_version(&mut self.inner, request)
     }
 
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {

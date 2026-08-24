@@ -48,7 +48,14 @@ use crate::core::broker::RestoreBrokerLogFilterRequest;
 use crate::core::broker::SetBrokerLogFilterTtlRequest;
 use crate::core::clock::Clock;
 use crate::core::consumer;
+use crate::core::consumer::ConsumerBatchMutationAdmin;
 use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::ConsumerExactBatchDeleteRequest;
+use crate::core::consumer::ConsumerExactBatchDeleteTarget;
+use crate::core::consumer::ConsumerExactBatchMutationAdmin;
+use crate::core::consumer::ConsumerExactBatchUpsertMutationAdmin;
+use crate::core::consumer::ConsumerExactBatchUpsertRequest;
+use crate::core::consumer::ConsumerExactBatchUpsertTarget;
 use crate::core::consumer::ConsumerMutationAdmin;
 use crate::core::consumer::DashboardConsumerDeleteRequest;
 use crate::core::consumer::DashboardConsumerMutationResult;
@@ -1025,6 +1032,414 @@ impl ConsumerMutationAdmin for MutationAdminSession {
     }
 }
 
+impl ConsumerBatchMutationAdmin for MutationAdminSession {
+    fn upsert_consumer_group_batch<'a>(
+        &'a mut self,
+        request: &'a consumer::ConsumerBatchUpsertRequest,
+    ) -> AdminFuture<'a, consumer::DashboardConsumerBatchResult> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = consumer::ConsumerBatchUpsertRequest::try_new(request.inner().clone())?;
+            let cluster_info = self
+                .inner
+                .inner
+                .mutation_cluster_info()
+                .await
+                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+            let targets = resolve_consumer_target_broker_names(
+                &cluster_info,
+                &request.inner().cluster_name_list,
+                &request.inner().broker_name_list,
+            )?;
+            let inner = request.inner();
+            let config = consumer_subscription_group_config(inner);
+
+            let mut outcomes = Vec::with_capacity(targets.len());
+            for target in targets {
+                let result = match find_master_addr_by_broker_name(&cluster_info, &target) {
+                    Some(address) => self
+                        .inner
+                        .inner
+                        .upsert_subscription_group(address, config.clone())
+                        .await
+                        .map_err(|error| backend_error("upsert_subscription_group", error)),
+                    None => Err(AdminError::invalid_argument(
+                        "brokerNameList",
+                        format!("Broker `{target}` does not have a reachable master address."),
+                    )),
+                };
+                outcomes.push(consumer_batch_target_outcome(
+                    target,
+                    "BROKER",
+                    "Consumer group updated.",
+                    result,
+                ));
+            }
+            let success = outcomes.iter().all(|outcome| outcome.success);
+            Ok(consumer::DashboardConsumerBatchResult {
+                consumer_group: inner.consumer_group.clone(),
+                success,
+                targets: outcomes,
+            })
+        })
+    }
+
+    fn delete_consumer_group_batch<'a>(
+        &'a mut self,
+        request: &'a consumer::ConsumerBatchDeleteRequest,
+    ) -> AdminFuture<'a, consumer::DashboardConsumerBatchResult> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = consumer::ConsumerBatchDeleteRequest::try_new(
+                request.consumer_group(),
+                request.selected_broker_names().to_vec(),
+                request.all_broker_names().to_vec(),
+            )?;
+            let cluster_info = self
+                .inner
+                .inner
+                .mutation_cluster_info()
+                .await
+                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+            let mut authoritative_addresses = HashSet::with_capacity(request.all_broker_names().len());
+            for target in request.all_broker_names() {
+                let address = find_master_addr_by_broker_name(&cluster_info, target).ok_or_else(|| {
+                    AdminError::invalid_argument(
+                        "allBrokerNames",
+                        format!("Broker `{target}` does not have a reachable master address."),
+                    )
+                })?;
+                authoritative_addresses.insert(address);
+            }
+
+            let mut outcomes = Vec::with_capacity(request.selected_broker_names().len() + 2);
+            for target in request.selected_broker_names() {
+                let result = match find_master_addr_by_broker_name(&cluster_info, target) {
+                    Some(address) => self
+                        .inner
+                        .inner
+                        .remove_subscription_group(address, CheetahString::from(request.consumer_group()), Some(true))
+                        .await
+                        .map_err(|error| backend_error("remove_subscription_group", error)),
+                    None => Err(AdminError::invalid_argument(
+                        "selectedBrokerNames",
+                        format!("Broker `{target}` does not have a reachable master address."),
+                    )),
+                };
+                outcomes.push(consumer_batch_target_outcome(
+                    target.clone(),
+                    "BROKER",
+                    "Consumer group deleted.",
+                    result,
+                ));
+            }
+
+            let all_brokers_succeeded = outcomes.iter().all(|outcome| outcome.success);
+            let all_real_targets_selected = request.selected_broker_names() == request.all_broker_names();
+            if all_real_targets_selected && all_brokers_succeeded {
+                let nameservers = self
+                    .inner
+                    .inner
+                    .mutation_name_server_addresses()
+                    .await
+                    .map_err(|error| backend_error("mutation_name_server_addresses", error))?
+                    .into_iter()
+                    .collect::<HashSet<_>>();
+                for topic in consumer_internal_topics(request.consumer_group()) {
+                    let broker_result = self
+                        .inner
+                        .inner
+                        .remove_topic_from_brokers(authoritative_addresses.clone(), CheetahString::from(&topic))
+                        .await
+                        .map_err(|error| backend_error("remove_topic_from_brokers", error));
+                    let result = match broker_result {
+                        Ok(()) => self
+                            .inner
+                            .inner
+                            .remove_topic_from_name_servers(
+                                nameservers.clone(),
+                                None,
+                                CheetahString::from(topic.as_str()),
+                            )
+                            .await
+                            .map_err(|error| backend_error("remove_topic_from_name_servers", error)),
+                        Err(error) => Err(error),
+                    };
+                    outcomes.push(consumer_batch_target_outcome(
+                        topic,
+                        "INTERNAL_TOPIC_CLEANUP",
+                        "Internal consumer topic deleted.",
+                        result,
+                    ));
+                }
+            }
+            let success = outcomes.iter().all(|outcome| outcome.success);
+            Ok(consumer::DashboardConsumerBatchResult {
+                consumer_group: request.consumer_group().to_owned(),
+                success,
+                targets: outcomes,
+            })
+        })
+    }
+}
+
+impl ConsumerExactBatchUpsertMutationAdmin for MutationAdminSession {
+    fn upsert_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerExactBatchUpsertRequest,
+    ) -> AdminFuture<'a, consumer::DashboardConsumerBatchResult> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request =
+                ConsumerExactBatchUpsertRequest::try_new(request.inner().clone(), request.targets().iter().cloned())?;
+            let cluster_info = self
+                .inner
+                .inner
+                .mutation_cluster_info()
+                .await
+                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+            validate_exact_upsert_targets(&cluster_info, request.targets())?;
+
+            let inner = request.inner();
+            let config = consumer_subscription_group_config(inner);
+            let mut outcomes = Vec::with_capacity(request.targets().len());
+            for target in request.targets() {
+                let result = self
+                    .inner
+                    .inner
+                    .upsert_subscription_group(CheetahString::from(target.broker_address()), config.clone())
+                    .await
+                    .map_err(|error| backend_error("upsert_subscription_group", error));
+                outcomes.push(consumer_batch_target_outcome(
+                    exact_target_label(target),
+                    "BROKER",
+                    "Consumer group updated.",
+                    result,
+                ));
+            }
+            let success = outcomes.iter().all(|outcome| outcome.success);
+            Ok(consumer::DashboardConsumerBatchResult {
+                consumer_group: inner.consumer_group.clone(),
+                success,
+                targets: outcomes,
+            })
+        })
+    }
+}
+
+fn consumer_subscription_group_config(inner: &DashboardConsumerUpsertRequest) -> SubscriptionGroupConfig {
+    let mut config = SubscriptionGroupConfig::default();
+    config.set_group_name(CheetahString::from(inner.consumer_group.as_str()));
+    config.set_consume_enable(inner.consume_enable);
+    config.set_consume_from_min_enable(inner.consume_from_min_enable);
+    config.set_consume_broadcast_enable(inner.consume_broadcast_enable);
+    config.set_consume_message_orderly(inner.consume_message_orderly);
+    config.set_retry_queue_nums(inner.retry_queue_nums);
+    config.set_retry_max_times(inner.retry_max_times);
+    config.set_broker_id(inner.broker_id);
+    config.set_which_broker_when_consume_slowly(inner.which_broker_when_consume_slowly);
+    config.set_notify_consumer_ids_changed_enable(inner.notify_consumer_ids_changed_enable);
+    config.set_group_sys_flag(inner.group_sys_flag);
+    config.set_consume_timeout_minute(inner.consume_timeout_minute);
+    config
+}
+
+impl ConsumerExactBatchMutationAdmin for MutationAdminSession {
+    fn delete_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerExactBatchDeleteRequest,
+    ) -> AdminFuture<'a, consumer::DashboardConsumerBatchResult> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = ConsumerExactBatchDeleteRequest::try_new(
+                request.consumer_group(),
+                request.selected_targets().iter().cloned(),
+                request.authoritative_targets().iter().cloned(),
+            )?;
+            let cluster_info = self
+                .inner
+                .inner
+                .mutation_cluster_info()
+                .await
+                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+            validate_exact_delete_targets(&cluster_info, request.authoritative_targets())?;
+
+            let mut outcomes = Vec::with_capacity(request.selected_targets().len() + 2);
+            for target in request.selected_targets() {
+                let result = self
+                    .inner
+                    .inner
+                    .remove_subscription_group(
+                        CheetahString::from(target.broker_address()),
+                        CheetahString::from(request.consumer_group()),
+                        Some(true),
+                    )
+                    .await
+                    .map_err(|error| backend_error("remove_subscription_group", error));
+                outcomes.push(consumer_batch_target_outcome(
+                    exact_target_label(target),
+                    "BROKER",
+                    "Consumer group deleted.",
+                    result,
+                ));
+            }
+
+            let all_brokers_succeeded = outcomes.iter().all(|outcome| outcome.success);
+            let all_real_targets_selected = request.selected_targets() == request.authoritative_targets();
+            if all_real_targets_selected && all_brokers_succeeded {
+                let nameservers = self
+                    .inner
+                    .inner
+                    .mutation_name_server_addresses()
+                    .await
+                    .map_err(|error| backend_error("mutation_name_server_addresses", error))?
+                    .into_iter()
+                    .collect::<HashSet<_>>();
+                let authoritative_addresses = request
+                    .authoritative_targets()
+                    .iter()
+                    .map(|target| CheetahString::from(target.broker_address()))
+                    .collect::<HashSet<_>>();
+                for topic in consumer_internal_topics(request.consumer_group()) {
+                    let broker_result = self
+                        .inner
+                        .inner
+                        .remove_topic_from_brokers(authoritative_addresses.clone(), CheetahString::from(&topic))
+                        .await
+                        .map_err(|error| backend_error("remove_topic_from_brokers", error));
+                    let result = match broker_result {
+                        Ok(()) => self
+                            .inner
+                            .inner
+                            .remove_topic_from_name_servers(
+                                nameservers.clone(),
+                                None,
+                                CheetahString::from(topic.as_str()),
+                            )
+                            .await
+                            .map_err(|error| backend_error("remove_topic_from_name_servers", error)),
+                        Err(error) => Err(error),
+                    };
+                    outcomes.push(consumer_batch_target_outcome(
+                        topic,
+                        "INTERNAL_TOPIC_CLEANUP",
+                        "Internal consumer topic deleted.",
+                        result,
+                    ));
+                }
+            }
+            let success = outcomes.iter().all(|outcome| outcome.success);
+            Ok(consumer::DashboardConsumerBatchResult {
+                consumer_group: request.consumer_group().to_owned(),
+                success,
+                targets: outcomes,
+            })
+        })
+    }
+}
+
+fn validate_exact_delete_targets(
+    cluster_info: &ClusterInfo,
+    confirmed: &[ConsumerExactBatchDeleteTarget],
+) -> AdminResult<()> {
+    validate_exact_targets(cluster_info, confirmed, "validate_consumer_delete_targets", "delete")
+}
+
+fn validate_exact_upsert_targets(
+    cluster_info: &ClusterInfo,
+    confirmed: &[ConsumerExactBatchUpsertTarget],
+) -> AdminResult<()> {
+    validate_exact_targets(
+        cluster_info,
+        confirmed,
+        "validate_consumer_upsert_targets",
+        "create-or-update",
+    )
+}
+
+fn validate_exact_targets(
+    cluster_info: &ClusterInfo,
+    confirmed: &[ConsumerExactBatchDeleteTarget],
+    operation: &'static str,
+    action: &'static str,
+) -> AdminResult<()> {
+    let mut current = Vec::with_capacity(confirmed.len());
+    for target in confirmed {
+        let belongs_to_cluster = cluster_info
+            .cluster_addr_table
+            .as_ref()
+            .and_then(|clusters| clusters.get(target.cluster_name()))
+            .is_some_and(|brokers| brokers.iter().any(|broker| broker.as_str() == target.broker_name()));
+        if !belongs_to_cluster {
+            return Err(exact_target_drift(
+                operation,
+                format!(
+                    "Broker `{}` is no longer in confirmed cluster `{}`.",
+                    target.broker_name(),
+                    target.cluster_name()
+                ),
+            ));
+        }
+        let address = find_master_addr_by_broker_name(cluster_info, target.broker_name()).ok_or_else(|| {
+            exact_target_drift(
+                operation,
+                format!(
+                    "Broker `{}` no longer has the confirmed master target.",
+                    target.broker_name()
+                ),
+            )
+        })?;
+        current.push(ConsumerExactBatchDeleteTarget::try_new(
+            target.cluster_name(),
+            target.broker_name(),
+            address.to_string(),
+        )?);
+    }
+    current.sort();
+    if current != confirmed {
+        return Err(exact_target_drift(
+            operation,
+            format!("The broker address set changed after confirmation; no {action} was attempted."),
+        ));
+    }
+    Ok(())
+}
+
+fn exact_target_drift(operation: &'static str, reason: impl Into<String>) -> AdminError {
+    AdminError::backend_view(operation, "TARGET_DRIFT", reason, None, 409, false)
+}
+
+fn exact_target_label(target: &ConsumerExactBatchDeleteTarget) -> String {
+    format!(
+        "{}/{}/{}",
+        target.cluster_name(),
+        target.broker_name(),
+        target.broker_address()
+    )
+}
+
+fn consumer_batch_target_outcome(
+    target: String,
+    kind: &str,
+    success_message: &str,
+    result: AdminResult<()>,
+) -> consumer::DashboardConsumerTargetOutcome {
+    match result {
+        Ok(()) => consumer::DashboardConsumerTargetOutcome {
+            target,
+            kind: kind.to_owned(),
+            success: true,
+            message: success_message.to_owned(),
+        },
+        Err(error) => consumer::DashboardConsumerTargetOutcome {
+            target,
+            kind: kind.to_owned(),
+            success: false,
+            message: crate::core::stable_error_message(&error),
+        },
+    }
+}
+
 impl MessageMutationAdmin for MutationAdminSession {
     fn consume_message_directly<'a>(
         &'a mut self,
@@ -1552,12 +1967,64 @@ mod tests {
             T: TopicMutationAdmin
                 + TopicOffsetMutationAdmin
                 + ConsumerMutationAdmin
+                + ConsumerExactBatchMutationAdmin
+                + ConsumerExactBatchUpsertMutationAdmin
                 + MessageMutationAdmin
                 + BrokerMutationAdmin,
         >() {
         }
 
         assert_mutation_contracts::<MutationAdminSession>();
+    }
+
+    #[test]
+    fn exact_consumer_delete_rejects_address_drift_before_mutation_loop() {
+        let cluster_info = exact_delete_cluster("10.0.0.2:10911");
+        let confirmed = [
+            ConsumerExactBatchDeleteTarget::try_new("cluster-a", "broker-a", "10.0.0.1:10911").expect("valid target"),
+        ];
+
+        let error = validate_exact_delete_targets(&cluster_info, &confirmed).expect_err("address drift");
+        assert_eq!(error.code(), Some("TARGET_DRIFT"));
+        assert_eq!(error.http_status(), Some(409));
+    }
+
+    #[test]
+    fn exact_consumer_delete_accepts_only_same_cluster_broker_and_address() {
+        let cluster_info = exact_delete_cluster("10.0.0.1:10911");
+        let confirmed = [
+            ConsumerExactBatchDeleteTarget::try_new("cluster-a", "broker-a", "10.0.0.1:10911").expect("valid target"),
+        ];
+
+        validate_exact_delete_targets(&cluster_info, &confirmed).expect("unchanged identity");
+    }
+
+    #[test]
+    fn exact_consumer_upsert_rejects_address_drift_before_mutation_loop() {
+        let cluster_info = exact_delete_cluster("10.0.0.2:10911");
+        let confirmed = [
+            ConsumerExactBatchUpsertTarget::try_new("cluster-a", "broker-a", "10.0.0.1:10911").expect("valid target"),
+        ];
+
+        let error = validate_exact_upsert_targets(&cluster_info, &confirmed).expect_err("address drift");
+        assert_eq!(error.code(), Some("TARGET_DRIFT"));
+        assert_eq!(error.http_status(), Some(409));
+    }
+
+    fn exact_delete_cluster(address: &str) -> ClusterInfo {
+        let broker = rocketmq_protocol::protocol::route::route_data_view::BrokerData::new(
+            "cluster-a".into(),
+            "broker-a".into(),
+            HashMap::from([(MASTER_ID, CheetahString::from(address))]),
+            None,
+        );
+        ClusterInfo::new(
+            Some(HashMap::from([(CheetahString::from("broker-a"), broker)])),
+            Some(HashMap::from([(
+                CheetahString::from("cluster-a"),
+                HashSet::from([CheetahString::from("broker-a")]),
+            )])),
+        )
     }
 
     #[test]

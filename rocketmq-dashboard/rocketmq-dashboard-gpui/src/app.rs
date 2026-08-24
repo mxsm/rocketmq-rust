@@ -14,6 +14,8 @@
 
 //! Root application entity, startup lifecycle, shell composition, and page cache ownership.
 
+#[path = "app/consumers.rs"]
+mod consumers;
 #[path = "app/delivery03.rs"]
 mod delivery03;
 #[path = "app/topics.rs"]
@@ -41,9 +43,11 @@ use crate::{
     },
     features::{
         brokers::BrokersView,
+        consumers::ConsumersView,
         dashboard::DashboardView,
         login::LoginForm,
         ops::{OpsIntent, OpsView},
+        producers::ProducersView,
         proxy::ProxyView,
         topics::TopicsView,
     },
@@ -53,7 +57,7 @@ use crate::{
         StartupSnapshot,
     },
     state::{RequestEpoch, UiError, UiErrorCode},
-    ui::{consumer_view::ConsumerView, message_view::MessageView, producer_view::ProducerView},
+    ui::message_view::MessageView,
 };
 
 /// The visible startup state. Ready retains the safe destination selected by local startup data.
@@ -143,8 +147,8 @@ struct LegacyPageCache {
     dashboard: Entity<DashboardView>,
     brokers: Entity<BrokersView>,
     topics: Entity<TopicsView>,
-    consumers: Entity<ConsumerView>,
-    producers: Entity<ProducerView>,
+    consumers: Entity<ConsumersView>,
+    producers: Entity<ProducersView>,
     messages: Entity<MessageView>,
     ops: Entity<OpsView>,
     proxy: Entity<ProxyView>,
@@ -157,8 +161,8 @@ impl LegacyPageCache {
             dashboard: cx.new(|cx| DashboardView::new(services.clone(), 0, cx)),
             brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
             topics: cx.new(|cx| TopicsView::new(window, services.clone(), 0, cx)),
-            consumers: cx.new(|_| ConsumerView::new()),
-            producers: cx.new(|_| ProducerView::new()),
+            consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), 0, cx)),
+            producers: cx.new(|cx| ProducersView::new(window, services.clone(), 0, cx)),
             messages: cx.new(|_| MessageView::new()),
             ops: cx.new(|cx| OpsView::new(window, services.clone(), cx)),
             proxy: cx.new(|cx| ProxyView::new(window, services.clone(), cx)),
@@ -179,6 +183,7 @@ impl LegacyPageCache {
                 | AppRoute::Topics
                 | AppRoute::TopicDetail { .. }
                 | AppRoute::Consumers
+                | AppRoute::ConsumerDetail { .. }
                 | AppRoute::Producers
                 | AppRoute::Messages
                 | AppRoute::OpsSettings
@@ -280,6 +285,7 @@ impl RocketmqDashboard {
         ];
         subscriptions.extend(Self::delivery03_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&legacy_pages, window, cx));
+        subscriptions.extend(Self::consumer_subscriptions(&legacy_pages, window, cx));
         let mut dashboard = Self {
             services,
             startup_state: StartupState::Booting,
@@ -379,6 +385,12 @@ impl RocketmqDashboard {
                 self.legacy_pages
                     .topics
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
+                self.legacy_pages
+                    .consumers
+                    .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
+                self.legacy_pages
+                    .producers
+                    .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
                 self.session = if snapshot.has_valid_session {
                     SessionState::authenticated()
                 } else {
@@ -437,6 +449,7 @@ impl RocketmqDashboard {
         self.history.navigate(route);
         self.sync_broker_route(window, cx);
         self.sync_topic_route(window, cx);
+        self.sync_consumer_route(window, cx);
         cx.notify();
     }
 
@@ -450,6 +463,7 @@ impl RocketmqDashboard {
         if self.history.back().is_some() {
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
+            self.sync_consumer_route(window, cx);
             cx.notify();
         }
     }
@@ -464,6 +478,7 @@ impl RocketmqDashboard {
         if self.history.forward().is_some() {
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
+            self.sync_consumer_route(window, cx);
             cx.notify();
         }
     }
@@ -537,12 +552,14 @@ impl RocketmqDashboard {
                             let _ = dashboard.history.back();
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
+                            dashboard.sync_consumer_route(window, cx);
                             cx.notify();
                         }
                         PendingDiscardAction::Forward => {
                             let _ = dashboard.history.forward();
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
+                            dashboard.sync_consumer_route(window, cx);
                             cx.notify();
                         }
                         PendingDiscardAction::CloseWindow => window.remove_window(),
@@ -618,6 +635,12 @@ impl RocketmqDashboard {
                 .update(cx, |view, cx| view.set_revision(event.revision, cx));
             self.legacy_pages
                 .topics
+                .update(cx, |view, cx| view.set_revision(event.revision, cx));
+            self.legacy_pages
+                .consumers
+                .update(cx, |view, cx| view.set_revision(event.revision, cx));
+            self.legacy_pages
+                .producers
                 .update(cx, |view, cx| view.set_revision(event.revision, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
@@ -727,6 +750,7 @@ impl RocketmqDashboard {
         ];
         subscriptions.extend(Self::delivery03_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&pages, window, cx));
+        subscriptions.extend(Self::consumer_subscriptions(&pages, window, cx));
         self.subscriptions = subscriptions;
         self.legacy_pages = pages;
     }
@@ -1192,12 +1216,12 @@ impl RocketmqDashboard {
                 "Filter real Topic inventory and inspect independently loaded lifecycle resources.",
                 div().size_full().child(self.legacy_pages.topics.clone()),
             ),
-            AppRoute::Consumers if uses_legacy_page => (
-                "Legacy read-only consumer content is preserved until the consumer delivery.",
+            AppRoute::Consumers | AppRoute::ConsumerDetail { .. } if uses_legacy_page => (
+                "Filter real Consumer observations and inspect independently loaded group resources.",
                 div().size_full().child(self.legacy_pages.consumers.clone()),
             ),
             AppRoute::Producers if uses_legacy_page => (
-                "Legacy read-only producer content is preserved until the producer delivery.",
+                "Inspect discovered Producer groups and apply an explicit Topic + Group client query.",
                 div().size_full().child(self.legacy_pages.producers.clone()),
             ),
             AppRoute::Messages if uses_legacy_page => (

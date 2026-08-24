@@ -225,14 +225,14 @@ impl<'de> Deserialize<'de> for DashboardConsumerRunningInfoRequest {
 }
 
 impl DashboardConsumerRunningInfoRequest {
-    const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+    const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 
     /// Creates a bounded consumer diagnostic request.
     ///
     /// # Errors
     ///
     /// Returns an error when the consumer group or client ID is blank, or
-    /// when `max_output_bytes` is outside the inclusive range 1 byte to 1 MiB.
+    /// when `max_output_bytes` is outside the inclusive range 1 byte to 256 KiB.
     pub fn try_new(
         consumer_group: impl Into<String>,
         client_id: impl Into<String>,
@@ -242,7 +242,7 @@ impl DashboardConsumerRunningInfoRequest {
         if !(1..=Self::MAX_OUTPUT_BYTES).contains(&max_output_bytes) {
             return Err(crate::core::AdminError::invalid_argument(
                 "maxOutputBytes",
-                "must be between 1 and 1048576 bytes",
+                "must be between 1 and 262144 bytes",
             ));
         }
         Ok(Self {
@@ -288,17 +288,104 @@ pub struct DashboardConsumerProcessQueue {
     pub last_consume_timestamp: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardConsumerRunningInfo {
+    consumer_group: String,
+    client_id: String,
+    properties: Vec<DashboardConsumerConfigAttribute>,
+    subscriptions: Vec<DashboardConsumerSubscriptionItem>,
+    process_queues: Vec<DashboardConsumerProcessQueue>,
+    jstack: Option<String>,
+    /// True when requested property or JStack text was shortened at a UTF-8
+    /// character boundary, omitted by the budget, or unavailable.
+    truncated: bool,
+}
+
+/// Move-only fields for an explicitly selected transport boundary. The wire
+/// decoder remains RocketMQ protocol's `ConsumerRunningInfo`; this type never
+/// implements Serde itself.
+pub struct DashboardConsumerRunningInfoParts {
     pub consumer_group: String,
     pub client_id: String,
     pub properties: Vec<DashboardConsumerConfigAttribute>,
     pub subscriptions: Vec<DashboardConsumerSubscriptionItem>,
     pub process_queues: Vec<DashboardConsumerProcessQueue>,
     pub jstack: Option<String>,
-    /// True when requested property or JStack text was shortened at a UTF-8
-    /// character boundary, omitted by the budget, or unavailable.
     pub truncated: bool,
+}
+
+impl DashboardConsumerRunningInfo {
+    pub fn new(
+        consumer_group: String,
+        client_id: String,
+        properties: Vec<DashboardConsumerConfigAttribute>,
+        subscriptions: Vec<DashboardConsumerSubscriptionItem>,
+        process_queues: Vec<DashboardConsumerProcessQueue>,
+        jstack: Option<String>,
+        truncated: bool,
+    ) -> Self {
+        Self {
+            consumer_group,
+            client_id,
+            properties,
+            subscriptions,
+            process_queues,
+            jstack,
+            truncated,
+        }
+    }
+
+    pub fn into_parts(mut self) -> DashboardConsumerRunningInfoParts {
+        DashboardConsumerRunningInfoParts {
+            consumer_group: std::mem::take(&mut self.consumer_group),
+            client_id: std::mem::take(&mut self.client_id),
+            properties: std::mem::take(&mut self.properties),
+            subscriptions: std::mem::take(&mut self.subscriptions),
+            process_queues: std::mem::take(&mut self.process_queues),
+            jstack: std::mem::take(&mut self.jstack),
+            truncated: self.truncated,
+        }
+    }
+
+    pub fn into_diagnostic_parts(mut self) -> (Vec<DashboardConsumerConfigAttribute>, Option<String>, bool) {
+        (
+            std::mem::take(&mut self.properties),
+            std::mem::take(&mut self.jstack),
+            self.truncated,
+        )
+    }
+}
+
+impl Drop for DashboardConsumerRunningInfo {
+    fn drop(&mut self) {
+        for property in &mut self.properties {
+            scrub_string(&mut property.key);
+            scrub_string(&mut property.value);
+        }
+        if let Some(jstack) = &mut self.jstack {
+            scrub_string(jstack);
+        }
+    }
+}
+
+fn scrub_string(value: &mut String) {
+    let byte_len = value.len();
+    if byte_len > 0 {
+        value.replace_range(.., &"\0".repeat(byte_len));
+        value.clear();
+    }
+}
+
+impl std::fmt::Debug for DashboardConsumerRunningInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DashboardConsumerRunningInfo")
+            .field("property_count", &self.properties.len())
+            .field("subscription_count", &self.subscriptions.len())
+            .field("process_queue_count", &self.process_queues.len())
+            .field("jstack_loaded", &self.jstack.is_some())
+            .field("truncated", &self.truncated)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -380,6 +467,7 @@ impl ConsumerBatchUpsertRequest {
         Ok(Self { inner })
     }
 
+    #[cfg(feature = "mutation-client-adapter")]
     pub(crate) fn inner(&self) -> &DashboardConsumerUpsertRequest {
         &self.inner
     }
@@ -443,17 +531,202 @@ impl ConsumerBatchDeleteRequest {
         })
     }
 
+    #[cfg(feature = "mutation-client-adapter")]
     pub(crate) fn consumer_group(&self) -> &str {
         &self.consumer_group
     }
 
+    #[cfg(feature = "mutation-client-adapter")]
     pub(crate) fn selected_broker_names(&self) -> &[String] {
         &self.selected_broker_names
     }
 
+    #[cfg(feature = "mutation-client-adapter")]
     pub(crate) fn all_broker_names(&self) -> &[String] {
         &self.all_broker_names
     }
+}
+
+/// One immutable broker identity confirmed by a read-only preflight.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConsumerExactBatchDeleteTarget {
+    cluster_name: String,
+    broker_name: String,
+    broker_address: String,
+}
+
+impl ConsumerExactBatchDeleteTarget {
+    /// Builds a non-empty exact broker identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when any identity component is empty.
+    pub fn try_new(
+        cluster_name: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_address: impl Into<String>,
+    ) -> AdminResult<Self> {
+        Ok(Self {
+            cluster_name: required_identity("clusterName", cluster_name.into())?,
+            broker_name: required_identity("brokerName", broker_name.into())?,
+            broker_address: required_identity("brokerAddress", broker_address.into())?,
+        })
+    }
+
+    pub fn cluster_name(&self) -> &str {
+        &self.cluster_name
+    }
+
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+
+    pub fn broker_address(&self) -> &str {
+        &self.broker_address
+    }
+}
+
+/// Exact broker identity used by create-or-update mutations.
+pub type ConsumerExactBatchUpsertTarget = ConsumerExactBatchDeleteTarget;
+
+/// Create-or-update request whose targets retain the exact cluster, broker,
+/// and address observed before confirmation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerExactBatchUpsertRequest {
+    inner: DashboardConsumerUpsertRequest,
+    targets: Vec<ConsumerExactBatchUpsertTarget>,
+}
+
+impl ConsumerExactBatchUpsertRequest {
+    /// Validates the consumer configuration and exact target identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for protected groups, invalid retry
+    /// limits, empty targets, or ambiguous broker identities.
+    pub fn try_new(
+        mut inner: DashboardConsumerUpsertRequest,
+        targets: impl IntoIterator<Item = ConsumerExactBatchUpsertTarget>,
+    ) -> AdminResult<Self> {
+        inner.consumer_group = validate_batch_consumer_group(inner.consumer_group)?;
+        let targets = canonical_exact_targets("targets", targets)?;
+        if targets.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "targets",
+                "Select at least one exact broker target before saving the consumer group.",
+            ));
+        }
+        validate_batch_consumer_limits(&inner)?;
+        inner.cluster_name_list.clear();
+        inner.broker_name_list = targets.iter().map(|target| target.broker_name.clone()).collect();
+        Ok(Self { inner, targets })
+    }
+
+    pub fn targets(&self) -> &[ConsumerExactBatchUpsertTarget] {
+        &self.targets
+    }
+
+    #[cfg(feature = "mutation-client-adapter")]
+    pub(crate) fn inner(&self) -> &DashboardConsumerUpsertRequest {
+        &self.inner
+    }
+}
+
+/// Delete request whose selected and authoritative targets retain the exact
+/// cluster, broker, and address observed before confirmation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerExactBatchDeleteRequest {
+    consumer_group: String,
+    selected_targets: Vec<ConsumerExactBatchDeleteTarget>,
+    authoritative_targets: Vec<ConsumerExactBatchDeleteTarget>,
+}
+
+impl ConsumerExactBatchDeleteRequest {
+    /// Validates the exact target identities and selection relationship.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for protected groups, empty or
+    /// ambiguous target sets, or a selection outside the authoritative set.
+    pub fn try_new(
+        consumer_group: impl Into<String>,
+        selected_targets: impl IntoIterator<Item = ConsumerExactBatchDeleteTarget>,
+        authoritative_targets: impl IntoIterator<Item = ConsumerExactBatchDeleteTarget>,
+    ) -> AdminResult<Self> {
+        let consumer_group = validate_batch_consumer_group(consumer_group)?;
+        let selected_targets = canonical_exact_targets("selectedTargets", selected_targets)?;
+        if selected_targets.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "selectedTargets",
+                "Select at least one exact broker target before deleting the consumer group.",
+            ));
+        }
+        let authoritative_targets = canonical_exact_targets("authoritativeTargets", authoritative_targets)?;
+        if authoritative_targets.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "authoritativeTargets",
+                "The authoritative exact target set must not be empty.",
+            ));
+        }
+        if let Some(target) = selected_targets
+            .iter()
+            .find(|target| authoritative_targets.binary_search(target).is_err())
+        {
+            return Err(crate::core::AdminError::invalid_argument(
+                "selectedTargets",
+                format!(
+                    "Broker `{}` is outside the authoritative exact target set.",
+                    target.broker_name
+                ),
+            ));
+        }
+        Ok(Self {
+            consumer_group,
+            selected_targets,
+            authoritative_targets,
+        })
+    }
+
+    pub fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    pub fn selected_targets(&self) -> &[ConsumerExactBatchDeleteTarget] {
+        &self.selected_targets
+    }
+
+    pub fn authoritative_targets(&self) -> &[ConsumerExactBatchDeleteTarget] {
+        &self.authoritative_targets
+    }
+}
+
+fn required_identity(field: &'static str, value: String) -> AdminResult<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        Err(crate::core::AdminError::invalid_argument(field, "must not be empty"))
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+fn canonical_exact_targets(
+    field: &'static str,
+    targets: impl IntoIterator<Item = ConsumerExactBatchDeleteTarget>,
+) -> AdminResult<Vec<ConsumerExactBatchDeleteTarget>> {
+    let mut targets = targets.into_iter().collect::<Vec<_>>();
+    targets.sort();
+    targets.dedup();
+    let mut broker_names = std::collections::BTreeSet::new();
+    if let Some(target) = targets
+        .iter()
+        .find(|target| !broker_names.insert(target.broker_name.as_str()))
+    {
+        return Err(crate::core::AdminError::invalid_argument(
+            field,
+            format!("Broker `{}` has more than one exact identity.", target.broker_name),
+        ));
+    }
+    Ok(targets)
 }
 
 /// Outcome of one broker mutation or one internal-topic cleanup target.
@@ -833,6 +1106,24 @@ pub trait ConsumerBatchMutationAdmin: Send {
     ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
 }
 
+/// Exact-target consumer deletion owned by one leased mutation session.
+pub trait ConsumerExactBatchMutationAdmin: Send {
+    fn delete_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerExactBatchDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
+}
+
+/// Exact-target consumer create-or-update owned by one leased mutation
+/// session. Implementations must revalidate the confirmed address set before
+/// attempting any write.
+pub trait ConsumerExactBatchUpsertMutationAdmin: Send {
+    fn upsert_consumer_group_exact_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerExactBatchUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
+}
+
 /// Consumer mutations require the explicit mutation adapter feature.
 pub trait ConsumerMutationAdmin: Send {
     fn patch_config_if_version<'a>(
@@ -1005,7 +1296,7 @@ mod tests {
         assert!(DashboardConsumerRunningInfoRequest::try_new(" ", "client-a", false, 1024).is_err());
         assert!(DashboardConsumerRunningInfoRequest::try_new("orders", " ", false, 1024).is_err());
         assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 0).is_err());
-        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 1_048_577).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 262_145).is_err());
     }
 
     #[test]
@@ -1020,7 +1311,7 @@ mod tests {
         for invalid in [
             r#"{"consumer_group":" ","client_id":"client-a","include_jstack":false,"max_output_bytes":1024}"#,
             r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":0}"#,
-            r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":1048577}"#,
+            r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":262145}"#,
         ] {
             assert!(serde_json::from_str::<DashboardConsumerRunningInfoRequest>(invalid).is_err());
         }

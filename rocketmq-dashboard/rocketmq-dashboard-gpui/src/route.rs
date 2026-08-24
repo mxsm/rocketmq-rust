@@ -73,14 +73,14 @@ pub enum TopicTab {
 pub enum ConsumerTab {
     /// Consumer group summary.
     Overview,
-    /// Subscription details.
-    Subscriptions,
     /// Client connections.
-    Connections,
-    /// Offset details.
-    Offsets,
-    /// Monitoring details.
-    Monitoring,
+    Clients,
+    /// Queue-level offset progress.
+    Progress,
+    /// Effective per-target configuration.
+    Configuration,
+    /// Reset and skip actions for exact Topic targets.
+    OffsetActions,
 }
 
 /// Every route exposed by Delivery 01.
@@ -246,10 +246,10 @@ impl fmt::Display for ConsumerTab {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Overview => "overview",
-            Self::Subscriptions => "subscriptions",
-            Self::Connections => "connections",
-            Self::Offsets => "offsets",
-            Self::Monitoring => "monitoring",
+            Self::Clients => "clients",
+            Self::Progress => "progress",
+            Self::Configuration => "configuration",
+            Self::OffsetActions => "offset-actions",
         })
     }
 }
@@ -360,10 +360,10 @@ fn parse_topic_tab(value: &str) -> Result<TopicTab, RouteParseError> {
 fn parse_consumer_tab(value: &str) -> Result<ConsumerTab, RouteParseError> {
     match value {
         "overview" => Ok(ConsumerTab::Overview),
-        "subscriptions" => Ok(ConsumerTab::Subscriptions),
-        "connections" => Ok(ConsumerTab::Connections),
-        "offsets" => Ok(ConsumerTab::Offsets),
-        "monitoring" => Ok(ConsumerTab::Monitoring),
+        "clients" | "connections" | "subscriptions" => Ok(ConsumerTab::Clients),
+        "progress" | "monitoring" => Ok(ConsumerTab::Progress),
+        "configuration" => Ok(ConsumerTab::Configuration),
+        "offset-actions" | "offsets" => Ok(ConsumerTab::OffsetActions),
         _ => Err(RouteParseError::InvalidParameter),
     }
 }
@@ -390,7 +390,7 @@ mod tests {
             AppRoute::Consumers,
             AppRoute::ConsumerDetail {
                 group: RouteKey::parse("payments").expect("valid group key"),
-                tab: ConsumerTab::Offsets,
+                tab: ConsumerTab::OffsetActions,
             },
             AppRoute::Producers,
             AppRoute::Messages,
@@ -437,6 +437,22 @@ mod tests {
             }
             .format_path(),
             "/topics/orders/configuration"
+        );
+        let group = RouteKey::parse("payments").expect("group");
+        assert_eq!(
+            AppRoute::parse("/consumers/payments/connections"),
+            Ok(AppRoute::ConsumerDetail {
+                group: group.clone(),
+                tab: ConsumerTab::Clients,
+            })
+        );
+        assert_eq!(
+            AppRoute::ConsumerDetail {
+                group,
+                tab: ConsumerTab::OffsetActions,
+            }
+            .format_path(),
+            "/consumers/payments/offset-actions"
         );
     }
 

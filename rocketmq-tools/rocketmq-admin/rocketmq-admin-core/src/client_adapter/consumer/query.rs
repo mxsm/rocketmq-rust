@@ -344,6 +344,7 @@ pub(super) fn map_consumer_running_info(
     let properties = running_info
         .properties
         .into_iter()
+        .filter(|(key, _)| running_info_property_is_allowlisted(key))
         .map(|(key, value)| consumer::DashboardConsumerConfigAttribute {
             key: budget.take(&key),
             value: budget.take(&value),
@@ -405,15 +406,26 @@ pub(super) fn map_consumer_running_info(
         None
     };
 
-    consumer::DashboardConsumerRunningInfo {
-        consumer_group: group.to_string(),
-        client_id: client_id.to_string(),
+    consumer::DashboardConsumerRunningInfo::new(
+        group.to_string(),
+        client_id.to_string(),
         properties,
         subscriptions,
         process_queues,
         jstack,
-        truncated: budget.truncated,
-    }
+        budget.truncated,
+    )
+}
+
+pub(super) fn running_info_property_is_allowlisted(key: &str) -> bool {
+    matches!(
+        key,
+        ConsumerRunningInfo::PROP_THREADPOOL_CORE_SIZE
+            | ConsumerRunningInfo::PROP_CONSUME_ORDERLY
+            | ConsumerRunningInfo::PROP_CONSUME_TYPE
+            | ConsumerRunningInfo::PROP_CLIENT_VERSION
+            | ConsumerRunningInfo::PROP_CONSUMER_START_TIMESTAMP
+    )
 }
 
 struct Utf8Budget {
@@ -618,8 +630,12 @@ mod tests {
 
     fn running_info_fixture() -> ConsumerRunningInfo {
         let mut running_info = ConsumerRunningInfo::new();
-        running_info.properties.insert("z-key".to_string(), "last".to_string());
-        running_info.properties.insert("a".to_string(), "éé".to_string());
+        running_info
+            .properties
+            .insert(ConsumerRunningInfo::PROP_CONSUME_TYPE.to_string(), "PUSH".to_string());
+        running_info
+            .properties
+            .insert("credential.token".to_string(), "must-not-cross-boundary".to_string());
         running_info.subscription_set.extend([
             SubscriptionData {
                 topic: CheetahString::from_static_str("payments"),
@@ -747,6 +763,8 @@ mod tests {
     #[test]
     fn running_info_mapping_sorts_sections_and_bounds_multibyte_text_and_jstack() {
         let mapped = map_consumer_running_info("orders-consumer", "10.0.0.8@client-a", true, 4, running_info_fixture());
+        let debug = format!("{mapped:?}");
+        let mapped = mapped.into_parts();
 
         assert_eq!(
             mapped
@@ -754,7 +772,7 @@ mod tests {
                 .iter()
                 .map(|item| (item.key.as_str(), item.value.as_str()))
                 .collect::<Vec<_>>(),
-            vec![("a", "é"), ("z", "")]
+            vec![("PROP", "")]
         );
         assert_eq!(
             mapped
@@ -774,6 +792,7 @@ mod tests {
         );
         assert_eq!(mapped.jstack.as_deref(), Some(""));
         assert!(mapped.truncated);
+        assert!(!debug.contains("must-not-cross-boundary"));
     }
 
     #[test]
@@ -784,7 +803,8 @@ mod tests {
             false,
             1_048_576,
             running_info_fixture(),
-        );
+        )
+        .into_parts();
 
         assert_eq!(mapped.jstack, None);
         assert!(!mapped.truncated);
@@ -795,7 +815,8 @@ mod tests {
         let mut running_info = running_info_fixture();
         running_info.jstack = None;
 
-        let mapped = map_consumer_running_info("orders-consumer", "10.0.0.8@client-a", true, 1_048_576, running_info);
+        let mapped = map_consumer_running_info("orders-consumer", "10.0.0.8@client-a", true, 1_048_576, running_info)
+            .into_parts();
 
         assert_eq!(mapped.jstack, None);
         assert!(mapped.truncated);

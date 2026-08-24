@@ -1246,7 +1246,7 @@ fn rebuilding_delivery_pages_keeps_root_subscriptions_bounded(cx: &mut gpui::Tes
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
             let expected = dashboard.subscriptions.len();
-            assert_eq!(expected, 7);
+            assert_eq!(expected, 8);
             for _ in 0..5 {
                 dashboard.rebuild_pages(window, cx);
                 assert_eq!(dashboard.subscriptions.len(), expected);
