@@ -57,6 +57,8 @@ mod history_sql_store_docker_tests;
 #[path = "session_sql_store.rs"]
 mod session_sql_store;
 
+const MIN_SAFE_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
+
 pub enum DatabasePool {
     Sqlite(SqlitePool),
     MySql(MySqlPool),
@@ -67,6 +69,8 @@ pub struct SqlPersistence {
     pool: DatabasePool,
     backend: StorageBackend,
     schema_version: i64,
+    sqlite_storage_path: Option<PathBuf>,
+    sqlite_storage_context: Option<ChildServiceContext>,
 }
 
 impl SqlPersistence {
@@ -119,6 +123,17 @@ impl SqlPersistence {
     pub async fn storage_health(&self) -> StorageHealth {
         let schema_version = self.probe().await.ok();
         let (pool_size, idle_connections) = self.pool_metrics();
+        let available_bytes = self.sqlite_safe_available_bytes().await;
+        let status = match (schema_version, self.backend, available_bytes) {
+            (None, _, _) => StorageStatus::Unavailable,
+            (Some(_), StorageBackend::Sqlite, Some(bytes)) if bytes < MIN_SAFE_AVAILABLE_BYTES => {
+                StorageStatus::Degraded
+            }
+            (Some(_), StorageBackend::Sqlite, Some(_)) => StorageStatus::Available,
+            (Some(_), StorageBackend::Sqlite, None) => StorageStatus::Unavailable,
+            (Some(_), StorageBackend::MySql | StorageBackend::Postgres, _) => StorageStatus::Available,
+            (Some(_), StorageBackend::File, _) => StorageStatus::Unavailable,
+        };
         StorageHealth {
             backend: self.backend,
             mode: match self.backend {
@@ -126,14 +141,10 @@ impl SqlPersistence {
                 StorageBackend::MySql | StorageBackend::Postgres => StorageMode::MultiNode,
                 StorageBackend::File => StorageMode::SingleNode,
             },
-            status: if schema_version.is_some() {
-                StorageStatus::Available
-            } else {
-                StorageStatus::Unavailable
-            },
+            status,
             schema_version,
             last_successful_write_at: None,
-            available_bytes: None,
+            available_bytes,
             pool_size: Some(pool_size),
             idle_connections: Some(idle_connections),
         }
@@ -145,6 +156,20 @@ impl SqlPersistence {
             DatabasePool::MySql(pool) => (pool.size(), pool.num_idle()),
             DatabasePool::Postgres(pool) => (pool.size(), pool.num_idle()),
         }
+    }
+
+    async fn sqlite_safe_available_bytes(&self) -> Option<u64> {
+        let path = self.sqlite_storage_path.clone()?;
+        let service_context = self.sqlite_storage_context.clone()?;
+        let directory = path.parent().map_or(path.clone(), PathBuf::from);
+        service_context
+            .storage_io()
+            .spawn_io("dashboard-sqlite-storage-health", move || {
+                fs4::available_space(directory).map_err(PersistenceError::Io)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
     }
 
     async fn initialize_sqlite(
@@ -170,6 +195,8 @@ impl SqlPersistence {
             pool: DatabasePool::Sqlite(pool),
             backend: StorageBackend::Sqlite,
             schema_version,
+            sqlite_storage_path: Some(config.data_path.clone()),
+            sqlite_storage_context: Some(service_context),
         };
         persistence.probe().await?;
         Ok(persistence)
@@ -190,6 +217,8 @@ impl SqlPersistence {
             pool: DatabasePool::MySql(pool),
             backend: StorageBackend::MySql,
             schema_version,
+            sqlite_storage_path: None,
+            sqlite_storage_context: None,
         };
         persistence.probe().await?;
         Ok(persistence)
@@ -210,6 +239,8 @@ impl SqlPersistence {
             pool: DatabasePool::Postgres(pool),
             backend: StorageBackend::Postgres,
             schema_version,
+            sqlite_storage_path: None,
+            sqlite_storage_context: None,
         };
         persistence.probe().await?;
         Ok(persistence)
@@ -1343,6 +1374,7 @@ mod tests {
             assert_eq!(first.schema_version(), 4);
             let health = first.storage_health().await;
             assert!(matches!(health.status, StorageStatus::Available));
+            assert!(health.available_bytes.is_some());
             assert!(health.pool_size.is_some());
             assert!(health.idle_connections.is_some());
             assert_schema_metadata(&first).await;

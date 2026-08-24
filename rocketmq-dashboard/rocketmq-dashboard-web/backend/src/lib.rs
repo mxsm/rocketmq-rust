@@ -37,8 +37,17 @@ use tokio::time::Instant;
 const APPLICATION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn run(config: AppConfig, client_runtime: std::sync::Arc<ClientRuntime>) -> anyhow::Result<()> {
+    run_with_telemetry(config, client_runtime, rocketmq_observability::TelemetryHandle::noop()).await
+}
+
+/// Runs the dashboard with an instance-owned telemetry handle.
+pub async fn run_with_telemetry(
+    config: AppConfig,
+    client_runtime: std::sync::Arc<ClientRuntime>,
+    telemetry: rocketmq_observability::TelemetryHandle,
+) -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port).parse()?;
-    let state = AppState::try_new(config, client_runtime).await?;
+    let state = AppState::try_new_with_telemetry(config, client_runtime, telemetry).await?;
     let admin_client = state.admin_client.clone();
     let app = build_router(state);
     let listener = TcpListener::bind(addr).await?;

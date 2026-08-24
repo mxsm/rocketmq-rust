@@ -30,7 +30,7 @@ uuid = { version = "1", features = ["v7"] }
 rocketmq-dashboard-common = { version = "1.0.0", path = "../../rocketmq-dashboard-common", features = ["admin"] }
 rocketmq-admin-core = { version = "1.0.0", path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-error = { version = "1.0.0", path = "../../../rocketmq-error" }
-rocketmq-observability = { version = "1.0.0", path = "../../../rocketmq-observability" }
+rocketmq-observability = { version = "1.0.0", path = "../../../rocketmq-observability", features = ["otel-metrics"] }
 rocketmq-runtime = { version = "1.0.0", path = "../../../rocketmq-runtime" }
 
 [dev-dependencies]

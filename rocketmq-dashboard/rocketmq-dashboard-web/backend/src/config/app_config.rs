@@ -20,6 +20,7 @@ use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::REDACTED;
 use std::env;
 use std::fmt;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -121,10 +122,13 @@ impl StorageConfig {
         let data_path = env::var("DASHBOARD_WEB_STORAGE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_storage_path(backend));
-        let database_url = env::var("DASHBOARD_WEB_DATABASE_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let database_url = resolve_database_url(
+            env::var("DASHBOARD_WEB_DATABASE_URL")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            env::var_os("DASHBOARD_WEB_DATABASE_URL_FILE").filter(|value| !value.is_empty()),
+        )?;
         let pool = SqlPoolConfig {
             min_connections: parse_u32_env("DASHBOARD_WEB_DB_MIN_CONNECTIONS", 1)?,
             max_connections: parse_u32_env("DASHBOARD_WEB_DB_MAX_CONNECTIONS", 10)?,
@@ -193,6 +197,40 @@ impl StorageConfig {
             StorageBackend::File | StorageBackend::Sqlite => Ok(()),
         }
     }
+}
+
+const DATABASE_URL_FILE_MAX_BYTES: u64 = 16 * 1024;
+
+/// Resolves a database URL from exactly one supported secret source without
+/// including a path or secret value in errors.
+fn resolve_database_url(
+    direct_value: Option<String>,
+    secret_file: Option<std::ffi::OsString>,
+) -> Result<Option<String>, DashboardError> {
+    let Some(secret_file) = secret_file else {
+        return Ok(direct_value);
+    };
+    if direct_value.is_some() {
+        return Err(DashboardError::Config(
+            "DASHBOARD_WEB_DATABASE_URL and DASHBOARD_WEB_DATABASE_URL_FILE are mutually exclusive".to_string(),
+        ));
+    }
+    let metadata = fs::metadata(&secret_file)
+        .map_err(|_| DashboardError::Config("DASHBOARD_WEB_DATABASE_URL_FILE could not be read".to_string()))?;
+    if metadata.len() > DATABASE_URL_FILE_MAX_BYTES {
+        return Err(DashboardError::Config(
+            "DASHBOARD_WEB_DATABASE_URL_FILE exceeds the supported secret size".to_string(),
+        ));
+    }
+    let value = fs::read_to_string(secret_file)
+        .map_err(|_| DashboardError::Config("DASHBOARD_WEB_DATABASE_URL_FILE could not be read".to_string()))?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(DashboardError::Config(
+            "DASHBOARD_WEB_DATABASE_URL_FILE must contain a database URL".to_string(),
+        ));
+    }
+    Ok(Some(value))
 }
 
 fn sqlite_memory_path(path: &Path) -> bool {
@@ -534,6 +572,20 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("super-secret"));
+    }
+
+    #[test]
+    fn database_url_file_is_redacted_and_mutually_exclusive() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let secret_file = directory.path().join("database-url");
+        std::fs::write(&secret_file, "mysql://dashboard:secret@database/dashboard\n").expect("secret file");
+
+        let value = resolve_database_url(None, Some(secret_file.into_os_string())).expect("read secret file");
+        assert_eq!(value.as_deref(), Some("mysql://dashboard:secret@database/dashboard"));
+        let error = resolve_database_url(Some("mysql://direct".to_string()), Some("hidden-secret-file".into()))
+            .expect_err("sources must be exclusive");
+        assert!(!error.to_string().contains("hidden-secret-file"));
+        assert!(!error.to_string().contains("dashboard:secret"));
     }
 
     #[test]

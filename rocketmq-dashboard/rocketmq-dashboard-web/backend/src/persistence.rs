@@ -22,6 +22,7 @@ pub mod migration;
 pub mod monitor_repository;
 pub mod session_repository;
 pub mod sql_store;
+pub mod storage_operations;
 
 #[cfg(test)]
 mod contract_tests;
@@ -38,6 +39,7 @@ use crate::config::StorageConfig;
 use crate::model::StorageBackend;
 use crate::persistence::backend::PersistenceBackend;
 use crate::persistence::error::PersistenceError;
+use chrono::Utc;
 use rocketmq_runtime::ChildServiceContext;
 use serde::Deserialize;
 use serde::Serialize;
@@ -127,6 +129,7 @@ pub enum TransactionOutcome {
 /// than allowing services to open files or database connections directly.
 pub struct DashboardPersistence {
     backend: PersistenceBackend,
+    observation_started_at: i64,
 }
 
 impl DashboardPersistence {
@@ -142,11 +145,14 @@ impl DashboardPersistence {
             StorageBackend::File => PersistenceBackend::File(Box::new(
                 file_store::FilePersistence::initialize(config, service_context).await?,
             )),
-            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => {
-                PersistenceBackend::Sql(sql_store::SqlPersistence::initialize(config, service_context).await?)
-            }
+            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => PersistenceBackend::Sql(
+                Box::new(sql_store::SqlPersistence::initialize(config, service_context).await?),
+            ),
         };
-        let persistence = Self { backend };
+        let persistence = Self {
+            backend,
+            observation_started_at: Utc::now().timestamp_millis(),
+        };
         // Migrations cannot repair an ambiguous historical default identity.
         // Validate every decoded aggregate before the backend is exposed so a
         // restart fails closed instead of serving a pre-existing mismatch.
@@ -163,6 +169,11 @@ impl DashboardPersistence {
             PersistenceBackend::File(store) => store.storage_health().await,
             PersistenceBackend::Sql(store) => store.storage_health().await,
         }
+    }
+
+    /// Returns the start of the current process-local storage observation window.
+    pub const fn observation_started_at(&self) -> i64 {
+        self.observation_started_at
     }
 
     async fn validate_persisted_environments(&self) -> Result<(), PersistenceError> {

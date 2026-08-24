@@ -488,6 +488,8 @@ mod tests {
             pool: DatabasePool::Sqlite(pool),
             backend: StorageBackend::Sqlite,
             schema_version,
+            sqlite_storage_path: None,
+            sqlite_storage_context: None,
         }
     }
 

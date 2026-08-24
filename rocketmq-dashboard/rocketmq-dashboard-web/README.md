@@ -129,6 +129,49 @@ all services as one command while preserving the runner's exit code, use:
 docker compose -f docker-compose.storage-test.yml up --build --abort-on-container-exit --exit-code-from storage-test-runner
 ```
 
+## Storage operations and production deployment
+
+`deploy/docker-compose.storage.yml` is the production-oriented Compose example.
+Select exactly one storage profile: `file`, `sqlite`, `mysql`, or `postgres`.
+File and SQLite are deliberately single-node deployments. MySQL and PostgreSQL
+use an external, TLS-verified database and can be deployed as multiple
+stateless dashboard replicas behind a load balancer.
+
+The example SQL profiles do not contain a database URL or password. They read
+the complete URL from `DASHBOARD_WEB_DATABASE_URL_FILE`, mounted as the
+`dashboard_database_url` Docker secret. The URL secret and the verified CA file
+are supplied from the deployment platform:
+
+```powershell
+cd D:\Github\Rust\rocketmq-rust\rocketmq-dashboard\rocketmq-dashboard-web\deploy
+$env:DASHBOARD_WEB_DATABASE_URL_SECRET_FILE='C:\secure\rocketmq-dashboard-mysql.url'
+$env:DASHBOARD_WEB_MYSQL_CA_FILE='C:\secure\mysql-ca.pem'
+docker compose --profile mysql up --build -d
+```
+
+The URL secret must use `ssl-mode=verify_identity` with
+`ssl-ca=/run/secrets/mysql-ca.pem` for MySQL, or `sslmode=verify-full` with
+`sslrootcert=/run/secrets/postgres-ca.pem` for PostgreSQL. See
+[storage-deployment.md](docs/storage-deployment.md) for minimum database
+privileges, deployment checks, failure handling, and replica guidance.
+
+The `rocketmq-dashboard-storage` command operates on the same storage
+configuration as the server. It supports `status [--json]`, `backup --output
+<directory>`, `verify --input <directory>`, and `restore --input <directory>
+--confirm-empty-target`. Build and invoke it from `backend/` with
+`cargo run --bin rocketmq-dashboard-storage -- <command>`. The packaged backend
+image also contains this command. Backup, verify, restore semantics and the
+required offline windows are documented in
+[storage-operations.md](docs/storage-operations.md).
+
+Authenticated operators can inspect a sanitized storage summary at
+`GET /api/ops/storage/status`. Public liveness and readiness endpoints do not
+return filesystem paths, database URLs, database users, or secrets. The OPS
+refresh control retains the last known summary if its refresh fails. See
+[storage-observability.md](docs/storage-observability.md) for metric and alert
+guidance, and [storage-release-checklist.md](docs/storage-release-checklist.md)
+for the release gate and known limitations.
+
 ## Frontend Development
 
 ```powershell
