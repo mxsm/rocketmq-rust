@@ -235,6 +235,7 @@ pub mod metrics {
 }
 
 pub mod labels {
+    pub const BACKEND: &str = "backend";
     pub const ADDRESS: &str = "address";
     pub const CLUSTER: &str = "cluster";
     pub const NODE_TYPE: &str = "node_type";
@@ -267,6 +268,7 @@ pub mod labels {
     pub const TYPE: &str = "type";
     pub const CATEGORY: &str = "category";
     pub const ERRNO: &str = "errno";
+    pub const ERROR_KIND: &str = "error_kind";
     pub const ENGINE: &str = "engine";
     pub const FROM: &str = "from";
     pub const TO: &str = "to";

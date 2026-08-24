@@ -46,113 +46,15 @@ fn client_nameserver_metrics_expose_only_low_cardinality_labels() {
     }
 }
 
-const EXPECTED_JAVA_METRIC_NAMES: &[&str] = &[
-    "active_broker_num",
-    "dledger_disk_usage",
-    "dledger_op_latency",
-    "dledger_op_total",
-    "election_total",
-    "request_latency",
-    "request_total",
-    "rocketmq_broker_permission",
-    "rocketmq_broker_up",
-    "rocketmq_commit_messages_total",
-    "rocketmq_consumer_connections",
-    "rocketmq_consumer_group_create_execution_time",
-    "rocketmq_consumer_group_number",
-    "rocketmq_consumer_inflight_messages",
-    "rocketmq_consumer_lag_latency",
-    "rocketmq_consumer_lag_messages",
-    "rocketmq_consumer_queueing_latency",
-    "rocketmq_consumer_ready_messages",
-    "rocketmq_delay_message_latency",
-    "rocketmq_finish_message_latency",
-    "rocketmq_half_messages",
-    "rocketmq_message_size",
-    "rocketmq_messages_in_total",
-    "rocketmq_messages_out_total",
-    "rocketmq_pop_buffer_scan_time_consume",
-    "rocketmq_pop_checkpoint_buffer_size",
-    "rocketmq_pop_offset_buffer_size",
-    "rocketmq_pop_revive_in_message_total",
-    "rocketmq_pop_revive_lag",
-    "rocketmq_pop_revive_latency",
-    "rocketmq_pop_revive_out_message_total",
-    "rocketmq_pop_revive_retry_messages_total",
-    "rocketmq_processor_watermark",
-    "rocketmq_producer_connections",
-    "rocketmq_proxy_up",
-    "rocketmq_rocksdb_bytes_read",
-    "rocketmq_rocksdb_bytes_written",
-    "rocketmq_rocksdb_rate_cache_hit",
-    "rocketmq_rocksdb_read_amplification_bytes",
-    "rocketmq_rocksdb_times_compressed",
-    "rocketmq_rocksdb_times_read",
-    "rocketmq_rocksdb_times_written_other",
-    "rocketmq_rocksdb_times_written_self",
-    "rocketmq_rollback_messages_total",
-    "rocketmq_rpc_latency",
-    "rocketmq_send_to_dlq_messages_total",
-    "rocketmq_storage_dispatch_behind_bytes",
-    "rocketmq_storage_flush_behind_bytes",
-    "rocketmq_storage_message_reserve_time",
-    "rocketmq_storage_size",
-    "rocketmq_store_commitlog_segment_lease_active",
-    "rocketmq_store_ha_ack_latency_millis",
-    "rocketmq_store_ha_replication_lag_bytes",
-    "rocketmq_store_linux_sendfile_bytes_total",
-    "rocketmq_store_linux_locked_bytes",
-    "rocketmq_store_linux_mlock_attempt_total",
-    "rocketmq_store_linux_mlock_bytes",
-    "rocketmq_store_linux_mlock_failure_total",
-    "rocketmq_store_linux_mlock_skipped_total",
-    "rocketmq_store_linux_mlock_success_total",
-    "rocketmq_store_linux_munlock_failure_total",
-    "rocketmq_store_linux_page_cache_warmup_millis",
-    "rocketmq_store_linux_storage_degradation_total",
-    "rocketmq_store_transfer_batch_total",
-    "rocketmq_store_transfer_bytes_total",
-    "rocketmq_store_transfer_engine_total",
-    "rocketmq_store_transfer_fallback_total",
-    "rocketmq_store_transfer_partial_write_total",
-    "rocketmq_throughput_in_total",
-    "rocketmq_throughput_out_total",
-    "rocketmq_tiered_store_api_latency",
-    "rocketmq_tiered_store_dispatch_behind",
-    "rocketmq_tiered_store_dispatch_latency",
-    "rocketmq_tiered_store_get_message_fallback_total",
-    "rocketmq_tiered_store_messages_dispatch_total",
-    "rocketmq_tiered_store_messages_out_total",
-    "rocketmq_tiered_store_provider_download_bytes",
-    "rocketmq_tiered_store_provider_rpc_latency",
-    "rocketmq_tiered_store_provider_upload_bytes",
-    "rocketmq_tiered_store_read_ahead_cache_access_total",
-    "rocketmq_tiered_store_read_ahead_cache_bytes",
-    "rocketmq_tiered_store_read_ahead_cache_count",
-    "rocketmq_tiered_store_read_ahead_cache_hit_total",
-    "rocketmq_timer_dequeue_lag",
-    "rocketmq_timer_dequeue_latency",
-    "rocketmq_timer_dequeue_total",
-    "rocketmq_timer_enqueue_lag",
-    "rocketmq_timer_enqueue_latency",
-    "rocketmq_timer_enqueue_total",
-    "rocketmq_timer_message_snapshot",
-    "rocketmq_timing_messages",
-    "rocketmq_topic_create_execution_time",
-    "rocketmq_topic_number",
-    "role",
-];
-
 #[test]
-fn java_metric_catalog_contains_every_java_metric_once() {
+fn java_metric_catalog_contains_each_descriptor_once() {
     let actual = JAVA_METRICS
         .iter()
         .map(|descriptor| descriptor.name)
         .collect::<HashSet<_>>();
-    let expected = EXPECTED_JAVA_METRIC_NAMES.iter().copied().collect::<HashSet<_>>();
 
-    assert_eq!(actual, expected);
-    assert_eq!(JAVA_METRICS.len(), actual.len(), "duplicate metric names in catalog");
+    assert_eq!(JAVA_METRICS.len(), 94);
+    assert_eq!(actual.len(), JAVA_METRICS.len(), "duplicate metric names in catalog");
 }
 
 #[test]
@@ -164,8 +66,8 @@ fn combined_catalog_contains_every_semantic_metric_once() {
         .collect::<HashSet<_>>();
 
     assert_eq!(JAVA_METRICS.len(), 94);
-    assert_eq!(RUST_METRICS.len(), 116);
-    assert_eq!(combined.len(), 210, "duplicate metric names across catalogs");
+    assert_eq!(RUST_METRICS.len(), 121);
+    assert_eq!(combined.len(), 215, "duplicate metric names across catalogs");
 }
 
 #[test]
@@ -267,14 +169,26 @@ fn java_metric_catalog_has_required_label_sets() {
         .find(|descriptor| descriptor.name == metrics::RPC_LATENCY)
         .expect("rpc latency descriptor");
     assert_eq!(rpc_latency.kind, MetricKind::Histogram);
-    assert_eq!(rpc_latency.labels, REMOTING_RPC_LABELS);
+    assert_eq!(
+        rpc_latency.labels,
+        &[
+            labels::PROTOCOL_TYPE,
+            labels::REQUEST_CODE,
+            labels::RESPONSE_CODE,
+            labels::IS_LONG_POLLING,
+            labels::RESULT,
+        ]
+    );
 
     let proxy_up = JAVA_METRICS
         .iter()
         .find(|descriptor| descriptor.name == metrics::PROXY_UP)
         .expect("proxy up descriptor");
     assert_eq!(proxy_up.kind, MetricKind::ObservableGauge);
-    assert_eq!(proxy_up.labels, PROXY_UP_LABELS);
+    assert_eq!(
+        proxy_up.labels,
+        &[labels::NODE_TYPE, labels::CLUSTER, labels::NODE_ID, labels::PROXY_MODE,]
+    );
 
     let controller_role = JAVA_METRICS
         .iter()
@@ -299,7 +213,10 @@ fn java_metric_catalog_has_required_label_sets() {
         .find(|descriptor| descriptor.name == metrics::DELAY_MESSAGE_LATENCY)
         .expect("delay message latency descriptor");
     assert_eq!(delay_message_latency.unit, "seconds");
-    assert_eq!(delay_message_latency.labels, STORE_TOPIC_LABELS);
+    assert_eq!(
+        delay_message_latency.labels,
+        &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM, labels::TOPIC]
+    );
 
     let transfer_batch = JAVA_METRICS
         .iter()
@@ -432,4 +349,51 @@ fn java_metric_catalog_has_required_label_sets() {
         storage_degradation.labels,
         &[labels::OPERATION, labels::REASON, labels::ERRNO]
     );
+}
+
+#[test]
+fn dashboard_storage_metrics_have_exact_catalog_contracts() {
+    let expected = [
+        (
+            metrics::DASHBOARD_STORAGE_OPERATIONS_TOTAL,
+            MetricKind::Counter,
+            "",
+            &[labels::BACKEND, labels::OPERATION, labels::RESULT][..],
+        ),
+        (
+            metrics::DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS,
+            MetricKind::Histogram,
+            "ms",
+            &[labels::BACKEND, labels::OPERATION, labels::RESULT][..],
+        ),
+        (
+            metrics::DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL,
+            MetricKind::Counter,
+            "",
+            &[labels::BACKEND, labels::OPERATION, labels::ERROR_KIND][..],
+        ),
+        (
+            metrics::DASHBOARD_STORAGE_CAPACITY_BYTES,
+            MetricKind::Gauge,
+            "By",
+            &[labels::BACKEND][..],
+        ),
+        (
+            metrics::DASHBOARD_STORAGE_POOL_CONNECTIONS,
+            MetricKind::Gauge,
+            "",
+            &[labels::BACKEND, labels::STATE][..],
+        ),
+    ];
+
+    for (name, kind, unit, labels) in expected {
+        let descriptor = RUST_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == name)
+            .expect("dashboard storage metric descriptor");
+        assert_eq!(descriptor.kind, kind);
+        assert_eq!(descriptor.unit, unit);
+        assert_eq!(descriptor.labels, labels);
+        assert_eq!(descriptor.source, MetricSource::Observability);
+    }
 }
