@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput};
+mod adapter;
+pub(super) mod codegen;
 
-pub(super) fn request_header_codec_inner(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    crate::request_header_codec_v3::legacy_v1::expand(input).into()
+use proc_macro2::TokenStream;
+use syn::DeriveInput;
+
+pub(crate) fn expand(input: DeriveInput) -> TokenStream {
+    let Some(model) = adapter::adapt(input) else {
+        return TokenStream::new();
+    };
+    match super::validate::validate(&model) {
+        Ok(()) => super::codegen::generate(&model),
+        Err(error) => error.into_compile_error(),
+    }
 }

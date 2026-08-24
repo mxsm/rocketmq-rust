@@ -26,6 +26,7 @@ pub(super) fn generate(model: &HeaderModel) -> TokenStream {
     match &model.profile {
         CodecProfile::V3 => {}
         CodecProfile::LegacyV2 { .. } => return super::legacy_v2::codegen::generate(model),
+        CodecProfile::LegacyV1 => return super::legacy_v1::codegen::generate(model),
     }
 
     let ident = &model.ident;

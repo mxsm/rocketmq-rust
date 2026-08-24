@@ -11,11 +11,11 @@ RocketMQ-Rust 协议类型和 Remoting Header 使用的过程宏。
 | 宏 | 状态 | 用途 |
 | --- | --- | --- |
 | `RequestHeaderCodecV3` | 推荐 | 生成类型化 map/source codec、wire schema、校验、键解析、兼容适配器，以及经过审查的可选直接编码。 |
-| `RequestHeaderCodecV2` | 已废弃 | 在兼容窗口内保留加固后的 V2 wire 契约；生产 Header 禁止新增使用。 |
-| `RequestHeaderCodec` | 已废弃 | 仅为下游源码兼容保留最早版本的 Request Header derive。 |
+| `RequestHeaderCodecV2` | 已废弃 | 加固 V2 wire 契约的冻结兼容适配器；生产 Header 禁止新增使用。 |
+| `RequestHeaderCodec` | 已废弃 | 保留最早 Request Header quirks 的冻结兼容适配器，仅用于下游源码兼容。 |
 | `RemotingSerializable` | 工具 | 为类型生成 Remoting 序列化辅助实现。 |
 
-仓库中登记的全部生产请求头和响应头都已使用 V3。旧 derive 至少保留一个发布窗口，只会在未来的破坏性版本中删除。
+仓库中登记的全部生产请求头和响应头都已使用 V3。所有新增 request-header 代码必须使用 V3；V1 和 V2 仅是冻结的兼容适配器。旧 derive 至少保留一个发布窗口，只会在未来的破坏性版本中删除。
 
 ## 快速开始
 
@@ -82,7 +82,7 @@ struct SendMessageRequestHeader {
 
 回退按 Header 和命令生效，不改变 wire 契约，也不会在每条消息上增加全局开关或环境变量查询。
 
-## 从 V2 迁移
+## 迁移旧 Header
 
 V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核后显式转换：
 
@@ -96,6 +96,8 @@ V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核�
 | 对应 Java `int`/`long` 的无符号字段 | `range = "i32"` / `range = "i64"` |
 
 V2 只应用于尚未完成迁移的既有下游模型。RocketMQ-Rust 新增生产 Header 必须使用 V3，并进入 checked-in schema inventory，否则 migration guard 会拒绝。
+
+V1（`RequestHeaderCodec`）为源码兼容而冻结，包括其历史解析和 decode quirks。不要将其用于新代码；现有 V1 Header 应直接迁移到显式的 V3 model。
 
 ## 重命名 Protocol 依赖
 
@@ -117,9 +119,10 @@ struct Header {
 | 路径 | 用途 |
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | 公开 derive 入口和共享解析辅助函数。 |
-| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | V3 元数据、语义模型、校验和代码生成。 |
-| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | 兼容窗口内保留的 V2 实现。 |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | 已废弃的最早版本 derive 实现。 |
+| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | canonical V3 元数据、语义模型、profile 校验和代码生成。 |
+| [`src/request_header_codec_v3/legacy_v1.rs`](src/request_header_codec_v3/legacy_v1.rs) 与 [`legacy_v2.rs`](src/request_header_codec_v3/legacy_v2.rs) | 基于 canonical model 的冻结 V1/V2 语法适配器和兼容代码生成。 |
+| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | 已废弃的 V2 public syntax parser 和 adapter。 |
+| [`src/request_header_custom.rs`](src/request_header_custom.rs) | 已废弃的 V1 parse/wrapper entry，转发到冻结兼容适配器。 |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Remoting 序列化 derive。 |
 
 Cargo 构建不会访问 Java checkout。Java schema、golden frame、迁移状态和性能证据由仓库中的 `scripts/request-header-codec` 资产治理。
@@ -130,6 +133,8 @@ Cargo 构建不会访问 Java checkout。Java schema、golden frame、迁移状�
 python scripts/request-header-codec/migrate.py check
 python scripts/request-header-codec/compare_header_schema.py
 cargo test -p rocketmq-macros --lib
+cargo test -p rocketmq-protocol --test request_header_codec_v1_ui
+cargo test -p rocketmq-protocol --test request_header_codec_v1_wire_snapshot
 cargo test -p rocketmq-protocol --test request_header_codec_v3_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot

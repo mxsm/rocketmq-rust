@@ -28,6 +28,7 @@ pub(super) fn validate(model: &HeaderModel) -> syn::Result<()> {
     match &model.profile {
         CodecProfile::V3 => {}
         CodecProfile::LegacyV2 { .. } => return super::legacy_v2::validate::validate(model),
+        CodecProfile::LegacyV1 => return Ok(()),
     }
 
     let mut errors = None;

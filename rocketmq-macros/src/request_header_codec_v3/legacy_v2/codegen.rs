@@ -29,7 +29,7 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     } = model;
     let validation_method = match &model.profile {
         CodecProfile::LegacyV2 { validation_method } => validation_method.as_ref(),
-        CodecProfile::V3 => return TokenStream::new(),
+        CodecProfile::V3 | CodecProfile::LegacyV1 => return TokenStream::new(),
     };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let command_trait = command_custom_header_trait(protocol_path);

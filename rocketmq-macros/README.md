@@ -12,12 +12,13 @@ or remoting crates instead of depending on it directly.
 | Macro | Status | Purpose |
 | --- | --- | --- |
 | `RequestHeaderCodecV3` | Recommended | Generates typed map/source codecs, wire schema, validation, key resolution, compatibility adapters, and optional reviewed direct encoding. |
-| `RequestHeaderCodecV2` | Deprecated | Preserves the hardened V2 wire contract during the compatibility window. No production header may newly adopt it. |
-| `RequestHeaderCodec` | Deprecated | Preserves the original request-header derive for downstream source compatibility. |
+| `RequestHeaderCodecV2` | Deprecated | Frozen compatibility adapter for the hardened V2 wire contract. No production header may newly adopt it. |
+| `RequestHeaderCodec` | Deprecated | Frozen compatibility adapter that preserves the original request-header quirks for downstream source compatibility. |
 | `RemotingSerializable` | Utility | Implements the remoting serialization helper for a type. |
 
-All registered production request and response headers use V3. Legacy derives remain callable for at least one
-release window and will only be removed in a future breaking release.
+All registered production request and response headers use V3. All new request-header code must use V3; V1 and V2
+are frozen compatibility adapters only. Legacy derives remain callable for at least one release window and will only
+be removed in a future breaking release.
 
 ## Quick start
 
@@ -92,7 +93,7 @@ schema resolves collisions and the map path remains authoritative.
 This fallback is per header and per command. It does not change the wire contract, and it avoids adding a global
 branch or environment lookup to every message.
 
-## Migrating from V2
+## Migrating legacy headers
 
 V2 metadata is not silently reinterpreted. Review it against the fixed Java schema and convert it explicitly:
 
@@ -107,6 +108,9 @@ V2 metadata is not silently reinterpreted. Review it against the fixed Java sche
 
 Keep V2 only while migrating an existing downstream model. New RocketMQ-Rust production headers are rejected by
 the migration guard unless they use V3 and are registered in the checked-in schema inventory.
+
+V1 (`RequestHeaderCodec`) is frozen for source compatibility, including its historical parsing and decode quirks.
+Do not use it for new code; migrate existing V1 headers directly to the explicit V3 model.
 
 ## Renamed protocol dependency
 
@@ -128,9 +132,10 @@ The standalone `tests/fixtures/renamed-consumer` project verifies both the V3 pa
 | Path | Purpose |
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | Public derive entry points and shared parsing helpers. |
-| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | V3 metadata, semantic model, validation, and code generation. |
-| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | Deprecated V2 implementation retained during the compatibility window. |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | Deprecated original derive implementation. |
+| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | Canonical V3 metadata, semantic model, profile validation, and code generation. |
+| [`src/request_header_codec_v3/legacy_v1.rs`](src/request_header_codec_v3/legacy_v1.rs) and [`legacy_v2.rs`](src/request_header_codec_v3/legacy_v2.rs) | Frozen V1/V2 syntax adapters and compatibility code generation over the canonical model. |
+| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | Deprecated V2 public syntax parser and adapter. |
+| [`src/request_header_custom.rs`](src/request_header_custom.rs) | Deprecated V1 parse/wrapper entry forwarding to the frozen compatibility adapter. |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Remoting serialization derive. |
 
 No Java checkout is accessed during Cargo builds. Java schemas, golden frames, migration state, and performance
@@ -142,6 +147,8 @@ evidence are governed by the repository's `scripts/request-header-codec` assets.
 python scripts/request-header-codec/migrate.py check
 python scripts/request-header-codec/compare_header_schema.py
 cargo test -p rocketmq-macros --lib
+cargo test -p rocketmq-protocol --test request_header_codec_v1_ui
+cargo test -p rocketmq-protocol --test request_header_codec_v1_wire_snapshot
 cargo test -p rocketmq-protocol --test request_header_codec_v3_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
