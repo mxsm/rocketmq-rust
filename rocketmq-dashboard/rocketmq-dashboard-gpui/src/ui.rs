@@ -14,11 +14,5 @@
 
 //! UI components for the RocketMQ Dashboard
 
-#[path = "ui/consumer_view.rs"]
-pub mod consumer_view;
-
-#[path = "ui/producer_view.rs"]
-pub mod producer_view;
-
 #[path = "ui/message_view.rs"]
 pub mod message_view;

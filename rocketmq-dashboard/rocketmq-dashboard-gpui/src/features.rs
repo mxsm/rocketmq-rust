@@ -56,6 +56,25 @@ pub mod topic_detail;
 #[path = "features/topics.rs"]
 pub mod topics;
 
+#[path = "features/consumers_store.rs"]
+pub mod consumers_store;
+
+#[path = "features/consumer_detail.rs"]
+pub mod consumer_detail;
+
+#[path = "features/consumers.rs"]
+pub mod consumers;
+
+#[path = "features/producers_store.rs"]
+pub mod producers_store;
+
+#[path = "features/producers.rs"]
+pub mod producers;
+
 #[cfg(test)]
 #[path = "features/topics_product_tests.rs"]
 mod topics_product_tests;
+
+#[cfg(test)]
+#[path = "features/consumers_product_tests.rs"]
+mod consumers_product_tests;

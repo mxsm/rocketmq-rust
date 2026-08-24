@@ -26,6 +26,7 @@ pub mod broker;
 pub mod client_connection;
 pub mod clock;
 pub mod consumer;
+pub mod consumer_workspace;
 pub mod dashboard;
 pub mod error;
 pub mod error_view;

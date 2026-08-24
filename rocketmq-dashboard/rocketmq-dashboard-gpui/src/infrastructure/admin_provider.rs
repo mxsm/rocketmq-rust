@@ -30,6 +30,8 @@ use super::{
     auth_state::{AuthStateError, DesktopAuthState},
 };
 
+#[path = "admin_provider/consumers.rs"]
+mod consumers;
 #[path = "admin_provider/delivery03.rs"]
 mod delivery03;
 #[path = "admin_provider/topics.rs"]

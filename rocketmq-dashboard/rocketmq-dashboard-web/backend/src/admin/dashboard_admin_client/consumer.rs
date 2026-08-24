@@ -519,6 +519,7 @@ fn collect_inconsistent_config_fields(values: &[&ConsumerConfigValue]) -> Vec<St
 }
 
 fn map_consumer_running_info(running_info: core_consumer::DashboardConsumerRunningInfo) -> ConsumerRunningInfoView {
+    let running_info = running_info.into_parts();
     ConsumerRunningInfoView {
         consumer_group: running_info.consumer_group,
         client_id: running_info.client_id,

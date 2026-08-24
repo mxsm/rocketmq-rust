@@ -148,10 +148,34 @@ pub trait MQAdminReadExt: Send {
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<ConsumerConnection>;
 
+    /// Reads one exact target without converting an authoritative empty
+    /// connection set into a synthetic error or offline inference.
+    async fn observe_consumer_connection_at(
+        &self,
+        consumer_group: CheetahString,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ConsumerConnection>;
+
     async fn examine_producer_connection_info(
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
+
+    /// Reads producer connections without converting an authoritative empty
+    /// set into a fabricated status or an unavailable observation.
+    async fn observe_producer_connection_info(
+        &self,
+        producer_group: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
+
+    /// Reads producer connections from one exact broker address. An empty
+    /// connection set is authoritative and is returned unchanged.
+    async fn observe_producer_connection_at(
+        &self,
+        producer_group: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
 
     async fn get_all_producer_info(
@@ -369,6 +393,21 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         Ok(result)
     }
 
+    async fn observe_consumer_connection_at(
+        &self,
+        consumer_group: CheetahString,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
+        self.inner()
+            .mq_client_api()?
+            .get_consumer_connection_list(
+                broker_addr.as_str(),
+                consumer_group,
+                self.inner().remoting_timeout_millis()?,
+            )
+            .await
+    }
+
     async fn examine_producer_connection_info(
         &self,
         producer_group: CheetahString,
@@ -397,6 +436,46 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             return Err(crate::mq_client_err!("Not found the producer group connection"));
         }
         Ok(result)
+    }
+
+    async fn observe_producer_connection_info(
+        &self,
+        producer_group: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+        let timeout = self.inner().remoting_timeout_millis()?;
+        let route = self
+            .inner()
+            .mq_client_api()?
+            .get_topic_route_info_from_name_server(&topic, timeout)
+            .await?;
+        let Some(broker_addr) = route.and_then(|route| {
+            route
+                .broker_datas
+                .choose(&mut rand::rng())
+                .and_then(BrokerDataExt::select_broker_addr)
+        }) else {
+            return Ok(ProducerConnection::new());
+        };
+        self.inner()
+            .mq_client_api()?
+            .get_producer_connection_list(broker_addr.as_str(), producer_group, timeout)
+            .await
+    }
+
+    async fn observe_producer_connection_at(
+        &self,
+        producer_group: CheetahString,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+        self.inner()
+            .mq_client_api()?
+            .get_producer_connection_list(
+                broker_addr.as_str(),
+                producer_group,
+                self.inner().remoting_timeout_millis()?,
+            )
+            .await
     }
 
     async fn get_all_producer_info(

@@ -15,6 +15,8 @@
 
 #[path = "services/brokers.rs"]
 pub mod brokers;
+#[path = "services/consumers.rs"]
+pub(crate) mod consumers;
 #[path = "services/dashboard.rs"]
 pub mod dashboard;
 #[path = "services/delivery03.rs"]
@@ -509,6 +511,7 @@ pub struct AppServices {
     backend: Arc<dyn ApplicationBackend>,
     runtime_bridge: Option<RuntimeBridge>,
     delivery03: Arc<dyn delivery03::Delivery03Backend>,
+    consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
 }
 
@@ -522,6 +525,7 @@ impl AppServices {
                 dashboard::DashboardService::unavailable(),
                 brokers::BrokerService::unavailable(),
             ),
+            consumers: consumers::RealConsumerBackend::unavailable(),
             topics: topics::RealTopicBackend::unavailable(),
         }
     }
@@ -566,6 +570,10 @@ impl AppServices {
             .as_ref()
             .map(|provider| brokers::BrokerService::new(Arc::clone(provider)))
             .unwrap_or_else(brokers::BrokerService::unavailable);
+        let consumers = admin_provider
+            .as_ref()
+            .map(|provider| consumers::RealConsumerBackend::new(Arc::clone(provider)))
+            .unwrap_or_else(consumers::RealConsumerBackend::unavailable);
         let topics = admin_provider
             .map(topics::RealTopicBackend::new)
             .unwrap_or_else(topics::RealTopicBackend::unavailable);
@@ -593,6 +601,7 @@ impl AppServices {
                 completion: None,
             }),
             delivery03,
+            consumers,
             topics,
         }
     }

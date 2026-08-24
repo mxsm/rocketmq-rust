@@ -225,10 +225,7 @@ impl TopicDialogState {
     }
 
     pub fn begin_submit(&mut self, revision: u64) -> Option<TopicSubmitToken> {
-        if !matches!(
-            self.submission,
-            TopicSubmissionState::Idle | TopicSubmissionState::Failed(_)
-        ) {
+        if !matches!(self.submission, TopicSubmissionState::Idle) {
             return None;
         }
         self.next_epoch = self.next_epoch.checked_add(1)?;
@@ -867,7 +864,13 @@ fn queue_count(input: &Entity<InputState>, cx: &gpui::App) -> Result<u32, UiErro
 }
 
 fn timestamp_value(input: &Entity<InputState>, cx: &gpui::App) -> Result<u64, UiError> {
-    value(input, cx).parse::<u64>().map_err(validation)
+    let timestamp = value(input, cx).parse::<u64>().map_err(validation)?;
+    if !(946_684_800_000..=4_102_444_800_000).contains(&timestamp) {
+        return Err(validation(
+            "timestamp must be an epoch-millisecond value between 2000 and 2100",
+        ));
+    }
+    Ok(timestamp)
 }
 
 fn single_cluster(clusters: &[String]) -> Option<String> {
