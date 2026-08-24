@@ -55,6 +55,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::base::plain_access_config::PlainAccessConfig;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::config::TopicConfig;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::constant::file_readahead_mode;

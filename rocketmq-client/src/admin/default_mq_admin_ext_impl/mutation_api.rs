@@ -61,6 +61,9 @@ use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatch;
 use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatch;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatchOutcome;
+use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationFailureCode;
+use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationOutcome;
+use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationTargetOutcome;
 
 use super::DefaultMQAdminExtImpl;
 use super::NAMESPACE_ORDER_TOPIC_CONFIG;
@@ -110,6 +113,39 @@ fn merge_order_conf_entries(existing: &str, value: &str) -> String {
         .filter_map(|broker_name| entries.remove(&broker_name))
         .collect::<Vec<_>>()
         .join(";")
+}
+
+fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &RocketMQError) -> TopicOffsetMutationTargetOutcome {
+    TopicOffsetMutationTargetOutcome {
+        broker_name: broker_name.to_owned(),
+        queue_id,
+        applied: false,
+        offset: None,
+        failure: Some(TopicOffsetMutationFailureCode::Unavailable),
+        retryable: error.boundary_view().is_retryable(),
+    }
+}
+
+fn invalid_offset(broker_name: &str, queue_id: i32) -> TopicOffsetMutationTargetOutcome {
+    TopicOffsetMutationTargetOutcome {
+        broker_name: broker_name.to_owned(),
+        queue_id: Some(queue_id),
+        applied: false,
+        offset: None,
+        failure: Some(TopicOffsetMutationFailureCode::InvalidData),
+        retryable: false,
+    }
+}
+
+fn applied_offset(broker_name: &str, queue_id: i32, offset: u64) -> TopicOffsetMutationTargetOutcome {
+    TopicOffsetMutationTargetOutcome {
+        broker_name: broker_name.to_owned(),
+        queue_id: Some(queue_id),
+        applied: true,
+        offset: Some(offset),
+        failure: None,
+        retryable: false,
+    }
 }
 
 fn select_consumer_direct_connection(
@@ -269,6 +305,196 @@ impl DefaultMQAdminExtImpl {
         }
         Ok(rollback_stats)
     }
+
+    async fn mutation_reset_offset_on_broker_detailed(
+        &self,
+        broker_addr: CheetahString,
+        queue_data: &QueueData,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        timestamp: i64,
+        force: bool,
+    ) -> Vec<TopicOffsetMutationTargetOutcome> {
+        let broker_name = queue_data.broker_name().to_string();
+        let api = match self.mq_client_api() {
+            Ok(api) => api,
+            Err(error) => return vec![offset_failure(&broker_name, None, &error)],
+        };
+        let timeout = match self.remoting_timeout_millis() {
+            Ok(timeout) => timeout,
+            Err(error) => return vec![offset_failure(&broker_name, None, &error)],
+        };
+        let consume_stats = match api
+            .get_consume_stats(
+                &broker_addr,
+                GetConsumeStatsRequestHeader {
+                    consumer_group: consumer_group.clone(),
+                    topic: CheetahString::empty(),
+                    topic_list: None,
+                    topic_request_header: None,
+                },
+                timeout,
+            )
+            .await
+        {
+            Ok(stats) => stats,
+            Err(error) => return vec![offset_failure(&broker_name, None, &error)],
+        };
+        let consumed = consume_stats
+            .offset_table
+            .iter()
+            .filter(|(queue, _)| queue.topic() == &topic)
+            .map(|(queue, wrapper)| (queue.clone(), wrapper.clone()))
+            .collect::<Vec<_>>();
+        let queues = if consumed.is_empty() {
+            let topic_status = match api
+                .get_topic_stats_info(
+                    &broker_addr,
+                    GetTopicStatsInfoRequestHeader {
+                        topic: topic.clone(),
+                        topic_request_header: None,
+                    },
+                    timeout,
+                )
+                .await
+            {
+                Ok(status) => status,
+                Err(error) => return vec![offset_failure(&broker_name, None, &error)],
+            };
+            (0..queue_data.read_queue_nums())
+                .map(|queue_id| {
+                    let queue =
+                        MessageQueue::from_parts(topic.clone(), queue_data.broker_name().clone(), queue_id as i32);
+                    let topic_offset = topic_status
+                        .get_offset_table()
+                        .get(&queue)
+                        .cloned()
+                        .unwrap_or_else(TopicOffset::new);
+                    let mut wrapper = OffsetWrapper::new();
+                    wrapper.set_broker_offset(topic_offset.get_max_offset());
+                    wrapper.set_consumer_offset(topic_offset.get_min_offset());
+                    (queue, wrapper)
+                })
+                .collect()
+        } else {
+            consumed
+        };
+        let mut outcomes = Vec::with_capacity(queues.len());
+        for (queue, wrapper) in queues {
+            let queue_id = queue.queue_id();
+            match self
+                .mutation_reset_queue_offset(
+                    broker_addr.clone(),
+                    consumer_group.clone(),
+                    queue,
+                    &wrapper,
+                    timestamp,
+                    force,
+                )
+                .await
+            {
+                Ok(stats) => match u64::try_from(stats.rollback_offset) {
+                    Ok(offset) => outcomes.push(applied_offset(&broker_name, queue_id, offset)),
+                    Err(_) => outcomes.push(invalid_offset(&broker_name, queue_id)),
+                },
+                Err(error) => outcomes.push(offset_failure(&broker_name, Some(queue_id), &error)),
+            }
+        }
+        outcomes
+    }
+
+    async fn mutation_offset_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        timestamp: i64,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        let topic_route = MQAdminMutationExt::mutation_topic_route(self, topic.clone()).await?;
+        let timeout = self.remoting_timeout_millis()?;
+        let api = self.mq_client_api()?;
+        let mut targets = Vec::new();
+        if let Some(route_data) = topic_route {
+            let queue_data = route_data
+                .queue_datas
+                .iter()
+                .map(|queue| (queue.broker_name().to_string(), queue))
+                .collect::<HashMap<_, _>>();
+            for broker in &route_data.broker_datas {
+                if broker.cluster() != cluster_name {
+                    continue;
+                }
+                let broker_name = broker.broker_name().to_string();
+                let Some(master_addr) = broker.broker_addrs().get(&mix_all::MASTER_ID) else {
+                    targets.push(TopicOffsetMutationTargetOutcome {
+                        broker_name,
+                        queue_id: None,
+                        applied: false,
+                        offset: None,
+                        failure: Some(TopicOffsetMutationFailureCode::Unavailable),
+                        retryable: true,
+                    });
+                    continue;
+                };
+                let current = api
+                    .invoke_broker_to_reset_offset(
+                        master_addr,
+                        ResetOffsetRequestHeader {
+                            topic: topic.clone(),
+                            group: consumer_group.clone(),
+                            queue_id: -1,
+                            offset: Some(-1),
+                            timestamp,
+                            is_force: force,
+                            topic_request_header: None,
+                        },
+                        timeout,
+                    )
+                    .await;
+                match current {
+                    Ok(offsets) => {
+                        for (queue, offset) in offsets {
+                            match u64::try_from(offset) {
+                                Ok(offset) => {
+                                    targets.push(applied_offset(queue.broker_name().as_str(), queue.queue_id(), offset))
+                                }
+                                Err(_) => targets.push(invalid_offset(queue.broker_name().as_str(), queue.queue_id())),
+                            }
+                        }
+                    }
+                    Err(RocketMQError::BrokerOperationFailed { code, .. })
+                        if ResponseCode::from(code) == ResponseCode::ConsumerNotOnline =>
+                    {
+                        if let (Some(addr), Some(queue)) = (broker.select_broker_addr(), queue_data.get(&broker_name)) {
+                            targets.extend(
+                                self.mutation_reset_offset_on_broker_detailed(
+                                    addr,
+                                    queue,
+                                    consumer_group.clone(),
+                                    topic.clone(),
+                                    timestamp,
+                                    force,
+                                )
+                                .await,
+                            );
+                        } else {
+                            targets.push(TopicOffsetMutationTargetOutcome {
+                                broker_name,
+                                queue_id: None,
+                                applied: false,
+                                offset: None,
+                                failure: Some(TopicOffsetMutationFailureCode::Unavailable),
+                                retryable: true,
+                            });
+                        }
+                    }
+                    Err(error) => targets.push(offset_failure(&broker_name, None, &error)),
+                }
+            }
+        }
+        Ok(TopicOffsetMutationOutcome { targets })
+    }
 }
 
 impl MQAdminMutationExt for DefaultMQAdminExtImpl {
@@ -344,6 +570,16 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 patch,
                 self.remoting_timeout_millis()?,
             )
+            .await
+    }
+
+    async fn mutation_topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<crate::admin::MutationTopicConfigVersioned> {
+        self.mq_client_api()?
+            .get_topic_config_with_version_for_mutation(&broker_addr, topic, self.remoting_timeout_millis()?)
             .await
     }
 
@@ -490,6 +726,116 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         }
 
         Ok(offset_table)
+    }
+
+    async fn reset_consumer_offset_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        timestamp: u64,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        let timestamp = timestamp_to_java_long("resetOffsetByTimestampDetailed", timestamp)?;
+        self.mutation_offset_detailed(cluster_name, topic, consumer_group, timestamp, force)
+            .await
+    }
+
+    async fn skip_accumulated_message(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<usize> {
+        let topic_route = MQAdminMutationExt::mutation_topic_route(self, topic.clone()).await?;
+        let mut offset_table = HashMap::new();
+        let timeout = self.remoting_timeout_millis()?;
+        let current = async {
+            if let Some(route_data) = &topic_route {
+                for broker_data in &route_data.broker_datas {
+                    if cluster_name
+                        .as_ref()
+                        .is_some_and(|expected| broker_data.cluster() != expected)
+                    {
+                        continue;
+                    }
+                    if let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) {
+                        let offsets = self
+                            .mq_client_api()?
+                            .invoke_broker_to_reset_offset(
+                                master_addr,
+                                ResetOffsetRequestHeader {
+                                    topic: topic.clone(),
+                                    group: consumer_group.clone(),
+                                    queue_id: -1,
+                                    offset: Some(-1),
+                                    timestamp: -1,
+                                    is_force: force,
+                                    topic_request_header: None,
+                                },
+                                timeout,
+                            )
+                            .await?;
+                        for (queue, offset) in offsets {
+                            offset_table.insert(queue, java_long_to_u64("skipAccumulatedMessage", "offset", offset)?);
+                        }
+                    }
+                }
+            }
+            Ok::<_, RocketMQError>(offset_table.len())
+        }
+        .await;
+        match current {
+            Ok(count) => Ok(count),
+            Err(RocketMQError::BrokerOperationFailed { code, .. })
+                if ResponseCode::from(code) == ResponseCode::ConsumerNotOnline =>
+            {
+                let mut rollback_count = 0usize;
+                if let Some(route_data) = topic_route {
+                    let mut topic_route_map = HashMap::new();
+                    for queue_data in &route_data.queue_datas {
+                        topic_route_map.insert(queue_data.broker_name().to_string(), queue_data.clone());
+                    }
+                    for broker_data in &route_data.broker_datas {
+                        if cluster_name
+                            .as_ref()
+                            .is_some_and(|expected| broker_data.cluster() != expected)
+                        {
+                            continue;
+                        }
+                        if let Some(addr) = broker_data.select_broker_addr() {
+                            if let Some(queue_data) = topic_route_map.get(broker_data.broker_name().as_str()) {
+                                rollback_count += self
+                                    .mutation_reset_offset_on_broker(
+                                        addr,
+                                        queue_data,
+                                        consumer_group.clone(),
+                                        topic.clone(),
+                                        -1,
+                                        force,
+                                    )
+                                    .await?
+                                    .len();
+                            }
+                        }
+                    }
+                }
+                Ok(rollback_count)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn skip_accumulated_message_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        self.mutation_offset_detailed(cluster_name, topic, consumer_group, -1, force)
+            .await
     }
 
     async fn upsert_subscription_group(
@@ -735,6 +1081,16 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         .await
     }
 
+    async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
+        self.mq_client_api()?
+            .delete_kvconfig_value(
+                CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                topic,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
     async fn reset_consumer_offset_legacy(
         &self,
         cluster_name: Option<CheetahString>,
@@ -805,5 +1161,31 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 self.remoting_timeout_millis()?,
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod detailed_offset_tests {
+    use super::*;
+
+    #[test]
+    fn detailed_offset_outcomes_retain_applied_and_failed_queue_targets_in_order() {
+        let unavailable = RocketMQError::IllegalArgument("safe test failure".into());
+        let outcomes = [
+            applied_offset("broker-a", 0, 41),
+            offset_failure("broker-a", Some(1), &unavailable),
+            invalid_offset("broker-b", 2),
+        ];
+
+        assert!(outcomes[0].applied);
+        assert_eq!(outcomes[0].offset, Some(41));
+        assert_eq!(outcomes[0].queue_id, Some(0));
+        assert!(!outcomes[1].applied);
+        assert_eq!(outcomes[1].queue_id, Some(1));
+        assert_eq!(outcomes[1].failure, Some(TopicOffsetMutationFailureCode::Unavailable));
+        assert!(!outcomes[2].applied);
+        assert_eq!(outcomes[2].queue_id, Some(2));
+        assert_eq!(outcomes[2].failure, Some(TopicOffsetMutationFailureCode::InvalidData));
+        assert!(!outcomes[2].retryable);
     }
 }

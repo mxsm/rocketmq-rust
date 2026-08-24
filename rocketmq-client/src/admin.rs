@@ -40,6 +40,8 @@ pub use mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::MQAdminMutationExt;
 #[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::MutationTopicConfigVersioned;
+#[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::SubscriptionGroupConfigPatch;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
@@ -47,6 +49,12 @@ pub use mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
 pub use mq_admin_mutation_ext::TopicConfigPatch;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicOffsetMutationFailureCode;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicOffsetMutationOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicOffsetMutationTargetOutcome;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-read")]

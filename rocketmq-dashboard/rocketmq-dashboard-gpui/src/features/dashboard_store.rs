@@ -29,6 +29,16 @@ pub struct ResourceRequest {
     revision: u64,
 }
 
+impl ResourceRequest {
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    pub const fn epoch(self) -> u64 {
+        self.epoch.value()
+    }
+}
+
 pub struct ResourceSlot<T> {
     pub state: Loadable<T>,
     epoch: RequestEpoch,
@@ -70,6 +80,18 @@ impl<T> ResourceSlot<T> {
 
     pub fn last_updated_epoch_ms(&self) -> Option<u64> {
         self.last_updated_epoch_ms
+    }
+
+    pub fn replace(&mut self, value: T) {
+        let _ = self.epoch.advance();
+        self.state = Loadable::ready(value);
+        self.last_updated_epoch_ms = now_epoch_ms();
+    }
+
+    pub fn replace_optional(&mut self, value: Option<T>) {
+        let _ = self.epoch.advance();
+        self.state = value.map_or_else(Loadable::empty, Loadable::ready);
+        self.last_updated_epoch_ms = now_epoch_ms();
     }
 
     pub fn invalidate(&mut self) {

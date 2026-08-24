@@ -25,7 +25,7 @@ use crate::{
         client_runtime::DesktopClientRuntime,
         config_store::{AuthConfig, DesktopConfig, DesktopConfigStore},
     },
-    route::{AppRoute, BrokerTab, RouteKey},
+    route::{AppRoute, BrokerTab, RouteKey, TopicTab},
     services::{
         AppServices, CapabilityUnavailableConfigService, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated,
         FakeAuthService, FakeStartupService, StartupSnapshot, delivery03::test_support::FakeDelivery03Backend,
@@ -48,6 +48,20 @@ fn broker_item(address: &str) -> rocketmq_dashboard_common::BrokerInventoryItem 
         availability: rocketmq_dashboard_common::EndpointAvailability::Available,
         produce_tps: rocketmq_dashboard_common::Observed::Observed(1.0),
         consume_tps: rocketmq_dashboard_common::Observed::Observed(2.0),
+    }
+}
+
+fn topic_item(name: &str) -> rocketmq_dashboard_common::TopicInventoryItem {
+    rocketmq_dashboard_common::TopicInventoryItem {
+        identity: rocketmq_dashboard_common::TopicIdentity::parse(name).expect("static Topic"),
+        category: rocketmq_dashboard_common::TopicCategory::Application,
+        message_type: rocketmq_dashboard_common::TopicMessageType::Normal,
+        clusters: vec!["cluster-a".into()],
+        brokers: vec!["broker-a".into()],
+        read_queue_count: Some(8),
+        write_queue_count: Some(8),
+        permission: rocketmq_dashboard_common::TopicPermission::parse(6).ok(),
+        ordered: Some(false),
     }
 }
 
@@ -1148,6 +1162,75 @@ fn broker_deep_route_back_forward_and_tab_replace_control_the_same_sheet(cx: &mu
 }
 
 #[gpui::test]
+fn topic_deep_route_back_forward_closes_and_reopens_the_owned_sheet_without_rewriting_history(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 7,
+            login_required: false,
+            has_valid_session: false,
+        },
+        FakeAuthService::authenticated(),
+    );
+    let dashboard_handle = Rc::new(RefCell::new(None));
+    let capture = dashboard_handle.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        capture.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = dashboard_handle.borrow_mut().take().expect("dashboard entity");
+    cx.run_until_parked();
+
+    let item = topic_item("orders");
+    let route = AppRoute::TopicDetail {
+        topic: RouteKey::parse("orders").expect("route key"),
+        tab: TopicTab::Consumers,
+    };
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.legacy_pages.topics.update(cx, |topics, _| {
+                topics
+                    .store
+                    .replace_inventory(rocketmq_dashboard_common::TopicInventory {
+                        items: vec![item],
+                        targets: Vec::new(),
+                        completeness: rocketmq_dashboard_common::TopicCompleteness::Complete,
+                        failures: Vec::new(),
+                    });
+            });
+            dashboard.navigate(AppRoute::Topics, window, cx);
+            dashboard.navigate(route.clone(), window, cx);
+        });
+        assert!(window.has_active_sheet(app));
+        assert_eq!(dashboard.read(app).history.current(), &route);
+    });
+
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| dashboard.back(window, cx));
+        assert!(!window.has_active_sheet(app));
+        assert_eq!(dashboard.read(app).history.current(), &AppRoute::Topics);
+        assert_eq!(dashboard.read(app).history.forward_target(), Some(&route));
+        assert!(
+            dashboard
+                .read(app)
+                .legacy_pages
+                .topics
+                .read(app)
+                .row_focus_is_focused(window, app)
+        );
+    });
+
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| dashboard.forward(window, cx));
+        assert!(window.has_active_sheet(app));
+        assert_eq!(dashboard.read(app).history.current(), &route);
+    });
+}
+
+#[gpui::test]
 fn rebuilding_delivery_pages_keeps_root_subscriptions_bounded(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let app_services = services(
@@ -1163,7 +1246,7 @@ fn rebuilding_delivery_pages_keeps_root_subscriptions_bounded(cx: &mut gpui::Tes
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
             let expected = dashboard.subscriptions.len();
-            assert_eq!(expected, 6);
+            assert_eq!(expected, 7);
             for _ in 0..5 {
                 dashboard.rebuild_pages(window, cx);
                 assert_eq!(dashboard.subscriptions.len(), expected);

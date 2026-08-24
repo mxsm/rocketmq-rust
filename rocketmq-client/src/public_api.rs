@@ -52,6 +52,12 @@ pub use crate::admin::TopicConfigPatch;
 pub use crate::admin::TopicConfigPatchOutcome;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::TopicConfigVersioned;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicOffsetMutationFailureCode;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicOffsetMutationOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicOffsetMutationTargetOutcome;
 pub use crate::base::client_config::ClientConfig;
 pub use crate::base::client_options::ClientOptions;
 pub use crate::cluster_session::{

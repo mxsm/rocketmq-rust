@@ -70,6 +70,37 @@ pub enum TopicConfigPatchOutcome {
     VersionConflict { expected_version: u64, actual_version: u64 },
 }
 
+/// Allowlisted Topic state returned to an isolated mutation preflight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MutationTopicConfigVersioned {
+    pub version: u64,
+    pub config: TopicConfig,
+}
+
+/// Closed failure categories for one detailed consumer-offset target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TopicOffsetMutationFailureCode {
+    InvalidData,
+    Unavailable,
+}
+
+/// One broker or queue result from a detailed reset/skip workflow.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicOffsetMutationTargetOutcome {
+    pub broker_name: String,
+    pub queue_id: Option<i32>,
+    pub applied: bool,
+    pub offset: Option<u64>,
+    pub failure: Option<TopicOffsetMutationFailureCode>,
+    pub retryable: bool,
+}
+
+/// Failure-aware results for all exact broker/queue targets reached by one offset mutation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TopicOffsetMutationOutcome {
+    pub targets: Vec<TopicOffsetMutationTargetOutcome>,
+}
+
 /// Closed Subscription Group fields accepted by the supervised version-CAS
 /// operation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -138,6 +169,19 @@ pub trait MQAdminMutationExt: Send {
         patch: TopicConfigPatch,
     ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome>;
 
+    /// Reads only the Topic fields and version needed to prepare a supervised
+    /// queue-count compare-and-set mutation.
+    async fn mutation_topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MutationTopicConfigVersioned> {
+        let _ = (broker_addr, topic);
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "versioned Topic mutation preflight is not implemented by this admin client",
+        ))
+    }
+
     /// Changes only the three fields in [`SubscriptionGroupConfigPatch`] when
     /// the Broker's current Subscription Group metadata version still matches
     /// `expected_version`.
@@ -201,6 +245,51 @@ pub trait MQAdminMutationExt: Send {
         timestamp: u64,
         force: bool,
     ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>>;
+
+    /// Resets each exact broker/queue target independently and retains partial outcomes.
+    async fn reset_consumer_offset_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        timestamp: u64,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        let _ = (cluster_name, topic, consumer_group, timestamp, force);
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "detailed reset-offset mutation is not implemented by this admin client",
+        ))
+    }
+
+    /// Advances one exact consumer group and Topic to the latest available
+    /// offsets. This is deliberately separate from timestamp reset because the
+    /// RocketMQ protocol represents latest with the signed `-1` sentinel.
+    async fn skip_accumulated_message(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<usize> {
+        let _ = (cluster_name, topic, consumer_group, force);
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "skip-accumulated mutation is not implemented by this admin client",
+        ))
+    }
+
+    /// Advances each exact broker/queue target to latest while retaining partial outcomes.
+    async fn skip_accumulated_message_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        let _ = (cluster_name, topic, consumer_group, force);
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "detailed skip-accumulated mutation is not implemented by this admin client",
+        ))
+    }
 
     async fn upsert_subscription_group(
         &self,
@@ -298,6 +387,15 @@ pub trait MQAdminMutationExt: Send {
         cluster_wide: bool,
     ) -> rocketmq_error::RocketMQResult<()>;
 
+    /// Deletes the global order-topic entry after an unordered update or a
+    /// complete Topic deletion.
+    async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
+        let _ = topic;
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "order Topic configuration deletion is not implemented by this admin client",
+        ))
+    }
+
     /// Performs the broker-by-broker offset reset fallback used for offline consumers.
     async fn reset_consumer_offset_legacy(
         &self,
@@ -361,6 +459,14 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
     ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome> {
         MQAdminMutationExt::patch_topic_config_if_version(self.inner(), broker_addr, topic, expected_version, patch)
             .await
+    }
+
+    async fn mutation_topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MutationTopicConfigVersioned> {
+        MQAdminMutationExt::mutation_topic_config_with_version(self.inner(), broker_addr, topic).await
     }
 
     async fn patch_subscription_group_config_if_version(
@@ -432,6 +538,46 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         force: bool,
     ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>> {
         MQAdminMutationExt::reset_consumer_offset(self.inner(), cluster_name, topic, consumer_group, timestamp, force)
+            .await
+    }
+
+    async fn reset_consumer_offset_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        timestamp: u64,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        MQAdminMutationExt::reset_consumer_offset_detailed(
+            self.inner(),
+            cluster_name,
+            topic,
+            consumer_group,
+            timestamp,
+            force,
+        )
+        .await
+    }
+
+    async fn skip_accumulated_message(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<usize> {
+        MQAdminMutationExt::skip_accumulated_message(self.inner(), cluster_name, topic, consumer_group, force).await
+    }
+
+    async fn skip_accumulated_message_detailed(
+        &self,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+        MQAdminMutationExt::skip_accumulated_message_detailed(self.inner(), cluster_name, topic, consumer_group, force)
             .await
     }
 
@@ -558,6 +704,10 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         cluster_wide: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminMutationExt::upsert_order_topic_config(self.inner(), topic, value, cluster_wide).await
+    }
+
+    async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
+        MQAdminMutationExt::delete_order_topic_config(self.inner(), topic).await
     }
 
     async fn reset_consumer_offset_legacy(

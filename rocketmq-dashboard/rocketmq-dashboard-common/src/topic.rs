@@ -21,6 +21,11 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+#[path = "topic/domain.rs"]
+mod domain;
+
+pub use domain::*;
+
 /// Query parameters for `/topic/list.query`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
