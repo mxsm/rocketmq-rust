@@ -102,6 +102,7 @@ fn main() -> anyhow::Result<()> {
     app.run(move |cx| {
         // This must be called before using any GPUI Component features.
         gpui_component::init(cx);
+        features::brokers::init(cx);
         theme::apply_dark_theme(cx);
 
         if let Err(error) = cx.open_window(

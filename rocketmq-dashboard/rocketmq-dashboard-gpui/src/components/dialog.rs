@@ -16,7 +16,7 @@
 
 use std::rc::Rc;
 
-use gpui::{ClickEvent, ParentElement as _, Styled as _, Window, div};
+use gpui::{ClickEvent, InteractiveElement as _, ParentElement as _, Styled as _, Window, div};
 use gpui_component::{
     WindowExt as _,
     dialog::{Dialog, DialogButtonProps},
@@ -40,6 +40,16 @@ pub fn open_confirm(
             .child(div().text_sm().child(description.clone()))
             .confirm()
             .button_props(DialogButtonProps::default().ok_text(confirm_label))
+            .footer(|ok, cancel, window, cx| {
+                vec![
+                    div()
+                        .debug_selector(|| "confirm-dialog-cancel".to_owned())
+                        .child(cancel(window, cx)),
+                    div()
+                        .debug_selector(|| "confirm-dialog-ok".to_owned())
+                        .child(ok(window, cx)),
+                ]
+            })
             .on_ok(move |event, window, cx| on_confirm(event, window, cx))
     });
 }

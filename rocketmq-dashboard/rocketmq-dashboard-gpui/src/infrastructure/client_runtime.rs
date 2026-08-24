@@ -16,7 +16,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use rocketmq_admin_core::read_client_adapter::{ClientRuntime, ClientRuntimeConfig, TelemetryHandle};
+use rocketmq_admin_core::client_adapter::{ClientRuntime, ClientRuntimeConfig, TelemetryHandle};
 use rocketmq_runtime::{ChildServiceContext, RuntimeConfig, RuntimeOwner, ShutdownReport};
 
 use super::admin_provider::GpuiAdminProvider;

@@ -22,3 +22,21 @@ pub mod ops;
 
 #[path = "features/proxy.rs"]
 pub mod proxy;
+
+#[path = "features/dashboard_store.rs"]
+pub mod dashboard_store;
+
+#[path = "features/dashboard.rs"]
+pub mod dashboard;
+
+#[path = "features/brokers_store.rs"]
+pub mod brokers_store;
+
+#[path = "features/brokers.rs"]
+pub mod brokers;
+
+#[path = "features/inspector_store.rs"]
+pub mod inspector_store;
+
+#[path = "features/broker_inspector.rs"]
+pub mod broker_inspector;

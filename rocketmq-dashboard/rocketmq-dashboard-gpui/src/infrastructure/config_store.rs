@@ -58,14 +58,42 @@ impl Default for AuthConfig {
     }
 }
 
-/// Minimal feature flags for lifecycle foundations delivered before their pages.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Maximum accepted per-series History retention.
+pub const HISTORY_MAX_POINTS_CAP: usize = 100_000;
+/// Maximum accepted distinct History series.
+pub const HISTORY_MAX_SERIES_CAP: usize = 4_096;
+/// Maximum accepted observations across the complete History file.
+pub const HISTORY_MAX_TOTAL_POINTS_CAP: usize = 100_000;
+
+/// Feature and bounded-lifecycle settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FoundationFlags {
-    /// Enables the owned History lifecycle without collecting metrics in Delivery 02.
+    /// Enables the owned History collector.
     pub history_enabled: bool,
+    /// Collection interval in seconds. Zero disables collection even when the flag is enabled.
+    pub history_interval_seconds: u64,
+    /// Maximum retained observations for each metric series.
+    pub history_max_points_per_series: usize,
+    /// Maximum retained metric series across the complete History file.
+    pub history_max_series: usize,
+    /// Maximum retained observations across the complete History file.
+    pub history_max_total_points: usize,
     /// Enables the local Monitor store without exposing a Monitor page in Delivery 02.
     pub monitor_enabled: bool,
+}
+
+impl Default for FoundationFlags {
+    fn default() -> Self {
+        Self {
+            history_enabled: false,
+            history_interval_seconds: 60,
+            history_max_points_per_series: 1_440,
+            history_max_series: 512,
+            history_max_total_points: 20_000,
+            monitor_enabled: false,
+        }
+    }
 }
 
 /// Complete non-sensitive desktop configuration.
@@ -148,6 +176,15 @@ impl DesktopConfig {
                 "Proxy scope requires a selected Proxy endpoint".to_owned(),
             ));
         }
+        self.foundations.history_max_points_per_series = self
+            .foundations
+            .history_max_points_per_series
+            .min(HISTORY_MAX_POINTS_CAP);
+        self.foundations.history_max_series = self.foundations.history_max_series.min(HISTORY_MAX_SERIES_CAP);
+        self.foundations.history_max_total_points = self
+            .foundations
+            .history_max_total_points
+            .min(HISTORY_MAX_TOTAL_POINTS_CAP);
         Ok(self)
     }
 

@@ -20,6 +20,10 @@ pub mod app_shell;
 pub mod data_table;
 #[path = "components/dialog.rs"]
 pub mod dialog;
+#[path = "components/key_value.rs"]
+pub mod key_value;
+#[path = "components/metric_card.rs"]
+pub mod metric_card;
 #[path = "components/page_header.rs"]
 pub mod page_header;
 #[path = "components/query_toolbar.rs"]
@@ -34,3 +38,5 @@ pub mod status_badge;
 pub mod toast;
 #[path = "components/topbar.rs"]
 pub mod topbar;
+#[path = "components/trend.rs"]
+pub mod trend;
