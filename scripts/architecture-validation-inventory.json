@@ -241,7 +241,7 @@
     ]
   },
   "python_tests": {
-    "expected_count": 62,
+    "expected_count": 63,
     "ci": {
       "guards": "python scripts/run_architecture_tests.py --tier pr_static",
       "contracts": "python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture"
@@ -263,6 +263,7 @@
       {"path": "scripts/tests/test_canonical_public_paths.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-client/**", "rocketmq-runtime/**", "rocketmq-transport/**", "rocketmq-store/**"], "command": "python -m unittest scripts.tests.test_canonical_public_paths -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_critical_architecture_freeze_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-runtime/**", "rocketmq-client/**", "rocketmq-broker/**", "rocketmq-transport/**"], "command": "python -m unittest scripts.tests.test_critical_architecture_freeze_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_environment_write_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/*.rs"], "command": "python -m unittest scripts.tests.test_environment_write_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
+      {"path": "scripts/tests/test_generate_metric_catalog.py", "owner": "observability", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-observability/**"], "command": "python -m unittest scripts.tests.test_generate_metric_catalog -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_generate_sre_capability_catalog.py", "owner": "sre", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-sre/**", "rocketmq-tools/rocketmq-admin/**"], "command": "python -m unittest scripts.tests.test_generate_sre_capability_catalog -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_m04_protocol_boundary.py", "owner": "protocol", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-protocol/**", "rocketmq-transport/**"], "command": "python -m unittest scripts.tests.test_m04_protocol_boundary -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m04_schema_ownership.py", "owner": "protocol", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-protocol/**"], "command": "python -m unittest scripts.tests.test_m04_schema_ownership -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},

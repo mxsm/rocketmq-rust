@@ -1,0 +1,975 @@
+# Checked-in source schema for the generated metric catalog.
+schema_version = 1
+
+[[metric]]
+index = 94
+symbol = "SEND_MESSAGE_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC"]
+source = "Broker"
+
+[[metric]]
+index = 95
+symbol = "METRICS_LABEL_DROPPED_TOTAL"
+kind = "Counter"
+unit = "{label}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "LABEL_KEY"]
+source = "Broker"
+
+[[metric]]
+index = 96
+symbol = "STORE_APPEND_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 97
+symbol = "STORE_FLUSH_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 98
+symbol = "STORE_DISPATCH_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 99
+symbol = "STORE_DISK_USAGE"
+kind = "ObservableGauge"
+unit = "By"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 100
+symbol = "TRANSPORT_REQUESTS_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = []
+source = "Remoting"
+
+[[metric]]
+index = 101
+symbol = "TRANSPORT_REQUEST_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Remoting"
+
+[[metric]]
+index = 102
+symbol = "TRANSPORT_OUTBOUND_ATTEMPTED_PLAINTEXT_BYTES"
+kind = "Counter"
+unit = "By"
+labels = []
+source = "Remoting"
+
+[[metric]]
+index = 103
+symbol = "TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES"
+kind = "Counter"
+unit = "By"
+labels = []
+source = "Remoting"
+
+[[metric]]
+index = 104
+symbol = "TRANSPORT_OUTBOUND_WRITTEN_PLAINTEXT_BYTES"
+kind = "Counter"
+unit = "By"
+labels = []
+source = "Remoting"
+
+[[metric]]
+index = 105
+symbol = "TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES"
+kind = "Counter"
+unit = "By"
+labels = []
+source = "Remoting"
+
+[[metric]]
+index = 106
+symbol = "TRANSPORT_LIFECYCLE_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["EVENT", "RESULT"]
+source = "Remoting"
+
+[[metric]]
+index = 107
+symbol = "TRANSPORT_LIFECYCLE_LISTENER_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["EVENT"]
+source = "Remoting"
+
+[[metric]]
+index = 108
+symbol = "CLIENT_SEND_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 109
+symbol = "CLIENT_SEND_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 110
+symbol = "CLIENT_CONSUME_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 111
+symbol = "CLIENT_CONSUME_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 112
+symbol = "CLIENT_REBALANCE_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 113
+symbol = "CLIENT_ONEWAY_EGRESS_ITEMS"
+kind = "Gauge"
+unit = "{message}"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 114
+symbol = "CLIENT_ONEWAY_EGRESS_BYTES"
+kind = "Gauge"
+unit = "By"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 115
+symbol = "CLIENT_ONEWAY_EGRESS_OLDEST_AGE"
+kind = "Gauge"
+unit = "ms"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 116
+symbol = "CLIENT_ONEWAY_EGRESS_WAITERS"
+kind = "Gauge"
+unit = "{waiter}"
+labels = []
+source = "Client"
+
+[[metric]]
+index = 117
+symbol = "CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["RESULT"]
+source = "Client"
+
+[[metric]]
+index = 118
+symbol = "CLIENT_NAMESRV_DISCOVERY_REFRESH_TOTAL"
+kind = "Counter"
+unit = "{refresh}"
+labels = ["SOURCE_KIND", "RESULT"]
+source = "Client"
+
+[[metric]]
+index = 119
+symbol = "CLIENT_NAMESRV_DISCOVERY_ENDPOINT_COUNT"
+kind = "Gauge"
+unit = "{endpoint}"
+labels = ["SOURCE_KIND", "ADDRESS_FAMILY"]
+source = "Client"
+
+[[metric]]
+index = 120
+symbol = "CLIENT_NAMESRV_DISCOVERY_FRESHNESS"
+kind = "Gauge"
+unit = "1"
+labels = ["SOURCE_KIND", "FRESHNESS"]
+source = "Client"
+
+[[metric]]
+index = 121
+symbol = "CLIENT_NAMESRV_DISCOVERY_SNAPSHOT_AGE"
+kind = "Gauge"
+unit = "s"
+labels = ["SOURCE_KIND", "FRESHNESS"]
+source = "Client"
+
+[[metric]]
+index = 122
+symbol = "CLIENT_NAMESRV_FAILOVER_TOTAL"
+kind = "Counter"
+unit = "{failover}"
+labels = ["REASON"]
+source = "Client"
+
+[[metric]]
+index = 123
+symbol = "NAMESRV_ROUTE_REQUEST_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 124
+symbol = "NAMESRV_ROUTE_REQUEST_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 125
+symbol = "NAMESRV_BROKER_REGISTRATIONS"
+kind = "Counter"
+unit = "{registration}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 126
+symbol = "NAMESRV_ACTIVE_BROKERS"
+kind = "ObservableGauge"
+unit = "{broker}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 127
+symbol = "NAMESRV_ROUTE_ERRORS_TOTAL"
+kind = "Counter"
+unit = "{error}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 128
+symbol = "NAMESRV_ROUTE_FRESHNESS"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 129
+symbol = "NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL"
+kind = "Counter"
+unit = "{sample}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 130
+symbol = "NAMESRV_ROUTE_STAGE_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["STAGE"]
+source = "NameServer"
+
+[[metric]]
+index = 131
+symbol = "NAMESRV_ROUTE_RESPONSE_BYTES"
+kind = "Histogram"
+unit = "By"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 132
+symbol = "NAMESRV_ROUTE_CACHE_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 133
+symbol = "NAMESRV_ROUTE_CACHE_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 134
+symbol = "NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["REQUEST_TYPE", "RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 135
+symbol = "NAMESRV_WORKLOAD_ADMISSION_INFLIGHT"
+kind = "ObservableGauge"
+unit = "{request}"
+labels = ["REQUEST_TYPE"]
+source = "NameServer"
+
+[[metric]]
+index = 136
+symbol = "NAMESRV_WORKLOAD_ADMISSION_WAITING"
+kind = "ObservableGauge"
+unit = "{request}"
+labels = ["REQUEST_TYPE"]
+source = "NameServer"
+
+[[metric]]
+index = 137
+symbol = "NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 138
+symbol = "NAMESRV_ROUTE_END_TO_END_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 139
+symbol = "NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL"
+kind = "Counter"
+unit = "{error}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 140
+symbol = "NAMESRV_REGISTRATION_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 141
+symbol = "NAMESRV_REGISTRATION_DIRTY_TOPICS"
+kind = "Histogram"
+unit = "{topic}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 142
+symbol = "NAMESRV_UNREGISTRATION_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 143
+symbol = "NAMESRV_UNREGISTRATION_QUEUE_DEPTH"
+kind = "ObservableGauge"
+unit = "{request}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 144
+symbol = "NAMESRV_UNREGISTRATION_BATCH_SIZE"
+kind = "Histogram"
+unit = "{request}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 145
+symbol = "NAMESRV_EXPIRY_SCAN_BROKERS"
+kind = "Histogram"
+unit = "{broker}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 146
+symbol = "NAMESRV_EXPIRY_SCAN_DURATION"
+kind = "Histogram"
+unit = "us"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 147
+symbol = "NAMESRV_REQUESTS_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = ["REQUEST_TYPE", "RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 148
+symbol = "NAMESRV_REQUEST_HANDLER_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["REQUEST_TYPE", "RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 149
+symbol = "NAMESRV_RESPONSE_BYTES"
+kind = "Histogram"
+unit = "By"
+labels = ["REQUEST_TYPE"]
+source = "NameServer"
+
+[[metric]]
+index = 150
+symbol = "NAMESRV_REGISTRATION_BODY_BYTES"
+kind = "Histogram"
+unit = "By"
+labels = ["STAGE"]
+source = "NameServer"
+
+[[metric]]
+index = 151
+symbol = "NAMESRV_REGISTRATION_DECODE_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 152
+symbol = "NAMESRV_MUTATION_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["STAGE"]
+source = "NameServer"
+
+[[metric]]
+index = 153
+symbol = "NAMESRV_SNAPSHOT_REBUILDS_TOTAL"
+kind = "Counter"
+unit = "{snapshot}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 154
+symbol = "NAMESRV_EXPIRY_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 155
+symbol = "NAMESRV_UNREGISTRATION_OLDEST_AGE"
+kind = "ObservableGauge"
+unit = "ms"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 156
+symbol = "NAMESRV_KV_GENERATION"
+kind = "ObservableGauge"
+unit = "{generation}"
+labels = ["STATE"]
+source = "NameServer"
+
+[[metric]]
+index = 157
+symbol = "NAMESRV_KV_QUEUE_DEPTH"
+kind = "ObservableGauge"
+unit = "{command}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 158
+symbol = "NAMESRV_KV_QUEUE_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 159
+symbol = "NAMESRV_KV_PERSIST_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 160
+symbol = "NAMESRV_KV_BATCH_SIZE"
+kind = "Histogram"
+unit = "{command}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 161
+symbol = "NAMESRV_KV_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 162
+symbol = "NAMESRV_SECURITY_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["OPERATION", "RESULT"]
+source = "NameServer"
+
+[[metric]]
+index = 163
+symbol = "NAMESRV_CONNECTION_EVENTS_TOTAL"
+kind = "Counter"
+unit = "{event}"
+labels = ["EVENT"]
+source = "NameServer"
+
+[[metric]]
+index = 164
+symbol = "NAMESRV_ACTIVE_CONNECTIONS"
+kind = "ObservableGauge"
+unit = "{connection}"
+labels = []
+source = "NameServer"
+
+[[metric]]
+index = 165
+symbol = "CONTROLLER_ELECTION_TOTAL"
+kind = "Counter"
+unit = "{election}"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 166
+symbol = "CONTROLLER_ELECTION_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 167
+symbol = "CONTROLLER_LEADER_CHANGES_TOTAL"
+kind = "Counter"
+unit = "{change}"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 168
+symbol = "CONTROLLER_ACTIVE_BROKERS"
+kind = "ObservableGauge"
+unit = "{broker}"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 169
+symbol = "CONTROLLER_QUORUM_HEALTH"
+kind = "Gauge"
+unit = "1"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 170
+symbol = "CONTROLLER_HEARTBEAT_AGE"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 171
+symbol = "CONTROLLER_STALE_BROKERS"
+kind = "Gauge"
+unit = "{broker}"
+labels = []
+source = "Controller"
+
+[[metric]]
+index = 172
+symbol = "PROXY_GRPC_REQUESTS_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = []
+source = "Proxy"
+
+[[metric]]
+index = 173
+symbol = "PROXY_GRPC_REQUEST_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Proxy"
+
+[[metric]]
+index = 174
+symbol = "PROXY_FORWARD_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Proxy"
+
+[[metric]]
+index = 175
+symbol = "PROXY_ACTIVE_CONNECTIONS"
+kind = "ObservableGauge"
+unit = "{connection}"
+labels = []
+source = "Proxy"
+
+[[metric]]
+index = 176
+symbol = "PROXY_GRPC_ERRORS_TOTAL"
+kind = "Counter"
+unit = "{error}"
+labels = ["RESULT"]
+source = "Proxy"
+
+[[metric]]
+index = 177
+symbol = "LOG_FILTER_RELOAD_TOTAL"
+kind = "Counter"
+unit = "{reload}"
+labels = []
+source = "Observability"
+
+[[metric]]
+index = 178
+symbol = "LOG_FILTER_ACTIVE"
+kind = "Gauge"
+unit = "1"
+labels = []
+source = "Observability"
+
+[[metric]]
+index = 179
+symbol = "LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS"
+kind = "Gauge"
+unit = "s"
+labels = []
+source = "Observability"
+
+[[metric]]
+index = 180
+symbol = "LOG_FILTER_AUDIT_FAILURE_TOTAL"
+kind = "Counter"
+unit = "{failure}"
+labels = []
+source = "Observability"
+
+[[metric]]
+index = 181
+symbol = "LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL"
+kind = "Counter"
+unit = "{failure}"
+labels = []
+source = "Observability"
+
+[[metric]]
+index = 182
+symbol = "LOG_FILTER_ROLLBACK_FAILURE_TOTAL"
+kind = "Counter"
+unit = "{failure}"
+labels = []
+source = "Observability"
+
+[[metric]]
+index = 183
+symbol = "RELEASE_INFO"
+kind = "Gauge"
+unit = "1"
+labels = ["SERVICE", "RELEASE_COMMIT", "RELEASE_NONCE"]
+source = "Observability"
+
+[[metric]]
+index = 184
+symbol = "MCP_REQUESTS_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = ["OPERATION_KIND", "OPERATION", "RESULT"]
+source = "Mcp"
+
+[[metric]]
+index = 185
+symbol = "MCP_REQUEST_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["OPERATION_KIND", "OPERATION"]
+source = "Mcp"
+
+[[metric]]
+index = 186
+symbol = "MCP_ERRORS_TOTAL"
+kind = "Counter"
+unit = "{error}"
+labels = ["OPERATION_KIND", "OPERATION", "RESULT"]
+source = "Mcp"
+
+[[metric]]
+index = 187
+symbol = "MCP_CACHE_OPERATIONS_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["RESULT"]
+source = "Mcp"
+
+[[metric]]
+index = 188
+symbol = "MCP_RATE_LIMIT_TOTAL"
+kind = "Counter"
+unit = "{decision}"
+labels = ["RESULT"]
+source = "Mcp"
+
+[[metric]]
+index = 189
+symbol = "MCP_AUDIT_BACKLOG"
+kind = "Gauge"
+unit = "{record}"
+labels = []
+source = "Mcp"
+
+[[metric]]
+index = 190
+symbol = "MCP_AUDIT_DROPPED_TOTAL"
+kind = "Counter"
+unit = "{record}"
+labels = ["REASON"]
+source = "Mcp"
+
+[[metric]]
+index = 191
+symbol = "MCP_AUDIT_FAILURES_TOTAL"
+kind = "Counter"
+unit = "{failure}"
+labels = ["REASON"]
+source = "Mcp"
+
+[[metric]]
+index = 192
+symbol = "RUNTIME_TASKS"
+kind = "Gauge"
+unit = "{task}"
+labels = ["COMPONENT", "TASK_TYPE"]
+source = "Runtime"
+
+[[metric]]
+index = 193
+symbol = "RUNTIME_TASK_GROUPS"
+kind = "Gauge"
+unit = "{group}"
+labels = ["COMPONENT"]
+source = "Runtime"
+
+[[metric]]
+index = 194
+symbol = "RUNTIME_LONG_RUNNING_TASKS"
+kind = "Gauge"
+unit = "{task}"
+labels = ["COMPONENT", "TASK_TYPE"]
+source = "Runtime"
+
+[[metric]]
+index = 195
+symbol = "RUNTIME_BLOCKING_QUEUED"
+kind = "Gauge"
+unit = "{task}"
+labels = ["COMPONENT", "BLOCKING_LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 196
+symbol = "RUNTIME_BLOCKING_RUNNING"
+kind = "Gauge"
+unit = "{task}"
+labels = ["COMPONENT", "BLOCKING_LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 197
+symbol = "RUNTIME_BLOCKING_TIMEOUTS"
+kind = "Gauge"
+unit = "{task}"
+labels = ["COMPONENT", "BLOCKING_LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 198
+symbol = "RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL"
+kind = "Counter"
+unit = "{transition}"
+labels = ["COMPONENT", "STATE", "RESULT", "REASON"]
+source = "Runtime"
+
+[[metric]]
+index = 199
+symbol = "RESOURCE_QUEUE_ITEMS"
+kind = "ObservableGauge"
+unit = "{item}"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 200
+symbol = "RESOURCE_QUEUE_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 201
+symbol = "RESOURCE_QUEUE_OLDEST_AGE_MILLIS"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 202
+symbol = "RESOURCE_QUEUE_CAPACITY_ITEMS"
+kind = "ObservableGauge"
+unit = "{item}"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 203
+symbol = "RESOURCE_QUEUE_CAPACITY_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 204
+symbol = "RESOURCE_QUEUE_ACTIVE"
+kind = "ObservableGauge"
+unit = "{operation}"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 205
+symbol = "RESOURCE_QUEUE_REJECTED_TOTAL"
+kind = "Counter"
+unit = "{rejection}"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 206
+symbol = "RESOURCE_CACHE_USAGE_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 207
+symbol = "RESOURCE_CACHE_BUDGET_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["COMPONENT", "BUDGET", "LANE"]
+source = "Runtime"
+
+[[metric]]
+index = 208
+symbol = "RECEIPT_RENEWAL_DUE_LAG_MICROS"
+kind = "ObservableGauge"
+unit = "us"
+labels = ["COMPONENT"]
+source = "Runtime"
+
+[[metric]]
+index = 209
+symbol = "RECEIPT_RENEWAL_EXPIRED_TOTAL"
+kind = "Counter"
+unit = "{receipt}"
+labels = ["COMPONENT"]
+source = "Runtime"
+
+[[metric]]
+index = 210
+symbol = "DASHBOARD_STORAGE_OPERATIONS_TOTAL"
+kind = "Counter"
+unit = ""
+labels = ["BACKEND", "OPERATION", "RESULT"]
+source = "Observability"
+description = "Dashboard storage status and operation events"
+
+[[metric]]
+index = 211
+symbol = "DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS"
+kind = "Histogram"
+unit = "ms"
+labels = ["BACKEND", "OPERATION", "RESULT"]
+source = "Observability"
+description = "Dashboard storage operation duration"
+
+[[metric]]
+index = 212
+symbol = "DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL"
+kind = "Counter"
+unit = ""
+labels = ["BACKEND", "OPERATION", "ERROR_KIND"]
+source = "Observability"
+description = "Dashboard storage operation failures"
+
+[[metric]]
+index = 213
+symbol = "DASHBOARD_STORAGE_CAPACITY_BYTES"
+kind = "Gauge"
+unit = "By"
+labels = ["BACKEND"]
+source = "Observability"
+description = "Dashboard storage capacity"
+
+[[metric]]
+index = 214
+symbol = "DASHBOARD_STORAGE_POOL_CONNECTIONS"
+kind = "Gauge"
+unit = ""
+labels = ["BACKEND", "STATE"]
+source = "Observability"
+description = "Dashboard SQL connection pool state"

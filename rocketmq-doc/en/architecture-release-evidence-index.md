@@ -85,8 +85,10 @@ must reference this baseline ID or a deliberately versioned successor.
 
 | Standalone package | Dependency | Root target path |
 |---|---|---|
+| `rocketmq-dashboard-gpui` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-gpui` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
 | `rocketmq-dashboard-gpui` | `rocketmq-observability` | `rocketmq-observability` |
+| `rocketmq-dashboard-gpui` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-dashboard-tauri` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-tauri` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
 | `rocketmq-dashboard-tauri` | `rocketmq-runtime` | `rocketmq-runtime` |
@@ -228,13 +230,13 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 62.
+- Inventoried test modules: 63.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 24 |
+| `pr_static` | 25 |
 | `milestone_contract` | 26 |
 | `phase_contract` | 4 |
 | `dynamic_fixture` | 7 |

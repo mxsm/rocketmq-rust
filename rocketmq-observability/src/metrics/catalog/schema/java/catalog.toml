@@ -1,0 +1,754 @@
+# Checked-in source schema for the generated metric catalog.
+schema_version = 1
+
+[[metric]]
+index = 0
+symbol = "PROCESSOR_WATERMARK"
+kind = "ObservableGauge"
+unit = "{request}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "PROCESSOR"]
+source = "Broker"
+
+[[metric]]
+index = 1
+symbol = "BROKER_PERMISSION"
+kind = "ObservableGauge"
+unit = "1"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Broker"
+
+[[metric]]
+index = 2
+symbol = "BROKER_UP"
+kind = "ObservableGauge"
+unit = "1"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Broker"
+
+[[metric]]
+index = 3
+symbol = "TOPIC_NUMBER"
+kind = "ObservableGauge"
+unit = "{topic}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Broker"
+
+[[metric]]
+index = 4
+symbol = "CONSUMER_GROUP_NUMBER"
+kind = "ObservableGauge"
+unit = "{consumer_group}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Broker"
+
+[[metric]]
+index = 5
+symbol = "MESSAGES_IN_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "MESSAGE_TYPE", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 6
+symbol = "MESSAGES_OUT_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 7
+symbol = "THROUGHPUT_IN_TOTAL"
+kind = "Counter"
+unit = "By"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC"]
+source = "Broker"
+
+[[metric]]
+index = 8
+symbol = "THROUGHPUT_OUT_TOTAL"
+kind = "Counter"
+unit = "By"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 9
+symbol = "MESSAGE_SIZE"
+kind = "Histogram"
+unit = "By"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "MESSAGE_TYPE"]
+source = "Broker"
+
+[[metric]]
+index = 10
+symbol = "TOPIC_CREATE_EXECUTION_TIME"
+kind = "Histogram"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Broker"
+
+[[metric]]
+index = 11
+symbol = "CONSUMER_GROUP_CREATE_EXECUTION_TIME"
+kind = "Histogram"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Broker"
+
+[[metric]]
+index = 12
+symbol = "PRODUCER_CONNECTIONS"
+kind = "ObservableGauge"
+unit = "{connection}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "LANGUAGE", "VERSION", "PROTOCOL_TYPE"]
+source = "Broker"
+
+[[metric]]
+index = 13
+symbol = "CONSUMER_CONNECTIONS"
+kind = "ObservableGauge"
+unit = "{connection}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "CONSUMER_GROUP", "LANGUAGE", "VERSION", "PROTOCOL_TYPE", "CONSUME_MODE", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 14
+symbol = "CONSUMER_LAG_MESSAGES"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 15
+symbol = "CONSUMER_LAG_LATENCY"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 16
+symbol = "CONSUMER_INFLIGHT_MESSAGES"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 17
+symbol = "CONSUMER_QUEUEING_LATENCY"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 18
+symbol = "CONSUMER_READY_MESSAGES"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 19
+symbol = "SEND_TO_DLQ_MESSAGES_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC", "CONSUMER_GROUP", "IS_RETRY", "IS_SYSTEM"]
+source = "Broker"
+
+[[metric]]
+index = 20
+symbol = "COMMIT_MESSAGES_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC"]
+source = "Broker"
+
+[[metric]]
+index = 21
+symbol = "ROLLBACK_MESSAGES_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC"]
+source = "Broker"
+
+[[metric]]
+index = 22
+symbol = "FINISH_MESSAGE_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC"]
+source = "Broker"
+
+[[metric]]
+index = 23
+symbol = "HALF_MESSAGES"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "TOPIC"]
+source = "Broker"
+
+[[metric]]
+index = 24
+symbol = "POP_BUFFER_SCAN_TIME_CONSUME"
+kind = "Histogram"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Pop"
+
+[[metric]]
+index = 25
+symbol = "POP_REVIVE_IN_MESSAGE_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "CONSUMER_GROUP", "TOPIC", "REVIVE_MESSAGE_TYPE", "PUT_STATUS"]
+source = "Pop"
+
+[[metric]]
+index = 26
+symbol = "POP_REVIVE_OUT_MESSAGE_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "CONSUMER_GROUP", "TOPIC", "QUEUE_ID", "REVIVE_MESSAGE_TYPE"]
+source = "Pop"
+
+[[metric]]
+index = 27
+symbol = "POP_REVIVE_RETRY_MESSAGES_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "CONSUMER_GROUP", "TOPIC", "REVIVE_MESSAGE_TYPE", "PUT_STATUS"]
+source = "Pop"
+
+[[metric]]
+index = 28
+symbol = "POP_REVIVE_LAG"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "QUEUE_ID"]
+source = "Pop"
+
+[[metric]]
+index = 29
+symbol = "POP_REVIVE_LATENCY"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID", "QUEUE_ID"]
+source = "Pop"
+
+[[metric]]
+index = 30
+symbol = "POP_OFFSET_BUFFER_SIZE"
+kind = "ObservableGauge"
+unit = "{offset}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Pop"
+
+[[metric]]
+index = 31
+symbol = "POP_CHECKPOINT_BUFFER_SIZE"
+kind = "ObservableGauge"
+unit = "{checkpoint}"
+labels = ["CLUSTER", "NODE_TYPE", "NODE_ID"]
+source = "Pop"
+
+[[metric]]
+index = 32
+symbol = "RPC_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["PROTOCOL_TYPE", "REQUEST_CODE", "RESPONSE_CODE", "IS_LONG_POLLING", "RESULT"]
+source = "Remoting"
+
+[[metric]]
+index = 33
+symbol = "STORAGE_SIZE"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM"]
+source = "Store"
+
+[[metric]]
+index = 34
+symbol = "STORAGE_FLUSH_BEHIND_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM"]
+source = "Store"
+
+[[metric]]
+index = 35
+symbol = "STORAGE_DISPATCH_BEHIND_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM"]
+source = "Store"
+
+[[metric]]
+index = 36
+symbol = "STORAGE_MESSAGE_RESERVE_TIME"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM"]
+source = "Store"
+
+[[metric]]
+index = 37
+symbol = "DELAY_MESSAGE_LATENCY"
+kind = "Histogram"
+unit = "seconds"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TOPIC"]
+source = "Store"
+
+[[metric]]
+index = 38
+symbol = "STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE"
+kind = "ObservableGauge"
+unit = "{lease}"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 39
+symbol = "STORE_HA_ACK_LATENCY_MILLIS"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 40
+symbol = "STORE_HA_REPLICATION_LAG_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 41
+symbol = "STORE_LINUX_SENDFILE_BYTES_TOTAL"
+kind = "Counter"
+unit = "By"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 42
+symbol = "STORE_LINUX_MLOCK_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 43
+symbol = "STORE_LINUX_MLOCK_ATTEMPT_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["CATEGORY"]
+source = "Store"
+
+[[metric]]
+index = 44
+symbol = "STORE_LINUX_MLOCK_SUCCESS_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["CATEGORY"]
+source = "Store"
+
+[[metric]]
+index = 45
+symbol = "STORE_LINUX_MLOCK_FAILURE_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["CATEGORY", "ERRNO"]
+source = "Store"
+
+[[metric]]
+index = 46
+symbol = "STORE_LINUX_MLOCK_SKIPPED_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["CATEGORY", "REASON"]
+source = "Store"
+
+[[metric]]
+index = 47
+symbol = "STORE_LINUX_LOCKED_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["CATEGORY"]
+source = "Store"
+
+[[metric]]
+index = 48
+symbol = "STORE_LINUX_MUNLOCK_FAILURE_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["CATEGORY", "ERRNO"]
+source = "Store"
+
+[[metric]]
+index = 49
+symbol = "STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS"
+kind = "Histogram"
+unit = "ms"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 50
+symbol = "STORE_LINUX_STORAGE_DEGRADATION_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["OPERATION", "REASON", "ERRNO"]
+source = "Store"
+
+[[metric]]
+index = 51
+symbol = "STORE_TRANSFER_BATCH_TOTAL"
+kind = "Counter"
+unit = "{batch}"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 52
+symbol = "STORE_TRANSFER_BYTES_TOTAL"
+kind = "Counter"
+unit = "By"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 53
+symbol = "STORE_TRANSFER_ENGINE_TOTAL"
+kind = "Counter"
+unit = "{transfer}"
+labels = ["ENGINE"]
+source = "Store"
+
+[[metric]]
+index = 54
+symbol = "STORE_TRANSFER_FALLBACK_TOTAL"
+kind = "Counter"
+unit = "{fallback}"
+labels = ["FROM", "TO", "REASON"]
+source = "Store"
+
+[[metric]]
+index = 55
+symbol = "STORE_TRANSFER_PARTIAL_WRITE_TOTAL"
+kind = "Counter"
+unit = "{write}"
+labels = []
+source = "Store"
+
+[[metric]]
+index = 56
+symbol = "TIMER_ENQUEUE_LAG"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TIMER_BOUND_SECONDS"]
+source = "Timer"
+
+[[metric]]
+index = 57
+symbol = "TIMER_ENQUEUE_LATENCY"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TIMER_BOUND_SECONDS"]
+source = "Timer"
+
+[[metric]]
+index = 58
+symbol = "TIMER_DEQUEUE_LAG"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TIMER_BOUND_SECONDS"]
+source = "Timer"
+
+[[metric]]
+index = 59
+symbol = "TIMER_DEQUEUE_LATENCY"
+kind = "ObservableGauge"
+unit = "ms"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TIMER_BOUND_SECONDS"]
+source = "Timer"
+
+[[metric]]
+index = 60
+symbol = "TIMING_MESSAGES"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TIMER_BOUND_SECONDS"]
+source = "Timer"
+
+[[metric]]
+index = 61
+symbol = "TIMER_ENQUEUE_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TOPIC"]
+source = "Timer"
+
+[[metric]]
+index = 62
+symbol = "TIMER_DEQUEUE_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TOPIC"]
+source = "Timer"
+
+[[metric]]
+index = 63
+symbol = "TIMER_MESSAGE_SNAPSHOT"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TIMER_BOUND_SECONDS"]
+source = "Timer"
+
+[[metric]]
+index = 64
+symbol = "ROCKSDB_BYTES_WRITTEN"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 65
+symbol = "ROCKSDB_BYTES_READ"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 66
+symbol = "ROCKSDB_TIMES_WRITTEN_SELF"
+kind = "ObservableGauge"
+unit = "{operation}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 67
+symbol = "ROCKSDB_TIMES_WRITTEN_OTHER"
+kind = "ObservableGauge"
+unit = "{operation}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 68
+symbol = "ROCKSDB_RATE_CACHE_HIT"
+kind = "ObservableGauge"
+unit = "1"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 69
+symbol = "ROCKSDB_TIMES_COMPRESSED"
+kind = "ObservableGauge"
+unit = "{operation}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 70
+symbol = "ROCKSDB_READ_AMPLIFICATION_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 71
+symbol = "ROCKSDB_TIMES_READ"
+kind = "ObservableGauge"
+unit = "{operation}"
+labels = ["STORAGE_TYPE", "STORAGE_MEDIUM", "TYPE"]
+source = "RocksDb"
+
+[[metric]]
+index = 72
+symbol = "TIERED_STORE_MESSAGES_DISPATCH_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["TOPIC", "QUEUE_ID", "FILE_TYPE"]
+source = "TieredStore"
+
+[[metric]]
+index = 73
+symbol = "TIERED_STORE_MESSAGES_OUT_TOTAL"
+kind = "Counter"
+unit = "{message}"
+labels = ["TOPIC", "GROUP"]
+source = "TieredStore"
+
+[[metric]]
+index = 74
+symbol = "TIERED_STORE_GET_MESSAGE_FALLBACK_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = ["TOPIC", "GROUP"]
+source = "TieredStore"
+
+[[metric]]
+index = 75
+symbol = "TIERED_STORE_PROVIDER_UPLOAD_BYTES"
+kind = "Counter"
+unit = "By"
+labels = ["OPERATION", "SUCCESS", "PATH"]
+source = "TieredStore"
+
+[[metric]]
+index = 76
+symbol = "TIERED_STORE_PROVIDER_DOWNLOAD_BYTES"
+kind = "Counter"
+unit = "By"
+labels = ["OPERATION", "SUCCESS", "PATH"]
+source = "TieredStore"
+
+[[metric]]
+index = 77
+symbol = "TIERED_STORE_PROVIDER_RPC_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["OPERATION", "SUCCESS", "PATH"]
+source = "TieredStore"
+
+[[metric]]
+index = 78
+symbol = "TIERED_STORE_API_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["OPERATION", "SUCCESS"]
+source = "TieredStore"
+
+[[metric]]
+index = 79
+symbol = "TIERED_STORE_DISPATCH_LATENCY"
+kind = "Histogram"
+unit = "ms"
+labels = ["TOPIC", "QUEUE_ID", "FILE_TYPE"]
+source = "TieredStore"
+
+[[metric]]
+index = 80
+symbol = "TIERED_STORE_DISPATCH_BEHIND"
+kind = "ObservableGauge"
+unit = "{message}"
+labels = ["TOPIC", "QUEUE_ID", "FILE_TYPE"]
+source = "TieredStore"
+
+[[metric]]
+index = 81
+symbol = "TIERED_STORE_READ_AHEAD_CACHE_COUNT"
+kind = "ObservableGauge"
+unit = "{entry}"
+labels = []
+source = "TieredStore"
+
+[[metric]]
+index = 82
+symbol = "TIERED_STORE_READ_AHEAD_CACHE_BYTES"
+kind = "ObservableGauge"
+unit = "By"
+labels = []
+source = "TieredStore"
+
+[[metric]]
+index = 83
+symbol = "TIERED_STORE_READ_AHEAD_CACHE_ACCESS_TOTAL"
+kind = "Counter"
+unit = "{access}"
+labels = ["SUCCESS"]
+source = "TieredStore"
+
+[[metric]]
+index = 84
+symbol = "TIERED_STORE_READ_AHEAD_CACHE_HIT_TOTAL"
+kind = "Counter"
+unit = "{hit}"
+labels = ["SUCCESS"]
+source = "TieredStore"
+
+[[metric]]
+index = 85
+symbol = "PROXY_UP"
+kind = "ObservableGauge"
+unit = "1"
+labels = ["NODE_TYPE", "CLUSTER", "NODE_ID", "PROXY_MODE"]
+source = "Proxy"
+
+[[metric]]
+index = 86
+symbol = "CONTROLLER_ROLE"
+kind = "UpDownCounter"
+unit = "1"
+labels = ["ADDRESS", "GROUP", "PEER_ID"]
+source = "Controller"
+
+[[metric]]
+index = 87
+symbol = "CONTROLLER_DLEDGER_DISK_USAGE"
+kind = "ObservableGauge"
+unit = "By"
+labels = ["ADDRESS", "GROUP", "PEER_ID"]
+source = "Controller"
+
+[[metric]]
+index = 88
+symbol = "CONTROLLER_ACTIVE_BROKER_NUM"
+kind = "ObservableGauge"
+unit = "{broker}"
+labels = ["ADDRESS", "GROUP", "PEER_ID"]
+source = "Controller"
+
+[[metric]]
+index = 89
+symbol = "CONTROLLER_REQUEST_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = ["ADDRESS", "GROUP", "PEER_ID", "REQUEST_TYPE", "REQUEST_HANDLE_STATUS"]
+source = "Controller"
+
+[[metric]]
+index = 90
+symbol = "CONTROLLER_DLEDGER_OP_TOTAL"
+kind = "Counter"
+unit = "{operation}"
+labels = ["ADDRESS", "GROUP", "PEER_ID", "DLEDGER_OPERATION", "DLEDGER_OPERATION_STATUS"]
+source = "Controller"
+
+[[metric]]
+index = 91
+symbol = "CONTROLLER_ELECTION_TOTAL_JAVA"
+kind = "Counter"
+unit = "{election}"
+labels = ["ADDRESS", "GROUP", "PEER_ID", "ELECTION_RESULT"]
+source = "Controller"
+
+[[metric]]
+index = 92
+symbol = "CONTROLLER_REQUEST_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["ADDRESS", "GROUP", "PEER_ID", "REQUEST_TYPE"]
+source = "Controller"
+
+[[metric]]
+index = 93
+symbol = "CONTROLLER_DLEDGER_OP_LATENCY"
+kind = "Histogram"
+unit = "us"
+labels = ["ADDRESS", "GROUP", "PEER_ID", "DLEDGER_OPERATION"]
+source = "Controller"

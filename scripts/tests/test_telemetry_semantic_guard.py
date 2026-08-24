@@ -42,10 +42,10 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
 
     def test_live_registry_matches_every_rust_signal(self) -> None:
         self.assertEqual([], guard.validate_registry(self.registry, self.inventory))
-        self.assertEqual(202, len(self.inventory["metrics"]))
+        self.assertEqual(207, len(self.inventory["metrics"]))
         self.assertEqual(13, len(self.inventory["spans"]))
         self.assertEqual(10, len(self.inventory["events"]))
-        self.assertEqual(225, len(self.registry["signals"]))
+        self.assertEqual(230, len(self.registry["signals"]))
         self.assertFalse(any(signal["owner"] == "mcp" for signal in self.registry["signals"]))
 
     def test_log_filter_metrics_have_stable_registry_contracts(self) -> None:
@@ -76,6 +76,39 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
     def test_generator_is_deterministic(self) -> None:
         self.assertEqual(self.registry, generator.build_registry(scope="core-release"))
 
+    def test_generated_catalog_parser_decodes_escaped_units(self) -> None:
+        source = r'''
+const METRIC_LABELS_0: &[&str] = &[
+    labels::LABEL,
+];
+
+pub const JAVA_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        name: metrics::JAVA_METRIC,
+        kind: MetricKind::Counter,
+        unit: "quoted \"unit\"\\path",
+        labels: METRIC_LABELS_0,
+        source: MetricSource::Runtime,
+    },
+];
+
+pub const RUST_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        name: metrics::RUST_METRIC,
+        kind: MetricKind::Gauge,
+        unit: "",
+        labels: METRIC_LABELS_0,
+        source: MetricSource::Observability,
+    },
+];
+'''
+        descriptors = guard.parse_catalog(
+            source,
+            {"JAVA_METRIC": "java_metric", "RUST_METRIC": "rust_metric"},
+            {"LABEL": "label"},
+        )
+        self.assertEqual('quoted "unit"\\path', descriptors[0]["unit"])
+
     def test_cli_reports_registered_inventory(self) -> None:
         result = subprocess.run(
             [
@@ -92,7 +125,7 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("metrics=202 spans=13 logs=10", result.stdout)
+        self.assertIn("metrics=207 spans=13 logs=10", result.stdout)
 
     def test_committed_violation_fixtures_are_rejected(self) -> None:
         fixture_ids = {fixture["id"] for fixture in self.fixtures}

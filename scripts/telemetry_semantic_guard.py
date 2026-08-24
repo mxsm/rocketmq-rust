@@ -29,7 +29,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = ROOT / "scripts" / "telemetry-semantic-registry.json"
 SEMANTIC_SOURCE = ROOT / "rocketmq-observability" / "src" / "semantic.rs"
-CATALOG_SOURCE = ROOT / "rocketmq-observability" / "src" / "metrics" / "catalog.rs"
+CATALOG_SOURCE = (
+    ROOT / "rocketmq-observability" / "src" / "metrics" / "catalog" / "generated.rs"
+)
 SPAN_SOURCE = ROOT / "rocketmq-observability" / "src" / "trace" / "span_names.rs"
 OUTAGE_SOURCE = ROOT / "rocketmq-observability" / "src" / "exporter" / "outage.rs"
 
@@ -70,6 +72,7 @@ FORBIDDEN_ATTRIBUTE_RE = re.compile(
     re.IGNORECASE,
 )
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+RUST_STRING_LITERAL_RE = r'"(?:[^"\\\r\n]|\\.)*"'
 
 
 class SourceInventoryError(ValueError):
@@ -103,8 +106,61 @@ def module_body(source: str, module: str) -> str:
     return source[match.end() : cursor - 1]
 
 
+def decode_rust_string_literal(literal: str) -> str:
+    if len(literal) < 2 or literal[0] != '"' or literal[-1] != '"':
+        raise SourceInventoryError(f"invalid Rust string literal: {literal!r}")
+
+    decoded: list[str] = []
+    cursor = 1
+    end = len(literal) - 1
+    simple_escapes = {"0": "\0", "t": "\t", "n": "\n", "r": "\r", "\"": '"', "'": "'", "\\": "\\"}
+    while cursor < end:
+        character = literal[cursor]
+        if character != "\\":
+            decoded.append(character)
+            cursor += 1
+            continue
+        cursor += 1
+        if cursor >= end:
+            raise SourceInventoryError(f"unterminated Rust string escape: {literal!r}")
+        escape = literal[cursor]
+        if escape in simple_escapes:
+            decoded.append(simple_escapes[escape])
+            cursor += 1
+            continue
+        if escape == "x":
+            digits = literal[cursor + 1 : cursor + 3]
+            if len(digits) != 2 or not re.fullmatch(r"[0-9A-Fa-f]{2}", digits):
+                raise SourceInventoryError(f"invalid Rust byte escape: {literal!r}")
+            decoded.append(chr(int(digits, 16)))
+            cursor += 3
+            continue
+        if escape == "u" and cursor + 1 < end and literal[cursor + 1] == "{":
+            closing = literal.find("}", cursor + 2, end)
+            digits = literal[cursor + 2 : closing] if closing != -1 else ""
+            if (
+                closing == -1
+                or not re.fullmatch(r"[0-9A-Fa-f_]{1,6}", digits)
+                or digits.startswith("_")
+                or digits.endswith("_")
+            ):
+                raise SourceInventoryError(f"invalid Rust Unicode escape: {literal!r}")
+            codepoint = int(digits.replace("_", ""), 16)
+            if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+                raise SourceInventoryError(f"invalid Rust Unicode scalar: {literal!r}")
+            decoded.append(chr(codepoint))
+            cursor = closing + 1
+            continue
+        raise SourceInventoryError(f"unsupported Rust string escape: {literal!r}")
+    return "".join(decoded)
+
+
 def parse_string_constants(source: str) -> dict[str, str]:
-    return dict(re.findall(r'pub\s+const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]+)"\s*;', source))
+    pattern = re.compile(
+        rf"pub\s+const\s+(\w+)\s*:\s*&str\s*=\s*({RUST_STRING_LITERAL_RE})\s*;",
+        re.DOTALL,
+    )
+    return {symbol: decode_rust_string_literal(literal) for symbol, literal in pattern.findall(source)}
 
 
 def catalog_array_body(source: str, name: str) -> str:
@@ -136,7 +192,7 @@ def parse_catalog(
         r"MetricDescriptor\s*\{\s*"
         r"name:\s*metrics::(\w+),\s*"
         r"kind:\s*MetricKind::(\w+),\s*"
-        r'unit:\s*"([^"]+)",\s*'
+        rf"unit:\s*({RUST_STRING_LITERAL_RE}),\s*"
         r"labels:\s*(.*?),\s*"
         r"source:\s*MetricSource::(\w+),\s*\}",
         re.DOTALL,
@@ -147,7 +203,7 @@ def parse_catalog(
         matches = descriptor_re.findall(body)
         if not matches:
             raise SourceInventoryError(f"no descriptors parsed from {catalog_name}")
-        for symbol, kind, unit, label_expression, owner in matches:
+        for symbol, kind, unit_literal, label_expression, owner in matches:
             if symbol not in metrics:
                 raise SourceInventoryError(f"catalog references unknown metric symbol: {symbol}")
             expression = label_expression.strip()
@@ -168,7 +224,7 @@ def parse_catalog(
                     "id": metrics[symbol],
                     "source_symbol": symbol,
                     "kind": re.sub(r"(?<!^)(?=[A-Z])", "_", kind).lower(),
-                    "unit": unit,
+                    "unit": decode_rust_string_literal(unit_literal),
                     "attributes": attributes,
                     "source": owner,
                     "catalog": "java" if catalog_name == "JAVA_METRICS" else "rust",

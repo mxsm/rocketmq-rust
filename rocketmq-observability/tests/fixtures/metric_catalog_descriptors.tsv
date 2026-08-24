@@ -208,3 +208,8 @@ rust	206	"rocketmq_resource_cache_usage_bytes"	ObservableGauge	"By"	["component"
 rust	207	"rocketmq_resource_cache_budget_bytes"	ObservableGauge	"By"	["component","budget","lane"]	Runtime
 rust	208	"rocketmq_receipt_renewal_due_lag_micros"	ObservableGauge	"us"	["component"]	Runtime
 rust	209	"rocketmq_receipt_renewal_expired_total"	Counter	"{receipt}"	["component"]	Runtime
+rust	210	"rocketmq_dashboard_storage_operations_total"	Counter	""	["backend","operation","result"]	Observability
+rust	211	"rocketmq_dashboard_storage_operation_duration_milliseconds"	Histogram	"ms"	["backend","operation","result"]	Observability
+rust	212	"rocketmq_dashboard_storage_operation_errors_total"	Counter	""	["backend","operation","error_kind"]	Observability
+rust	213	"rocketmq_dashboard_storage_capacity_bytes"	Gauge	"By"	["backend"]	Observability
+rust	214	"rocketmq_dashboard_storage_pool_connections"	Gauge	""	["backend","state"]	Observability
