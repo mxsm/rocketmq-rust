@@ -19,7 +19,7 @@ use crate::persistence::error::PersistenceError;
 
 /// Opaque authority granted by the SQL task lease. The holder identity is
 /// never serialized or exposed through a dashboard API.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HistoryLease {
     pub(crate) environment_id: EnvironmentId,
     pub(crate) name: String,
@@ -28,7 +28,22 @@ pub struct HistoryLease {
     pub(crate) expires_at_ms: i64,
 }
 
+impl std::fmt::Debug for HistoryLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HistoryLease")
+            .field("environment_id", &self.environment_id)
+            .field("name", &self.name)
+            .field("holder_id", &"<redacted>")
+            .field("fencing_token", &"<redacted>")
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish()
+    }
+}
+
 impl HistoryLease {
+    const SESSION_AUDIT_CLEANUP_ENVIRONMENT: &'static str = "session-audit-cleanup";
+    const SESSION_AUDIT_CLEANUP_NAME: &'static str = "dashboard-session-audit-cleanup";
     pub(crate) fn new(
         environment_id: EnvironmentId,
         holder_id: String,
@@ -45,7 +60,14 @@ impl HistoryLease {
     }
 
     pub(crate) fn name_for(environment_id: &EnvironmentId) -> String {
+        if environment_id.0 == Self::SESSION_AUDIT_CLEANUP_ENVIRONMENT {
+            return Self::SESSION_AUDIT_CLEANUP_NAME.to_string();
+        }
         format!("dashboard-history:{}", environment_id.0)
+    }
+
+    pub(crate) fn session_audit_cleanup_environment() -> EnvironmentId {
+        EnvironmentId(Self::SESSION_AUDIT_CLEANUP_ENVIRONMENT.to_string())
     }
 
     pub fn environment_id(&self) -> &EnvironmentId {
@@ -95,6 +117,21 @@ impl DashboardPersistence {
             self.storage_backend(),
             StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres
         )
+    }
+
+    /// SQLite is single-node by deployment contract. Only MySQL and
+    /// PostgreSQL need a durable fenced leader for cleanup.
+    pub fn session_audit_cleanup_uses_sql_lease(&self) -> bool {
+        matches!(self.storage_backend(), StorageBackend::MySql | StorageBackend::Postgres)
+    }
+
+    pub async fn acquire_session_audit_cleanup_lease(
+        &self,
+        holder_id: &str,
+        ttl_ms: i64,
+    ) -> Result<Option<HistoryLease>, PersistenceError> {
+        let environment_id = HistoryLease::session_audit_cleanup_environment();
+        self.acquire_history_lease(&environment_id, holder_id, ttl_ms).await
     }
 }
 

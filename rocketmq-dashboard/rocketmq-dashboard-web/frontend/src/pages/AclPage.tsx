@@ -2,6 +2,7 @@ import { Eye, EyeOff, FileKey2, Plus, RefreshCw, Search, UserCheck, UserPlus, Us
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { aclApi } from '../api/acl_api';
 import { brokerApi } from '../api/broker_api';
+import { handleAppliedAuditFailure } from '../api/client';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
@@ -191,7 +192,16 @@ export default function AclPage() {
       setUserDialog(undefined);
       setNotice({ tone: 'success', message: username ? 'ACL user updated.' : 'ACL user created.' });
       void loadAclRecords(scope);
-    } catch {
+    } catch (error) {
+      if (await handleAppliedAuditFailure(error, {
+        onApplied: () => {
+          if (!mounted.current || interaction !== interactionGeneration.current) return;
+          setUserDialog(undefined);
+          setUserSaveError(null);
+          setNotice({ tone: 'warning', message: 'ACL user change was applied. Refreshing authoritative records.' });
+        },
+        refresh: () => scope ? loadAclRecords(scope) : undefined
+      })) return;
       if (mounted.current && interaction === interactionGeneration.current) {
         setUserSaveError('Unable to save the ACL user. Verify the request and try again.');
       }
@@ -216,7 +226,15 @@ export default function AclPage() {
       setPolicyDeleteError(null);
       setNotice({ tone: 'success', message: 'ACL user deleted.' });
       void loadAclRecords(scope);
-    } catch {
+    } catch (error) {
+      if (await handleAppliedAuditFailure(error, {
+        onApplied: () => {
+          if (!mounted.current || interaction !== interactionGeneration.current) return;
+          setUserDeleteError(null);
+          setNotice({ tone: 'warning', message: 'ACL user deletion was applied. Refreshing authoritative records.' });
+        },
+        refresh: () => scope ? loadAclRecords(scope) : undefined
+      })) return;
       if (mounted.current && interaction === interactionGeneration.current) setUserDeleteError('Unable to delete the ACL user.');
     } finally {
       mutationInFlight.current = false;
@@ -240,7 +258,16 @@ export default function AclPage() {
       setPolicyDialog(undefined);
       setNotice({ tone: 'success', message: subject ? 'ACL policy updated.' : 'ACL policy created.' });
       void loadAclRecords(scope);
-    } catch {
+    } catch (error) {
+      if (await handleAppliedAuditFailure(error, {
+        onApplied: () => {
+          if (!mounted.current || interaction !== interactionGeneration.current) return;
+          setPolicyDialog(undefined);
+          setPolicySaveError(null);
+          setNotice({ tone: 'warning', message: 'ACL policy change was applied. Refreshing authoritative records.' });
+        },
+        refresh: () => scope ? loadAclRecords(scope) : undefined
+      })) return;
       if (mounted.current && interaction === interactionGeneration.current) {
         setPolicySaveError('Unable to save the ACL policy. Verify the request and try again.');
       }
@@ -265,7 +292,15 @@ export default function AclPage() {
       setPolicyDeleteError(null);
       setNotice({ tone: 'success', message: 'ACL policy deleted.' });
       void loadAclRecords(scope);
-    } catch {
+    } catch (error) {
+      if (await handleAppliedAuditFailure(error, {
+        onApplied: () => {
+          if (!mounted.current || interaction !== interactionGeneration.current) return;
+          setPolicyDeleteError(null);
+          setNotice({ tone: 'warning', message: 'ACL policy deletion was applied. Refreshing authoritative records.' });
+        },
+        refresh: () => scope ? loadAclRecords(scope) : undefined
+      })) return;
       if (mounted.current && interaction === interactionGeneration.current) setPolicyDeleteError('Unable to delete the ACL policy.');
     } finally {
       mutationInFlight.current = false;

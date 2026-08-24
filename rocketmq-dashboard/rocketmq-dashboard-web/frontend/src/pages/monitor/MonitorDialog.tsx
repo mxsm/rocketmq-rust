@@ -1,6 +1,6 @@
 import { Save } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
-import { ApiClientError } from '../../api/client';
+import { ApiClientError, handleAppliedAuditFailure } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/Dialog';
 import { Input } from '../../components/ui/Input';
@@ -15,6 +15,7 @@ interface MonitorDialogProps {
   onOpenChange: (open: boolean) => void;
   onSubmit: (request: ConsumerMonitorUpsertRequest) => Promise<void>;
   onConflict?: (consumerGroup: string) => Promise<ConsumerMonitorView | null>;
+  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 const emptyDraft: ConsumerMonitorDraft = {
@@ -23,7 +24,7 @@ const emptyDraft: ConsumerMonitorDraft = {
   maxDiffTotal: '1000'
 };
 
-export default function MonitorDialog({ open, environmentId, rule, onOpenChange, onSubmit, onConflict }: MonitorDialogProps) {
+export default function MonitorDialog({ open, environmentId, rule, onOpenChange, onSubmit, onConflict, onAppliedAuditFailure }: MonitorDialogProps) {
   const [draft, setDraft] = useState<ConsumerMonitorDraft>(emptyDraft);
   const [validationErrors, setValidationErrors] = useState<Partial<Record<keyof ConsumerMonitorDraft, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -84,6 +85,13 @@ export default function MonitorDialog({ open, environmentId, rule, onOpenChange,
       if (generation === requestGeneration.current) onOpenChange(false);
     } catch (error) {
       if (generation === requestGeneration.current) {
+        if (await handleAppliedAuditFailure(error, {
+          onApplied: () => {
+            setSubmitError(null);
+            onOpenChange(false);
+          },
+          refresh: onAppliedAuditFailure
+        })) return;
         if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
           // Set this before awaiting the parent refresh: a concurrent create
           // can synchronously select the authoritative row and otherwise

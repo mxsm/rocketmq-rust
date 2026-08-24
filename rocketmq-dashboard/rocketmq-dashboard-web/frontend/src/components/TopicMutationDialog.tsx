@@ -1,5 +1,6 @@
 import { Save } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
+import { handleAppliedAuditFailure } from '../api/client';
 import type {
   TopicConfigView,
   TopicMutationRequest,
@@ -30,6 +31,7 @@ interface TopicMutationDialogProps {
   onRetryConfig?: () => void;
   onOpenChange: (open: boolean) => void;
   onSubmit: (request: TopicMutationRequest) => Promise<TopicOperationResult>;
+  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 interface TopicFormState {
@@ -59,7 +61,8 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps) {
   const {
     open,
     onOpenChange,
-    onSubmit
+    onSubmit,
+    onAppliedAuditFailure
   } = props;
   const mode = props.mode;
   const targets = props.targets;
@@ -198,6 +201,15 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps) {
       }
     } catch (requestError) {
       if (!isCurrentPresentation(requestId, submittedMode, submittedTopic)) return;
+
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          closeDialog();
+          setError(null);
+          setResult(null);
+        },
+        refresh: onAppliedAuditFailure
+      })) return;
 
       setConfirmation(null);
       setError(requestError instanceof Error ? requestError.message : 'Unable to save the topic.');

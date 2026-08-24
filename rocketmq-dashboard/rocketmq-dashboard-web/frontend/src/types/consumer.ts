@@ -5,6 +5,17 @@ export interface ConsumerQueryScope {
   proxyAddress?: string;
 }
 
+/**
+ * Identifies the consumer workspace that owned a mutation when it started.
+ * The generation is supplied by the route owner so a delayed completion
+ * cannot refresh or close a newer group or query scope.
+ */
+export interface ConsumerOperationIdentity {
+  group: string;
+  scopeKey: string;
+  generation: number;
+}
+
 export interface ConsumerQuery {
   mode: ConsumerQueryMode;
   proxyAddress?: string;

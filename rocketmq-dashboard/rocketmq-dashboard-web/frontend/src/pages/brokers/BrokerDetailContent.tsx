@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Pencil, Save, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { brokerApi } from '../../api/broker_api';
+import { handleAppliedAuditFailure } from '../../api/client';
 import ErrorState from '../../components/ErrorState';
 import KeyValueTable from '../../components/KeyValueTable';
 import LoadingState from '../../components/LoadingState';
@@ -166,6 +167,16 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
       setSaveMessage('Configuration updated.');
     } catch (requestError) {
       if (requestId !== saveRequestRef.current || brokerNameRef.current !== requestBroker) return;
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setEditing(false);
+          setConfirmOpen(false);
+          setPendingEntries(null);
+          setSaveError(null);
+          setSaveMessage('Configuration change was applied. Refreshing authoritative values.');
+        },
+        refresh: loadConfig
+      })) return;
       setSaveError(requestError instanceof Error ? requestError.message : String(requestError));
       setConfirmOpen(false);
     } finally {

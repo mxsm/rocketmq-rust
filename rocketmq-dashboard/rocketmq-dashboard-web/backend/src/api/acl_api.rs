@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::middleware::AuditTerminalFactSink;
 use crate::model::AclMutationResult;
 use crate::model::AclPolicyRequest;
 use crate::model::AclPolicyView;
@@ -22,6 +23,7 @@ use crate::model::ApiResponse;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
+use axum::extract::Extension;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
@@ -35,29 +37,41 @@ pub async fn list_users(
 
 pub async fn create_user(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Json(payload): Json<AclUserUpsertRequest>,
 ) -> Result<Json<ApiResponse<AclMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(service::create_user(&state, payload).await?)))
+    let result = service::create_user(&state, payload).await?;
+    // Access keys and user credentials are never usable audit resource names.
+    audit
+        .record_success(None, Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn update_user(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(access_key): Path<String>,
     Json(payload): Json<AclUserUpsertRequest>,
 ) -> Result<Json<ApiResponse<AclMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::update_user(&state, &access_key, payload).await?,
-    )))
+    let result = service::update_user(&state, &access_key, payload).await?;
+    audit
+        .record_success(None, Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn delete_user(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(access_key): Path<String>,
     Query(query): Query<AclQuery>,
 ) -> Result<Json<ApiResponse<AclMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::delete_user(&state, &access_key, query).await?,
-    )))
+    let result = service::delete_user(&state, &access_key, query).await?;
+    audit
+        .record_success(None, Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn list_policies(
@@ -69,29 +83,38 @@ pub async fn list_policies(
 
 pub async fn create_policy(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Json(payload): Json<AclPolicyRequest>,
 ) -> Result<Json<ApiResponse<AclMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::create_policy(&state, payload).await?,
-    )))
+    let result = service::create_policy(&state, payload).await?;
+    audit
+        .record_success(None, Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn update_policy(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(policy_name): Path<String>,
     Json(payload): Json<AclPolicyRequest>,
 ) -> Result<Json<ApiResponse<AclMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::update_policy(&state, &policy_name, payload).await?,
-    )))
+    let result = service::update_policy(&state, &policy_name, payload).await?;
+    audit
+        .record_success(Some(&policy_name), Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn delete_policy(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(policy_name): Path<String>,
     Query(query): Query<AclQuery>,
 ) -> Result<Json<ApiResponse<AclMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::delete_policy(&state, &policy_name, query).await?,
-    )))
+    let result = service::delete_policy(&state, &policy_name, query).await?;
+    audit
+        .record_success(Some(&policy_name), Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod acl_api;
+pub mod audit_api;
 pub mod auth_api;
 pub mod broker_api;
 pub mod config_api;

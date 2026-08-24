@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::DashboardHistoryHealth;
+use crate::model::SessionAuditCleanupHealth;
 use crate::persistence::StorageHealth;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,4 +25,6 @@ pub struct HealthStatus {
     pub storage: Option<StorageHealth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<DashboardHistoryHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_audit_cleanup: Option<SessionAuditCleanupHealth>,
 }

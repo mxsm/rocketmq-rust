@@ -65,6 +65,12 @@
   font-size: 16px;
 }
 
+.login-session-notice {
+  margin: 0 0 14px;
+  color: var(--warning);
+  font-size: 13px;
+}
+
 .login-session-note svg {
   flex: 0 0 auto;
   color: var(--info);

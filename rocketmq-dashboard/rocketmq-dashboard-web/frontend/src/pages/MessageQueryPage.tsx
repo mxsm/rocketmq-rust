@@ -1,6 +1,7 @@
 import { Clock3, DatabaseZap, Hash, Search, Send } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { messageApi } from '../api/message_api';
+import { handleAppliedAuditFailure } from '../api/client';
 import { topicApi } from '../api/topic_api';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EntitySheet from '../components/EntitySheet';
@@ -45,7 +46,7 @@ export default function MessageQueryPage() {
   const [consumerGroup, setConsumerGroup] = useState('');
   const [clientId, setClientId] = useState('');
   const [resending, setResending] = useState(false);
-  const [resendNotice, setResendNotice] = useState<{ tone: 'success' | 'danger'; message: string } | null>(null);
+  const [resendNotice, setResendNotice] = useState<{ tone: 'success' | 'warning' | 'danger'; message: string } | null>(null);
   const [topicsLoading, setTopicsLoading] = useState(false);
   const [topicsError, setTopicsError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -204,6 +205,15 @@ export default function MessageQueryPage() {
         message: result.remark ? `${result.consumeResult}: ${result.remark}` : result.message
       });
     } catch (requestError) {
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setSelected(null);
+          setConsumerGroup('');
+          setClientId('');
+          setResendNotice({ tone: 'warning', message: 'Message resend was applied. Refreshing authoritative results.' });
+        },
+        refresh: searchMessages
+      })) return;
       if (resendRequestRef.current === requestId) {
         setResendNotice({ tone: 'danger', message: requestError instanceof Error ? requestError.message : String(requestError) });
       }

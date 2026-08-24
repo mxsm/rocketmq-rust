@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { vi } from 'vitest';
 import { aclApi } from '../api/acl_api';
 import { brokerApi } from '../api/broker_api';
+import { ApiClientError } from '../api/client';
 import { renderAtRoute } from '../test/render';
 import AclPage from './AclPage';
 
@@ -163,6 +164,23 @@ describe('AclPage', () => {
     await waitFor(() => expect(aclApi.deleteUser).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('button', { name: 'Modify ACL user locked-user' })).toBeDisabled();
     await act(async () => { resolveDelete(); });
+  });
+
+  it('treats an applied audit failure as terminal for ACL deletion and refreshes once', async () => {
+    const user = userEvent.setup();
+    vi.mocked(aclApi.listUsers).mockResolvedValue([{ brokerName: 'broker-a', brokerAddr: '10.0.0.1:10911', username: 'terminal-user', password: 'secret' }]);
+    vi.mocked(aclApi.deleteUser).mockRejectedValueOnce(
+      new ApiClientError('APPLIED_AUDIT_FAILED', 'ACL deletion applied.', { mutationApplied: true })
+    );
+    renderAtRoute(<AclPage />, '/acl');
+    await user.click(await screen.findByRole('button', { name: 'Confirm' }));
+    await screen.findByText('terminal-user');
+    await user.click(screen.getByRole('button', { name: 'Delete ACL user terminal-user' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(aclApi.deleteUser).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(aclApi.listUsers).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('ACL user deletion was applied. Refreshing authoritative records.')).toBeInTheDocument();
   });
 
   it('clears stale delete feedback when changing tabs or opening a new dialog', async () => {

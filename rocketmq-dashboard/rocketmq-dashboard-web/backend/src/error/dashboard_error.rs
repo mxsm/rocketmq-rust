@@ -47,6 +47,13 @@ pub enum DashboardError {
     NotFound(String),
     #[error("{0}")]
     Auth(String),
+    /// More than one supported request credential was supplied with different
+    /// values. Keep this response value-free so session tokens never cross the
+    /// HTTP error boundary.
+    #[error("Ambiguous session credentials")]
+    AuthTokenAmbiguous,
+    #[error("{0}")]
+    Forbidden(String),
     #[error("{0}")]
     NotImplemented(String),
     #[error("{0}")]
@@ -114,6 +121,8 @@ impl DashboardError {
             Self::Admin(error) => Cow::Owned(error.code().unwrap_or("ADMIN_ERROR").to_string()),
             Self::NotFound(_) => Cow::Borrowed("NOT_FOUND"),
             Self::Auth(_) => Cow::Borrowed("AUTH_ERROR"),
+            Self::AuthTokenAmbiguous => Cow::Borrowed("AUTH_TOKEN_AMBIGUOUS"),
+            Self::Forbidden(_) => Cow::Borrowed("FORBIDDEN"),
             Self::NotImplemented(_) => Cow::Borrowed("NOT_IMPLEMENTED"),
             Self::Internal(_) | Self::InternalSource { .. } => Cow::Borrowed("INTERNAL_ERROR"),
             Self::Storage(error) => Cow::Borrowed(error.stable_code()),
@@ -133,6 +142,8 @@ impl DashboardError {
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Auth(_) => StatusCode::UNAUTHORIZED,
+            Self::AuthTokenAmbiguous => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             Self::Internal(_) | Self::InternalSource { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Storage(PersistenceError::InvalidConfig(_)) => StatusCode::BAD_REQUEST,
@@ -153,8 +164,10 @@ impl DashboardError {
             | Self::Config(message)
             | Self::NotFound(message)
             | Self::Auth(message)
+            | Self::Forbidden(message)
             | Self::NotImplemented(message)
             | Self::Internal(message) => message.clone(),
+            Self::AuthTokenAmbiguous => "Ambiguous session credentials".to_string(),
             Self::ConfigSource { message, .. } | Self::InternalSource { message, .. } => (*message).to_string(),
             Self::RocketMq(error) => metadata_io_response_message(error)
                 .map(str::to_string)
@@ -382,6 +395,16 @@ mod tests {
         assert!(!body.message.contains('/'));
     }
 
+    #[tokio::test]
+    async fn ambiguous_session_credentials_are_a_typed_redacted_401_response() {
+        let (status, body) = failure_response(DashboardError::AuthTokenAmbiguous).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.code, "AUTH_TOKEN_AMBIGUOUS");
+        assert_eq!(body.message, "Ambiguous session credentials");
+        assert!(!body.message.contains("token"));
+    }
+
     #[test]
     fn local_error_codes_are_stable() {
         let cases = [
@@ -404,6 +427,11 @@ mod tests {
                 DashboardError::Auth("denied".to_string()),
                 "AUTH_ERROR",
                 StatusCode::UNAUTHORIZED,
+            ),
+            (
+                DashboardError::Forbidden("denied".to_string()),
+                "FORBIDDEN",
+                StatusCode::FORBIDDEN,
             ),
             (
                 DashboardError::NotImplemented("todo".to_string()),

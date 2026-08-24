@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::middleware::AuditTerminalFactSink;
 use crate::model::ApiResponse;
 use crate::model::BrokerConfigUpdateRequest;
 use crate::model::BrokerConfigView;
@@ -21,6 +22,7 @@ use crate::model::MutationResult;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
+use axum::extract::Extension;
 use axum::extract::Path;
 use axum::extract::State;
 
@@ -48,10 +50,13 @@ pub async fn broker_config(
 
 pub async fn update_broker_config(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(broker_name): Path<String>,
     Json(request): Json<BrokerConfigUpdateRequest>,
 ) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::update_broker_config(&state, &broker_name, request).await?,
-    )))
+    let result = service::update_broker_config(&state, &broker_name, request).await?;
+    audit
+        .record_success(Some(&broker_name), Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }

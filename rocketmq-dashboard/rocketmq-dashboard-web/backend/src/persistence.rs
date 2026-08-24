@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+pub mod audit_repository;
 pub mod backend;
 pub mod environment_repository;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod history_repository;
 pub mod lease_repository;
 pub mod migration;
 pub mod monitor_repository;
+pub mod session_repository;
 pub mod sql_store;
 
 #[cfg(test)]
@@ -27,6 +29,10 @@ mod contract_tests;
 #[cfg(test)]
 #[path = "persistence/history_capacity_tests.rs"]
 mod history_capacity_tests;
+
+#[cfg(test)]
+#[path = "persistence/session_audit_docker_tests.rs"]
+mod session_audit_docker_tests;
 
 use crate::config::StorageConfig;
 use crate::model::StorageBackend;

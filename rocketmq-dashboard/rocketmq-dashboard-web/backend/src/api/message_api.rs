@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::middleware::AuditTerminalFactSink;
 use crate::model::ApiResponse;
 use crate::model::DlqBatchResendRequest;
 use crate::model::DlqExportView;
@@ -25,6 +26,7 @@ use crate::model::MessageTraceView;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
+use axum::extract::Extension;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
@@ -83,12 +85,18 @@ pub async fn message_trace(
 
 pub async fn resend_message(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(message_id): Path<String>,
     Json(request): Json<MessageResendRequest>,
 ) -> Result<Json<ApiResponse<MessageResendResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::resend_message(&state, &message_id, request).await?,
-    )))
+    let result = service::resend_message(&state, &message_id, request).await?;
+    let environment_id = Some(state.published().environment.environment_id);
+    if result.success {
+        audit.record_success(Some(&message_id), environment_id).await;
+    } else {
+        audit.record_failed(Some(&message_id), environment_id).await;
+    }
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn query_dlq_messages(
@@ -102,18 +110,29 @@ pub async fn query_dlq_messages(
 
 pub async fn resend_dlq_message(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Json(payload): Json<DlqBatchResendRequest>,
 ) -> Result<Json<ApiResponse<Vec<DlqMessageResendResult>>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::resend_dlq_messages(&state, payload).await?,
-    )))
+    let result = service::resend_dlq_messages(&state, payload).await?;
+    let succeeded = !result.is_empty() && result.iter().all(|entry| entry.success);
+    let environment_id = Some(state.published().environment.environment_id);
+    if succeeded {
+        audit.record_success(None, environment_id).await;
+    } else {
+        audit.record_failed(None, environment_id).await;
+    }
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn export_dlq_messages(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Query(query): Query<DlqMessageQuery>,
 ) -> Result<Json<ApiResponse<DlqExportView>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::export_dlq_messages(&state, query).await?,
-    )))
+    let resource_name = query.consumer_group.clone();
+    let result = service::export_dlq_messages(&state, query).await?;
+    audit
+        .record_success(Some(&resource_name), Some(state.published().environment.environment_id))
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }

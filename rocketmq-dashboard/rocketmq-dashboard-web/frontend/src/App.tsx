@@ -5,6 +5,7 @@ import AppLayout from './layouts/AppLayout';
 import { ConsumerQueryScopeProvider } from './pages/consumers/ConsumerQueryScopeProvider';
 
 const AclPage = lazy(() => import('./pages/AclPage'));
+const AuditPage = lazy(() => import('./pages/AuditPage'));
 const BrokerDetailPage = lazy(() => import('./pages/BrokerDetailPage'));
 const BrokerListPage = lazy(() => import('./pages/BrokerListPage'));
 const ConfigPage = lazy(() => import('./pages/ConfigPage'));
@@ -18,6 +19,7 @@ const MessageTracePage = lazy(() => import('./pages/MessageTracePage'));
 const MonitorPage = lazy(() => import('./pages/MonitorPage'));
 const ProducerListPage = lazy(() => import('./pages/ProducerListPage'));
 const ProxyPage = lazy(() => import('./pages/ProxyPage'));
+const SessionAdminPage = lazy(() => import('./pages/SessionAdminPage'));
 const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
 const TopicListPage = lazy(() => import('./pages/TopicListPage'));
 
@@ -49,7 +51,9 @@ export default function App() {
                   <Route path="/dlq" element={<Navigate to="/messages/dlq" replace />} />
                   <Route path="/message-trace" element={<MessageTracePage />} />
                   <Route path="/acl" element={<AclPage />} />
+                  <Route path="/audit" element={<AuditPage />} />
                   <Route path="/monitors" element={<MonitorPage />} />
+                  <Route path="/sessions" element={<SessionAdminPage />} />
                   <Route path="/config" element={<ConfigPage />} />
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>

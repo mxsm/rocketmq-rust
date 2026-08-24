@@ -13,6 +13,7 @@
 // limitations under the License.
 pub mod acl_model;
 pub mod api_response;
+pub mod audit_model;
 pub mod auth_model;
 pub mod broker_model;
 pub mod config_model;
@@ -26,6 +27,7 @@ pub mod topic_model;
 
 pub use acl_model::*;
 pub use api_response::*;
+pub use audit_model::*;
 pub use auth_model::*;
 pub use broker_model::*;
 pub use config_model::*;

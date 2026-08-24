@@ -1,9 +1,10 @@
 import { Activity, ListRestart, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, Users } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
 import ConsumerDeleteDialog from '../components/ConsumerDeleteDialog';
 import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
+import { useConsumerMutationScopeRevision } from '../components/consumerMutationLock';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
@@ -41,6 +42,10 @@ import {
 
 const PAGE_SIZE = 10;
 
+function consumerScopeKey(scope: { mode: string; proxyAddress?: string }) {
+  return `${scope.mode}:${scope.proxyAddress ?? ''}`;
+}
+
 const SORT_OPTIONS: Array<{ key: ConsumerSortKey; label: string }> = [
   { key: 'rawGroupName', label: 'Group' },
   { key: 'connectionCount', label: 'Connections' },
@@ -52,6 +57,8 @@ const SORT_OPTIONS: Array<{ key: ConsumerSortKey; label: string }> = [
 
 export default function ConsumerListPage() {
   const { scope, revision } = useConsumerQueryScope();
+  const scopeKey = consumerScopeKey(scope);
+  const terminalRevision = useConsumerMutationScopeRevision(scopeKey);
   const [data, setData] = useState<ConsumerGroupListView | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -64,8 +71,32 @@ export default function ConsumerListPage() {
   const [mutationConsumer, setMutationConsumer] = useState<ConsumerGroupListItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConsumerGroupListItem | null>(null);
   const requestToken = useRef(0);
+  const committedScopeRef = useRef({ key: '', generation: 0 });
 
-  const load = async (isRefresh: boolean) => {
+  const isCurrentScope = (requestScope: { key: string; generation: number }) => {
+    const current = committedScopeRef.current;
+    return current.key === requestScope.key && current.generation === requestScope.generation;
+  };
+
+  // A candidate can be rendered and discarded in concurrent React. Only the
+  // layout effect publishes the current scope used by asynchronous reads.
+  useLayoutEffect(() => {
+    const current = committedScopeRef.current;
+    if (current.key === scopeKey) return;
+    committedScopeRef.current = { key: scopeKey, generation: current.generation + 1 };
+    requestToken.current += 1;
+    setData(null);
+    setInitialError(null);
+    setRefreshError(null);
+    setLoading(true);
+  }, [scopeKey]);
+
+  const load = async (
+    isRefresh: boolean,
+    requestScope = committedScopeRef.current,
+    requestScopeValue = scope
+  ) => {
+    if (requestScope.key !== consumerScopeKey(requestScopeValue) || !isCurrentScope(requestScope)) return;
     const token = ++requestToken.current;
     if (isRefresh) {
       setRefreshing(true);
@@ -75,16 +106,16 @@ export default function ConsumerListPage() {
       setInitialError(null);
     }
     try {
-      const next = await consumerApi.list(scope);
-      if (token !== requestToken.current) return;
+      const next = await consumerApi.list(requestScopeValue);
+      if (token !== requestToken.current || !isCurrentScope(requestScope)) return;
       setData(next);
     } catch (error) {
-      if (token !== requestToken.current) return;
+      if (token !== requestToken.current || !isCurrentScope(requestScope)) return;
       const message = error instanceof Error ? error.message : String(error);
       if (isRefresh) setRefreshError(message);
       else setInitialError(message);
     } finally {
-      if (token === requestToken.current) {
+      if (token === requestToken.current && isCurrentScope(requestScope)) {
         setLoading(false);
         setRefreshing(false);
       }
@@ -92,13 +123,11 @@ export default function ConsumerListPage() {
   };
 
   useEffect(() => {
-    requestToken.current += 1;
+    const requestScope = committedScopeRef.current;
+    if (requestScope.key !== scopeKey) return;
     setPage(1);
-    void load(false);
-    return () => {
-      requestToken.current += 1;
-    };
-  }, [scope.mode, scope.proxyAddress, revision]);
+    void load(false, requestScope, scope);
+  }, [scopeKey, revision, terminalRevision]);
 
   const consumers = data?.items ?? [];
   const metrics = useMemo(() => getConsumerMetrics(consumers), [consumers]);
@@ -369,7 +398,9 @@ export default function ConsumerListPage() {
         mode={mutationMode ?? 'create'}
         consumer={mutationConsumer}
         onOpenChange={(open) => { if (!open) { setMutationMode(null); setMutationConsumer(null); } }}
-        onSucceeded={() => void load(false)}
+        onSucceeded={() => {
+          if (mutationMode !== 'create') void load(false);
+        }}
       />
 
       <ConsumerDeleteDialog
@@ -377,6 +408,7 @@ export default function ConsumerListPage() {
         consumer={deleteTarget}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
         onSucceeded={() => void load(false)}
+        onAppliedAuditFailure={() => load(false)}
       />
     </div>
   );

@@ -7,13 +7,24 @@ export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 
-export const DialogContent = forwardRef<ElementRef<typeof DialogPrimitive.Content>, ComponentPropsWithoutRef<typeof DialogPrimitive.Content>>(
-  ({ className, children, ...props }, ref) => (
+interface DialogContentProps extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
+  closeDisabled?: boolean;
+}
+
+export const DialogContent = forwardRef<ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(
+  ({ className, children, closeDisabled = false, ...props }, ref) => (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="ui-overlay" />
       <DialogPrimitive.Content ref={ref} className={cn('ui-dialog-content', className)} {...props}>
         {children}
-        <DialogPrimitive.Close className="ui-overlay-close" aria-label="Close dialog">
+        <DialogPrimitive.Close
+          className="ui-overlay-close"
+          aria-label="Close dialog"
+          disabled={closeDisabled}
+          onClick={(event) => {
+            if (closeDisabled) event.preventDefault();
+          }}
+        >
           <X size={16} aria-hidden="true" />
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>

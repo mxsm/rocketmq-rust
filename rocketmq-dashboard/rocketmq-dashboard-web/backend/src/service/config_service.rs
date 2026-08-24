@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::model::AuditEvent;
 use crate::model::{
     AddressRequest, BoolSettingRequest, ConfigMutationResult, DashboardConfigView, DashboardEnvironment, Endpoint,
     EndpointId, EndpointRequest, EndpointRole, EndpointType, NameserverAvailabilityStatus, NameserverAvailabilityView,
@@ -63,6 +64,7 @@ async fn check_nameserver_endpoint(address: String) -> NameserverEndpointAvailab
 pub async fn replace_nameservers(
     state: &AppState,
     request: NameserverListRequest,
+    audit: Option<AuditEvent>,
 ) -> Result<ConfigMutationResult, DashboardError> {
     let addresses = normalize_address_list(&request.namesrv_addr_list, "NameServer")?;
     let active = request
@@ -78,7 +80,7 @@ pub async fn replace_nameservers(
             "Current NameServer must exist in the NameServer list".to_string(),
         ));
     }
-    persist_environment(state, request.expected_revision, move |environment| {
+    persist_environment(state, request.expected_revision, audit, move |environment| {
         replace_endpoints(environment, EndpointType::Nameserver, addresses, active);
         Ok(())
     })
@@ -89,9 +91,13 @@ pub async fn replace_nameservers(
     })
 }
 
-pub async fn add_nameserver(state: &AppState, request: AddressRequest) -> Result<ConfigMutationResult, DashboardError> {
+pub async fn add_nameserver(
+    state: &AppState,
+    request: AddressRequest,
+    audit: Option<AuditEvent>,
+) -> Result<ConfigMutationResult, DashboardError> {
     let address = normalize_address(&request.address, "NameServer")?;
-    persist_environment(state, request.expected_revision, move |environment| {
+    persist_environment(state, request.expected_revision, audit, move |environment| {
         add_endpoint(environment, EndpointType::Nameserver, address);
         Ok(())
     })
@@ -105,8 +111,9 @@ pub async fn add_nameserver(state: &AppState, request: AddressRequest) -> Result
 pub async fn set_vip_channel(
     state: &AppState,
     request: BoolSettingRequest,
+    audit: Option<AuditEvent>,
 ) -> Result<ConfigMutationResult, DashboardError> {
-    persist_environment(state, request.expected_revision, move |environment| {
+    persist_environment(state, request.expected_revision, audit, move |environment| {
         environment.use_vip_channel = request.enabled;
         Ok(())
     })
@@ -117,8 +124,12 @@ pub async fn set_vip_channel(
     })
 }
 
-pub async fn set_tls(state: &AppState, request: BoolSettingRequest) -> Result<ConfigMutationResult, DashboardError> {
-    persist_environment(state, request.expected_revision, move |environment| {
+pub async fn set_tls(
+    state: &AppState,
+    request: BoolSettingRequest,
+    audit: Option<AuditEvent>,
+) -> Result<ConfigMutationResult, DashboardError> {
+    persist_environment(state, request.expected_revision, audit, move |environment| {
         environment.use_tls = request.enabled;
         Ok(())
     })
@@ -129,9 +140,13 @@ pub async fn set_tls(state: &AppState, request: BoolSettingRequest) -> Result<Co
     })
 }
 
-pub async fn add_proxy(state: &AppState, request: AddressRequest) -> Result<ConfigMutationResult, DashboardError> {
+pub async fn add_proxy(
+    state: &AppState,
+    request: AddressRequest,
+    audit: Option<AuditEvent>,
+) -> Result<ConfigMutationResult, DashboardError> {
     let address = normalize_address(&request.address, "Proxy")?;
-    persist_environment(state, request.expected_revision, move |environment| {
+    persist_environment(state, request.expected_revision, audit, move |environment| {
         add_endpoint(environment, EndpointType::Proxy, address);
         Ok(())
     })
@@ -142,17 +157,31 @@ pub async fn add_proxy(state: &AppState, request: AddressRequest) -> Result<Conf
     })
 }
 
-pub async fn switch_proxy(state: &AppState, request: EndpointRequest) -> Result<ConfigMutationResult, DashboardError> {
-    switch_endpoint(state, request, EndpointType::Proxy, "Proxy", "Current Proxy switched").await
+pub async fn switch_proxy(
+    state: &AppState,
+    request: EndpointRequest,
+    audit: Option<AuditEvent>,
+) -> Result<ConfigMutationResult, DashboardError> {
+    switch_endpoint(
+        state,
+        request,
+        audit,
+        EndpointType::Proxy,
+        "Proxy",
+        "Current Proxy switched",
+    )
+    .await
 }
 
 pub async fn switch_nameserver(
     state: &AppState,
     request: EndpointRequest,
+    audit: Option<AuditEvent>,
 ) -> Result<ConfigMutationResult, DashboardError> {
     switch_endpoint(
         state,
         request,
+        audit,
         EndpointType::Nameserver,
         "NameServer",
         "Current NameServer switched",
@@ -163,11 +192,12 @@ pub async fn switch_nameserver(
 async fn switch_endpoint(
     state: &AppState,
     request: EndpointRequest,
+    audit: Option<AuditEvent>,
     endpoint_type: EndpointType,
     label: &'static str,
     message: &'static str,
 ) -> Result<ConfigMutationResult, DashboardError> {
-    persist_environment(state, request.expected_revision, move |environment| {
+    persist_environment(state, request.expected_revision, audit, move |environment| {
         let mut found = false;
         let now_ms = Utc::now().timestamp_millis();
         for endpoint in &mut environment.endpoints {
@@ -197,11 +227,13 @@ pub async fn delete_proxy(
     state: &AppState,
     endpoint_id: &EndpointId,
     expected_revision: Revision,
+    audit: Option<AuditEvent>,
 ) -> Result<ConfigMutationResult, DashboardError> {
     delete_endpoint(
         state,
         endpoint_id,
         expected_revision,
+        audit,
         EndpointType::Proxy,
         "Proxy",
         "Proxy deleted",
@@ -213,11 +245,13 @@ pub async fn delete_nameserver(
     state: &AppState,
     endpoint_id: &EndpointId,
     expected_revision: Revision,
+    audit: Option<AuditEvent>,
 ) -> Result<ConfigMutationResult, DashboardError> {
     delete_endpoint(
         state,
         endpoint_id,
         expected_revision,
+        audit,
         EndpointType::Nameserver,
         "NameServer",
         "NameServer deleted",
@@ -229,12 +263,13 @@ async fn delete_endpoint(
     state: &AppState,
     endpoint_id: &EndpointId,
     expected_revision: Revision,
+    audit: Option<AuditEvent>,
     endpoint_type: EndpointType,
     label: &'static str,
     message: &'static str,
 ) -> Result<ConfigMutationResult, DashboardError> {
     let endpoint_id = endpoint_id.clone();
-    persist_environment(state, expected_revision, move |environment| {
+    persist_environment(state, expected_revision, audit, move |environment| {
         let previous_len = environment.endpoints.len();
         environment
             .endpoints
@@ -255,6 +290,7 @@ async fn delete_endpoint(
 async fn persist_environment<F>(
     state: &AppState,
     expected_revision: Revision,
+    audit: Option<AuditEvent>,
     operation: F,
 ) -> Result<DashboardConfigView, DashboardError>
 where
@@ -262,7 +298,7 @@ where
 {
     state
         .run_persisted_mutation("dashboard-config-candidate-persist-publish", move |state| async move {
-            persist_environment_owned(&state, expected_revision, operation).await
+            persist_environment_owned(&state, expected_revision, audit, operation).await
         })
         .await
 }
@@ -270,6 +306,7 @@ where
 async fn persist_environment_owned<F>(
     state: &AppState,
     expected_revision: Revision,
+    audit: Option<AuditEvent>,
     operation: F,
 ) -> Result<DashboardConfigView, DashboardError>
 where
@@ -283,7 +320,16 @@ where
     }
     operation(&mut candidate)?;
     candidate.updated_at_ms = Utc::now().timestamp_millis();
-    let persisted = match state.persistence.update_environment(expected_revision, candidate).await {
+    let persisted = match audit {
+        Some(audit) => {
+            state
+                .persistence
+                .update_environment_with_audit(expected_revision, candidate, audit)
+                .await
+        }
+        None => state.persistence.update_environment(expected_revision, candidate).await,
+    };
+    let persisted = match persisted {
         Ok(environment) => environment,
         Err(PersistenceError::Conflict) => {
             // Reconcile before reporting the stable conflict so a following
