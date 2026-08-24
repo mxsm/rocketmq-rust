@@ -1,0 +1,86 @@
+# Production-oriented storage deployment examples.
+#
+# Start exactly one profile at a time. File and SQLite use local named volumes
+# and are intentionally single-node. MySQL and PostgreSQL point to externally
+# managed, TLS-enabled databases and can run multiple dashboard replicas behind
+# a load balancer.
+name: rocketmq-dashboard-storage
+
+x-dashboard-common: &dashboard-common
+  build:
+    context: ../../..
+    dockerfile: rocketmq-dashboard/rocketmq-dashboard-web/deploy/backend.Dockerfile
+  init: true
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - dashboard
+
+services:
+  dashboard-file:
+    <<: *dashboard-common
+    profiles: ["file"]
+    env_file:
+      - ./env/file.env.example
+    ports:
+      - "${DASHBOARD_WEB_FILE_PORT:-8082}:8082"
+    volumes:
+      - dashboard-file-data:/var/lib/rocketmq-dashboard
+
+  dashboard-sqlite:
+    <<: *dashboard-common
+    profiles: ["sqlite"]
+    env_file:
+      - ./env/sqlite.env.example
+    ports:
+      - "${DASHBOARD_WEB_SQLITE_PORT:-8082}:8082"
+    volumes:
+      - dashboard-sqlite-data:/var/lib/rocketmq-dashboard
+
+  dashboard-mysql:
+    <<: *dashboard-common
+    profiles: ["mysql"]
+    env_file:
+      - ./env/mysql.env.example
+    ports:
+      - "${DASHBOARD_WEB_MYSQL_PORT:-8082}:8082"
+    secrets:
+      - source: dashboard_database_url
+        target: dashboard_database_url
+        mode: 0400
+      - source: mysql_ca
+        target: mysql-ca.pem
+        mode: 0444
+
+  dashboard-postgres:
+    <<: *dashboard-common
+    profiles: ["postgres"]
+    env_file:
+      - ./env/postgres.env.example
+    ports:
+      - "${DASHBOARD_WEB_POSTGRES_PORT:-8082}:8082"
+    secrets:
+      - source: dashboard_database_url
+        target: dashboard_database_url
+        mode: 0400
+      - source: postgres_ca
+        target: postgres-ca.pem
+        mode: 0444
+
+networks:
+  dashboard:
+
+volumes:
+  dashboard-file-data:
+  dashboard-sqlite-data:
+
+secrets:
+  dashboard_database_url:
+    file: ${DASHBOARD_WEB_DATABASE_URL_SECRET_FILE:-./secrets/database-url.example}
+  mysql_ca:
+    file: ${DASHBOARD_WEB_MYSQL_CA_FILE:-./secrets/mysql-ca.pem.example}
+  postgres_ca:
+    file: ${DASHBOARD_WEB_POSTGRES_CA_FILE:-./secrets/postgres-ca.pem.example}

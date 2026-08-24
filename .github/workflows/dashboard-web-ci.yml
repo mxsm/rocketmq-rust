@@ -47,7 +47,7 @@ env:
 
 jobs:
   frontend-build:
-    name: Frontend Build
+    name: Frontend Test and Build
     runs-on: ubuntu-latest
 
     defaults:
@@ -68,7 +68,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: TypeScript Check & Build
+      - name: Run frontend tests
+        run: npm run test -- --run
+
+      - name: TypeScript check and build
         run: npm run build
 
   backend-build:
@@ -127,4 +130,35 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test backend
-        run: cargo test
+        run: cargo test --locked --all-targets --all-features
+
+  storage-contract:
+    name: Storage Contract (File, SQLite, MySQL, PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      STORAGE_COMPOSE_PROJECT: rocketmq-dashboard-storage-ci-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate storage test Compose
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-web
+        run: docker compose -p "$STORAGE_COMPOSE_PROJECT" -f docker-compose.storage-test.yml config --quiet
+
+      - name: Run real storage contract matrix
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-web
+        run: |
+          docker compose -p "$STORAGE_COMPOSE_PROJECT" -f docker-compose.storage-test.yml \
+            up --build --abort-on-container-exit --exit-code-from storage-test-runner
+
+      - name: Collect storage test logs
+        if: ${{ failure() }}
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-web
+        run: docker compose -p "$STORAGE_COMPOSE_PROJECT" -f docker-compose.storage-test.yml logs --no-color
+
+      - name: Remove project-scoped storage resources
+        if: ${{ always() }}
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-web
+        run: docker compose -p "$STORAGE_COMPOSE_PROJECT" -f docker-compose.storage-test.yml down --volumes --remove-orphans

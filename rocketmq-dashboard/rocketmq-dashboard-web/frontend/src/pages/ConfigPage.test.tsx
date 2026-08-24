@@ -2,9 +2,11 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { configApi } from '../api/config_api';
+import { opsApi } from '../api/ops_api';
 import { ApiClientError } from '../api/client';
 import { renderAtRoute } from '../test/render';
 import type { DashboardConfigView, NameserverAvailabilityView } from '../types/config';
+import type { StorageStatusView } from '../types/ops';
 import ConfigPage from './ConfigPage';
 
 vi.mock('../api/config_api', () => ({
@@ -22,6 +24,8 @@ vi.mock('../api/config_api', () => ({
     deleteProxy: vi.fn()
   }
 }));
+
+vi.mock('../api/ops_api', () => ({ opsApi: { getStorageStatus: vi.fn() } }));
 
 const initialConfig: DashboardConfigView = {
   environmentId: 'environment-default',
@@ -49,6 +53,13 @@ const initialAvailability: NameserverAvailabilityView = {
 };
 
 const mockedConfigApi = vi.mocked(configApi);
+const mockedOpsApi = vi.mocked(opsApi);
+
+const storageSnapshot: StorageStatusView = {
+  backend: 'file', mode: 'singleNode', status: 'available', schemaOrFormatVersion: 1,
+  observationStartedAt: 1_700_000_000_000, lastSuccessfulWriteAt: 1_700_000_000_100,
+  safeAvailableBytes: 128 * 1024 * 1024
+};
 
 function mutationResult(config = initialConfig, message = 'Configuration updated') {
   return Promise.resolve({ config, message });
@@ -77,6 +88,7 @@ describe('ConfigPage', () => {
     mockedConfigApi.deleteNameserver.mockResolvedValue(awaitableMutation());
     mockedConfigApi.setVipChannel.mockImplementation(({ enabled }) => mutationResult({ ...initialConfig, useVIPChannel: enabled }, 'VIP updated'));
     mockedConfigApi.setTls.mockImplementation(({ enabled }) => mutationResult({ ...initialConfig, useTLS: enabled }, 'TLS updated'));
+    mockedOpsApi.getStorageStatus.mockResolvedValue(storageSnapshot);
   });
 
   it('switches the selected NameServer by endpoint identifier and signals successful persistence', async () => {
@@ -276,6 +288,22 @@ describe('ConfigPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('refresh before retrying');
     expect(screen.getByLabelText('Current NameServer')).toHaveValue('10.0.0.11:9876');
     expect(mockedConfigApi.switchNameserver).toHaveBeenCalledWith({ endpointId: 'nameserver-b', expectedRevision: 7 });
+  });
+
+  it('retains the last storage snapshot and explicitly marks it stale when manual refresh fails', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<ConfigPage />, '/config');
+    await screen.findByRole('heading', { name: 'OPS settings' });
+    await user.click(screen.getByRole('button', { name: 'Storage' }));
+    await screen.findByText('128.0 MiB');
+    mockedOpsApi.getStorageStatus.mockRejectedValueOnce(new Error('Storage status request failed'));
+
+    await user.click(screen.getByRole('button', { name: 'Refresh storage status' }));
+
+    expect(await screen.findByText(/Storage status may be stale/)).toBeInTheDocument();
+    expect(screen.getByText('128.0 MiB')).toBeInTheDocument();
+    expect(screen.getByText(/\(stale\)/)).toBeInTheDocument();
+    expect(mockedOpsApi.getStorageStatus).toHaveBeenCalledTimes(2);
   });
 });
 

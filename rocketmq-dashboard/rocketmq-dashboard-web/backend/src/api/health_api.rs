@@ -13,6 +13,7 @@
 // limitations under the License.
 use crate::model::ApiResponse;
 use crate::model::HealthStatus;
+use crate::model::MinimalHealthStatus;
 use crate::service::liveness_status;
 use crate::service::readiness_status;
 use crate::state::AppState;
@@ -20,7 +21,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 
-pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
+pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<MinimalHealthStatus>>) {
     readiness_response(
         readiness_status(
             &state.persistence,
@@ -31,11 +32,12 @@ pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<ApiRespo
     )
 }
 
-pub async fn live() -> Json<ApiResponse<HealthStatus>> {
-    Json(ApiResponse::success(liveness_status()))
+pub async fn live() -> Json<ApiResponse<MinimalHealthStatus>> {
+    let _ = liveness_status();
+    Json(ApiResponse::success(MinimalHealthStatus { status: "UP" }))
 }
 
-pub async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
+pub async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<MinimalHealthStatus>>) {
     readiness_response(
         readiness_status(
             &state.persistence,
@@ -46,16 +48,19 @@ pub async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ApiRespon
     )
 }
 
-fn readiness_response(status: HealthStatus) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
+fn readiness_response(status: HealthStatus) -> (StatusCode, Json<ApiResponse<MinimalHealthStatus>>) {
+    let response = MinimalHealthStatus {
+        status: if status.status == "UP" { "UP" } else { "DOWN" },
+    };
     if status.status == "UP" {
-        (StatusCode::OK, Json(ApiResponse::success(status)))
+        (StatusCode::OK, Json(ApiResponse::success(response)))
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiResponse::failure_with_data(
                 "STORAGE_UNAVAILABLE",
-                "Storage backend is unavailable",
-                status,
+                "Service is not ready",
+                response,
             )),
         )
     }
@@ -92,5 +97,6 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(!body.0.success);
         assert_eq!(body.0.code, "STORAGE_UNAVAILABLE");
+        assert_eq!(body.0.data.unwrap().status, "DOWN");
     }
 }

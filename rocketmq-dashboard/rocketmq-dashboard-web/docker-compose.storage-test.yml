@@ -1,3 +1,6 @@
+# The CLI or CI job may override this with `docker compose -p <project>`.
+# Do not add explicit network or volume names: Compose then scopes every
+# resource to the selected project and parallel test runs cannot collide.
 name: rocketmq-dashboard-storage-test
 
 services:
@@ -19,7 +22,7 @@ services:
     networks:
       - storage-test
     volumes:
-      - rocketmq_dashboard_storage_test_mysql_data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
 
   postgres:
     image: postgres:15-alpine
@@ -38,7 +41,7 @@ services:
     networks:
       - storage-test
     volumes:
-      - rocketmq_dashboard_storage_test_postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
 
   storage-test-runner:
     build:
@@ -49,6 +52,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    init: true
+    restart: "no"
     environment:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: "1"
@@ -59,19 +64,14 @@ services:
     networks:
       - storage-test
     volumes:
-      - rocketmq_dashboard_storage_test_sqlite_data:/storage/sqlite
-      - rocketmq_dashboard_storage_test_file_data:/storage/file
+      - sqlite-data:/storage/sqlite
+      - file-data:/storage/file
 
 networks:
   storage-test:
-    name: rocketmq-dashboard-storage-test
 
 volumes:
-  rocketmq_dashboard_storage_test_mysql_data:
-    name: rocketmq-dashboard-storage-test-mysql-data
-  rocketmq_dashboard_storage_test_postgres_data:
-    name: rocketmq-dashboard-storage-test-postgres-data
-  rocketmq_dashboard_storage_test_sqlite_data:
-    name: rocketmq-dashboard-storage-test-sqlite-data
-  rocketmq_dashboard_storage_test_file_data:
-    name: rocketmq-dashboard-storage-test-file-data
+  mysql-data:
+  postgres-data:
+  sqlite-data:
+  file-data:

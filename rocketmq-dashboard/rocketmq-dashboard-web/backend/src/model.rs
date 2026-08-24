@@ -22,6 +22,7 @@ pub mod dashboard_model;
 pub mod health_model;
 pub mod message_model;
 pub mod monitor_model;
+pub mod ops_model;
 pub mod producer_model;
 pub mod topic_model;
 
@@ -36,5 +37,6 @@ pub use dashboard_model::*;
 pub use health_model::*;
 pub use message_model::*;
 pub use monitor_model::*;
+pub use ops_model::*;
 pub use producer_model::*;
 pub use topic_model::*;

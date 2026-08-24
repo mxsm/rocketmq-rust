@@ -17,7 +17,7 @@ use crate::persistence::sql_store::SqlPersistence;
 
 pub enum PersistenceBackend {
     File(Box<FilePersistence>),
-    Sql(SqlPersistence),
+    Sql(Box<SqlPersistence>),
 }
 
 impl PersistenceBackend {

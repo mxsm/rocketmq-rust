@@ -13,6 +13,12 @@
 // limitations under the License.
 
 pub mod metrics {
+    pub const DASHBOARD_STORAGE_OPERATIONS_TOTAL: &str = "rocketmq_dashboard_storage_operations_total";
+    pub const DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS: &str =
+        "rocketmq_dashboard_storage_operation_duration_milliseconds";
+    pub const DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL: &str = "rocketmq_dashboard_storage_operation_errors_total";
+    pub const DASHBOARD_STORAGE_CAPACITY_BYTES: &str = "rocketmq_dashboard_storage_capacity_bytes";
+    pub const DASHBOARD_STORAGE_POOL_CONNECTIONS: &str = "rocketmq_dashboard_storage_pool_connections";
     pub const PROCESSOR_WATERMARK: &str = "rocketmq_processor_watermark";
     pub const BROKER_PERMISSION: &str = "rocketmq_broker_permission";
     pub const BROKER_UP: &str = "rocketmq_broker_up";

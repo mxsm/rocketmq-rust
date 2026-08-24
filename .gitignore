@@ -68,3 +68,5 @@ docs
 !rocketmq-sre/docs/**
 !rocketmq-tools/rocketmq-mcp/docs/
 !rocketmq-tools/rocketmq-mcp/docs/**
+!rocketmq-dashboard/rocketmq-dashboard-web/docs/
+!rocketmq-dashboard/rocketmq-dashboard-web/docs/**

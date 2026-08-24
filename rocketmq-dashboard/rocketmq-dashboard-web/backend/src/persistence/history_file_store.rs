@@ -23,6 +23,55 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 
 impl FilePersistence {
+    /// Reads every current history segment while the caller owns the File
+    /// storage directory lock. This narrow operations hook is intentionally
+    /// not exposed through HTTP query APIs.
+    pub(crate) async fn snapshot_history_for_operations(&self) -> Result<Vec<MetricSample>, PersistenceError> {
+        self.ensure_available()?;
+        let _read_guard = self.read_guard().await;
+        let root = self.root.clone();
+        self.service_context
+            .storage_io()
+            .spawn_io("dashboard-file-storage-snapshot-history", move || {
+                let history_root = root.join("history").join("metric-samples");
+                if !history_root.exists() {
+                    return Ok(Vec::new());
+                }
+                let mut records = Vec::new();
+                for environment in std::fs::read_dir(&history_root).map_err(PersistenceError::Io)? {
+                    let environment = environment.map_err(PersistenceError::Io)?;
+                    if environment.file_type().map_err(PersistenceError::Io)?.is_symlink()
+                        || !environment.file_type().map_err(PersistenceError::Io)?.is_dir()
+                    {
+                        return Err(PersistenceError::CorruptedData);
+                    }
+                    for entry in std::fs::read_dir(environment.path()).map_err(PersistenceError::Io)? {
+                        let entry = entry.map_err(PersistenceError::Io)?;
+                        let path = entry.path();
+                        let file_type = entry.file_type().map_err(PersistenceError::Io)?;
+                        if file_type.is_symlink() {
+                            return Err(PersistenceError::CorruptedData);
+                        }
+                        if file_type.is_file()
+                            && path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+                        {
+                            records.extend(read_history_samples_file(&path)?);
+                        }
+                    }
+                }
+                records.sort_by(|left, right| {
+                    left.environment_id
+                        .0
+                        .cmp(&right.environment_id.0)
+                        .then_with(|| left.metric.cmp(&right.metric))
+                        .then_with(|| left.bucket_ms.cmp(&right.bucket_ms))
+                });
+                Ok(records)
+            })
+            .await
+            .map_err(PersistenceError::Runtime)?
+    }
+
     pub(crate) async fn append_history(&self, samples: Vec<MetricSample>) -> Result<(), PersistenceError> {
         let write_guard = self.write_guard().await;
         self.ensure_available()?;

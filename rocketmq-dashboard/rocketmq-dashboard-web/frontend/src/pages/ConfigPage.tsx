@@ -1,6 +1,7 @@
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
+import { opsApi } from '../api/ops_api';
 import { ApiClientError, handleAppliedAuditFailure } from '../api/client';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
@@ -10,6 +11,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from '../components/ui/Button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import type { ConfigMutationResult, DashboardConfigView, NameserverAvailabilityView } from '../types/config';
+import type { StorageStatusView } from '../types/ops';
 import ConnectionSettingsSection from './settings/ConnectionSettingsSection';
 import SettingsSectionNav, { type SettingsSection } from './settings/SettingsSectionNav';
 import { isNameserverDraftDirty, normalizeNameserverDraft, type NameserverDraft } from './settings/settings-model';
@@ -227,5 +229,63 @@ function SettingToggle({ label, description, enabled, pending, onClick }: { labe
 }
 
 function StorageSection({ storageBackend, storageMode }: { storageBackend: string; storageMode: DashboardConfigView['storageMode'] }) {
-  return <Card className="settings-card"><CardHeader><div><CardTitle>Storage</CardTitle><CardDescription>Persistence is reported by the connected dashboard backend and cannot be changed here.</CardDescription></div></CardHeader><CardContent className="settings-card-content"><dl className="settings-storage-detail"><div><dt>Storage backend</dt><dd><StatusBadge status={storageBackend} /></dd></div><div><dt>Deployment mode</dt><dd><StatusBadge status={storageMode === 'multiNode' ? 'multi-node' : 'single-node'} tone={storageMode === 'multiNode' ? 'info' : 'neutral'} /></dd></div><div><dt>Configuration mode</dt><dd>Read-only</dd></div></dl></CardContent></Card>;
+  const [snapshot, setSnapshot] = useState<StorageStatusView | null>(null);
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
+
+  const refresh = async () => {
+    const requestId = ++requestSequence.current;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const next = await opsApi.getStorageStatus();
+      if (requestId === requestSequence.current) {
+        setSnapshot(next);
+        setLastCheckedAt(Date.now());
+      }
+    } catch (error) {
+      if (requestId === requestSequence.current) {
+        setRefreshError(error instanceof Error ? error.message : 'Unable to refresh storage status.');
+      }
+    } finally {
+      if (requestId === requestSequence.current) setRefreshing(false);
+    }
+  };
+
+  useEffect(() => { void refresh(); }, []);
+  const status = snapshot?.status ?? storageBackend;
+  const mode = snapshot?.mode ?? storageMode;
+
+  return <Card className="settings-card">
+    <CardHeader>
+      <div><CardTitle>Storage</CardTitle><CardDescription>Authenticated storage status contains no connection or filesystem location details.</CardDescription></div>
+      <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing} aria-label="Refresh storage status"><RefreshCw className={refreshing ? 'spin' : undefined} size={14} aria-hidden="true" />Refresh</Button>
+    </CardHeader>
+    <CardContent className="settings-card-content">
+      {refreshError ? <div className="notice notice-warning" role="status">{snapshot ? 'Storage status may be stale. ' : ''}{refreshError}</div> : null}
+      <dl className="settings-storage-detail" aria-label="Storage status">
+        <div><dt>Availability</dt><dd><StatusBadge status={status} tone={snapshot?.status === 'unavailable' ? 'danger' : snapshot?.status === 'degraded' ? 'warning' : 'success'} /></dd></div>
+        <div><dt>Storage backend</dt><dd><StatusBadge status={snapshot?.backend ?? storageBackend} /></dd></div>
+        <div><dt>Deployment mode</dt><dd><StatusBadge status={mode === 'multiNode' ? 'multi-node' : 'single-node'} tone={mode === 'multiNode' ? 'info' : 'neutral'} /></dd></div>
+        <div><dt>Schema / format version</dt><dd>{snapshot?.schemaOrFormatVersion ?? 'Not reported'}</dd></div>
+        <div><dt>Observation started</dt><dd>{formatTimestamp(snapshot?.observationStartedAt)}</dd></div>
+        <div><dt>Latest successful write</dt><dd>{formatTimestamp(snapshot?.lastSuccessfulWriteAt)}</dd></div>
+        <div><dt>Safe capacity</dt><dd>{formatBytes(snapshot?.safeAvailableBytes)}</dd></div>
+        <div><dt>SQL pool</dt><dd>{snapshot?.poolSize === undefined ? 'Not applicable' : `${snapshot.poolSize} total / ${snapshot.idleConnections ?? 0} idle`}</dd></div>
+        <div><dt>Last checked</dt><dd>{lastCheckedAt ? formatTimestamp(lastCheckedAt) : 'Checking…'}{refreshError && snapshot ? ' (stale)' : ''}</dd></div>
+      </dl>
+    </CardContent>
+  </Card>;
+}
+
+function formatTimestamp(value: number | undefined) {
+  return value ? new Date(value).toLocaleString() : 'Not observed in this process';
+}
+
+function formatBytes(value: number | undefined) {
+  if (value === undefined) return 'Not applicable';
+  if (value < 1024) return `${value} B`;
+  return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }

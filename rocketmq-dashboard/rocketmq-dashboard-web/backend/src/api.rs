@@ -21,6 +21,7 @@ pub mod dashboard_api;
 pub mod health_api;
 pub mod message_api;
 pub mod monitor_api;
+pub mod ops_api;
 pub mod producer_api;
 pub mod router;
 pub mod topic_api;

@@ -16,9 +16,12 @@ use crate::config::AuthConfig;
 use crate::error::DashboardError;
 use crate::model::SessionAuditCleanupHealth;
 use crate::persistence::DashboardPersistence;
+use crate::service::storage_metrics::StorageMetrics;
 use chrono::Utc;
+use rocketmq_observability::DashboardStorageOperation;
 use rocketmq_runtime::ChildServiceContext;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::MissedTickBehavior;
 
@@ -79,6 +82,7 @@ pub fn start_session_audit_cleanup(
     persistence: Arc<DashboardPersistence>,
     config: AuthConfig,
     runtime: SessionAuditCleanupRuntime,
+    storage_metrics: StorageMetrics,
 ) -> Result<(), DashboardError> {
     let cancellation = service_context.task_group().cancellation_token();
     service_context
@@ -115,10 +119,17 @@ pub fn start_session_audit_cleanup(
                         let now = Utc::now().timestamp_millis();
                         let session_cutoff = now.saturating_sub(i64::from(config.session_retention_days) * 86_400_000);
                         let audit_cutoff = now.saturating_sub(i64::from(config.audit_retention_days) * 86_400_000);
+                        let started_at = Instant::now();
                         let result = async {
                             persistence.delete_sessions_before(session_cutoff, config.cleanup_batch_size as usize).await?;
                             persistence.delete_audit_before(audit_cutoff, config.cleanup_batch_size as usize).await
                         }.await;
+                        storage_metrics.record_persistence_operation(
+                            persistence.storage_backend(),
+                            DashboardStorageOperation::SessionAuditCleanup,
+                            &result,
+                            started_at.elapsed(),
+                        );
                         match result {
                             Ok(_) => runtime.success().await,
                             Err(_) => runtime.unavailable().await,

@@ -21,6 +21,7 @@ use crate::api::dashboard_api;
 use crate::api::health_api;
 use crate::api::message_api;
 use crate::api::monitor_api;
+use crate::api::ops_api;
 use crate::api::producer_api;
 use crate::api::topic_api;
 use crate::middleware::audit_mutation;
@@ -42,6 +43,7 @@ use tower_http::cors::CorsLayer;
 
 pub fn build_router(state: AppState) -> Router {
     let protected_routes = Router::new()
+        .route("/api/ops/storage/status", get(ops_api::storage_status_handler))
         .route("/api/dashboard/overview", get(dashboard_api::overview))
         .route("/api/dashboard/topic-current", get(dashboard_api::topic_current))
         .route("/api/dashboard/brokers/history", get(dashboard_api::broker_history))
@@ -365,6 +367,76 @@ mod tests {
                 assert!(!text.contains("bearer-secret"));
                 assert!(!text.contains("cookie-secret"));
             }
+
+            drop(app);
+            drop(state);
+            client_runtime.shutdown().await.log_if_unhealthy();
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn storage_status_is_authenticated_while_public_health_is_minimal() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        owner.block_on(async {
+            let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
+            let app = build_router(state.clone());
+
+            let live_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/health/live")
+                        .body(Body::empty())
+                        .expect("health request"),
+                )
+                .await
+                .expect("health response");
+            assert_eq!(live_response.status(), StatusCode::OK);
+            let live_body = to_bytes(live_response.into_body(), 4_096).await.expect("health body");
+            let live_json: serde_json::Value = serde_json::from_slice(&live_body).expect("health json");
+            assert_eq!(live_json["data"], serde_json::json!({ "status": "UP" }));
+
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/ops/storage/status")
+                        .body(Body::empty())
+                        .expect("status request"),
+                )
+                .await
+                .expect("denied status response");
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+            let session = service::login(
+                &state,
+                LoginRequest {
+                    username: "admin".to_string(),
+                    password: "test-password".to_string(),
+                },
+            )
+            .await
+            .expect("login");
+            let token = session.session_id.expect("session token");
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/ops/storage/status")
+                        .header("x-dashboard-session", token)
+                        .body(Body::empty())
+                        .expect("authenticated status request"),
+                )
+                .await
+                .expect("status response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 4_096).await.expect("status body");
+            let json: serde_json::Value = serde_json::from_slice(&body).expect("status json");
+            assert_eq!(json["data"]["backend"], "file");
+            assert!(json["data"].get("dataPath").is_none());
+            assert!(json["data"].get("databaseUrl").is_none());
 
             drop(app);
             drop(state);

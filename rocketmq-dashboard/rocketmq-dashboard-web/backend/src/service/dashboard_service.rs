@@ -26,6 +26,7 @@ use crate::persistence::DashboardPersistence;
 use crate::persistence::TimeRange;
 use crate::persistence::history_repository::HistoryQuery;
 use crate::persistence::lease_repository::HistoryLease;
+use crate::service::storage_metrics::StorageMetrics;
 use crate::state::AppState;
 use crate::state::WebAdminFacade;
 #[path = "history_collector_schedule.rs"]
@@ -34,8 +35,10 @@ use chrono::NaiveDate;
 use chrono::Utc;
 use history_collector_schedule::HistoryCollectorSchedule;
 use history_collector_schedule::HistoryCollectorState;
+use rocketmq_observability::DashboardStorageOperation;
 use rocketmq_runtime::ChildServiceContext;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::MissedTickBehavior;
 
@@ -212,6 +215,7 @@ pub fn start_dashboard_history_collector(
     environment_id: EnvironmentId,
     config: HistoryCollectorConfig,
     runtime: DashboardHistoryRuntime,
+    storage_metrics: StorageMetrics,
 ) -> Result<(), DashboardError> {
     if config.interval_secs == 0 {
         return Ok(());
@@ -274,7 +278,21 @@ pub fn start_dashboard_history_collector(
                         runtime.set_leader(lease.as_ref().map(HistoryLease::expires_at_ms)).await;
                     }
                     _ = collection.tick(), if collector.can_collect() => {
-                        match collect_history_sample(&persistence, &admin_facade, &environment_id, config.interval_secs, lease.as_ref()).await {
+                        let started_at = Instant::now();
+                        let result = collect_history_sample(
+                            &persistence,
+                            &admin_facade,
+                            &environment_id,
+                            config.interval_secs,
+                            lease.as_ref(),
+                        ).await;
+                        storage_metrics.record_dashboard_operation(
+                            persistence.storage_backend(),
+                            DashboardStorageOperation::HistoryCollection,
+                            &result,
+                            started_at.elapsed(),
+                        );
+                        match result {
                             Ok(()) => {
                                 runtime.success().await;
                             }
@@ -292,10 +310,17 @@ pub fn start_dashboard_history_collector(
                     _ = tokio::task::yield_now(), if collector.can_retain() => {
                         let cutoff = Utc::now().timestamp_millis()
                             .saturating_sub(i64::from(config.retention_days) * 86_400_000);
-                        match persistence
+                        let started_at = Instant::now();
+                        let result = persistence
                             .delete_history_before(&environment_id, cutoff, config.retention_batch_size, lease.as_ref())
-                            .await
-                        {
+                            .await;
+                        storage_metrics.record_persistence_operation(
+                            persistence.storage_backend(),
+                            DashboardStorageOperation::HistoryRetention,
+                            &result,
+                            started_at.elapsed(),
+                        );
+                        match result {
                             Ok(result) => {
                                 runtime.retention().await;
                                 collector.completed_retention_batch(result.has_more);

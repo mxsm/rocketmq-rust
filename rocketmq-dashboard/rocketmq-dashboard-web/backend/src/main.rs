@@ -14,7 +14,7 @@
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_dashboard_web_backend::config::AppConfig;
-use rocketmq_dashboard_web_backend::run;
+use rocketmq_dashboard_web_backend::run_with_telemetry;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
@@ -49,7 +49,12 @@ fn main() -> anyhow::Result<()> {
     );
 
     let run_result = owner.block_on(async {
-        let run_result = Box::pin(run(config, client_runtime.clone())).await;
+        let run_result = Box::pin(run_with_telemetry(
+            config,
+            client_runtime.clone(),
+            telemetry_guard.handle(),
+        ))
+        .await;
         let report = client_runtime.shutdown().await;
         report.log_if_unhealthy();
         run_result

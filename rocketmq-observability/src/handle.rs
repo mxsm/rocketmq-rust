@@ -56,6 +56,8 @@ pub const SRE_CONTROL_PLANE_METER_SCOPE: &str = "rocketmq-sre-control-plane";
 pub const SRE_CONNECTOR_METER_SCOPE: &str = "rocketmq-sre-connector";
 /// Fixed instrumentation scope for tiered-store metrics.
 pub const TIERED_STORE_METER_SCOPE: &str = "rocketmq-tieredstore";
+/// Fixed instrumentation scope for dashboard operations metrics.
+pub const DASHBOARD_METER_SCOPE: &str = "rocketmq-dashboard";
 
 /// Current state of a telemetry handle's runtime-owned lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +486,7 @@ struct FixedMeters {
     sre_control_plane: opentelemetry::metrics::Meter,
     sre_connector: opentelemetry::metrics::Meter,
     tiered_store: opentelemetry::metrics::Meter,
+    dashboard: opentelemetry::metrics::Meter,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -504,6 +507,7 @@ impl FixedMeters {
             sre_control_plane: provider.meter(SRE_CONTROL_PLANE_METER_SCOPE),
             sre_connector: provider.meter(SRE_CONNECTOR_METER_SCOPE),
             tiered_store: provider.meter(TIERED_STORE_METER_SCOPE),
+            dashboard: provider.meter(DASHBOARD_METER_SCOPE),
         }
     }
 
@@ -521,6 +525,7 @@ impl FixedMeters {
             SRE_CONTROL_PLANE_METER_SCOPE => Some(self.sre_control_plane.clone()),
             SRE_CONNECTOR_METER_SCOPE => Some(self.sre_connector.clone()),
             TIERED_STORE_METER_SCOPE => Some(self.tiered_store.clone()),
+            DASHBOARD_METER_SCOPE => Some(self.dashboard.clone()),
             _ => None,
         }
     }

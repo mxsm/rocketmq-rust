@@ -25,13 +25,16 @@ use crate::service::AuthState;
 use crate::service::DashboardHistoryRuntime;
 use crate::service::HistoryCollectorConfig;
 use crate::service::SessionAuditCleanupRuntime;
+use crate::service::StorageMetrics;
 use crate::service::start_dashboard_history_collector;
 use crate::service::start_session_audit_cleanup;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_dashboard_common::DashboardAdminFacade;
+use rocketmq_observability::DashboardStorageOperation;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
@@ -63,6 +66,7 @@ pub struct AppState {
     pub auth_state: Arc<AuthState>,
     pub history_runtime: DashboardHistoryRuntime,
     pub session_audit_cleanup_runtime: SessionAuditCleanupRuntime,
+    pub storage_metrics: StorageMetrics,
     pub published_environment: Arc<std::sync::RwLock<PublishedEnvironment>>,
     pub admin_client: DashboardAdminClient,
     #[cfg(test)]
@@ -73,7 +77,15 @@ pub struct AppState {
 
 impl AppState {
     pub async fn try_new(config: AppConfig, client_runtime: Arc<ClientRuntime>) -> Result<Self, DashboardError> {
-        Self::try_new_inner(config, client_runtime, true).await
+        Self::try_new_with_telemetry(config, client_runtime, rocketmq_observability::TelemetryHandle::noop()).await
+    }
+
+    pub async fn try_new_with_telemetry(
+        config: AppConfig,
+        client_runtime: Arc<ClientRuntime>,
+        telemetry: rocketmq_observability::TelemetryHandle,
+    ) -> Result<Self, DashboardError> {
+        Self::try_new_inner(config, client_runtime, telemetry, true).await
     }
 
     #[cfg(test)]
@@ -81,12 +93,19 @@ impl AppState {
         config: AppConfig,
         client_runtime: Arc<ClientRuntime>,
     ) -> Result<Self, DashboardError> {
-        Self::try_new_inner(config, client_runtime, false).await
+        Self::try_new_inner(
+            config,
+            client_runtime,
+            rocketmq_observability::TelemetryHandle::noop(),
+            false,
+        )
+        .await
     }
 
     async fn try_new_inner(
         config: AppConfig,
         client_runtime: Arc<ClientRuntime>,
+        telemetry: rocketmq_observability::TelemetryHandle,
         start_environment_convergence: bool,
     ) -> Result<Self, DashboardError> {
         let persistence = Arc::new(
@@ -94,6 +113,7 @@ impl AppState {
                 .await?,
         );
         ensure_persistence_ready(persistence.storage_health().await)?;
+        let storage_metrics = StorageMetrics::from_handle(&telemetry);
         let session_audit_config = config.auth.clone();
         let auth_state = Arc::new(AuthState::new(config.auth)?);
         let environment = load_or_create_default_environment(&persistence, &config.initial_config).await?;
@@ -123,6 +143,7 @@ impl AppState {
                     lease_ttl_secs: config.dashboard_history_lease_ttl_secs,
                 },
                 history_runtime.clone(),
+                storage_metrics.clone(),
             )?;
         }
         let session_audit_cleanup_runtime = SessionAuditCleanupRuntime::new(&persistence);
@@ -131,6 +152,7 @@ impl AppState {
             persistence.clone(),
             session_audit_config,
             session_audit_cleanup_runtime.clone(),
+            storage_metrics.clone(),
         )?;
 
         let state = Self {
@@ -141,6 +163,7 @@ impl AppState {
             auth_state,
             history_runtime,
             session_audit_cleanup_runtime,
+            storage_metrics,
             published_environment,
             admin_client,
             #[cfg(test)]
@@ -202,7 +225,14 @@ impl AppState {
         let state = self.clone();
         self.persisted_mutation_context
             .spawn_service(name, async move {
+                let started_at = Instant::now();
                 let result = operation(state.clone()).await;
+                state.storage_metrics.record_dashboard_operation(
+                    state.persistence.storage_backend(),
+                    DashboardStorageOperation::PersistedMutation,
+                    &result,
+                    started_at.elapsed(),
+                );
                 #[cfg(test)]
                 state.wait_after_persisted_mutation_for_tests().await;
                 let _ = sender.send(result);
