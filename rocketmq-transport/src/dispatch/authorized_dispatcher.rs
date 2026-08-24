@@ -34,6 +34,7 @@ use rocketmq_security_api::Action;
 use rocketmq_security_api::Decision;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
+use rocketmq_security_api::SecurityBootstrapProfile;
 
 use super::LocalResponseReceiver;
 use super::RequestContext;
@@ -109,6 +110,12 @@ impl AuthorizedDispatchBoundary {
     #[must_use]
     pub fn admission_controller(&self) -> Arc<AdmissionController> {
         Arc::clone(&self.admission)
+    }
+
+    /// Returns the security profile enforced by this shared boundary.
+    #[must_use]
+    pub(crate) fn security_profile(&self) -> SecurityBootstrapProfile {
+        self.security.profile()
     }
 
     pub(crate) fn session(

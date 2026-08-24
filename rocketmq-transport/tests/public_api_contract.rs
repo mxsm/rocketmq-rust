@@ -26,6 +26,7 @@ use rocketmq_transport::api::v1::RemotingSerializable;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::ServerStartError;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportServer;
@@ -33,6 +34,8 @@ use rocketmq_transport::api::v1::TransportServer;
 fn assert_serialization_contract<T: RemotingSerializable + RemotingDeserializable>() {}
 
 fn assert_processor_contract<T: RequestProcessor>() {}
+
+fn assert_server_start_error_contract<T: Clone + std::fmt::Debug + std::error::Error>() {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TokenKind {
@@ -877,6 +880,7 @@ fn api_v1_reexports_versioned_capabilities_and_dtos() {
     let _: Option<TransportClient<DefaultRequestProcessor>> = None;
     let _: Option<RemotingClient<DefaultRequestProcessor>> = None;
     let _: Option<TransportServer<DefaultRequestProcessor>> = None;
+    assert_server_start_error_contract::<ServerStartError>();
     let _: CachedConnectionState = CachedConnectionState::Absent;
     let _ = CachedConnectionState::Healthy;
     let _ = CachedConnectionState::UnhealthyRetired;

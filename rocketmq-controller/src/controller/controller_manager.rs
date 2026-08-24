@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -286,6 +288,12 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
     }
 }
 
+struct LeadershipGateState {
+    /// Invariant: `applied_is_leader` changes only after its side effects succeed, and `stopping` blocks later promotion.
+    applied_is_leader: bool,
+    stopping: bool,
+}
+
 /// Main controller manager
 ///
 /// This is the central component that coordinates all controller operations.
@@ -357,8 +365,17 @@ pub struct ControllerManager {
     /// Initialization state - uses AtomicBool for lock-free reads
     initialized: Arc<AtomicBool>,
 
+    /// A started controller consumes its one-shot remoting and task resources when it stops.
+    lifecycle_terminated: Arc<AtomicBool>,
+
     /// Serializes initialize, start, and graceful shutdown transitions.
     lifecycle_lock: AsyncMutex<()>,
+
+    /// Serializes leadership side effects and manual role-change notification submission.
+    leadership_gate: AsyncMutex<LeadershipGateState>,
+
+    #[cfg(test)]
+    test_leadership_override: AtomicU8,
 
     broker_housekeeping_service: Mutex<Option<Arc<BrokerHousekeepingService>>>,
     broker_role_notifier: BrokerRoleNotifier,
@@ -572,7 +589,14 @@ impl ControllerManager {
             metrics_manager,
             running: Arc::new(AtomicBool::new(false)),
             initialized: Arc::new(AtomicBool::new(false)),
+            lifecycle_terminated: Arc::new(AtomicBool::new(false)),
             lifecycle_lock: AsyncMutex::new(()),
+            leadership_gate: AsyncMutex::new(LeadershipGateState {
+                applied_is_leader: false,
+                stopping: false,
+            }),
+            #[cfg(test)]
+            test_leadership_override: AtomicU8::new(0),
             broker_housekeeping_service: Mutex::new(None),
             broker_role_notifier,
             service_context,
@@ -753,14 +777,34 @@ impl ControllerManager {
     ///
     /// Returns `ControllerError` if:
     /// - Controller is not initialized
+    /// - A previously started controller has already shut down or rolled back a failed start
     /// - Any component fails to start
     ///
     /// # Thread Safety
     ///
-    /// This method is idempotent - calling it multiple times is safe
+    /// Repeated calls while the controller is running are idempotent. Once a started controller
+    /// shuts down or rolls back a failed start, this method returns an error instead of attempting
+    /// to recreate its consumed resources.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
         let _lifecycle_guard = self.lifecycle_lock.lock().await;
-        // Check if already running using atomic operation
+        if self.running.load(Ordering::Acquire) {
+            warn!("Controller manager is already running");
+            return Ok(());
+        }
+
+        if self.lifecycle_terminated.load(Ordering::Acquire) {
+            return Err(ControllerError::runtime_error(
+                "Controller manager cannot be restarted after shutdown or a failed startup",
+            ));
+        }
+
+        // Check if initialized
+        if !self.initialized.load(Ordering::SeqCst) {
+            return Err(ControllerError::NotInitialized(
+                "Controller manager must be initialized before starting".to_string(),
+            ));
+        }
+
         if self
             .running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -768,15 +812,6 @@ impl ControllerManager {
         {
             warn!("Controller manager is already running");
             return Ok(());
-        }
-
-        // Check if initialized
-        if !self.initialized.load(Ordering::SeqCst) {
-            // Rollback running state
-            self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::NotInitialized(
-                "Controller manager must be initialized before starting".to_string(),
-            ));
         }
 
         info!("Starting controller manager...");
@@ -816,20 +851,26 @@ impl ControllerManager {
                 .map(|service| service as Arc<dyn ChannelEventListener>);
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             *self.remoting_server_shutdown_tx.lock() = Some(shutdown_tx);
+            let (startup_tx, startup_rx) = oneshot::channel();
             if let Err(error) = manager_task_group.spawn_service("controller.remoting-server", async move {
                 let report = server
-                    .run_with_shutdown_report(request_processor, broker_housekeeping_service, async move {
-                        let _ = shutdown_rx.await;
-                    })
+                    .try_run_with_shutdown_report_and_startup(
+                        request_processor,
+                        broker_housekeeping_service,
+                        async move {
+                            let _ = shutdown_rx.await;
+                        },
+                        startup_tx,
+                    )
                     .await;
                 match report.as_ref() {
-                    Some(report) if !report.is_healthy() => {
+                    Ok(report) if !report.is_healthy() => {
                         warn!(
                             report = %report.to_json(),
                             "Controller remoting server shutdown report is unhealthy"
                         );
                     }
-                    None => warn!("Controller remoting server stopped without a shutdown report"),
+                    Err(error) => warn!(%error, "Controller remoting server stopped before startup completed"),
                     _ => {}
                 }
             }) {
@@ -837,7 +878,23 @@ impl ControllerManager {
                     ControllerError::runtime_error(format!("Failed to spawn controller remoting server task: {error}"));
                 return Err(self.cleanup_after_start_failure(error).await);
             }
-            info!("Remoting server started with ControllerRequestProcessor");
+            match startup_rx.await {
+                Ok(Ok(_address)) => info!("Remoting server started with ControllerRequestProcessor"),
+                Ok(Err(error)) => {
+                    return Err(self
+                        .cleanup_after_start_failure(ControllerError::runtime_error(format!(
+                            "Controller remoting server failed to start: {error}"
+                        )))
+                        .await);
+                }
+                Err(error) => {
+                    return Err(self
+                        .cleanup_after_start_failure(ControllerError::runtime_error(format!(
+                            "Controller remoting server startup acknowledgement was dropped: {error}"
+                        )))
+                        .await);
+                }
+            }
         }
 
         // Start remoting client (for outbound RPC calls)
@@ -849,10 +906,13 @@ impl ControllerManager {
             info!("Remoting client started");
         }
 
-        if let Err(error) = self.broker_role_notifier.start(&manager_task_group) {
+        if let Err(error) = self
+            .start_broker_role_notifier_and_synchronize(&manager_task_group)
+            .await
+        {
             return Err(self.cleanup_after_start_failure(error).await);
         }
-        if let Err(error) = self.start_leadership_watch_loop() {
+        if let Err(error) = self.start_leadership_watch_loop().await {
             return Err(self.cleanup_after_start_failure(error).await);
         }
 
@@ -930,9 +990,14 @@ impl ControllerManager {
             warn!("Controller manager is not running");
             return Ok(());
         }
+        self.lifecycle_terminated.store(true, Ordering::Release);
         info!("Shutting down controller manager...");
         let mut failures = Vec::new();
 
+        if let Err(error) = self.stop_leadership_gate().await {
+            warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
+            failures.push(format!("leadership scheduling: {error}"));
+        }
         self.broker_role_notifier.close();
         if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
             let _ = shutdown_tx.send(());
@@ -946,10 +1011,6 @@ impl ControllerManager {
             failures.push(format!("heartbeat manager: {detail}"));
         }
 
-        if let Err(error) = self.apply_leadership_state(false).await {
-            warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
-            failures.push(format!("leadership scheduling: {error}"));
-        }
         if !self.shutdown_manager_tasks(deadline).await {
             failures.push("manager tasks did not stop cleanly".to_string());
         }
@@ -1020,7 +1081,25 @@ impl ControllerManager {
     ///
     /// true if this node is the Raft leader, false otherwise
     pub fn is_leader(&self) -> bool {
+        #[cfg(test)]
+        match self.test_leadership_override.load(Ordering::Acquire) {
+            1 => return false,
+            2 => return true,
+            _ => {}
+        }
         self.raft_controller.is_leader()
+    }
+
+    #[cfg(test)]
+    fn set_test_leadership_override(&self, is_leader: Option<bool>) {
+        self.test_leadership_override.store(
+            match is_leader {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            },
+            Ordering::Release,
+        );
     }
 
     /// Check if the controller manager is running
@@ -1155,18 +1234,17 @@ impl ControllerManager {
         self.raft_controller.set_runtime_elect_enabled(enabled)
     }
 
-    fn start_leadership_watch_loop(self: &Arc<Self>) -> Result<()> {
+    async fn start_leadership_watch_loop(self: &Arc<Self>) -> Result<()> {
         let weak_manager = Arc::downgrade(self);
         let interval = Duration::from_millis(self.config.snapshot().heartbeat_interval_ms.max(100));
         let task_group = self.ensure_manager_task_group()?;
+        self.synchronize_leadership_gate().await?;
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
-        let was_leader = Arc::new(AtomicBool::new(false));
         let task_config = ScheduledTaskConfig::fixed_delay("controller.leadership-watch", interval);
 
         scheduled_tasks
             .schedule_fixed_delay(task_config, move || {
                 let weak_manager = weak_manager.clone();
-                let was_leader = was_leader.clone();
                 async move {
                     let Some(manager) = weak_manager.upgrade() else {
                         return;
@@ -1176,15 +1254,8 @@ impl ControllerManager {
                         return;
                     }
 
-                    let is_leader = manager.is_leader();
-                    if is_leader == was_leader.load(Ordering::Acquire) {
-                        return;
-                    }
-
-                    if let Err(error) = manager.apply_leadership_state(is_leader).await {
+                    if let Err(error) = manager.synchronize_leadership_gate().await {
                         warn!("Failed to apply leadership state transition: {}", error);
-                    } else {
-                        was_leader.store(is_leader, Ordering::Release);
                     }
                 }
             })
@@ -1193,6 +1264,47 @@ impl ControllerManager {
             })?;
 
         *self.leadership_watch_tasks.lock() = Some(scheduled_tasks);
+        Ok(())
+    }
+
+    async fn synchronize_leadership_gate(&self) -> Result<bool> {
+        let mut gate = self.leadership_gate.lock().await;
+        self.synchronize_leadership_gate_locked(&mut gate).await
+    }
+
+    async fn start_broker_role_notifier_and_synchronize(&self, task_group: &TaskGroup) -> Result<()> {
+        let mut gate = self.leadership_gate.lock().await;
+        if gate.stopping {
+            return Err(ControllerError::runtime_error(
+                "Controller leadership gate cannot be started after shutdown",
+            ));
+        }
+
+        self.broker_role_notifier.start(task_group)?;
+        let is_leader = self.is_leader();
+        self.apply_leadership_state(is_leader).await?;
+        gate.applied_is_leader = is_leader;
+        Ok(())
+    }
+
+    async fn synchronize_leadership_gate_locked(&self, gate: &mut LeadershipGateState) -> Result<bool> {
+        if gate.stopping {
+            return Ok(false);
+        }
+
+        let is_leader = self.is_leader();
+        if is_leader != gate.applied_is_leader {
+            self.apply_leadership_state(is_leader).await?;
+            gate.applied_is_leader = is_leader;
+        }
+        Ok(is_leader)
+    }
+
+    async fn stop_leadership_gate(&self) -> Result<()> {
+        let mut gate = self.leadership_gate.lock().await;
+        gate.stopping = true;
+        self.apply_leadership_state(false).await?;
+        gate.applied_is_leader = false;
         Ok(())
     }
 
@@ -1277,6 +1389,7 @@ impl ControllerManager {
                 ControllerError::serialization_source("encode sync state set for broker role notify", error)
             })?;
 
+        let mut tasks = Vec::new();
         for (broker_id, broker_addr) in member_group.broker_addrs {
             if !self.heartbeat_manager.is_broker_active(
                 &member_group.cluster,
@@ -1303,20 +1416,38 @@ impl ControllerManager {
                     return Ok(());
                 }
             };
-            let task = NotifyTask::new(
+            tasks.push(NotifyTask::new(
                 key,
                 state,
                 broker_addr.clone(),
                 response_header.master_address.clone(),
                 sync_state_set.clone(),
-            );
+            ));
+        }
+
+        self.submit_broker_role_notifications(tasks).await
+    }
+
+    async fn submit_broker_role_notifications<I>(&self, tasks: I) -> Result<()>
+    where
+        I: IntoIterator<Item = NotifyTask>,
+    {
+        let mut leadership_gate = self.leadership_gate.lock().await;
+        if !self.synchronize_leadership_gate_locked(&mut leadership_gate).await? {
+            return Ok(());
+        }
+
+        for task in tasks {
+            let broker_id = task.key.broker_id;
+            let broker_name = task.key.broker_name.clone();
+            let broker_addr = task.broker_addr.clone();
             let outcome = self.broker_role_notifier.submit(task);
             if matches!(outcome, SubmitOutcome::Full | SubmitOutcome::Closed) {
                 warn!(
                     ?outcome,
                     target = %broker_addr,
                     broker_id,
-                    broker = %member_group.broker_name,
+                    broker = %broker_name,
                     "Broker role notify was not retained"
                 );
             }
@@ -1434,6 +1565,27 @@ mod tests {
 
     fn test_service_context() -> ChildServiceContext {
         rocketmq_runtime::RuntimeContext::from_current("controller-manager-test").service_context("controller-manager")
+    }
+
+    fn test_notify_task(broker_id: u64) -> NotifyTask {
+        let state = NotifyState::try_new(
+            1,
+            rocketmq_store_api::MasterEpoch::try_from(1).expect("test master epoch"),
+            rocketmq_store_api::SyncStateSetEpoch::try_from(1).expect("test sync-state-set epoch"),
+            Some("127.0.0.1:10911".to_string()),
+        )
+        .expect("test notify state");
+        NotifyTask::new(
+            NotifyKey {
+                cluster_name: "test-cluster".to_string(),
+                broker_name: "broker-a".to_string(),
+                broker_id,
+            },
+            state,
+            CheetahString::from_static_str("127.0.0.1:10911"),
+            Some(CheetahString::from_static_str("127.0.0.1:10911")),
+            Vec::new(),
+        )
     }
 
     #[tokio::test]
@@ -1625,6 +1777,14 @@ mod tests {
 
         manager.shutdown().await.expect("shutdown manager");
         assert!(!manager.is_running());
+        let restart_error = manager
+            .start()
+            .await
+            .expect_err("a stopped controller must not restart");
+        assert_eq!(
+            restart_error.to_string(),
+            "Runtime error: Controller manager cannot be restarted after shutdown or a failed startup"
+        );
         std::mem::forget(manager);
     }
 
@@ -1664,8 +1824,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn occupied_remoting_listener_fails_startup_and_cleans_up_owned_components() {
+        let occupied = std::net::TcpListener::bind("0.0.0.0:0").expect("occupy remoting listener");
+        let remoting_addr = std::net::SocketAddr::from((
+            std::net::Ipv4Addr::LOCALHOST,
+            occupied.local_addr().expect("occupied remoting address").port(),
+        ));
+        let (_unused_remoting_addr, raft_addr) = reserve_controller_addresses();
+        let config = ControllerConfig::default()
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
+                .await
+                .expect("create manager"),
+        );
+        manager.initialize().await.expect("initialize manager");
+
+        let error = manager
+            .start()
+            .await
+            .expect_err("occupied remoting listener must fail startup");
+
+        assert!(error.to_string().contains("Controller remoting server failed to start"));
+        assert!(!manager.is_running());
+        assert_eq!(manager.heartbeat_manager.scan_task_count(), 0);
+        assert!(manager.manager_task_group.lock().is_none());
+        assert!(manager.remoting_server_shutdown_tx.lock().is_none());
+        drop(occupied);
+        let restart_error = manager
+            .start()
+            .await
+            .expect_err("a failed startup must not consume the released listener on retry");
+        assert_eq!(
+            restart_error.to_string(),
+            "Runtime error: Controller manager cannot be restarted after shutdown or a failed startup"
+        );
+        assert!(!manager.is_running());
+        manager
+            .shutdown()
+            .await
+            .expect("shutdown remains idempotent after listener startup cleanup");
+    }
+
+    #[tokio::test]
     async fn test_manager_shutdown() {
-        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        let config = ControllerConfig::default()
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
 
         let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -1677,6 +1886,12 @@ mod tests {
 
         // Test shutdown without starting (should succeed)
         manager_arc.shutdown().await.expect("Failed to shutdown");
+        manager_arc
+            .start()
+            .await
+            .expect("shutdown before start must not prevent the first start");
+        assert!(manager_arc.is_running());
+        manager_arc.shutdown().await.expect("shutdown after start");
 
         // Prevent dropping runtime in async context
         std::mem::forget(manager_arc);
@@ -1765,6 +1980,115 @@ mod tests {
         );
 
         manager.shutdown().await.expect("shutdown manager");
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn leadership_gate_recovers_from_pre_start_notifier_poisoning() {
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        let config = ControllerConfig::default()
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
+                .await
+                .expect("create manager"),
+        );
+        manager.initialize().await.expect("initialize manager");
+
+        manager.set_test_leadership_override(Some(true));
+        manager
+            .submit_broker_role_notifications([test_notify_task(1)])
+            .await
+            .expect("pre-start notification submission");
+        let poisoned = manager.broker_role_notifier_snapshot();
+        assert_eq!(
+            poisoned.accepted, 0,
+            "an unstarted notifier must reject the poisoned submission"
+        );
+        assert!(
+            manager.scheduling_enabled(),
+            "the pre-start leader path must have applied the poisoned gate state"
+        );
+
+        manager.start().await.expect("start manager");
+        manager
+            .submit_broker_role_notifications([test_notify_task(2)])
+            .await
+            .expect("post-start notification submission");
+        let recovered = manager.broker_role_notifier_snapshot();
+        assert_eq!(recovered.accepted, 1, "post-start leader notification must be accepted");
+        assert!(
+            manager.scheduling_enabled(),
+            "the forced post-start synchronization must retain leader scheduling"
+        );
+
+        manager.shutdown().await.expect("shutdown manager");
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn leadership_gate_orders_authoritative_promotion_and_demotion_before_notify_submission() {
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        let config = ControllerConfig::default()
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
+                .await
+                .expect("create manager"),
+        );
+        manager.initialize().await.expect("initialize manager");
+        manager.start().await.expect("start manager");
+
+        manager.set_test_leadership_override(Some(true));
+        let (promotion_submission, promotion_watch) = tokio::join!(biased;
+            manager.submit_broker_role_notifications([test_notify_task(1)]),
+            manager.synchronize_leadership_gate(),
+        );
+        promotion_submission.expect("leader notification submission");
+        assert!(promotion_watch.expect("leader watch synchronization"));
+        let promoted = manager.broker_role_notifier_snapshot();
+        assert_eq!(promoted.accepted, 1, "leader submission must be retained immediately");
+        assert!(manager.scheduling_enabled());
+
+        manager.set_test_leadership_override(Some(false));
+        let (demotion_watch, demotion_submission) = tokio::join!(biased;
+            manager.synchronize_leadership_gate(),
+            manager.submit_broker_role_notifications([test_notify_task(2)]),
+        );
+        assert!(!demotion_watch.expect("leader watch demotion"));
+        demotion_submission.expect("follower notification submission");
+        let demoted = manager.broker_role_notifier_snapshot();
+        assert_eq!(
+            demoted.accepted, promoted.accepted,
+            "a demoted controller must not retain a stale role-change notification"
+        );
+        assert!(
+            demoted.generation > promoted.generation,
+            "demotion must reset the notifier generation"
+        );
+        assert_eq!(demoted.queued_keys, 0, "demotion must clear queued notifications");
+        assert_eq!(
+            demoted.retry_waiting_keys, 0,
+            "demotion must clear retry-waiting notifications"
+        );
+        assert!(!manager.scheduling_enabled());
+
+        manager.shutdown().await.expect("shutdown manager");
+        manager.set_test_leadership_override(Some(true));
+        manager
+            .submit_broker_role_notifications([test_notify_task(3)])
+            .await
+            .expect("stopped notification submission");
+        let stopped = manager.broker_role_notifier_snapshot();
+        assert!(stopped.closed, "shutdown must close the notifier");
+        assert_eq!(
+            stopped.accepted, demoted.accepted,
+            "a stopped controller must not accept a later leader notification"
+        );
         std::mem::forget(manager);
     }
 

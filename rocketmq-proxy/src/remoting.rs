@@ -100,6 +100,8 @@ use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::auth::is_auth_error;
@@ -522,7 +524,7 @@ async fn serve_with_context<P, F>(
     drain: ProxyDrainController,
     command_factory: RemotingCommandFactory,
     shutdown: F,
-    ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
+    mut ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
 ) -> ProxyResult<Option<ShutdownReport>>
 where
     P: MessagingProcessor + 'static,
@@ -532,9 +534,6 @@ where
     let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
         message: format!("proxy remoting server failed to bind {addr}: {error}"),
     })?;
-    if let Some(ready) = ready {
-        ready()?;
-    }
     let proxy_protocol = config.remoting.proxy_protocol.clone();
     let request_processor = ProxyRequestProcessor::new_with_drain_controller_and_remoting_command_factory(
         config,
@@ -548,20 +547,83 @@ where
     let mut server = TransportServer::new(Arc::new(ServerConfig::default()), service_context)
         .with_telemetry(telemetry)
         .try_with_proxy_protocol(proxy_protocol)?;
-    let report = server
-        .serve_bound_listener_until(listener, request_processor, None, None, shutdown)
-        .await;
-    match report.as_ref() {
-        Some(report) if !report.is_healthy() => {
-            warn!(
-                report = %report.to_json(),
-                "Proxy remoting server task shutdown report is unhealthy"
-            );
+    let (startup_tx, mut startup_rx) = oneshot::channel();
+    let readiness_cancellation = CancellationToken::new();
+    let server_cancellation = readiness_cancellation.clone();
+    let server_future = server.try_serve_bound_listener_until_with_startup(
+        listener,
+        request_processor,
+        None,
+        None,
+        async move {
+            tokio::select! {
+                _ = shutdown => {}
+                _ = server_cancellation.cancelled() => {}
+            }
+        },
+        startup_tx,
+    );
+    tokio::pin!(server_future);
+    let startup = tokio::select! {
+        biased;
+        startup = &mut startup_rx => startup.map_err(|error| ProxyError::Transport {
+            message: format!("proxy remoting startup acknowledgement was dropped: {error}"),
+        })?,
+        result = &mut server_future => {
+            let report = result.map_err(|error| ProxyError::Transport {
+                message: format!("proxy remoting server failed before readiness: {error}"),
+            })?;
+            let startup = startup_rx.await.map_err(|error| ProxyError::Transport {
+                message: format!("proxy remoting startup acknowledgement was dropped: {error}"),
+            })?;
+            startup.map_err(|error| ProxyError::Transport {
+                message: format!("proxy remoting server failed before readiness: {error}"),
+            })?;
+            run_ready_transition(&mut ready)?;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "Proxy remoting server task shutdown report is unhealthy"
+                );
+            }
+            return Ok(Some(report));
         }
-        None => warn!("Proxy remoting server stopped without a shutdown report"),
-        _ => {}
+    };
+    startup.map_err(|error| ProxyError::Transport {
+        message: format!("proxy remoting server failed before readiness: {error}"),
+    })?;
+    if let Err(error) = run_ready_transition(&mut ready) {
+        readiness_cancellation.cancel();
+        match server_future.await {
+            Ok(report) if !report.is_healthy() => warn!(
+                report = %report.to_json(),
+                "Proxy remoting server cleanup after readiness failure is unhealthy"
+            ),
+            Err(server_error) => warn!(
+                %server_error,
+                "Proxy remoting server cleanup after readiness failure returned an error"
+            ),
+            _ => {}
+        }
+        return Err(error);
     }
-    Ok(report)
+    let report = server_future.await.map_err(|error| ProxyError::Transport {
+        message: format!("proxy remoting server failed: {error}"),
+    })?;
+    if !report.is_healthy() {
+        warn!(
+            report = %report.to_json(),
+            "Proxy remoting server task shutdown report is unhealthy"
+        );
+    }
+    Ok(Some(report))
+}
+
+fn run_ready_transition(ready: &mut Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>) -> ProxyResult<()> {
+    let Some(ready) = ready.take() else {
+        return Ok(());
+    };
+    ready()
 }
 
 pub struct ProxyRemotingDispatcher<P> {
@@ -2193,6 +2255,7 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     use bytes::Bytes;
     use cheetah_string::CheetahString;
@@ -2275,10 +2338,12 @@ mod tests {
     use super::ProxyRemotingBackend;
     use super::ProxyRemotingDispatcher;
     use super::ProxyRequestProcessor;
+    use super::TransportTelemetry;
     use crate::auth::ProxyAuthRuntime;
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
     use crate::config::ProxyMode;
+    use crate::config::RemotingConfig;
     use crate::context::ProxyContext;
     use crate::processor::AckMessageRequest;
     use crate::processor::AckMessageResultEntry;
@@ -2350,6 +2415,79 @@ mod tests {
             None,
             command_factory,
         )
+    }
+
+    fn test_remoting_config() -> Arc<ProxyConfig> {
+        Arc::new(ProxyConfig {
+            mode: ProxyMode::Local,
+            remoting: RemotingConfig {
+                enabled: true,
+                listen_addr: "127.0.0.1:0".to_owned(),
+                ..RemotingConfig::default()
+            },
+            ..ProxyConfig::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn remoting_ready_callback_runs_before_immediate_shutdown_completes() {
+        let runtime = RuntimeContext::from_current("proxy-remoting-ready-immediate-shutdown-test");
+        let service = runtime.service_context("proxy-remoting-ready-immediate-shutdown");
+        let ready_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ready_observer = ready_called.clone();
+        let processor = Arc::clone(&test_dispatcher().processor);
+
+        let report = super::serve_with_service_context_and_ready(
+            service.clone(),
+            TransportTelemetry::noop(),
+            test_remoting_config(),
+            processor,
+            ClientSessionRegistry::default(),
+            None,
+            None,
+            std::future::ready(()),
+            move || {
+                ready_observer.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await
+        .expect("immediate shutdown should still publish Proxy readiness")
+        .expect("remoting server should return a shutdown report");
+
+        assert!(ready_called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn remoting_ready_error_waits_for_owned_server_cleanup() {
+        let runtime = RuntimeContext::from_current("proxy-remoting-ready-error-cleanup-test");
+        let service = runtime.service_context("proxy-remoting-ready-error-cleanup");
+        let processor = Arc::clone(&test_dispatcher().processor);
+
+        let error = super::serve_with_service_context_and_ready(
+            service.clone(),
+            TransportTelemetry::noop(),
+            test_remoting_config(),
+            processor,
+            ClientSessionRegistry::default(),
+            None,
+            None,
+            std::future::pending(),
+            || {
+                Err(crate::error::ProxyError::Transport {
+                    message: "test readiness rejection".to_owned(),
+                })
+            },
+        )
+        .await
+        .expect_err("readiness error must propagate after server cleanup");
+
+        assert!(error.to_string().contains("test readiness rejection"));
+        let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
     }
 
     #[tokio::test]

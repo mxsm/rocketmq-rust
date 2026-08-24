@@ -59,6 +59,12 @@ pub struct TransportSecurity {
 }
 
 impl TransportSecurity {
+    /// Returns the process security profile selected by the composition root.
+    #[must_use]
+    pub(crate) const fn profile(&self) -> SecurityBootstrapProfile {
+        self.profile
+    }
+
     /// Creates an explicitly insecure transport adapter for loopback-only development.
     ///
     /// The listener address restriction is enforced by the process security bootstrap before bind.

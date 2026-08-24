@@ -33,16 +33,12 @@ use crate::request_processor::default_request_processor::DefaultRequestProcessor
 use crate::runtime::config::client_config::TransportClientConfig;
 
 use self::runtime_test_support::test_service_context;
-#[cfg(feature = "tls")]
-use super::capabilities::RemotingServerRunCapabilities;
 use super::connection_handler::SessionCommandInterceptor;
 use super::connection_handler::TestDeferredResponse;
 use super::connection_handler::TestRequestHook;
 use super::connection_handler::TestRequestHookResult;
 use super::launch::run_with_report;
 use super::launch::run_with_report_with_service_context;
-#[cfg(feature = "tls")]
-use super::launch::run_with_tls_config_report;
 use super::lifecycle_events::enqueue_lifecycle_event;
 use super::lifecycle_events::run_lifecycle_event_dispatcher;
 use super::lifecycle_events::LifecycleEventConfig;
@@ -450,7 +446,143 @@ async fn startup_acknowledgement_reports_bind_failure() {
 }
 
 #[tokio::test]
-async fn startup_acknowledgement_is_sent_after_listener_binding() {
+async fn checked_entries_share_capability_validation_and_typed_bind_failures() {
+    let config = Arc::new(ServerConfig {
+        bind_address: "127.0.0.1".to_owned(),
+        listen_port: 0,
+        ..ServerConfig::default()
+    });
+    let mut server = TransportServer::<DefaultRequestProcessor>::new(
+        config,
+        test_service_context("remoting-server-checked-configuration-test"),
+    );
+    server.lifecycle_event_config.queue_capacity = 0;
+    let (startup_tx, startup_rx) = oneshot::channel();
+
+    let result = server
+        .try_run_with_shutdown_report_and_startup(DefaultRequestProcessor, None, future::pending::<()>(), startup_tx)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ServerStartError::Configuration {
+            stage: "lifecycle_events",
+            ..
+        })
+    ));
+    assert!(matches!(
+        startup_rx.await.expect("startup error should be reported"),
+        Err(ServerStartError::Configuration {
+            stage: "lifecycle_events",
+            ..
+        })
+    ));
+
+    let config = Arc::new(ServerConfig {
+        bind_address: "127.0.0.1".to_owned(),
+        listen_port: 70000,
+        ..ServerConfig::default()
+    });
+    let mut server = TransportServer::<DefaultRequestProcessor>::new(
+        config,
+        test_service_context("remoting-server-checked-bind-test"),
+    );
+    let result = server
+        .try_run_with_shutdown_report(DefaultRequestProcessor, None, future::pending::<()>())
+        .await;
+    assert!(matches!(
+        result,
+        Err(ServerStartError::Bind {
+            stage: "listener.bind",
+            ..
+        })
+    ));
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("pre-bound listener should bind");
+    let mut server = TransportServer::<DefaultRequestProcessor>::new(
+        Arc::new(ServerConfig::default()),
+        test_service_context("remoting-server-checked-pre-bound-configuration-test"),
+    );
+    server.lifecycle_event_config.queue_capacity = 0;
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let result = server
+        .try_serve_bound_listener_until_with_startup(
+            listener,
+            DefaultRequestProcessor,
+            None,
+            None,
+            future::pending::<()>(),
+            startup_tx,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ServerStartError::Configuration {
+            stage: "lifecycle_events",
+            ..
+        })
+    ));
+    assert!(matches!(
+        startup_rx.await.expect("pre-bound startup error should be reported"),
+        Err(ServerStartError::Configuration {
+            stage: "lifecycle_events",
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn prepared_security_state_distinguishes_legacy_insecure_and_secure_profiles() {
+    let context = RuntimeContext::from_current("remoting-server-security-state-test");
+    let service = context.service_context("remoting-server-security-state");
+    let config = Arc::new(ServerConfig::default());
+
+    let mut unconfigured = TransportServer::<DefaultRequestProcessor>::new(config.clone(), service.component("legacy"));
+    let prepared = unconfigured
+        .prepare_server(DefaultRequestProcessor, None)
+        .await
+        .expect("legacy fallback should prepare");
+    assert_eq!(
+        prepared.security_state,
+        super::capabilities::ServerSecurityState::Unconfigured
+    );
+    drop(prepared);
+
+    let mut insecure = TransportServer::<DefaultRequestProcessor>::new(config.clone(), service.component("insecure"))
+        .with_transport_security(
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+        );
+    let prepared = insecure
+        .prepare_server(DefaultRequestProcessor, None)
+        .await
+        .expect("explicit insecure profile should prepare");
+    assert_eq!(
+        prepared.security_state,
+        super::capabilities::ServerSecurityState::ExplicitInsecureLoopback
+    );
+    drop(prepared);
+
+    let mut secure = TransportServer::<DefaultRequestProcessor>::new(config, service.component("secure"))
+        .with_transport_security(Arc::new(TransportSecurity::secure_enforced(None, None)), None);
+    let prepared = secure
+        .prepare_server(DefaultRequestProcessor, None)
+        .await
+        .expect("secure profile should prepare without a legacy fallback");
+    assert_eq!(
+        prepared.security_state,
+        super::capabilities::ServerSecurityState::Secure
+    );
+    drop(prepared);
+
+    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn checked_config_startup_acknowledgement_is_sent_after_prepare() {
     let config = Arc::new(ServerConfig {
         bind_address: "127.0.0.1".to_string(),
         listen_port: 0,
@@ -462,7 +594,7 @@ async fn startup_acknowledgement_is_sent_after_listener_binding() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
         server
-            .run_with_shutdown_report_and_startup(
+            .try_run_with_shutdown_report_and_startup(
                 DefaultRequestProcessor,
                 None,
                 async {
@@ -488,6 +620,133 @@ async fn startup_acknowledgement_is_sent_after_listener_binding() {
         .expect("server task should not panic")
         .expect("server should report shutdown");
     assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn checked_pre_bound_startup_acknowledgement_is_sent_after_prepare() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("pre-bound listener should bind");
+    let mut server = TransportServer::<DefaultRequestProcessor>::new(
+        Arc::new(ServerConfig::default()),
+        test_service_context("remoting-server-pre-bound-startup-test"),
+    );
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        server
+            .try_serve_bound_listener_until_with_startup(
+                listener,
+                DefaultRequestProcessor,
+                None,
+                None,
+                async {
+                    let _ = shutdown_rx.await;
+                },
+                startup_tx,
+            )
+            .await
+    });
+
+    let bound_address = startup_rx
+        .await
+        .expect("pre-bound startup acknowledgement should be sent")
+        .expect("pre-bound listener should become ready");
+    TcpStream::connect(bound_address)
+        .await
+        .expect("acknowledged pre-bound listener should accept connections");
+
+    let _ = shutdown_tx.send(());
+    let report = server_task
+        .await
+        .expect("pre-bound server task should not panic")
+        .expect("pre-bound server should report shutdown");
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn checked_startup_reports_task_spawn_failure_before_readiness() {
+    let service = test_service_context("remoting-server-task-spawn-failure-test");
+    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("pre-bound listener should bind");
+    let mut server =
+        TransportServer::<DefaultRequestProcessor>::new(Arc::new(ServerConfig::default()), service.clone());
+    let lifecycle_listener = Arc::new(ConnectSignalListener {
+        connected: std::sync::Mutex::new(None),
+        disconnected: std::sync::Mutex::new(None),
+    });
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let result = server
+        .try_serve_bound_listener_until_with_startup(
+            listener,
+            DefaultRequestProcessor,
+            None,
+            Some(lifecycle_listener),
+            future::pending::<()>(),
+            startup_tx,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ServerStartError::TaskSpawn {
+            stage: "lifecycle_event_dispatcher.spawn",
+            ..
+        })
+    ));
+    assert!(matches!(
+        startup_rx.await.expect("task spawn failure should be reported"),
+        Err(ServerStartError::TaskSpawn {
+            stage: "lifecycle_event_dispatcher.spawn",
+            ..
+        })
+    ));
+    let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+}
+
+#[cfg(feature = "tls")]
+#[tokio::test]
+async fn checked_startup_reports_typed_tls_failure_before_readiness() {
+    let config = Arc::new(ServerConfig {
+        bind_address: "127.0.0.1".to_owned(),
+        listen_port: 0,
+        tls_config: TlsConfig {
+            server: TlsServerConfig {
+                mode: TlsMode::Enforcing,
+                cert_path: Some("missing-cert.pem".to_owned()),
+                key_path: Some("missing-key.pem".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..ServerConfig::default()
+    });
+    let mut server = TransportServer::<DefaultRequestProcessor>::new(
+        config,
+        test_service_context("remoting-server-checked-tls-failure-test"),
+    );
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let result = server
+        .try_run_with_shutdown_report_and_startup(DefaultRequestProcessor, None, future::pending::<()>(), startup_tx)
+        .await;
+    assert!(matches!(
+        result,
+        Err(ServerStartError::Tls {
+            stage: "tls.initialize",
+            ..
+        })
+    ));
+    assert!(matches!(
+        startup_rx.await.expect("TLS startup error should be reported"),
+        Err(ServerStartError::Tls {
+            stage: "tls.initialize",
+            ..
+        })
+    ));
 }
 
 #[tokio::test]
@@ -1025,8 +1284,8 @@ async fn run_shutdown_report_includes_tls_reload_task() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let context = RuntimeContext::from_current("remoting-server-tls-report-test");
     let service = context.service_context("remoting-server-tls-report");
-    let tls_runtime = TlsServerRuntime::initialize_with_service_context(
-        TlsConfig {
+    let config = Arc::new(ServerConfig {
+        tls_config: TlsConfig {
             test_mode_enable: true,
             server: TlsServerConfig {
                 mode: TlsMode::Permissive,
@@ -1034,38 +1293,16 @@ async fn run_shutdown_report_includes_tls_reload_task() {
             },
             ..Default::default()
         },
-        &service,
-    )
-    .await
-    .expect("TLS runtime should initialize");
-
-    let report = run_with_tls_config_report(
-        listener,
-        async {
-            let _ = shutdown_rx.await;
-        },
-        DefaultRequestProcessor,
-        None,
-        Vec::new(),
-        None,
-        None,
-        RemotingServerRunCapabilities {
-            tls_runtime,
-            task_group: service.component("remoting-server").task_group().clone(),
-            file_region_blocking: service.storage_io().clone(),
-            file_transfer_mode: FileTransferMode::Auto,
-            frame_limits: FrameLimits::default(),
-            process_budget: service.process_budget(),
-            transport_security: None,
-            transport_principal: None,
-            admission: None,
-            command_interceptor: Arc::new(()),
-            telemetry: TransportTelemetry::noop(),
-            lifecycle_event_config: LifecycleEventConfig::default(),
-            proxy_protocol: ProxyProtocolConfig::default(),
-        },
-    );
-    let server_task = tokio::spawn(report);
+        ..ServerConfig::default()
+    });
+    let mut server = TransportServer::new(config, service);
+    let server_task = tokio::spawn(async move {
+        server
+            .try_serve_bound_listener_until(listener, DefaultRequestProcessor, None, None, async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
 
     let _ = shutdown_tx.send(());
     let report = tokio::time::timeout(Duration::from_secs(3), server_task)

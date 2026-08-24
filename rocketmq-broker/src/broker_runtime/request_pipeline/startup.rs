@@ -107,7 +107,7 @@ impl BrokerRuntime {
         let (normal_startup_tx, normal_startup_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.normal", async move {
             let report = server
-                .run_with_shutdown_report_and_startup(
+                .try_run_with_shutdown_report_and_startup(
                     request_processor,
                     client_housekeeping_service_main,
                     async move {
@@ -116,10 +116,10 @@ impl BrokerRuntime {
                     normal_startup_tx,
                 )
                 .await;
-            if let Some(report) = report.as_ref() {
+            if let Ok(report) = report.as_ref() {
                 report.log_if_unhealthy();
             }
-            let _ = normal_report_tx.send(report);
+            let _ = normal_report_tx.send(report.ok());
         }) {
             return Err(BrokerStartupError::component_start("normal_remoting_server", error));
         }
@@ -137,7 +137,7 @@ impl BrokerRuntime {
         let (fast_startup_tx, fast_startup_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.fast", async move {
             let report = fast_server
-                .run_with_shutdown_report_and_startup(
+                .try_run_with_shutdown_report_and_startup(
                     fast_request_processor,
                     client_housekeeping_service_fast,
                     async move {
@@ -146,10 +146,10 @@ impl BrokerRuntime {
                     fast_startup_tx,
                 )
                 .await;
-            if let Some(report) = report.as_ref() {
+            if let Ok(report) = report.as_ref() {
                 report.log_if_unhealthy();
             }
-            let _ = fast_report_tx.send(report);
+            let _ = fast_report_tx.send(report.ok());
         }) {
             return Err(BrokerStartupError::component_start("fast_remoting_server", error));
         }

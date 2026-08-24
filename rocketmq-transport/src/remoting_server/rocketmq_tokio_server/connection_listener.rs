@@ -15,8 +15,6 @@
 use super::connection_handler::ConnectionHandler;
 use super::connection_handler::InterceptingConnectionHandler;
 use super::connection_handler::SessionCommandInterceptor;
-use super::lifecycle_events::run_lifecycle_event_dispatcher;
-use super::lifecycle_events::LifecycleEventConfig;
 use super::lifecycle_events::LifecycleEventPublisher;
 use super::*;
 
@@ -57,11 +55,8 @@ pub(super) struct ConnectionListener<RP> {
     /// Used for routing table cleanup and metrics.
     pub(super) conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
-    /// Optional lifecycle event listener
-    ///
-    /// Receives CONNECTED/DISCONNECTED/EXCEPTION events.
-    /// Useful for external monitoring and orchestration.
-    pub(super) channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+    /// Optional publisher backed by the lifecycle-owned event dispatcher.
+    pub(super) event_publisher: Option<LifecycleEventPublisher>,
 
     /// Shared command processing handler
     ///
@@ -83,8 +78,6 @@ pub(super) struct ConnectionListener<RP> {
     pub(super) transport_principal: Option<Principal>,
     pub(super) command_interceptor: Arc<dyn SessionCommandInterceptor>,
     pub(super) telemetry: TransportTelemetry,
-    pub(super) lifecycle_event_config: LifecycleEventConfig,
-    pub(super) lifecycle_shutdown: CancellationToken,
     pub(super) lifecycle_dispatcher_task: Option<TaskId>,
 }
 
@@ -116,38 +109,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     pub(super) async fn run(&mut self) -> RocketMQResult<()> {
         info!("Server ready to accept connections");
 
-        let event_publisher = if let Some(listener) = self.channel_event_listener.take() {
-            let (sender, receiver) = mpsc::channel(self.lifecycle_event_config.queue_capacity);
-            let cancellation = self.lifecycle_shutdown.clone();
-            let publisher = LifecycleEventPublisher {
-                sender,
-                publish_timeout: self.lifecycle_event_config.publish_timeout,
-                cancellation: cancellation.clone(),
-                telemetry: self.telemetry.clone(),
-            };
-            let spawn_result = self.task_group.spawn_service(
-                "rocketmq.remoting.event_dispatcher",
-                run_lifecycle_event_dispatcher(
-                    receiver,
-                    listener,
-                    cancellation,
-                    self.lifecycle_event_config,
-                    self.telemetry.clone(),
-                ),
-            );
-            match spawn_result {
-                Ok(task_id) => {
-                    self.lifecycle_dispatcher_task = Some(task_id);
-                    Some(publisher)
-                }
-                Err(error) => {
-                    error!(%error, "Failed to spawn remoting lifecycle event dispatcher");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let event_publisher = self.event_publisher.take();
 
         let listener = self.listener.take().ok_or_else(|| {
             RocketMQError::network_connection_failed("remoting-server", "transport listener already started")
