@@ -2,6 +2,7 @@ import { Download, RotateCcw, Search, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { consumerApi } from '../api/consumer_api';
 import { dlqApi } from '../api/dlq_api';
+import { handleAppliedAuditFailure } from '../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EntitySheet from '../components/EntitySheet';
 import MetricCard from '../components/MetricCard';
@@ -45,8 +46,10 @@ export default function DlqMessagePage() {
   const [resending, setResending] = useState(false);
   const [resendResults, setResendResults] = useState<DlqMessageResendResult[]>([]);
   const [resendError, setResendError] = useState<string | null>(null);
+  const [resendTerminal, setResendTerminal] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportTerminal, setExportTerminal] = useState(false);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [groupsError, setGroupsError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -110,8 +113,10 @@ export default function DlqMessagePage() {
     resendRequestRef.current += 1;
     exportRequestRef.current += 1;
     setExporting(false);
+    setExportTerminal(false);
     setResendResults([]);
     setResendError(null);
+    setResendTerminal(false);
     setExportError(null);
     const requestId = ++requestRef.current;
     if (requestPage === 1) setExhaustedAfterPage(null);
@@ -161,6 +166,7 @@ export default function DlqMessagePage() {
     exportRequestRef.current += 1;
     setLoading(false);
     setExporting(false);
+    setExportTerminal(false);
     setRows([]);
     setTotal(0);
     setPage(1);
@@ -171,6 +177,7 @@ export default function DlqMessagePage() {
     setResendResults([]);
     setQueryError(null);
     setResendError(null);
+    setResendTerminal(false);
     setExportError(null);
   };
 
@@ -186,6 +193,7 @@ export default function DlqMessagePage() {
     setResending(true);
     setResendResults([]);
     setResendError(null);
+    setResendTerminal(false);
     try {
       const results = await dlqApi.resend({
         messages: selectedTargets.map((target) => ({
@@ -197,6 +205,16 @@ export default function DlqMessagePage() {
       });
       if (resendRequestRef.current === requestId) setResendResults(results);
     } catch (requestError) {
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setSelectedIds(new Set());
+          setSelected(null);
+          setResendResults([]);
+          setResendTerminal(true);
+          setResendError('Selected DLQ resends were applied. Refreshing authoritative results.');
+        },
+        refresh: () => query(page)
+      })) return;
       if (resendRequestRef.current === requestId) {
         setResendError(requestError instanceof Error ? requestError.message : String(requestError));
       }
@@ -207,6 +225,7 @@ export default function DlqMessagePage() {
   };
 
   const exportCurrentQuery = async () => {
+    if (exportTerminal) return;
     const issue = validateQuery(consumerGroup, begin, end);
     if (issue) {
       setValidation(issue);
@@ -225,6 +244,13 @@ export default function DlqMessagePage() {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (requestError) {
+      if (exportRequestRef.current !== requestId) return;
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setExportTerminal(true);
+          setExportError('The export was applied, but its audit record could not be stored. Re-query before requesting another export.');
+        }
+      })) return;
       if (exportRequestRef.current === requestId) {
         setExportError(requestError instanceof Error ? requestError.message : String(requestError));
       }
@@ -247,6 +273,7 @@ export default function DlqMessagePage() {
             resendRequestRef.current += 1;
             setResendResults([]);
             setResendError(null);
+            setResendTerminal(false);
             setSelectedIds((current) => toggleMessageSelection(current, rowId, event.target.checked));
           }}
         />
@@ -304,7 +331,7 @@ export default function DlqMessagePage() {
           <div><CardTitle>Dead-letter queue</CardTitle><CardDescription>Message bodies are available only from the detail sheet.</CardDescription></div>
           <div className="dlq-action-bar">
             <span>{selectedTargets.length} selected</span>
-            <Button type="button" variant="outline" loading={exporting} onClick={() => void exportCurrentQuery()}><Download size={15} aria-hidden="true" /> Export current query</Button>
+            <Button type="button" variant="outline" disabled={exportTerminal} loading={exporting} onClick={() => void exportCurrentQuery()}><Download size={15} aria-hidden="true" /> Export current query</Button>
             <AlertDialog>
               <AlertDialogTrigger asChild><Button type="button" variant="destructive" disabled={selectedTargets.length === 0 || resending}><RotateCcw size={15} aria-hidden="true" /> Review selected resend</Button></AlertDialogTrigger>
               <AlertDialogContent>
@@ -316,11 +343,11 @@ export default function DlqMessagePage() {
           </div>
         </CardHeader>
         <CardContent>
-          {resendError ? <div className="notice notice-danger" role="alert">{resendError}. Review the selected batch again to retry.</div> : null}
+          {resendError ? <div className={`notice ${resendTerminal ? 'notice-warning' : 'notice-danger'}`} role="alert">{resendError}{resendTerminal ? '' : '. Review the selected batch again to retry.'}</div> : null}
           {exportError ? (
-            <div className="notice notice-danger message-discovery-notice" role="alert">
+            <div className={`notice ${exportTerminal ? 'notice-warning' : 'notice-danger'} message-discovery-notice`} role="alert">
               <span>{exportError}</span>
-              <Button type="button" variant="outline" size="sm" onClick={() => void exportCurrentQuery()}>Retry export</Button>
+              {!exportTerminal ? <Button type="button" variant="outline" size="sm" onClick={() => void exportCurrentQuery()}>Retry export</Button> : null}
             </div>
           ) : null}
           {resendResults.length > 0 ? (

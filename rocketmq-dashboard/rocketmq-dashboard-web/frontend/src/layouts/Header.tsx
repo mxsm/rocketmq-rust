@@ -23,7 +23,9 @@ const pageLabels = [
   ['/producers', 'Producer', 'Messaging'],
   ['/messages', 'Message', 'Messaging'],
   ['/acl', 'ACL Management', 'Governance'],
+  ['/audit', 'Audit', 'Governance'],
   ['/monitors', 'Monitor', 'Governance'],
+  ['/sessions', 'Sessions', 'Governance'],
   ['/config', 'OPS', 'Operate'],
   ['/proxy', 'Proxy', 'Operate']
 ] as const;

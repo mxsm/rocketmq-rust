@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../components/ui/Sheet';
 import Sidebar from './Sidebar';
 import Header from './Header';
@@ -10,11 +11,28 @@ interface AppLayoutProps {
 
 export default function AppLayout({ children }: AppLayoutProps) {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [auditWarning, setAuditWarning] = useState<string | null>(null);
   const navigationTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreNavigationFocusRef = useRef(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     document.documentElement.dataset.theme = 'dark';
+  }, []);
+
+  useEffect(() => {
+    const onSessionExpired = () => navigate('/login', { replace: true });
+    window.addEventListener('rocketmq-auth-expired', onSessionExpired);
+    return () => window.removeEventListener('rocketmq-auth-expired', onSessionExpired);
+  }, [navigate]);
+
+  useEffect(() => {
+    const onAuditWarning = (event: Event) => {
+      const warning = event as CustomEvent<string>;
+      setAuditWarning(warning.detail || 'The change was applied, but its audit event could not be persisted.');
+    };
+    window.addEventListener('rocketmq-audit-warning', onAuditWarning);
+    return () => window.removeEventListener('rocketmq-audit-warning', onAuditWarning);
   }, []);
 
   useEffect(() => {
@@ -42,7 +60,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
             setMobileNavigationOpen(true);
           }}
         />
-        <main className="content">{children}</main>
+        <main className="content">
+          {auditWarning ? <div className="audit-warning" role="status">{auditWarning}</div> : null}
+          {children}
+        </main>
       </div>
       <Sheet open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
         <SheetContent

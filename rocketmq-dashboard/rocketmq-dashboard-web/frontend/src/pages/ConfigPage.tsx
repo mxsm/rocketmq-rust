@@ -1,7 +1,7 @@
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
-import { ApiClientError } from '../api/client';
+import { ApiClientError, handleAppliedAuditFailure } from '../api/client';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
@@ -98,6 +98,17 @@ export default function ConfigPage() {
       window.dispatchEvent(new CustomEvent('rocketmq-config-updated'));
       void checkNameserverAvailability();
     } catch (requestError) {
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setNameserverToRemove(null);
+          setNotice({ tone: 'warning', message: 'Configuration change was applied. Refreshing authoritative settings.' });
+        },
+        refresh: async () => {
+          const authoritative = await configApi.getConfig();
+          applyConfig(authoritative);
+          await checkNameserverAvailability();
+        }
+      })) return;
       setNotice({ tone: 'danger', message: mutationErrorMessage(requestError, 'Configuration update failed.') });
       if (requestError instanceof ApiClientError && requestError.code === 'STORAGE_CONFLICT') {
         load(true);

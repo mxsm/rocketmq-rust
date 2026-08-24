@@ -11,8 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+pub mod audit_layer;
 pub mod auth_layer;
 pub mod trace_layer;
 
+pub use audit_layer::*;
 pub use auth_layer::*;
 pub use trace_layer::*;

@@ -21,7 +21,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 
 pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
-    readiness_response(readiness_status(&state.persistence, state.history_runtime.health().await).await)
+    readiness_response(
+        readiness_status(
+            &state.persistence,
+            state.history_runtime.health().await,
+            state.session_audit_cleanup_runtime.health().await,
+        )
+        .await,
+    )
 }
 
 pub async fn live() -> Json<ApiResponse<HealthStatus>> {
@@ -29,7 +36,14 @@ pub async fn live() -> Json<ApiResponse<HealthStatus>> {
 }
 
 pub async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
-    readiness_response(readiness_status(&state.persistence, state.history_runtime.health().await).await)
+    readiness_response(
+        readiness_status(
+            &state.persistence,
+            state.history_runtime.health().await,
+            state.session_audit_cleanup_runtime.health().await,
+        )
+        .await,
+    )
 }
 
 fn readiness_response(status: HealthStatus) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
@@ -72,6 +86,7 @@ mod tests {
                 idle_connections: None,
             }),
             history: None,
+            session_audit_cleanup: None,
         });
 
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

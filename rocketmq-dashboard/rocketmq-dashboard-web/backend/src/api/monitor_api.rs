@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::middleware::AuditTerminalFactSink;
+use crate::middleware::successful_mutation_audit_event;
 use crate::model::ApiResponse;
+use crate::model::AuditAction;
+use crate::model::AuditResourceType;
+use crate::model::AuthenticatedActor;
 use crate::model::ConsumerMonitorMutationResult;
 use crate::model::ConsumerMonitorUpsertRequest;
 use crate::model::ConsumerMonitorView;
@@ -21,6 +26,7 @@ use crate::model::MonitorEnvironmentQuery;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
+use axum::extract::Extension;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
@@ -36,20 +42,53 @@ pub async fn list_consumer_monitors(
 
 pub async fn create_consumer_monitor(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
+    Extension(actor): Extension<AuthenticatedActor>,
     Json(payload): Json<ConsumerMonitorUpsertRequest>,
 ) -> Result<Json<ApiResponse<ConsumerMonitorMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::create_or_update_consumer_monitor(&state, payload).await?,
-    )))
+    let resource_name = payload.consumer_group.clone();
+    let environment_id = Some(payload.environment_id.clone());
+    let atomic_audit = successful_mutation_audit_event(
+        &actor,
+        AuditAction::MonitorUpsert,
+        AuditResourceType::Monitor,
+        Some(&resource_name),
+        environment_id.clone(),
+    );
+    let result = service::create_or_update_consumer_monitor(&state, payload, Some(atomic_audit)).await?;
+    audit
+        .record_persisted_success(Some(&resource_name), environment_id)
+        .await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn delete_consumer_monitor(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
+    Extension(actor): Extension<AuthenticatedActor>,
     Path(consumer_group): Path<String>,
     Query(query): Query<MonitorDeleteQuery>,
 ) -> Result<Json<ApiResponse<ConsumerMonitorMutationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::delete_consumer_monitor(&state, &query.environment_id, &consumer_group, query.expected_revision)
-            .await?,
-    )))
+    let environment_id = Some(query.environment_id.clone());
+    let atomic_audit = successful_mutation_audit_event(
+        &actor,
+        AuditAction::MonitorDelete,
+        AuditResourceType::Monitor,
+        Some(&consumer_group),
+        environment_id.clone(),
+    );
+    let result = service::delete_consumer_monitor(
+        &state,
+        &query.environment_id,
+        &consumer_group,
+        query.expected_revision,
+        Some(atomic_audit),
+    )
+    .await?;
+    if result.message.ends_with("deleted") {
+        audit
+            .record_persisted_success(Some(&consumer_group), environment_id)
+            .await;
+    }
+    Ok(Json(ApiResponse::success(result)))
 }

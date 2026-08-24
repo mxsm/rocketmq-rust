@@ -1,9 +1,22 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
+import { ApiClientError } from '../api/client';
 import type { ConsumerGroupListItem, ConsumerOperationResult } from '../types/consumer';
+import { ConsumerQueryScopeProvider } from '../pages/consumers/ConsumerQueryScopeProvider';
 import ConsumerDeleteDialog from './ConsumerDeleteDialog';
+import { resetConsumerMutationLocksForTests } from './consumerMutationLock';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 vi.mock('../api/consumer_api', () => ({
   consumerApi: {
@@ -42,6 +55,7 @@ const successResult: ConsumerOperationResult = {
 
 describe('ConsumerDeleteDialog', () => {
   beforeEach(() => {
+    resetConsumerMutationLocksForTests();
     vi.clearAllMocks();
     vi.mocked(consumerApi.brokers).mockResolvedValue({
       items: [
@@ -51,18 +65,24 @@ describe('ConsumerDeleteDialog', () => {
     });
   });
 
+  afterEach(() => {
+    resetConsumerMutationLocksForTests();
+  });
+
   it('requires exact group confirmation and full success before closing', async () => {
     const user = userEvent.setup();
     const onOpenChange = vi.fn();
     const onSucceeded = vi.fn();
     vi.mocked(consumerApi.delete).mockResolvedValue(successResult);
     render(
-      <ConsumerDeleteDialog
-        open
-        consumer={consumer}
-        onOpenChange={onOpenChange}
-        onSucceeded={onSucceeded}
-      />
+      <ConsumerQueryScopeProvider>
+        <ConsumerDeleteDialog
+          open
+          consumer={consumer}
+          onOpenChange={onOpenChange}
+          onSucceeded={onSucceeded}
+        />
+      </ConsumerQueryScopeProvider>
     );
 
     const dialog = screen.getByRole('dialog', { name: 'Delete consumer group' });
@@ -91,12 +111,14 @@ describe('ConsumerDeleteDialog', () => {
       ]
     });
     render(
-      <ConsumerDeleteDialog
-        open
-        consumer={consumer}
-        onOpenChange={onOpenChange}
-        onSucceeded={onSucceeded}
-      />
+      <ConsumerQueryScopeProvider>
+        <ConsumerDeleteDialog
+          open
+          consumer={consumer}
+          onOpenChange={onOpenChange}
+          onSucceeded={onSucceeded}
+        />
+      </ConsumerQueryScopeProvider>
     );
 
     const dialog = screen.getByRole('dialog', { name: 'Delete consumer group' });
@@ -107,5 +129,55 @@ describe('ConsumerDeleteDialog', () => {
     expect(await within(dialog).findByText((content) => content.includes('unavailable'))).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSucceeded).not.toHaveBeenCalled();
+  });
+
+  it('retains a delete lock across close and reopen until the original applied request settles', async () => {
+    const user = userEvent.setup();
+    const pendingDelete = deferred<ConsumerOperationResult>();
+    const pendingRefresh = deferred<void>();
+    const onOpenChange = vi.fn();
+    const onAppliedAuditFailure = vi.fn(() => pendingRefresh.promise);
+    const auditWarning = vi.fn();
+    window.addEventListener('rocketmq-audit-warning', auditWarning);
+    vi.mocked(consumerApi.delete).mockImplementationOnce(() => pendingDelete.promise);
+    const renderDialog = (mounted: boolean) => (
+      <ConsumerQueryScopeProvider>
+        {mounted ? <ConsumerDeleteDialog open consumer={consumer} onOpenChange={onOpenChange} onSucceeded={vi.fn()} onAppliedAuditFailure={onAppliedAuditFailure} /> : null}
+      </ConsumerQueryScopeProvider>
+    );
+    const { rerender } = render(renderDialog(true));
+
+    let dialog = screen.getByRole('dialog', { name: 'Delete consumer group' });
+    await user.click(await within(dialog).findByRole('checkbox', { name: 'broker-a' }));
+    await user.type(within(dialog).getByLabelText('Confirm consumer group'), 'orders-consumer');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete consumer group' }));
+    await waitFor(() => expect(consumerApi.delete).toHaveBeenCalledTimes(1));
+
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Close dialog' })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.pointerDown(document.querySelector('.ui-overlay')!);
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    rerender(renderDialog(false));
+    rerender(renderDialog(true));
+    dialog = screen.getByRole('dialog', { name: 'Delete consumer group' });
+    await user.click(await within(dialog).findByRole('checkbox', { name: 'broker-a' }));
+    await user.type(within(dialog).getByLabelText('Confirm consumer group'), 'orders-consumer');
+    expect(within(dialog).getByRole('button', { name: 'Delete consumer group' })).toBeDisabled();
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('rocketmq-audit-warning', { detail: 'Consumer deletion was applied.' }));
+      pendingDelete.reject(new ApiClientError('APPLIED_AUDIT_FAILED', 'Consumer deletion was applied.', { mutationApplied: true }));
+    });
+    await waitFor(() => expect(onAppliedAuditFailure).toHaveBeenCalledTimes(1));
+    expect(auditWarning).toHaveBeenCalledTimes(1);
+    expect(consumerApi.delete).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByRole('dialog', { name: 'Delete consumer group' })).getByRole('button', { name: 'Delete consumer group' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+
+    await act(async () => pendingRefresh.resolve());
+    await waitFor(() => expect(within(screen.getByRole('dialog', { name: 'Delete consumer group' })).getByRole('button', { name: 'Delete consumer group' })).toBeEnabled());
+    window.removeEventListener('rocketmq-audit-warning', auditWarning);
   });
 });

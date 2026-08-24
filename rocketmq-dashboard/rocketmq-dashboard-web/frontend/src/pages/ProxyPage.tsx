@@ -1,7 +1,7 @@
 import { CheckCircle2, Plus, RefreshCw, Route, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
-import { ApiClientError } from '../api/client';
+import { ApiClientError, handleAppliedAuditFailure } from '../api/client';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -76,6 +76,15 @@ export default function ProxyPage() {
       applyMutation(await request());
       onSuccess?.();
     } catch (requestError) {
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setAddDialogOpen(false);
+          setAddError(null);
+          setRetryProxyMutation(null);
+          setNotice({ tone: 'warning', message: 'Proxy configuration change was applied. Refreshing authoritative settings.' });
+        },
+        refresh: load
+      })) return;
       if (requestError instanceof ApiClientError && requestError.code === 'STORAGE_CONFLICT' && onConflict) {
         try {
           await onConflict(requestError);

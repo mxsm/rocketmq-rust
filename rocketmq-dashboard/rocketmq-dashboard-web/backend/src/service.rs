@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod acl_service;
+pub mod audit_service;
 pub mod auth_service;
 pub mod broker_service;
 pub mod config_service;
@@ -21,9 +22,11 @@ pub mod health_service;
 pub mod message_service;
 pub mod monitor_service;
 pub mod producer_service;
+pub mod session_audit_cleanup;
 pub mod topic_service;
 
 pub use acl_service::*;
+pub use audit_service::*;
 pub use auth_service::*;
 pub use broker_service::*;
 pub use config_service::*;
@@ -33,4 +36,5 @@ pub use health_service::*;
 pub use message_service::*;
 pub use monitor_service::*;
 pub use producer_service::*;
+pub use session_audit_cleanup::*;
 pub use topic_service::*;

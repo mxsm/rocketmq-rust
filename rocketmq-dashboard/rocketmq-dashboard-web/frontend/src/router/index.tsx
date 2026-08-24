@@ -13,7 +13,9 @@ export const canonicalRoutePatterns = [
   '/messages/dlq',
   '/message-trace',
   '/acl',
+  '/audit',
   '/monitors',
+  '/sessions',
   '/config'
 ] as const;
 
@@ -38,7 +40,9 @@ export const routes = [
   '/dlq',
   '/message-trace',
   '/acl',
+  '/audit',
   '/monitors',
+  '/sessions',
   '/login',
   '/config'
 ];

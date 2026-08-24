@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::error::DashboardError;
+use crate::middleware::AuditTerminalFactSink;
 use crate::model::ApiResponse;
 use crate::model::TopicConfigView;
 use crate::model::TopicConsumersView;
@@ -29,6 +30,7 @@ use crate::model::TopicTestMessageRequest;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
+use axum::extract::Extension;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
@@ -53,68 +55,95 @@ pub async fn get_topic(
 
 pub async fn create_topic(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Json(request): Json<TopicMutationRequest>,
 ) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::create_topic(&state, request).await?,
-    )))
+    let result = service::create_topic(&state, request).await?;
+    record_topic_operation(&audit, &state, &result).await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn update_topic(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(topic): Path<String>,
     Json(mut request): Json<TopicMutationRequest>,
 ) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
     request.topic = topic;
-    Ok(Json(ApiResponse::success(
-        service::create_or_update_topic(&state, request).await?,
-    )))
+    let result = service::create_or_update_topic(&state, request).await?;
+    record_topic_operation(&audit, &state, &result).await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn delete_topic(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(topic): Path<String>,
 ) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(service::delete_topic(&state, &topic).await?)))
+    let result = service::delete_topic(&state, &topic).await?;
+    record_topic_operation(&audit, &state, &result).await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn send_topic_test_message(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(topic): Path<String>,
     Json(request): Json<TopicTestMessageRequest>,
 ) -> Result<Json<ApiResponse<TopicSendResultView>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::send_topic_test_message(&state, &topic, request).await?,
-    )))
+    let result = service::send_topic_test_message(&state, &topic, request).await?;
+    record_terminal_outcome(&audit, &state, &result.topic, result.success).await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn reset_topic_consumer_offset(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(topic): Path<String>,
     Json(request): Json<TopicResetOffsetRequest>,
 ) -> Result<Json<ApiResponse<TopicOffsetResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::reset_topic_consumer_offset(&state, &topic, request).await?,
-    )))
+    let result = service::reset_topic_consumer_offset(&state, &topic, request).await?;
+    record_terminal_outcome(&audit, &state, &result.topic, result.success).await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn skip_topic_consumer_offset(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path(topic): Path<String>,
     Json(request): Json<TopicSkipOffsetRequest>,
 ) -> Result<Json<ApiResponse<TopicOffsetResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::skip_topic_consumer_offset(&state, &topic, request).await?,
-    )))
+    let result = service::skip_topic_consumer_offset(&state, &topic, request).await?;
+    record_terminal_outcome(&audit, &state, &result.topic, result.success).await;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 pub async fn delete_topic_from_broker(
     State(state): State<AppState>,
+    Extension(audit): Extension<AuditTerminalFactSink>,
     Path((topic, broker_name)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
-    Ok(Json(ApiResponse::success(
-        service::delete_topic_from_broker(&state, &topic, &broker_name).await?,
-    )))
+    let result = service::delete_topic_from_broker(&state, &topic, &broker_name).await?;
+    record_topic_operation(&audit, &state, &result).await;
+    Ok(Json(ApiResponse::success(result)))
+}
+
+async fn record_topic_operation(audit: &AuditTerminalFactSink, state: &AppState, result: &TopicOperationResult) {
+    record_terminal_outcome(audit, state, &result.topic, result.success).await;
+}
+
+async fn record_terminal_outcome(
+    audit: &AuditTerminalFactSink,
+    state: &AppState,
+    resource_name: &str,
+    succeeded: bool,
+) {
+    let environment_id = Some(state.published().environment.environment_id);
+    if succeeded {
+        audit.record_success(Some(resource_name), environment_id).await;
+    } else {
+        audit.record_failed(Some(resource_name), environment_id).await;
+    }
 }
 
 pub async fn topic_route(

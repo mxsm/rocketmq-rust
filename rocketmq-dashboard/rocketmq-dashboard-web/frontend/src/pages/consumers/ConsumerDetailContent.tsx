@@ -1,6 +1,7 @@
 import { ListChecks, Network, RadioTower, RotateCcw, Settings2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { consumerApi } from '../../api/consumer_api';
+import { handleAppliedAuditFailure } from '../../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ErrorState from '../../components/ErrorState';
 import LoadingState from '../../components/LoadingState';
@@ -37,6 +38,12 @@ import { normalizeConsumerValue } from './consumer-model';
 interface ConsumerDetailContentProps {
   group: string;
   initialTab?: 'overview' | 'clients' | 'progress' | 'config' | 'reset';
+  authoritativeDetail?: {
+    identityKey: string;
+    revision: number;
+    summary: ConsumerSummaryView;
+    config: ConsumerConfigView;
+  } | null;
 }
 
 const connectionColumns: AppDataTableColumn<ConsumerConnectionItem>[] = [
@@ -69,8 +76,14 @@ const queueColumns: AppDataTableColumn<ConsumerProgressQueue>[] = [
   { id: 'lastConsume', header: 'Last consume time', width: '180px', cell: (row) => formatTimestamp(row.lastTimestamp) }
 ];
 
-export default function ConsumerDetailContent({ group, initialTab = 'overview' }: ConsumerDetailContentProps) {
+export default function ConsumerDetailContent({
+  group,
+  initialTab = 'overview',
+  authoritativeDetail = null
+}: ConsumerDetailContentProps) {
   const { scope, revision } = useConsumerQueryScope();
+  const scopeKey = `${scope.mode}:${scope.proxyAddress ?? ''}`;
+  const identityKey = `${group}|${scopeKey}`;
   const [activeTab, setActiveTab] = useState(initialTab);
   const [summary, setSummary] = useState<ConsumerSummaryView | null>(null);
   const [progress, setProgress] = useState<ConsumerProgressView | null>(null);
@@ -90,8 +103,10 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const requestToken = useRef(0);
+  const configRequestToken = useRef(0);
   const resetOperationToken = useRef(0);
   const currentGroupRef = useRef(group);
+  const appliedCursorRef = useRef<{ identityKey: string; revision: number } | null>(null);
 
   const load = async () => {
     const token = ++requestToken.current;
@@ -128,14 +143,19 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   };
 
   const loadConfig = async () => {
+    const token = ++configRequestToken.current;
     setConfigLoading(true);
     setConfigError(null);
     try {
-      setConfig(await consumerApi.config(group, scope));
+      const nextConfig = await consumerApi.config(group, scope);
+      if (token !== configRequestToken.current) return;
+      setConfig(nextConfig);
     } catch (requestError) {
-      setConfigError(requestError instanceof Error ? requestError.message : String(requestError));
+      if (token === configRequestToken.current) {
+        setConfigError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
     } finally {
-      setConfigLoading(false);
+      if (token === configRequestToken.current) setConfigLoading(false);
     }
   };
 
@@ -155,12 +175,29 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
     setNotice(null);
     setConfirmOpen(false);
     setResetting(false);
+    appliedCursorRef.current = null;
     void load();
     return () => {
       requestToken.current += 1;
+      configRequestToken.current += 1;
       resetOperationToken.current += 1;
     };
   }, [group, initialTab, scope.mode, scope.proxyAddress, revision]);
+
+  useEffect(() => {
+    if (!authoritativeDetail || authoritativeDetail.identityKey !== identityKey) return;
+    const cursor = appliedCursorRef.current;
+    if (cursor?.identityKey === identityKey && cursor.revision === authoritativeDetail.revision) return;
+    appliedCursorRef.current = { identityKey, revision: authoritativeDetail.revision };
+    requestToken.current += 1;
+    configRequestToken.current += 1;
+    setSummary(authoritativeDetail.summary);
+    setConfig(authoritativeDetail.config);
+    setLoading(false);
+    setError(null);
+    setConfigLoading(false);
+    setConfigError(null);
+  }, [authoritativeDetail, identityKey]);
 
   useEffect(() => {
     if (activeTab === 'clients' && !connections) void loadClients();
@@ -220,6 +257,14 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
       await load();
     } catch (requestError) {
       if (operationToken !== resetOperationToken.current || currentGroupRef.current !== operationGroup) return;
+      if (await handleAppliedAuditFailure(requestError, {
+        onApplied: () => {
+          setConfirmOpen(false);
+          setValidationError(null);
+          setNotice(`Offset reset was applied for ${operationGroup}. Refreshing authoritative progress.`);
+        },
+        refresh: load
+      })) return;
       setConfirmOpen(false);
       setValidationError(requestError instanceof Error ? requestError.message : 'Unable to reset offsets.');
     } finally {

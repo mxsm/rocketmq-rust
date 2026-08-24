@@ -21,12 +21,15 @@ use sqlx::{MySqlConnection, PgConnection, SqliteConnection};
 const SQLITE_INITIAL: &str = include_str!("../../migrations/sqlite/0001_initial.sql");
 const SQLITE_PHASE_TWO: &str = include_str!("../../migrations/sqlite/0002_environment_endpoint_constraints.sql");
 const SQLITE_PHASE_THREE: &str = include_str!("../../migrations/sqlite/0003_history_retention.sql");
+const SQLITE_PHASE_FOUR: &str = include_str!("../../migrations/sqlite/0004_session_audit.sql");
 const MYSQL_INITIAL: &str = include_str!("../../migrations/mysql/0001_initial.sql");
 const MYSQL_PHASE_TWO: &str = include_str!("../../migrations/mysql/0002_environment_endpoint_constraints.sql");
 const MYSQL_PHASE_THREE: &str = include_str!("../../migrations/mysql/0003_history_retention.sql");
+const MYSQL_PHASE_FOUR: &str = include_str!("../../migrations/mysql/0004_session_audit.sql");
 const POSTGRES_INITIAL: &str = include_str!("../../migrations/postgres/0001_initial.sql");
 const POSTGRES_PHASE_TWO: &str = include_str!("../../migrations/postgres/0002_environment_endpoint_constraints.sql");
 const POSTGRES_PHASE_THREE: &str = include_str!("../../migrations/postgres/0003_history_retention.sql");
+const POSTGRES_PHASE_FOUR: &str = include_str!("../../migrations/postgres/0004_session_audit.sql");
 const MYSQL_MIGRATION_LOCK: &str = "rocketmq_dashboard_schema_migration";
 const POSTGRES_MIGRATION_LOCK: i64 = 7_246_920_002;
 
@@ -101,6 +104,15 @@ async fn migrate_sqlite_locked(connection: &mut SqliteConnection) -> Result<i64,
     }
     if version < 3 {
         for statement in statements(SQLITE_PHASE_THREE) {
+            sqlx::query(statement)
+                .execute(&mut *connection)
+                .await
+                .map_err(|_| PersistenceError::MigrationFailed)?;
+        }
+    }
+    if version < 4 {
+        ensure_session_audit_empty_sqlite(connection).await?;
+        for statement in statements(SQLITE_PHASE_FOUR) {
             sqlx::query(statement)
                 .execute(&mut *connection)
                 .await
@@ -194,6 +206,15 @@ async fn migrate_mysql_locked(connection: &mut MySqlConnection) -> Result<i64, P
                 .map_err(|_| PersistenceError::MigrationFailed)?;
         }
     }
+    if version < 4 {
+        ensure_session_audit_empty_mysql(connection).await?;
+        for statement in statements(MYSQL_PHASE_FOUR) {
+            sqlx::query(statement)
+                .execute(&mut *connection)
+                .await
+                .map_err(|_| PersistenceError::MigrationFailed)?;
+        }
+    }
     schema_version_mysql_connection(connection).await
 }
 
@@ -239,8 +260,60 @@ async fn migrate_postgres_locked(connection: &mut PgConnection) -> Result<i64, P
                 .map_err(|_| PersistenceError::MigrationFailed)?;
         }
     }
+    if version < 4 {
+        ensure_session_audit_empty_postgres(&mut transaction).await?;
+        for statement in statements(POSTGRES_PHASE_FOUR) {
+            sqlx::query(statement)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| PersistenceError::MigrationFailed)?;
+        }
+    }
     transaction.commit().await.map_err(map_query_error)?;
     schema_version_postgres_connection(connection).await
+}
+
+async fn ensure_session_audit_empty_sqlite(connection: &mut SqliteConnection) -> Result<(), PersistenceError> {
+    ensure_session_audit_empty(
+        sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM dashboard_session) + (SELECT COUNT(*) FROM dashboard_audit_event)",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(map_query_error)?,
+    )
+}
+
+async fn ensure_session_audit_empty_mysql(connection: &mut MySqlConnection) -> Result<(), PersistenceError> {
+    ensure_session_audit_empty(
+        sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM dashboard_session) + (SELECT COUNT(*) FROM dashboard_audit_event)",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(map_query_error)?,
+    )
+}
+
+async fn ensure_session_audit_empty_postgres(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), PersistenceError> {
+    ensure_session_audit_empty(
+        sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM dashboard_session) + (SELECT COUNT(*) FROM dashboard_audit_event)",
+        )
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(map_query_error)?,
+    )
+}
+
+fn ensure_session_audit_empty(count: i64) -> Result<(), PersistenceError> {
+    if count == 0 {
+        Ok(())
+    } else {
+        Err(PersistenceError::UnsupportedLayout)
+    }
 }
 
 async fn sqlite_column_exists(connection: &mut SqliteConnection, column: &str) -> Result<bool, PersistenceError> {
@@ -401,7 +474,7 @@ mod tests {
             .await
             .expect("simulate the first phase-two DDL");
 
-        assert_eq!(migrate_sqlite(&pool).await.expect("resume migration"), 3);
+        assert_eq!(migrate_sqlite(&pool).await.expect("resume migration"), 4);
         let enabled_column: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('dashboard_endpoint') WHERE name = 'is_enabled'",
         )
@@ -435,8 +508,8 @@ mod tests {
         apply_sqlite_initial(&first).await;
 
         let (first_version, second_version) = tokio::join!(migrate_sqlite(&first), migrate_sqlite(&second));
-        assert_eq!(first_version.expect("first migration"), 3);
-        assert_eq!(second_version.expect("second migration"), 3);
+        assert_eq!(first_version.expect("first migration"), 4);
+        assert_eq!(second_version.expect("second migration"), 4);
     }
 
     #[tokio::test]
@@ -449,7 +522,7 @@ mod tests {
             .connect(&url)
             .await
             .expect("connect MySQL storage test database");
-        assert_eq!(migrate_mysql(&pool).await.expect("prepare migration"), 3);
+        assert_eq!(migrate_mysql(&pool).await.expect("prepare migration"), 4);
 
         // Leave the first phase-two DDL in place, then roll the remaining
         // schema changes back to emulate a connection loss between DDLs.
@@ -483,7 +556,7 @@ mod tests {
             .expect("release migration lock after partial DDL setup");
         assert_eq!(released, 1, "migration setup must release the advisory lock");
 
-        assert_eq!(migrate_mysql(&pool).await.expect("resume migration"), 3);
+        assert_eq!(migrate_mysql(&pool).await.expect("resume migration"), 4);
         let active_index: i64 = sqlx::query_scalar(
             "SELECT COUNT(DISTINCT index_name) FROM information_schema.statistics \
              WHERE table_schema = DATABASE() AND table_name = 'dashboard_endpoint' \
@@ -507,8 +580,8 @@ mod tests {
             .expect("connect MySQL storage test database");
 
         let (first, second) = tokio::join!(migrate_mysql(&pool), migrate_mysql(&pool));
-        assert_eq!(first.expect("first concurrent migration"), 3);
-        assert_eq!(second.expect("second concurrent migration"), 3);
+        assert_eq!(first.expect("first concurrent migration"), 4);
+        assert_eq!(second.expect("second concurrent migration"), 4);
     }
 
     #[tokio::test]
@@ -521,7 +594,7 @@ mod tests {
             .connect(&url)
             .await
             .expect("connect MySQL storage test database");
-        assert_eq!(migrate_mysql(&pool).await.expect("prepare migration"), 3);
+        assert_eq!(migrate_mysql(&pool).await.expect("prepare migration"), 4);
         let suffix = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let environment_id = format!("mbf-{suffix}");
         let endpoint_id = format!("mbe-{suffix}");
@@ -547,7 +620,7 @@ mod tests {
             .execute(&pool)
             .await
             .expect("remove MySQL phase-two marker");
-        assert_eq!(migrate_mysql(&pool).await.expect("rerun MySQL phase two"), 3);
+        assert_eq!(migrate_mysql(&pool).await.expect("rerun MySQL phase two"), 4);
         let role: String = sqlx::query_scalar("SELECT role FROM dashboard_endpoint WHERE endpoint_id = ?")
             .bind(&endpoint_id)
             .fetch_one(&pool)
@@ -567,8 +640,8 @@ mod tests {
             .await
             .expect("connect PostgreSQL storage test database");
         let (first, second) = tokio::join!(migrate_postgres(&pool), migrate_postgres(&pool));
-        assert_eq!(first.expect("first PostgreSQL migration"), 3);
-        assert_eq!(second.expect("second PostgreSQL migration"), 3);
+        assert_eq!(first.expect("first PostgreSQL migration"), 4);
+        assert_eq!(second.expect("second PostgreSQL migration"), 4);
     }
 
     #[tokio::test]
@@ -581,7 +654,7 @@ mod tests {
             .connect(&url)
             .await
             .expect("connect PostgreSQL storage test database");
-        assert_eq!(migrate_postgres(&pool).await.expect("prepare migration"), 3);
+        assert_eq!(migrate_postgres(&pool).await.expect("prepare migration"), 4);
         let suffix = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let environment_id = format!("pbf-{suffix}");
         let endpoint_id = format!("pbe-{suffix}");
@@ -607,7 +680,7 @@ mod tests {
             .execute(&pool)
             .await
             .expect("remove PostgreSQL phase-two marker");
-        assert_eq!(migrate_postgres(&pool).await.expect("rerun PostgreSQL phase two"), 3);
+        assert_eq!(migrate_postgres(&pool).await.expect("rerun PostgreSQL phase two"), 4);
         let role: String = sqlx::query_scalar("SELECT role FROM dashboard_endpoint WHERE endpoint_id = $1")
             .bind(&endpoint_id)
             .fetch_one(&pool)

@@ -218,6 +218,11 @@ export default function TopicListPage() {
     });
   };
 
+  const refreshAppliedTopicResources = async (...resources: Array<keyof typeof detailRevisions>) => {
+    refreshDetailResources(...resources);
+    await load();
+  };
+
   const openDetails = (topic: TopicInfo, origin?: HTMLElement) => {
     if (origin) detailTriggerRef.current = origin;
     selectedTopicRef.current = topic;
@@ -485,6 +490,7 @@ export default function TopicListPage() {
         targets={data?.targets ?? []}
         onOpenChange={changeCreateOpen}
         onSubmit={saveCreate}
+        onAppliedAuditFailure={load}
       />
       <TopicMutationDialog
         open={Boolean(editAction)}
@@ -496,6 +502,7 @@ export default function TopicListPage() {
         onRetryConfig={retryEditConfig}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSubmit={saveEdit}
+        onAppliedAuditFailure={() => refreshAppliedTopicResources('config')}
       />
       <EntitySheet
         open={selectedTopic !== null}
@@ -556,6 +563,7 @@ export default function TopicListPage() {
         topic={sendAction?.topic.topic ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSucceeded={() => undefined}
+        onAppliedAuditFailure={() => refreshAppliedTopicResources('stats')}
       />
       <TopicResetOffsetDialog
         open={Boolean(consumerAction?.kind === 'reset' && consumerAction.consumerGroup)}
@@ -563,6 +571,7 @@ export default function TopicListPage() {
         consumerGroup={consumerAction?.consumerGroup ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSucceeded={(result) => refreshOffsetResources(result.topic)}
+        onAppliedAuditFailure={() => refreshAppliedTopicResources('stats', 'consumers')}
       />
       <TopicSkipBacklogDialog
         open={Boolean(consumerAction?.kind === 'skip' && consumerAction.consumerGroup)}
@@ -570,6 +579,7 @@ export default function TopicListPage() {
         consumerGroup={consumerAction?.consumerGroup ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSucceeded={(result) => refreshOffsetResources(result.topic)}
+        onAppliedAuditFailure={() => refreshAppliedTopicResources('stats', 'consumers')}
       />
       <TopicDeleteDialog
         open={Boolean(deleteAction)}
@@ -579,6 +589,12 @@ export default function TopicListPage() {
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onResult={handleDeleteResult}
         onSucceeded={handleDeleteSucceeded}
+        onAppliedAuditFailure={() => {
+          const resources = deleteAction?.kind === 'delete-broker'
+            ? ['route', 'stats', 'config'] as const
+            : [] as const;
+          return refreshAppliedTopicResources(...resources);
+        }}
       />
     </div>
   );

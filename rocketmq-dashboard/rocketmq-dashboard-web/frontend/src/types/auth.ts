@@ -9,4 +9,5 @@ export interface SessionView {
   username?: string | null;
   sessionId?: string | null;
   loginTime?: number | null;
+  authReason?: 'invalid' | 'expired' | 'revoked' | null;
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::config::StorageConfig;
+use crate::model::AuditEvent;
 use crate::persistence::StorageHealth;
 use crate::persistence::StorageMode;
 use crate::persistence::StorageStatus;
@@ -42,8 +43,12 @@ use tokio::sync::RwLock;
 use tokio::sync::RwLockReadGuard;
 use tokio::sync::oneshot;
 
+#[path = "audit_file_store.rs"]
+mod audit_file_store;
 #[path = "history_file_store.rs"]
 mod history_file_store;
+#[path = "session_file_store.rs"]
+mod session_file_store;
 
 const FORMAT_VERSION: u32 = 1;
 const MIN_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
@@ -74,6 +79,10 @@ impl FileDirectoryLock {
             return Err(PersistenceError::LockUnavailable);
         }
         recover_incomplete_snapshot_transactions(root)?;
+        session_file_store::recover_session_audit_transactions(root)?;
+        session_file_store::recover_session_touch_transactions(root)?;
+        session_file_store::recover_session_cleanup_transactions(root)?;
+        audit_file_store::recover_audit_rewrite_transactions(root)?;
         history_file_store::recover_history_file_operations(root)?;
         initialize_manifest(root)?;
         Ok(Self { _file: file })
@@ -110,12 +119,24 @@ pub(crate) struct FileSnapshotTransactionWrite {
 struct FileSnapshotTransaction {
     format_version: u32,
     writes: Vec<FileSnapshotTransactionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audit: Option<FileSnapshotAuditAppend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileSnapshotTransactionRecord {
     collection: String,
     revision: u64,
+}
+
+/// The only journal rollback data persisted with a snapshot aggregate. The
+/// append payload itself is already durable in the journal; no checksum or
+/// token-derived identifier is stored in the marker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileSnapshotAuditAppend {
+    relative_path: String,
+    existed: bool,
+    original_length: u64,
 }
 
 /// The result sent by an admitted storage-I/O task. A task-timeout is not a
@@ -366,6 +387,7 @@ impl FilePersistence {
                     payload,
                 }],
                 None,
+                None,
             )?;
             mutation_blocker.wait_after_mutation();
             Ok(FileMutationOutcome {
@@ -480,6 +502,7 @@ impl FilePersistence {
                         payload,
                     }],
                     None,
+                    None,
                 )?;
                 mutation_blocker.wait_after_mutation();
                 Ok(FileMutationOutcome {
@@ -515,6 +538,53 @@ impl FilePersistence {
     ) -> Result<(), PersistenceError> {
         self.publish_snapshot_transaction_locked_with_failure(write_guard, writes, None, None)
             .await
+    }
+
+    /// Publishes related snapshots and one already-safe audit event behind the
+    /// same prepared/committed decision marker. The caller must retain the
+    /// returned request ownership through `dispatch_file_mutation`; a request
+    /// cancellation can therefore only observe the old aggregate or the
+    /// committed aggregate plus its journal entry.
+    pub(crate) async fn publish_snapshot_transaction_with_audit_locked(
+        &self,
+        write_guard: OwnedRwLockWriteGuard<()>,
+        writes: Vec<FileSnapshotTransactionWrite>,
+        audit: AuditEvent,
+    ) -> Result<(), PersistenceError> {
+        self.ensure_available()?;
+        if writes.is_empty() {
+            return Err(PersistenceError::InvalidConfig(
+                "snapshot audit transaction requires at least one write".to_string(),
+            ));
+        }
+        let root = self.root.clone();
+        let mutation_blocker = self.mutation_blocker.clone();
+        self.dispatch_file_mutation(
+            write_guard,
+            "dashboard-file-storage-publish-snapshot-audit-transaction",
+            move || {
+                let encoded = serde_json::to_vec(&audit).map_err(PersistenceError::Serialization)?;
+                let audit_append = prepare_snapshot_audit_append(&root, audit.created_at_ms)?;
+                let prepared = prepare_transaction_writes_with_audit(&root, &writes, audit_append.clone())?;
+                append_snapshot_audit(&root, &audit_append, &encoded)?;
+                mutation_blocker.wait_after_mutation();
+                Ok(FileMutationOutcome {
+                    value: (),
+                    finalize: Box::new({
+                        let prepared = prepared.clone();
+                        move || prepared.finalize()
+                    }),
+                    cleanup: Box::new({
+                        let prepared = prepared.clone();
+                        move || prepared.cleanup()
+                    }),
+                    rollback: Box::new(move || prepared.rollback(None)),
+                })
+            },
+        )
+        .await?;
+        self.record_write();
+        Ok(())
     }
 
     #[cfg(test)]
@@ -887,6 +957,10 @@ impl FilePersistence {
         let root = self.root.clone();
         self.run_recovery_operation_owned("dashboard-file-storage-recover-file-operations", move || {
             recover_incomplete_snapshot_transactions(&root)?;
+            session_file_store::recover_session_audit_transactions(&root)?;
+            session_file_store::recover_session_touch_transactions(&root)?;
+            session_file_store::recover_session_cleanup_transactions(&root)?;
+            audit_file_store::recover_audit_rewrite_transactions(&root)?;
             history_file_store::recover_history_file_operations(&root)
         })
         .await
@@ -1009,7 +1083,22 @@ fn recover_incomplete_snapshot_transactions(root: &Path) -> Result<(), Persisten
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             return Err(PersistenceError::CorruptedData);
         };
-        if let Some(transaction_id) = name.strip_suffix(".prepared.json") {
+        if name.ends_with(".session-audit.prepared.json")
+            || name.ends_with(".session-audit.committed.json")
+            || name.ends_with(".session-touch.prepared.json")
+            || name.ends_with(".session-touch.committed.json")
+            || name.ends_with(".session-touch-stage.json")
+            || name.ends_with(".session-touch-backup.json")
+            || name.ends_with(".session-cleanup.prepared.json")
+            || name.ends_with(".session-cleanup.committed.json")
+            || name.ends_with(".audit-rewrite.prepared.json")
+            || name.ends_with(".audit-rewrite.committed.json")
+        {
+            // Session/audit markers share the transaction directory but have
+            // their own recovery grammar and must never be interpreted as a
+            // snapshot aggregate.
+            continue;
+        } else if let Some(transaction_id) = name.strip_suffix(".prepared.json") {
             prepared_markers.insert(transaction_id.to_string(), path);
         } else if let Some(transaction_id) = name.strip_suffix(".committed.json") {
             committed_markers.insert(transaction_id.to_string(), path);
@@ -1063,13 +1152,36 @@ fn prepare_transaction_writes(
             payload: write.payload.clone(),
         });
     }
-    prepare_snapshot_transaction(root, prepared_writes, fail_after_writes)
+    prepare_snapshot_transaction(root, prepared_writes, fail_after_writes, None)
+}
+
+fn prepare_transaction_writes_with_audit(
+    root: &Path,
+    writes: &[FileSnapshotTransactionWrite],
+    audit: FileSnapshotAuditAppend,
+) -> Result<PreparedSnapshotTransaction, PersistenceError> {
+    let mut prepared_writes = Vec::with_capacity(writes.len());
+    for write in writes {
+        validate_collection(&write.collection)?;
+        let directory = root.join(&write.collection).join("snapshots");
+        let current_revision = load_latest_snapshot_file(&directory)?.map_or(0, |snapshot| snapshot.revision);
+        if current_revision != write.expected_revision {
+            return Err(PersistenceError::Conflict);
+        }
+        prepared_writes.push(PreparedSnapshotWrite {
+            collection: write.collection.clone(),
+            revision: current_revision.checked_add(1).ok_or(PersistenceError::Conflict)?,
+            payload: write.payload.clone(),
+        });
+    }
+    prepare_snapshot_transaction(root, prepared_writes, None, Some(audit))
 }
 
 fn prepare_snapshot_transaction(
     root: &Path,
     writes: Vec<PreparedSnapshotWrite>,
     fail_after_writes: Option<usize>,
+    audit: Option<FileSnapshotAuditAppend>,
 ) -> Result<PreparedSnapshotTransaction, PersistenceError> {
     if writes.is_empty() {
         return Err(PersistenceError::InvalidConfig(
@@ -1110,6 +1222,7 @@ fn prepare_snapshot_transaction(
         &FileSnapshotTransaction {
             format_version: FORMAT_VERSION,
             writes: records,
+            audit,
         },
     )?;
     for (index, write) in writes.into_iter().enumerate() {
@@ -1135,6 +1248,56 @@ fn prepare_snapshot_transaction(
         prepared_marker,
         committed_marker,
     })
+}
+
+fn prepare_snapshot_audit_append(root: &Path, created_at_ms: i64) -> Result<FileSnapshotAuditAppend, PersistenceError> {
+    let day = chrono::DateTime::from_timestamp_millis(created_at_ms)
+        .unwrap_or_else(Utc::now)
+        .format("%Y-%m-%d")
+        .to_string();
+    let relative_path = format!("audit/{day}.jsonl");
+    let path = root.join(&relative_path);
+    std::fs::create_dir_all(root.join("audit")).map_err(PersistenceError::Io)?;
+    truncate_incomplete_tail(&path)?;
+    let existed = path.exists();
+    let original_length = if existed {
+        std::fs::metadata(&path).map_err(PersistenceError::Io)?.len()
+    } else {
+        0
+    };
+    Ok(FileSnapshotAuditAppend {
+        relative_path,
+        existed,
+        original_length,
+    })
+}
+
+fn append_snapshot_audit(
+    root: &Path,
+    append: &FileSnapshotAuditAppend,
+    encoded: &[u8],
+) -> Result<(), PersistenceError> {
+    let path = audit_append_path(root, append)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(PersistenceError::Io)?;
+    file.write_all(encoded).map_err(PersistenceError::Io)?;
+    file.write_all(b"\n").map_err(PersistenceError::Io)?;
+    file.flush().map_err(PersistenceError::Io)?;
+    file.sync_data().map_err(PersistenceError::Io)
+}
+
+fn audit_append_path(root: &Path, append: &FileSnapshotAuditAppend) -> Result<PathBuf, PersistenceError> {
+    let path = Path::new(&append.relative_path);
+    if path.components().count() != 2
+        || path.parent() != Some(Path::new("audit"))
+        || path.extension().is_none_or(|extension| extension != "jsonl")
+    {
+        return Err(PersistenceError::CorruptedData);
+    }
+    Ok(root.join(path))
 }
 
 fn commit_prepared_snapshot_transaction(
@@ -1192,6 +1355,9 @@ fn rollback_prepared_snapshot_transaction(
     if let Some(error) = rollback_failure {
         return Err(error);
     }
+    if let Some(audit) = transaction.audit {
+        rollback_jsonl_append(audit_append_path(root, &audit)?, audit.original_length, audit.existed)?;
+    }
     remove_file_if_exists(Some(prepared_marker))
 }
 
@@ -1204,6 +1370,15 @@ fn read_snapshot_transaction(marker: &Path) -> Result<FileSnapshotTransaction, P
     }
     for write in &transaction.writes {
         validate_collection(&write.collection)?;
+    }
+    if let Some(audit) = &transaction.audit {
+        let _ = audit_append_path(
+            marker
+                .parent()
+                .and_then(Path::parent)
+                .ok_or(PersistenceError::CorruptedData)?,
+            audit,
+        )?;
     }
     Ok(transaction)
 }
@@ -1407,16 +1582,35 @@ fn truncate_incomplete_tail(path: &Path) -> Result<(), PersistenceError> {
         .write(true)
         .open(path)
         .map_err(PersistenceError::Io)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(PersistenceError::Io)?;
-    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-        let length = bytes
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |position| position + 1);
-        file.set_len(length as u64).map_err(PersistenceError::Io)?;
-        file.seek(SeekFrom::Start(length as u64))
-            .map_err(PersistenceError::Io)?;
+    let length = file.metadata().map_err(PersistenceError::Io)?.len();
+    if length == 0 {
+        return Ok(());
+    }
+    file.seek(SeekFrom::End(-1)).map_err(PersistenceError::Io)?;
+    let mut final_byte = [0_u8; 1];
+    file.read_exact(&mut final_byte).map_err(PersistenceError::Io)?;
+    if final_byte != [b'\n'] {
+        // Only the incomplete final record is recoverable. Locate the last
+        // complete JSONL delimiter from the end in fixed-size blocks so a
+        // large audit file is never loaded to recover one torn append.
+        const BLOCK: usize = 8 * 1024;
+        let mut end = length;
+        let mut complete_length = 0_u64;
+        while end > 0 {
+            let start = end.saturating_sub(BLOCK as u64);
+            let block_length = usize::try_from(end - start).map_err(|_| PersistenceError::CorruptedData)?;
+            let mut block = vec![0_u8; block_length];
+            file.seek(SeekFrom::Start(start)).map_err(PersistenceError::Io)?;
+            file.read_exact(&mut block).map_err(PersistenceError::Io)?;
+            if let Some(position) = block.iter().rposition(|byte| *byte == b'\n') {
+                complete_length = start + position as u64 + 1;
+                break;
+            }
+            end = start;
+        }
+        let length = complete_length;
+        file.set_len(length).map_err(PersistenceError::Io)?;
+        file.seek(SeekFrom::Start(length)).map_err(PersistenceError::Io)?;
         file.sync_data().map_err(PersistenceError::Io)?;
     }
     Ok(())
@@ -1468,8 +1662,17 @@ fn non_zero(value: i64) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::config::SqlPoolConfig;
+    use crate::model::AuditAction;
+    use crate::model::AuditActor;
+    use crate::model::AuditEvent;
+    use crate::model::AuditOutcome;
+    use crate::model::AuditResourceType;
+    use crate::model::NewSession;
+    use crate::model::SessionTokenHash;
     use crate::model::StorageBackend;
     use crate::persistence::StorageStatus;
+    use crate::persistence::audit_repository::AuditQuery;
+    use crate::persistence::session_repository::SessionQuery;
     use crate::service::readiness_status_from_storage;
     use rocketmq_runtime::BlockingPoolPolicy;
     use rocketmq_runtime::RuntimeConfig;
@@ -1483,6 +1686,41 @@ mod tests {
             data_path: root,
             database_url: None,
             pool: SqlPoolConfig::default(),
+        }
+    }
+
+    fn audit_event(created_at_ms: i64) -> AuditEvent {
+        AuditEvent {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            request_id: uuid::Uuid::now_v7().to_string(),
+            actor: AuditActor::admin("operator"),
+            action: AuditAction::ConfigNameserverAdd,
+            resource_type: AuditResourceType::Nameserver,
+            resource_name: Some("127.0.0.1:9876".to_string()),
+            environment_id: None,
+            outcome: AuditOutcome::Succeeded,
+            detail: None,
+            created_at_ms,
+        }
+    }
+
+    fn expired_session(token_hash: SessionTokenHash) -> NewSession {
+        NewSession {
+            session_id: uuid::Uuid::now_v7().to_string(),
+            token_hash,
+            username: "expired-session-owner".to_string(),
+            created_at_ms: 1,
+            expires_at_ms: 2,
+        }
+    }
+
+    fn active_session(token_hash: SessionTokenHash, username: &str) -> NewSession {
+        NewSession {
+            session_id: uuid::Uuid::now_v7().to_string(),
+            token_hash,
+            username: username.to_string(),
+            created_at_ms: 1,
+            expires_at_ms: 10_000,
         }
     }
 
@@ -2151,6 +2389,7 @@ mod tests {
                     payload: json!({"value": "interrupted"}),
                 }],
                 None,
+                None,
             )
             .expect("stage single intent");
             let _multi = prepare_snapshot_transaction(
@@ -2167,6 +2406,7 @@ mod tests {
                         payload: json!({"rules": []}),
                     },
                 ],
+                None,
                 None,
             )
             .expect("stage multi intent");
@@ -2204,6 +2444,729 @@ mod tests {
                     .expect("original monitors")
                     .payload,
                 json!({"rules": ["before"]})
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn snapshot_audit_transactions_commit_or_recover_with_one_durable_decision() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("dashboard");
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("snapshot-audit-normal"),
+            )
+            .await
+            .expect("file store");
+            store
+                .write_snapshot("config", 1, json!({"value": "before"}))
+                .await
+                .expect("seed config");
+            let normal_event = audit_event(1_000);
+            let write_guard = store.write_guard().await;
+            store
+                .publish_snapshot_transaction_with_audit_locked(
+                    write_guard,
+                    vec![FileSnapshotTransactionWrite {
+                        collection: "config".to_string(),
+                        expected_revision: 1,
+                        payload: json!({"value": "normal"}),
+                    }],
+                    normal_event.clone(),
+                )
+                .await
+                .expect("commit snapshot and audit");
+            assert_eq!(
+                store
+                    .load_latest_snapshot("config")
+                    .await
+                    .expect("load normal snapshot")
+                    .expect("normal snapshot")
+                    .payload,
+                json!({"value": "normal"})
+            );
+            assert_eq!(
+                store
+                    .query_audit_events(AuditQuery {
+                        start_ms: 0,
+                        end_ms: 2_000,
+                        actor: None,
+                        action: None,
+                        outcome: None,
+                        environment_id: None,
+                        cursor: None,
+                        limit: 10,
+                    })
+                    .await
+                    .expect("query normal audit")
+                    .events,
+                vec![normal_event.clone()]
+            );
+            drop(store);
+
+            let staged = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("snapshot-audit-prepared"),
+            )
+            .await
+            .expect("stage file store");
+            let prepared_event = audit_event(2_000);
+            let append =
+                prepare_snapshot_audit_append(&root, prepared_event.created_at_ms).expect("prepare audit append");
+            let prepared = prepare_transaction_writes_with_audit(
+                &root,
+                &[FileSnapshotTransactionWrite {
+                    collection: "config".to_string(),
+                    expected_revision: 2,
+                    payload: json!({"value": "prepared"}),
+                }],
+                append.clone(),
+            )
+            .expect("stage prepared transaction");
+            append_snapshot_audit(
+                &root,
+                &append,
+                &serde_json::to_vec(&prepared_event).expect("encode audit"),
+            )
+            .expect("append staged audit");
+            drop(prepared);
+            drop(staged);
+
+            let reopened = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("snapshot-audit-prepared-reopen"),
+            )
+            .await
+            .expect("recover prepared transaction");
+            assert_eq!(
+                reopened
+                    .load_latest_snapshot("config")
+                    .await
+                    .expect("load recovered snapshot")
+                    .expect("normal snapshot")
+                    .payload,
+                json!({"value": "normal"})
+            );
+            assert_eq!(
+                reopened
+                    .query_audit_events(AuditQuery {
+                        start_ms: 0,
+                        end_ms: 3_000,
+                        actor: None,
+                        action: None,
+                        outcome: None,
+                        environment_id: None,
+                        cursor: None,
+                        limit: 10,
+                    })
+                    .await
+                    .expect("query recovered audit")
+                    .events,
+                vec![normal_event.clone()]
+            );
+            drop(reopened);
+
+            let committed = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("snapshot-audit-committed"),
+            )
+            .await
+            .expect("committed file store");
+            let committed_event = audit_event(3_000);
+            let append =
+                prepare_snapshot_audit_append(&root, committed_event.created_at_ms).expect("prepare committed audit");
+            let committed_transaction = prepare_transaction_writes_with_audit(
+                &root,
+                &[FileSnapshotTransactionWrite {
+                    collection: "config".to_string(),
+                    expected_revision: 2,
+                    payload: json!({"value": "committed"}),
+                }],
+                append.clone(),
+            )
+            .expect("stage committed transaction");
+            append_snapshot_audit(
+                &root,
+                &append,
+                &serde_json::to_vec(&committed_event).expect("encode audit"),
+            )
+            .expect("append committed audit");
+            committed_transaction.finalize().expect("write committed decision");
+            drop(committed_transaction);
+            drop(committed);
+
+            let reopened = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("snapshot-audit-committed-reopen"),
+            )
+            .await
+            .expect("recover committed transaction");
+            assert_eq!(
+                reopened
+                    .load_latest_snapshot("config")
+                    .await
+                    .expect("load committed snapshot")
+                    .expect("committed snapshot")
+                    .payload,
+                json!({"value": "committed"})
+            );
+            let events = reopened
+                .query_audit_events(AuditQuery {
+                    start_ms: 0,
+                    end_ms: 4_000,
+                    actor: None,
+                    action: None,
+                    outcome: None,
+                    environment_id: None,
+                    cursor: None,
+                    limit: 10,
+                })
+                .await
+                .expect("query committed audit")
+                .events;
+            assert_eq!(events, vec![committed_event, normal_event]);
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn injected_prepared_snapshot_audit_failure_reopens_with_neither_side_committed() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("dashboard");
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("snapshot-audit-failure"),
+            )
+            .await
+            .expect("file store");
+            store
+                .write_snapshot("config", 1, json!({"value": "before"}))
+                .await
+                .expect("seed config");
+
+            // The failure happens only after the transaction has staged the
+            // replacement snapshot and appended the audit line. Recovery must
+            // therefore use the prepared marker to remove both artifacts.
+            let (started, release) = install_panicking_mutation_blocker(&store);
+            let failed_event = audit_event(1_000);
+            let (result, ()) = tokio::join!(
+                async {
+                    let write_guard = store.write_guard().await;
+                    store
+                        .publish_snapshot_transaction_with_audit_locked(
+                            write_guard,
+                            vec![FileSnapshotTransactionWrite {
+                                collection: "config".to_string(),
+                                expected_revision: 1,
+                                payload: json!({"value": "after"}),
+                            }],
+                            failed_event,
+                        )
+                        .await
+                },
+                async {
+                    wait_for_mutation_start(started).await;
+                    release.send(()).expect("release injected failure");
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(PersistenceError::Runtime(RuntimeError::BlockingJoin { .. }))
+            ));
+            store.mutation_blocker.clear();
+            drop(store);
+
+            let reopened = FilePersistence::initialize(
+                &file_config(root),
+                owner.root_context().component("snapshot-audit-failure-reopen"),
+            )
+            .await
+            .expect("reopen prepared failure");
+            assert_eq!(
+                reopened
+                    .load_latest_snapshot("config")
+                    .await
+                    .expect("load original config")
+                    .expect("original snapshot")
+                    .payload,
+                json!({"value": "before"})
+            );
+            assert!(
+                reopened
+                    .query_audit_events(AuditQuery {
+                        start_ms: 0,
+                        end_ms: 2_000,
+                        actor: None,
+                        action: None,
+                        outcome: None,
+                        environment_id: None,
+                        cursor: None,
+                        limit: 10,
+                    })
+                    .await
+                    .expect("query recovered journal")
+                    .events
+                    .is_empty()
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn cancelled_session_cleanup_request_keeps_the_owned_mutation_alive_until_commit() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(directory.path().join("dashboard")),
+                owner.root_context().component("cancelled-session-cleanup-file-store"),
+            )
+            .await
+            .expect("file store");
+            let token_hash = SessionTokenHash([41; 32]);
+            store
+                .create_session(expired_session(token_hash))
+                .await
+                .expect("seed expired session");
+            let (started, release) = install_mutation_blocker(&store);
+            let request_store = store.clone();
+            let request = tokio::spawn(async move { request_store.delete_sessions_before(3, 10).await });
+            wait_for_mutation_start(started).await;
+            request.abort();
+            assert!(request.await.expect_err("cancelled request").is_cancelled());
+            release.send(()).expect("release cleanup mutation");
+            store.mutation_blocker.clear();
+            let gate = tokio::time::timeout(Duration::from_secs(1), store.write_guard())
+                .await
+                .expect("owned cleanup must release its write gate");
+            drop(gate);
+            assert!(
+                store
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read committed cleanup")
+                    .is_none()
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn timed_out_session_cleanup_rolls_back_before_active_or_reopened_reads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("dashboard");
+        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("timeout-session-cleanup-file-store"),
+            )
+            .await
+            .expect("file store");
+            let token_hash = SessionTokenHash([42; 32]);
+            store
+                .create_session(expired_session(token_hash))
+                .await
+                .expect("seed expired session");
+            let (started, release) = install_mutation_blocker(&store);
+            let (result, ()) = tokio::join!(
+                store.delete_sessions_before(3, 10),
+                release_mutation_after_storage_timeout(started, release),
+            );
+            assert!(matches!(
+                result,
+                Err(PersistenceError::Runtime(
+                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
+                ))
+            ));
+            store.mutation_blocker.clear();
+            assert!(
+                store
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read rollback result")
+                    .is_some()
+            );
+            drop(store);
+
+            let reopened = FilePersistence::initialize(
+                &file_config(root),
+                owner
+                    .root_context()
+                    .component("timeout-session-cleanup-file-store-reopen"),
+            )
+            .await
+            .expect("reopen after cleanup rollback");
+            assert!(
+                reopened
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read reopened rollback result")
+                    .is_some()
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn session_cleanup_serializes_a_concurrent_session_writer() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(directory.path().join("dashboard")),
+                owner.root_context().component("serialized-session-cleanup-file-store"),
+            )
+            .await
+            .expect("file store");
+            let expired_hash = SessionTokenHash([43; 32]);
+            let writer_hash = SessionTokenHash([44; 32]);
+            store
+                .create_session(expired_session(expired_hash))
+                .await
+                .expect("seed expired session");
+            let (started, release) = install_mutation_blocker(&store);
+            let cleanup_store = store.clone();
+            let cleanup = tokio::spawn(async move { cleanup_store.delete_sessions_before(3, 10).await });
+            wait_for_mutation_start(started).await;
+
+            let writer_store = store.clone();
+            let mut writer = tokio::spawn(async move {
+                writer_store
+                    .create_session(NewSession {
+                        session_id: uuid::Uuid::now_v7().to_string(),
+                        token_hash: writer_hash,
+                        username: "writer".to_string(),
+                        created_at_ms: 3,
+                        expires_at_ms: 10_000,
+                    })
+                    .await
+            });
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), &mut writer)
+                    .await
+                    .is_err(),
+                "the writer must wait for the cleanup decision"
+            );
+            release.send(()).expect("release cleanup mutation");
+            store.mutation_blocker.clear();
+            assert_eq!(cleanup.await.expect("join cleanup").expect("commit cleanup"), 1);
+            writer
+                .await
+                .expect("join writer")
+                .expect("writer must finish after cleanup");
+            assert!(
+                store
+                    .find_session(&writer_hash)
+                    .await
+                    .expect("read writer session")
+                    .is_some()
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn session_touch_reopen_recovers_prepared_old_or_committed_new_decisions() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        owner.block_on(async {
+            for (name, token_hash, committed, expected_last_seen) in [
+                ("prepared", SessionTokenHash([51; 32]), false, 1),
+                ("committed", SessionTokenHash([52; 32]), true, 2),
+            ] {
+                let root = directory.path().join(name);
+                let store = FilePersistence::initialize(
+                    &file_config(root.clone()),
+                    owner.root_context().component("touch-reopen-stage"),
+                )
+                .await
+                .expect("stage file store");
+                store
+                    .create_session(active_session(token_hash, "touch-owner"))
+                    .await
+                    .expect("seed active session");
+                session_file_store::stage_session_touch_for_reopen_test(&root, token_hash, 2, committed)
+                    .expect("stage interrupted touch");
+                drop(store);
+
+                let reopened = FilePersistence::initialize(
+                    &file_config(root.clone()),
+                    owner.root_context().component("touch-reopen-recover"),
+                )
+                .await
+                .expect("recover interrupted touch");
+                let record = reopened
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read recovered session")
+                    .expect("recovered session");
+                assert_eq!(record.last_seen_at_ms, expected_last_seen, "{name} decision");
+                assert_eq!(
+                    std::fs::read_dir(root.join("transactions"))
+                        .expect("transaction directory")
+                        .count(),
+                    0,
+                    "{name} recovery must remove every marker and sidecar"
+                );
+            }
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn cancelled_session_touch_request_keeps_the_owned_mutation_until_commit() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(directory.path().join("dashboard")),
+                owner.root_context().component("cancelled-session-touch-file-store"),
+            )
+            .await
+            .expect("file store");
+            let token_hash = SessionTokenHash([53; 32]);
+            store
+                .create_session(active_session(token_hash, "touch-owner"))
+                .await
+                .expect("seed active session");
+            let (started, release) = install_mutation_blocker(&store);
+            let request_store = store.clone();
+            let request = tokio::spawn(async move { request_store.touch_session(&token_hash, 2).await });
+            wait_for_mutation_start(started).await;
+            request.abort();
+            assert!(request.await.expect_err("cancelled request").is_cancelled());
+            release.send(()).expect("release touch mutation");
+            store.mutation_blocker.clear();
+            let gate = tokio::time::timeout(Duration::from_secs(1), store.write_guard())
+                .await
+                .expect("owned touch must release its write gate");
+            drop(gate);
+            assert_eq!(
+                store
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read committed touch")
+                    .expect("active session")
+                    .last_seen_at_ms,
+                2
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn timed_out_session_touch_rolls_back_before_active_or_reopened_reads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("dashboard");
+        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("timeout-session-touch-file-store"),
+            )
+            .await
+            .expect("file store");
+            let token_hash = SessionTokenHash([54; 32]);
+            store
+                .create_session(active_session(token_hash, "touch-owner"))
+                .await
+                .expect("seed active session");
+            let (started, release) = install_mutation_blocker(&store);
+            let (result, ()) = tokio::join!(
+                store.touch_session(&token_hash, 2),
+                release_mutation_after_storage_timeout(started, release),
+            );
+            assert!(matches!(
+                result,
+                Err(PersistenceError::Runtime(
+                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
+                ))
+            ));
+            store.mutation_blocker.clear();
+            assert_eq!(
+                store
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read rollback result")
+                    .expect("active session")
+                    .last_seen_at_ms,
+                1
+            );
+            drop(store);
+
+            let reopened = FilePersistence::initialize(
+                &file_config(root),
+                owner
+                    .root_context()
+                    .component("timeout-session-touch-file-store-reopen"),
+            )
+            .await
+            .expect("reopen after touch rollback");
+            assert_eq!(
+                reopened
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read reopened rollback result")
+                    .expect("active session")
+                    .last_seen_at_ms,
+                1
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn failed_session_touch_cleanup_reopens_the_committed_record_and_removes_its_marker() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("dashboard");
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("touch-cleanup-failure-file-store"),
+            )
+            .await
+            .expect("file store");
+            let token_hash = SessionTokenHash([55; 32]);
+            store
+                .create_session(active_session(token_hash, "touch-owner"))
+                .await
+                .expect("seed active session");
+            let (started, release) = install_committed_cleanup_blocker(&store, true);
+            let (result, ()) = tokio::join!(store.touch_session(&token_hash, 2), async {
+                wait_for_mutation_start(started).await;
+                release.send(()).expect("release cleanup hook");
+            },);
+            assert!(result.expect("committed touch"));
+            store.clear_test_committed_cleanup_blocker();
+            assert_eq!(store.storage_health().await.status, StorageStatus::Available);
+            assert!(
+                std::fs::read_dir(root.join("transactions"))
+                    .expect("transaction directory")
+                    .next()
+                    .is_some(),
+                "failed cleanup must retain a committed touch marker"
+            );
+            drop(store);
+
+            let reopened = FilePersistence::initialize(
+                &file_config(root.clone()),
+                owner
+                    .root_context()
+                    .component("touch-cleanup-failure-file-store-reopen"),
+            )
+            .await
+            .expect("reopen committed touch");
+            assert_eq!(
+                reopened
+                    .find_session(&token_hash)
+                    .await
+                    .expect("read committed touch")
+                    .expect("active session")
+                    .last_seen_at_ms,
+                2
+            );
+            assert_eq!(
+                std::fs::read_dir(root.join("transactions"))
+                    .expect("transaction directory")
+                    .count(),
+                0
+            );
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn session_touch_serializes_cleanup_listing_and_login_cap_scan() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        owner.block_on(async {
+            let store = FilePersistence::initialize(
+                &file_config(directory.path().join("dashboard")),
+                owner.root_context().component("serialized-session-touch-file-store"),
+            )
+            .await
+            .expect("file store");
+            let touched_hash = SessionTokenHash([56; 32]);
+            let expired_hash = SessionTokenHash([57; 32]);
+            let login_hash = SessionTokenHash([58; 32]);
+            store
+                .create_session(active_session(touched_hash, "touch-owner"))
+                .await
+                .expect("seed touched session");
+            store
+                .create_session(expired_session(expired_hash))
+                .await
+                .expect("seed expired session");
+            let (started, release) = install_mutation_blocker(&store);
+            let touch_store = store.clone();
+            let touch = tokio::spawn(async move { touch_store.touch_session(&touched_hash, 2).await });
+            wait_for_mutation_start(started).await;
+
+            let list_store = store.clone();
+            let mut listing = tokio::spawn(async move {
+                list_store
+                    .list_sessions(SessionQuery {
+                        username: None,
+                        cursor: None,
+                        limit: 50,
+                    })
+                    .await
+            });
+            let cleanup_store = store.clone();
+            let cleanup = tokio::spawn(async move { cleanup_store.delete_sessions_before(3, 10).await });
+            let login_store = store.clone();
+            let login = tokio::spawn(async move {
+                login_store
+                    .create_session_with_audit_capped(active_session(login_hash, "login-owner"), audit_event(3), 32, 3)
+                    .await
+            });
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), &mut listing)
+                    .await
+                    .is_err(),
+                "listing must wait for the touch commit decision"
+            );
+            release.send(()).expect("release touch mutation");
+            store.mutation_blocker.clear();
+            assert!(touch.await.expect("join touch").expect("commit touch"));
+            listing
+                .await
+                .expect("join listing")
+                .expect("listing after touch decision");
+            assert_eq!(cleanup.await.expect("join cleanup").expect("commit cleanup"), 1);
+            login
+                .await
+                .expect("join login-cap scan")
+                .expect("login-cap scan after touch decision");
+            assert_eq!(
+                store
+                    .find_session(&touched_hash)
+                    .await
+                    .expect("read touched session")
+                    .expect("touched session")
+                    .last_seen_at_ms,
+                2
+            );
+            assert!(
+                store
+                    .find_session(&expired_hash)
+                    .await
+                    .expect("read cleaned session")
+                    .is_none()
+            );
+            assert!(
+                store
+                    .find_session(&login_hash)
+                    .await
+                    .expect("read capped-login session")
+                    .is_some()
             );
         });
         owner.shutdown_runtime_blocking().expect("runtime shutdown");

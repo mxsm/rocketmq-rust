@@ -4,6 +4,7 @@ import { StrictMode } from 'react';
 import { vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
 import { dlqApi } from '../api/dlq_api';
+import { ApiClientError } from '../api/client';
 import { renderAtRoute } from '../test/render';
 import type { MessageView } from '../types/message';
 import DlqMessagePage from './DlqMessagePage';
@@ -147,6 +148,24 @@ describe('DlqMessagePage', () => {
 
     await waitFor(() => expect(dlqApi.list).toHaveBeenNthCalledWith(3, expect.objectContaining({ pageNum: 2 })));
     expect(await screen.findByText('DLQ-021')).toBeInTheDocument();
+  });
+
+  it('treats an applied audit failure as terminal, clears the submitted batch, and refetches once', async () => {
+    const user = userEvent.setup();
+    vi.mocked(dlqApi.resend).mockRejectedValueOnce(
+      new ApiClientError('APPLIED_AUDIT_FAILED', 'Batch resend was applied.', { mutationApplied: true })
+    );
+    renderAtRoute(<DlqMessagePage />, '/messages/dlq');
+    await screen.findByRole('heading', { name: 'Dead-letter messages' });
+    await user.click(screen.getByRole('button', { name: 'Search DLQ messages' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Select DLQ-001' }));
+    await user.click(screen.getByRole('button', { name: 'Review selected resend' }));
+    await user.click(within(screen.getByRole('alertdialog', { name: 'Resend selected DLQ messages?' })).getByRole('button', { name: 'Confirm resend' }));
+
+    await waitFor(() => expect(dlqApi.resend).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('0 selected')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Review selected resend' })).toBeDisabled();
+    await waitFor(() => expect(dlqApi.list).toHaveBeenCalledTimes(2));
   });
 
   it('shows every exact-ID match as one non-paginated result set', async () => {
@@ -410,6 +429,23 @@ describe('DlqMessagePage', () => {
     expect(await screen.findByText('export backend unavailable')).toBeInTheDocument();
     expect(screen.getByText('DLQ-001')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry export' })).toBeInTheDocument();
+  });
+
+  it('treats an applied audit failure during export as terminal without offering a retry', async () => {
+    const user = userEvent.setup();
+    vi.mocked(dlqApi.export).mockRejectedValueOnce(
+      new ApiClientError('APPLIED_AUDIT_FAILED', 'Export was applied.', { mutationApplied: true })
+    );
+
+    renderAtRoute(<DlqMessagePage />, '/messages/dlq');
+    await screen.findByRole('heading', { name: 'Dead-letter messages' });
+    await user.click(screen.getByRole('button', { name: 'Search DLQ messages' }));
+    await user.click(screen.getByRole('button', { name: 'Export current query' }));
+
+    await waitFor(() => expect(dlqApi.export).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/export was applied, but its audit record could not be stored/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry export' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export current query' })).toBeDisabled();
   });
 
   it('unlocks batch resend after completion under React StrictMode', async () => {

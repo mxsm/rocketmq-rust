@@ -9,6 +9,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  ScrollText,
   Siren,
   Split,
   TimerReset,
@@ -56,7 +57,9 @@ const navGroups: NavGroup[] = [
     label: 'Governance',
     items: [
       { to: '/acl', label: 'ACL Management', icon: ShieldCheck },
-      { to: '/monitors', label: 'Monitor', icon: Bell }
+      { to: '/monitors', label: 'Monitor', icon: Bell },
+      { to: '/sessions', label: 'Sessions', icon: ShieldCheck },
+      { to: '/audit', label: 'Audit', icon: ScrollText }
     ]
   }
 ];

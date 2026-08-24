@@ -13,7 +13,7 @@
 // limitations under the License.
 use crate::error::DashboardError;
 use crate::model::{
-    ConsumerMonitorMutationResult, ConsumerMonitorRule, ConsumerMonitorUpsertRequest, ConsumerMonitorView,
+    AuditEvent, ConsumerMonitorMutationResult, ConsumerMonitorRule, ConsumerMonitorUpsertRequest, ConsumerMonitorView,
     EnvironmentId,
 };
 use crate::persistence::Revision;
@@ -34,6 +34,7 @@ pub async fn list_consumer_monitors(
 pub async fn create_or_update_consumer_monitor(
     state: &AppState,
     request: ConsumerMonitorUpsertRequest,
+    audit: Option<AuditEvent>,
 ) -> Result<ConsumerMonitorMutationResult, DashboardError> {
     let rule = ConsumerMonitorRule {
         environment_id: request.environment_id,
@@ -47,7 +48,15 @@ pub async fn create_or_update_consumer_monitor(
     let expected_revision = request.expected_revision;
     state
         .run_persisted_mutation("dashboard-monitor-candidate-persist", move |state| async move {
-            let saved = state.persistence.upsert_monitor_rule(rule, expected_revision).await?;
+            let saved = match audit {
+                Some(audit) => {
+                    state
+                        .persistence
+                        .upsert_monitor_rule_with_audit(rule, expected_revision, audit)
+                        .await?
+                }
+                None => state.persistence.upsert_monitor_rule(rule, expected_revision).await?,
+            };
             let item = ConsumerMonitorView::from(saved);
             Ok(ConsumerMonitorMutationResult {
                 message: format!("Consumer monitor {} saved", item.consumer_group),
@@ -62,15 +71,26 @@ pub async fn delete_consumer_monitor(
     environment_id: &EnvironmentId,
     consumer_group: &str,
     expected_revision: Revision,
+    audit: Option<AuditEvent>,
 ) -> Result<ConsumerMonitorMutationResult, DashboardError> {
     let environment_id = environment_id.clone();
     let consumer_group = consumer_group.to_string();
     state
         .run_persisted_mutation("dashboard-monitor-delete", move |state| async move {
-            let removed = state
-                .persistence
-                .delete_monitor_rule(&environment_id, &consumer_group, expected_revision)
-                .await?;
+            let removed = match audit {
+                Some(audit) => {
+                    state
+                        .persistence
+                        .delete_monitor_rule_with_audit(&environment_id, &consumer_group, expected_revision, audit)
+                        .await?
+                }
+                None => {
+                    state
+                        .persistence
+                        .delete_monitor_rule(&environment_id, &consumer_group, expected_revision)
+                        .await?
+                }
+            };
             Ok(ConsumerMonitorMutationResult {
                 message: if removed {
                     format!("Consumer monitor {consumer_group} deleted")

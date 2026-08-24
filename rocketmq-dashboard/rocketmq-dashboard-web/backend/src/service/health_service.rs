@@ -13,6 +13,7 @@
 // limitations under the License.
 use crate::model::DashboardHistoryHealth;
 use crate::model::HealthStatus;
+use crate::model::SessionAuditCleanupHealth;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::StorageHealth;
 use crate::persistence::StorageStatus;
@@ -22,12 +23,21 @@ pub fn liveness_status() -> HealthStatus {
         status: "UP".to_string(),
         storage: None,
         history: None,
+        session_audit_cleanup: None,
     }
 }
 
-pub async fn readiness_status(persistence: &DashboardPersistence, history: DashboardHistoryHealth) -> HealthStatus {
+pub async fn readiness_status(
+    persistence: &DashboardPersistence,
+    history: DashboardHistoryHealth,
+    session_audit_cleanup: SessionAuditCleanupHealth,
+) -> HealthStatus {
     let mut status = readiness_status_from_storage(persistence.storage_health().await);
     status.history = Some(history);
+    if session_audit_cleanup.connectivity != "available" {
+        status.status = "DOWN".to_string();
+    }
+    status.session_audit_cleanup = Some(session_audit_cleanup);
     status
 }
 
@@ -40,6 +50,7 @@ pub fn readiness_status_from_storage(storage: StorageHealth) -> HealthStatus {
         },
         storage: Some(storage),
         history: None,
+        session_audit_cleanup: None,
     }
 }
 

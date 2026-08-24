@@ -1,7 +1,7 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
-import { ApiClientError } from '../api/client';
+import { ApiClientError, handleAppliedAuditFailure } from '../api/client';
 import { monitorApi } from '../api/monitor_api';
 import DataTable, { type DataTableColumn } from '../components/DataTable';
 import ErrorState from '../components/ErrorState';
@@ -91,6 +91,13 @@ export default function MonitorPage() {
       setDeleteTarget(null);
       void load();
     } catch (error) {
+      if (await handleAppliedAuditFailure(error, {
+        onApplied: () => {
+          setDeleteTarget(null);
+          setMutationError(null);
+        },
+        refresh: load
+      })) return;
       if (mounted.current) {
         setDeleteTarget(null);
         let retryRule: ConsumerMonitorView | null = rule;
@@ -186,6 +193,7 @@ export default function MonitorPage() {
           if (authoritative) setSelectedRule(authoritative);
           return authoritative;
         }}
+        onAppliedAuditFailure={load}
       />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => {

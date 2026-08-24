@@ -20,15 +20,19 @@ export default function LoginPage() {
   const [checking, setChecking] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [credentialError, setCredentialError] = useState<string | null>(null);
 
   const checkSession = async () => {
     setChecking(true);
     setSessionError(null);
+    setSessionNotice(null);
     try {
       const session = await authApi.session();
       if (!session.loginRequired || session.authenticated) {
         navigate('/dashboard', { replace: true });
+      } else if (session.authReason) {
+        setSessionNotice(sessionReason(session.authReason));
       }
     } catch {
       setSessionError('Unable to load auth session.');
@@ -101,6 +105,7 @@ export default function LoginPage() {
           <LogIn size={18} aria-hidden="true" />
           Authentication is required for this dashboard.
         </p>
+        {sessionNotice ? <p className="login-session-notice" role="status">{sessionNotice}</p> : null}
         <Card className="login-card">
           <CardHeader>
             <CardTitle>Sign in to RocketMQ Operations</CardTitle>
@@ -144,4 +149,12 @@ export default function LoginPage() {
       <p className="login-footer">RocketMQ Dashboard Web</p>
     </main>
   );
+}
+
+function sessionReason(reason: NonNullable<import('../types/auth').SessionView['authReason']>) {
+  switch (reason) {
+    case 'expired': return 'Your dashboard session expired. Sign in again to continue.';
+    case 'revoked': return 'Your dashboard session was revoked. Sign in again to continue.';
+    default: return 'Your previous dashboard session is no longer valid. Sign in again to continue.';
+  }
 }

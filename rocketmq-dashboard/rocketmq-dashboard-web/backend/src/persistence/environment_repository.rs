@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::model::AuditEvent;
 use crate::model::DashboardEnvironment;
 use crate::model::EndpointType;
 use crate::model::EnvironmentId;
@@ -92,6 +93,30 @@ impl DashboardPersistence {
         match &self.backend {
             PersistenceBackend::File(store) => store.update_environment(expected_revision, candidate).await,
             PersistenceBackend::Sql(store) => store.update_environment(expected_revision, candidate).await,
+        }
+    }
+
+    /// Persists an environment revision and its terminal successful audit event
+    /// as one storage decision. Callers must publish the returned aggregate
+    /// only after this method succeeds.
+    pub async fn update_environment_with_audit(
+        &self,
+        expected_revision: Revision,
+        mut candidate: DashboardEnvironment,
+        audit: AuditEvent,
+    ) -> Result<DashboardEnvironment, PersistenceError> {
+        sort_environment_endpoints(&mut candidate);
+        match &self.backend {
+            PersistenceBackend::File(store) => {
+                store
+                    .update_environment_with_audit(expected_revision, candidate, audit)
+                    .await
+            }
+            PersistenceBackend::Sql(store) => {
+                store
+                    .update_environment_with_audit(expected_revision, candidate, audit)
+                    .await
+            }
         }
     }
 
@@ -283,6 +308,49 @@ impl FilePersistence {
             &collection,
             current.revision,
             to_value(&candidate).map_err(PersistenceError::Serialization)?,
+        )
+        .await?;
+        Ok(candidate)
+    }
+
+    pub(crate) async fn update_environment_with_audit(
+        &self,
+        expected_revision: Revision,
+        mut candidate: DashboardEnvironment,
+        audit: AuditEvent,
+    ) -> Result<DashboardEnvironment, PersistenceError> {
+        candidate.validate().map_err(PersistenceError::InvalidConfig)?;
+        validate_environment_identity(&candidate)?;
+        let write_guard = self.write_guard().await;
+        if self
+            .list_environments_locked()
+            .await?
+            .iter()
+            .any(|existing| existing.environment_id != candidate.environment_id && existing.name == candidate.name)
+        {
+            return Err(PersistenceError::Conflict);
+        }
+        let collection = collection_for_environment(&candidate);
+        let current = self
+            .load_latest_snapshot(&collection)
+            .await?
+            .ok_or(PersistenceError::NotFound)?;
+        let current_environment =
+            decode_file_environment_snapshot(current.payload)?.ok_or(PersistenceError::NotFound)?;
+        if current_environment.environment_id != candidate.environment_id
+            || current_environment.revision != expected_revision
+        {
+            return Err(PersistenceError::Conflict);
+        }
+        candidate.revision = Revision(expected_revision.0.checked_add(1).ok_or(PersistenceError::Conflict)?);
+        self.publish_snapshot_transaction_with_audit_locked(
+            write_guard,
+            vec![FileSnapshotTransactionWrite {
+                collection,
+                expected_revision: current.revision,
+                payload: to_value(&candidate).map_err(PersistenceError::Serialization)?,
+            }],
+            audit,
         )
         .await?;
         Ok(candidate)

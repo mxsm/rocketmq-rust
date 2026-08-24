@@ -24,7 +24,9 @@ use crate::persistence::error::PersistenceError;
 use crate::service::AuthState;
 use crate::service::DashboardHistoryRuntime;
 use crate::service::HistoryCollectorConfig;
+use crate::service::SessionAuditCleanupRuntime;
 use crate::service::start_dashboard_history_collector;
+use crate::service::start_session_audit_cleanup;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_dashboard_common::DashboardAdminFacade;
 use std::future::Future;
@@ -60,6 +62,7 @@ pub struct AppState {
     persisted_mutation_context: rocketmq_runtime::ChildServiceContext,
     pub auth_state: Arc<AuthState>,
     pub history_runtime: DashboardHistoryRuntime,
+    pub session_audit_cleanup_runtime: SessionAuditCleanupRuntime,
     pub published_environment: Arc<std::sync::RwLock<PublishedEnvironment>>,
     pub admin_client: DashboardAdminClient,
     #[cfg(test)]
@@ -91,7 +94,8 @@ impl AppState {
                 .await?,
         );
         ensure_persistence_ready(persistence.storage_health().await)?;
-        let auth_state = Arc::new(AuthState::new(config.auth));
+        let session_audit_config = config.auth.clone();
+        let auth_state = Arc::new(AuthState::new(config.auth)?);
         let environment = load_or_create_default_environment(&persistence, &config.initial_config).await?;
         let history_environment_id = environment.environment_id.clone();
         let published_environment = Arc::new(std::sync::RwLock::new(PublishedEnvironment::from_environment(
@@ -121,6 +125,13 @@ impl AppState {
                 history_runtime.clone(),
             )?;
         }
+        let session_audit_cleanup_runtime = SessionAuditCleanupRuntime::new(&persistence);
+        start_session_audit_cleanup(
+            client_runtime.component("dashboard-session-audit-cleanup"),
+            persistence.clone(),
+            session_audit_config,
+            session_audit_cleanup_runtime.clone(),
+        )?;
 
         let state = Self {
             persistence,
@@ -129,6 +140,7 @@ impl AppState {
             persisted_mutation_context,
             auth_state,
             history_runtime,
+            session_audit_cleanup_runtime,
             published_environment,
             admin_client,
             #[cfg(test)]
@@ -397,6 +409,7 @@ mod tests {
                 login_required: false,
                 username: "admin".to_string(),
                 password: "test-password".to_string(),
+                ..AuthConfig::default()
             },
             dashboard_history_interval_secs: 0,
             dashboard_history_retention_days: 30,
@@ -470,6 +483,7 @@ mod tests {
                         address: "127.0.0.2:8080".to_string(),
                         expected_revision: initial.revision,
                     },
+                    None,
                 )
                 .await
             });
@@ -534,6 +548,7 @@ mod tests {
                         max_diff_total: 0,
                         expected_revision: Revision(0),
                     },
+                    None,
                 )
                 .await
             });

@@ -1326,6 +1326,57 @@
   }
 }
 
+.audit-admin-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.audit-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.audit-filter-row .ui-input,
+.audit-filter-row select {
+  min-width: 160px;
+}
+
+.audit-actor {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.audit-outcome {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.audit-outcome-succeeded { color: var(--success); }
+.audit-outcome-rejected { color: var(--warning); }
+.audit-outcome-failed { color: var(--destructive); }
+
+.audit-detail {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.audit-warning {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 9%, var(--card));
+  color: var(--warning);
+}
+
 /* Message operations */
 .settings-workspace {
   display: grid;

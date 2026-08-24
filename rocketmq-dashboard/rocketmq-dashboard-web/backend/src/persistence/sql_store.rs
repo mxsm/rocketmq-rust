@@ -45,6 +45,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::timeout;
 
+#[path = "audit_sql_store.rs"]
+mod audit_sql_store;
 #[path = "history_lease_store.rs"]
 mod history_lease_store;
 #[path = "history_sql_store.rs"]
@@ -52,6 +54,8 @@ mod history_sql_store;
 #[cfg(test)]
 #[path = "history_sql_store_docker_tests.rs"]
 mod history_sql_store_docker_tests;
+#[path = "session_sql_store.rs"]
+mod session_sql_store;
 
 pub enum DatabasePool {
     Sqlite(SqlitePool),
@@ -391,6 +395,38 @@ impl SqlPersistence {
         Ok(candidate)
     }
 
+    pub(crate) async fn update_environment_with_audit(
+        &self,
+        expected_revision: Revision,
+        mut candidate: DashboardEnvironment,
+        audit: crate::model::AuditEvent,
+    ) -> Result<DashboardEnvironment, PersistenceError> {
+        candidate.validate().map_err(PersistenceError::InvalidConfig)?;
+        validate_environment_identity(&candidate)?;
+        candidate.revision = Revision(expected_revision.0.checked_add(1).ok_or(PersistenceError::Conflict)?);
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                crate::update_environment_in_transaction!(transaction, expected_revision, &candidate);
+                audit_sql_store::append_sqlite_audit_event_in_transaction(&mut transaction, &audit).await?;
+                transaction.commit().await.map_err(map_query_error)?;
+            }
+            DatabasePool::MySql(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                crate::update_environment_in_transaction!(transaction, expected_revision, &candidate);
+                audit_sql_store::append_mysql_audit_event_in_transaction(&mut transaction, &audit).await?;
+                transaction.commit().await.map_err(map_query_error)?;
+            }
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                crate::update_environment_in_transaction!(transaction, expected_revision, &candidate);
+                audit_sql_store::append_postgres_audit_event_in_transaction(&mut transaction, &audit).await?;
+                transaction.commit().await.map_err(map_query_error)?;
+            }
+        }
+        Ok(candidate)
+    }
+
     pub(crate) async fn delete_environment(
         &self,
         environment_id: &EnvironmentId,
@@ -435,6 +471,38 @@ impl SqlPersistence {
         }
     }
 
+    pub(crate) async fn upsert_monitor_rule_with_audit(
+        &self,
+        rule: ConsumerMonitorRule,
+        expected_revision: Revision,
+        audit: crate::model::AuditEvent,
+    ) -> Result<ConsumerMonitorRule, PersistenceError> {
+        rule.validate().map_err(PersistenceError::InvalidConfig)?;
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(map_query_error)?;
+                let saved = crate::upsert_monitor_rule_in_transaction!(transaction, rule, expected_revision)?;
+                audit_sql_store::append_sqlite_audit_event_in_transaction(&mut transaction, &audit).await?;
+                transaction.commit().await.map_err(map_query_error)?;
+                Ok(saved)
+            }
+            DatabasePool::MySql(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                let saved = crate::upsert_monitor_rule_in_transaction!(transaction, rule, expected_revision)?;
+                audit_sql_store::append_mysql_audit_event_in_transaction(&mut transaction, &audit).await?;
+                transaction.commit().await.map_err(map_query_error)?;
+                Ok(saved)
+            }
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                let saved = crate::upsert_monitor_rule_in_transaction!(transaction, rule, expected_revision)?;
+                audit_sql_store::append_postgres_audit_event_in_transaction(&mut transaction, &audit).await?;
+                transaction.commit().await.map_err(map_query_error)?;
+                Ok(saved)
+            }
+        }
+    }
+
     pub(crate) async fn delete_monitor_rule(
         &self,
         environment_id: &EnvironmentId,
@@ -455,6 +523,64 @@ impl SqlPersistence {
             }
             DatabasePool::Postgres(pool) => {
                 crate::delete_monitor_rule_in_pool!(pool, environment_id, consumer_group, expected_revision)
+            }
+        }
+    }
+
+    pub(crate) async fn delete_monitor_rule_with_audit(
+        &self,
+        environment_id: &EnvironmentId,
+        consumer_group: &str,
+        expected_revision: Revision,
+        audit: crate::model::AuditEvent,
+    ) -> Result<bool, PersistenceError> {
+        if consumer_group.trim().is_empty() {
+            return Err(PersistenceError::InvalidConfig(
+                "consumer group is required".to_string(),
+            ));
+        }
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                let removed = crate::delete_monitor_rule_in_transaction!(
+                    transaction,
+                    environment_id,
+                    consumer_group,
+                    expected_revision
+                )?;
+                if removed {
+                    audit_sql_store::append_sqlite_audit_event_in_transaction(&mut transaction, &audit).await?;
+                }
+                transaction.commit().await.map_err(map_query_error)?;
+                Ok(removed)
+            }
+            DatabasePool::MySql(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                let removed = crate::delete_monitor_rule_in_transaction!(
+                    transaction,
+                    environment_id,
+                    consumer_group,
+                    expected_revision
+                )?;
+                if removed {
+                    audit_sql_store::append_mysql_audit_event_in_transaction(&mut transaction, &audit).await?;
+                }
+                transaction.commit().await.map_err(map_query_error)?;
+                Ok(removed)
+            }
+            DatabasePool::Postgres(pool) => {
+                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                let removed = crate::delete_monitor_rule_in_transaction!(
+                    transaction,
+                    environment_id,
+                    consumer_group,
+                    expected_revision
+                )?;
+                if removed {
+                    audit_sql_store::append_postgres_audit_event_in_transaction(&mut transaction, &audit).await?;
+                }
+                transaction.commit().await.map_err(map_query_error)?;
+                Ok(removed)
             }
         }
     }
@@ -903,6 +1029,14 @@ macro_rules! insert_environment_in_pool {
 macro_rules! update_environment_in_pool {
     ($pool:expr, $expected_revision:expr, $environment:expr) => {{
         let mut transaction = $pool.begin().await.map_err(map_query_error)?;
+        $crate::update_environment_in_transaction!(transaction, $expected_revision, $environment);
+        transaction.commit().await.map_err(map_query_error)
+    }};
+}
+
+#[macro_export]
+macro_rules! update_environment_in_transaction {
+    ($transaction:ident, $expected_revision:expr, $environment:expr) => {{
         let mut update = QueryBuilder::new("UPDATE dashboard_environment SET name = ");
         update.push_bind(&$environment.name);
         update.push(", use_vip_channel = ");
@@ -919,7 +1053,7 @@ macro_rules! update_environment_in_pool {
         update.push_bind(revision_to_database($expected_revision)?);
         if update
             .build()
-            .execute(&mut *transaction)
+            .execute(&mut *$transaction)
             .await
             .map_err(map_query_error)?
             .rows_affected()
@@ -931,11 +1065,10 @@ macro_rules! update_environment_in_pool {
         delete.push_bind(&$environment.environment_id.0);
         delete
             .build()
-            .execute(&mut *transaction)
+            .execute(&mut *$transaction)
             .await
             .map_err(map_query_error)?;
-        $crate::insert_endpoints_in_transaction!(transaction, $environment);
-        transaction.commit().await.map_err(map_query_error)
+        $crate::insert_endpoints_in_transaction!($transaction, $environment);
     }};
 }
 
@@ -979,7 +1112,10 @@ macro_rules! delete_environment_in_pool {
 macro_rules! upsert_monitor_rule_in_pool {
     ($pool:expr, $rule:expr, $expected_revision:expr) => {{
         let mut transaction = $pool.begin().await.map_err(map_query_error)?;
-        $crate::upsert_monitor_rule_in_transaction!(transaction, $rule, $expected_revision)
+        let result = $crate::upsert_monitor_rule_in_transaction!(transaction, $rule, $expected_revision);
+        let result = result?;
+        transaction.commit().await.map_err(map_query_error)?;
+        Ok(result)
     }};
 }
 
@@ -1057,7 +1193,6 @@ macro_rules! upsert_monitor_rule_in_transaction {
             separated.push_unseparated(")");
             insert.build().execute(&mut *$transaction).await.map_err(map_query_error)?;
         }
-        $transaction.commit().await.map_err(map_query_error)?;
         Ok(persisted)
     }};
 }
@@ -1072,18 +1207,36 @@ async fn upsert_monitor_rule_in_sqlite_transaction(
     expected_revision: Revision,
 ) -> Result<ConsumerMonitorRule, PersistenceError> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(map_query_error)?;
-    crate::upsert_monitor_rule_in_transaction!(transaction, rule, expected_revision)
+    let result = crate::upsert_monitor_rule_in_transaction!(transaction, rule, expected_revision);
+    let result = result?;
+    transaction.commit().await.map_err(map_query_error)?;
+    Ok(result)
 }
 
 #[macro_export]
 macro_rules! delete_monitor_rule_in_pool {
     ($pool:expr, $environment_id:expr, $consumer_group:expr, $expected_revision:expr) => {{
         let mut transaction = $pool.begin().await.map_err(map_query_error)?;
+        let result = $crate::delete_monitor_rule_in_transaction!(
+            transaction,
+            $environment_id,
+            $consumer_group,
+            $expected_revision
+        );
+        let result = result?;
+        transaction.commit().await.map_err(map_query_error)?;
+        Ok(result)
+    }};
+}
+
+#[macro_export]
+macro_rules! delete_monitor_rule_in_transaction {
+    ($transaction:ident, $environment_id:expr, $consumer_group:expr, $expected_revision:expr) => {{
         let mut environment = QueryBuilder::new("SELECT 1 FROM dashboard_environment WHERE environment_id = ");
         environment.push_bind(&$environment_id.0);
         if environment
             .build()
-            .fetch_optional(&mut *transaction)
+            .fetch_optional(&mut *$transaction)
             .await
             .map_err(map_query_error)?
             .is_none()
@@ -1098,19 +1251,18 @@ macro_rules! delete_monitor_rule_in_pool {
         delete.push_bind(revision_to_database($expected_revision)?);
         let deleted = delete
             .build()
-            .execute(&mut *transaction)
+            .execute(&mut *$transaction)
             .await
             .map_err(map_query_error)?
             .rows_affected();
         if deleted == 1 {
-            transaction.commit().await.map_err(map_query_error)?;
             Ok(true)
         } else {
             let mut owner = QueryBuilder::new("SELECT 1 FROM dashboard_environment WHERE environment_id = ");
             owner.push_bind(&$environment_id.0);
             if owner
                 .build()
-                .fetch_optional(&mut *transaction)
+                .fetch_optional(&mut *$transaction)
                 .await
                 .map_err(map_query_error)?
                 .is_none()
@@ -1123,14 +1275,13 @@ macro_rules! delete_monitor_rule_in_pool {
             exists.push_bind($consumer_group);
             let found = exists
                 .build()
-                .fetch_optional(&mut *transaction)
+                .fetch_optional(&mut *$transaction)
                 .await
                 .map_err(map_query_error)?
                 .is_some();
             if found {
                 Err(PersistenceError::Conflict)
             } else {
-                transaction.commit().await.map_err(map_query_error)?;
                 Ok(false)
             }
         }
@@ -1189,7 +1340,7 @@ mod tests {
             let first = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-first"))
                 .await
                 .expect("first SQLite initialization");
-            assert_eq!(first.schema_version(), 3);
+            assert_eq!(first.schema_version(), 4);
             let health = first.storage_health().await;
             assert!(matches!(health.status, StorageStatus::Available));
             assert!(health.pool_size.is_some());
@@ -1199,7 +1350,7 @@ mod tests {
             let second = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-second"))
                 .await
                 .expect("second SQLite initialization");
-            assert_eq!(second.schema_version(), 3);
+            assert_eq!(second.schema_version(), 4);
         });
         assert!(database_path.exists());
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
@@ -1377,7 +1528,7 @@ mod tests {
                 SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-first"))
                     .await
                     .expect("first storage initialization");
-            assert_eq!(first.schema_version(), 3);
+            assert_eq!(first.schema_version(), 4);
             assert_eq!(first.storage_health().await.status, StorageStatus::Available);
             assert_schema_metadata(&first).await;
             drop(first);
@@ -1385,7 +1536,7 @@ mod tests {
                 SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-second"))
                     .await
                     .expect("second storage initialization");
-            assert_eq!(second.schema_version(), 3);
+            assert_eq!(second.schema_version(), 4);
             assert_eq!(second.storage_health().await.status, StorageStatus::Available);
         });
         if config.backend == StorageBackend::Sqlite {

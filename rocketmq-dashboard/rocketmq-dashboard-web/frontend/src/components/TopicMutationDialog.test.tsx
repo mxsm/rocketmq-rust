@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
+import { ApiClientError } from '../api/client';
 import { deferred } from '../test/deferred';
 import type {
   TopicConfigView,
@@ -118,6 +119,25 @@ describe('TopicMutationDialog', () => {
       messageType: 'FIFO'
     }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('closes and refreshes once instead of retrying after an applied audit failure', async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const onAppliedAuditFailure = vi.fn().mockResolvedValue(undefined);
+    const onSubmit = vi.fn().mockRejectedValue(
+      new ApiClientError('APPLIED_AUDIT_FAILED', 'Topic mutation applied.', { mutationApplied: true })
+    );
+    render(<TopicMutationDialog {...defaultProps} onOpenChange={onOpenChange} onSubmit={onSubmit} onAppliedAuditFailure={onAppliedAuditFailure} />);
+
+    await user.type(screen.getByRole('textbox', { name: 'Topic name' }), 'inventory-events');
+    await user.click(screen.getByRole('checkbox', { name: 'DefaultCluster' }));
+    const confirmation = await openConfirmation(user);
+    await user.click(within(confirmation).getByRole('button', { name: 'Create topic' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(onAppliedAuditFailure).toHaveBeenCalledTimes(1);
   });
 
   it('builds permission bits from Read, Write, and Inherit and requires Read or Write', async () => {
