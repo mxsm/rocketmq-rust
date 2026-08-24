@@ -1,0 +1,135 @@
+error[E0277]: the trait bound `LegacyV1Header: LocalV3Descriptor` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:134:30
+    |
+134 |     requires_v3_descriptor::<LegacyV1Header>();
+    |                              ^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalV3Descriptor` is not implemented for `LegacyV1Header`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:32:5
+    |
+ 32 |     pub struct LegacyV1Header {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_v3_descriptor`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:113:30
+    |
+113 | fn requires_v3_descriptor<T: LocalV3Descriptor>() {
+    |                              ^^^^^^^^^^^^^^^^^ required by this bound in `requires_v3_descriptor`
+
+error[E0277]: the trait bound `LegacyV2Header: LocalV3Descriptor` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:135:30
+    |
+135 |     requires_v3_descriptor::<LegacyV2Header>();
+    |                              ^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalV3Descriptor` is not implemented for `LegacyV2Header`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:48:5
+    |
+ 48 |     pub struct LegacyV2Header {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_v3_descriptor`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:113:30
+    |
+113 | fn requires_v3_descriptor<T: LocalV3Descriptor>() {
+    |                              ^^^^^^^^^^^^^^^^^ required by this bound in `requires_v3_descriptor`
+
+error[E0277]: the trait bound `SilentTupleHeader: LocalLegacyCommandCustomHeader` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:136:45
+    |
+136 |     requires_legacy_command_custom_header::<SilentTupleHeader>();
+    |                                             ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalLegacyCommandCustomHeader` is not implemented for `SilentTupleHeader`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:63:5
+    |
+ 63 |     pub struct SilentTupleHeader(i32);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_legacy_command_custom_header`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:129:45
+    |
+129 | fn requires_legacy_command_custom_header<T: LocalLegacyCommandCustomHeader>() {}
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `requires_legacy_command_custom_header`
+
+error[E0277]: the trait bound `SilentUnitHeader: LocalLegacyCommandCustomHeader` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:137:45
+    |
+137 |     requires_legacy_command_custom_header::<SilentUnitHeader>();
+    |                                             ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalLegacyCommandCustomHeader` is not implemented for `SilentUnitHeader`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:76:5
+    |
+ 76 |     pub struct SilentUnitHeader;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_legacy_command_custom_header`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:129:45
+    |
+129 | fn requires_legacy_command_custom_header<T: LocalLegacyCommandCustomHeader>() {}
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `requires_legacy_command_custom_header`
+
+error[E0277]: the trait bound `SilentEnumHeader: LocalLegacyCommandCustomHeader` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:138:45
+    |
+138 |     requires_legacy_command_custom_header::<SilentEnumHeader>();
+    |                                             ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalLegacyCommandCustomHeader` is not implemented for `SilentEnumHeader`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:89:5
+    |
+ 89 |     pub enum SilentEnumHeader {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_legacy_command_custom_header`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:129:45
+    |
+129 | fn requires_legacy_command_custom_header<T: LocalLegacyCommandCustomHeader>() {}
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `requires_legacy_command_custom_header`
+
+error[E0277]: the trait bound `SilentTupleHeader: LocalLegacyFromMap` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:139:32
+    |
+139 |     requires_legacy_from_map::<SilentTupleHeader>();
+    |                                ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalLegacyFromMap` is not implemented for `SilentTupleHeader`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:63:5
+    |
+ 63 |     pub struct SilentTupleHeader(i32);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_legacy_from_map`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:131:32
+    |
+131 | fn requires_legacy_from_map<T: LocalLegacyFromMap>() {}
+    |                                ^^^^^^^^^^^^^^^^^^ required by this bound in `requires_legacy_from_map`
+
+error[E0277]: the trait bound `SilentUnitHeader: LocalLegacyFromMap` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:140:32
+    |
+140 |     requires_legacy_from_map::<SilentUnitHeader>();
+    |                                ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalLegacyFromMap` is not implemented for `SilentUnitHeader`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:76:5
+    |
+ 76 |     pub struct SilentUnitHeader;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_legacy_from_map`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:131:32
+    |
+131 | fn requires_legacy_from_map<T: LocalLegacyFromMap>() {}
+    |                                ^^^^^^^^^^^^^^^^^^ required by this bound in `requires_legacy_from_map`
+
+error[E0277]: the trait bound `SilentEnumHeader: LocalLegacyFromMap` is not satisfied
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:141:32
+    |
+141 |     requires_legacy_from_map::<SilentEnumHeader>();
+    |                                ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `LocalLegacyFromMap` is not implemented for `SilentEnumHeader`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:89:5
+    |
+ 89 |     pub enum SilentEnumHeader {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_legacy_from_map`
+   --> tests/ui/request_header_codec_v1/fail/legacy_codecs_do_not_implement_v3_descriptor.rs:131:32
+    |
+131 | fn requires_legacy_from_map<T: LocalLegacyFromMap>() {}
+    |                                ^^^^^^^^^^^^^^^^^^ required by this bound in `requires_legacy_from_map`
