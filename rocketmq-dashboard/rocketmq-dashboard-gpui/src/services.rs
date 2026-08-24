@@ -19,6 +19,8 @@ pub mod brokers;
 pub mod dashboard;
 #[path = "services/delivery03.rs"]
 pub(crate) mod delivery03;
+#[path = "services/topics.rs"]
+pub(crate) mod topics;
 
 use std::{
     fmt,
@@ -507,6 +509,7 @@ pub struct AppServices {
     backend: Arc<dyn ApplicationBackend>,
     runtime_bridge: Option<RuntimeBridge>,
     delivery03: Arc<dyn delivery03::Delivery03Backend>,
+    topics: Arc<dyn topics::TopicBackend>,
 }
 
 impl AppServices {
@@ -519,6 +522,7 @@ impl AppServices {
                 dashboard::DashboardService::unavailable(),
                 brokers::BrokerService::unavailable(),
             ),
+            topics: topics::RealTopicBackend::unavailable(),
         }
     }
 
@@ -559,8 +563,12 @@ impl AppServices {
             .map(|provider| dashboard::DashboardService::new(Arc::clone(provider), Arc::clone(&history_store)))
             .unwrap_or_else(dashboard::DashboardService::unavailable);
         let brokers = admin_provider
-            .map(brokers::BrokerService::new)
+            .as_ref()
+            .map(|provider| brokers::BrokerService::new(Arc::clone(provider)))
             .unwrap_or_else(brokers::BrokerService::unavailable);
+        let topics = admin_provider
+            .map(topics::RealTopicBackend::new)
+            .unwrap_or_else(topics::RealTopicBackend::unavailable);
         let history_sampler: Arc<dyn HistorySampler> = dashboard.clone();
         let delivery03 = delivery03::RealDelivery03Backend::new(dashboard, brokers);
         Self {
@@ -585,6 +593,7 @@ impl AppServices {
                 completion: None,
             }),
             delivery03,
+            topics,
         }
     }
 

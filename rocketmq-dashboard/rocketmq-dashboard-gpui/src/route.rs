@@ -58,10 +58,14 @@ pub enum BrokerTab {
 pub enum TopicTab {
     /// Topic summary.
     Overview,
-    /// Queue details.
-    Queues,
-    /// Permission details.
-    Permissions,
+    /// Real queue offsets and recent activity.
+    Stats,
+    /// Broker and queue routing metadata.
+    Route,
+    /// Effective per-target configuration.
+    Configuration,
+    /// Consumer groups using this Topic.
+    Consumers,
 }
 
 /// The selected Consumer detail section.
@@ -230,8 +234,10 @@ impl fmt::Display for TopicTab {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Overview => "overview",
-            Self::Queues => "queues",
-            Self::Permissions => "permissions",
+            Self::Stats => "stats",
+            Self::Route => "route",
+            Self::Configuration => "configuration",
+            Self::Consumers => "consumers",
         })
     }
 }
@@ -343,8 +349,10 @@ fn parse_broker_tab(value: &str) -> Result<BrokerTab, RouteParseError> {
 fn parse_topic_tab(value: &str) -> Result<TopicTab, RouteParseError> {
     match value {
         "overview" => Ok(TopicTab::Overview),
-        "queues" => Ok(TopicTab::Queues),
-        "permissions" => Ok(TopicTab::Permissions),
+        "stats" | "queues" => Ok(TopicTab::Stats),
+        "route" => Ok(TopicTab::Route),
+        "configuration" | "permissions" => Ok(TopicTab::Configuration),
+        "consumers" => Ok(TopicTab::Consumers),
         _ => Err(RouteParseError::InvalidParameter),
     }
 }
@@ -377,7 +385,7 @@ mod tests {
             AppRoute::Topics,
             AppRoute::TopicDetail {
                 topic: RouteKey::parse("orders-v1").expect("valid topic key"),
-                tab: TopicTab::Permissions,
+                tab: TopicTab::Consumers,
             },
             AppRoute::Consumers,
             AppRoute::ConsumerDetail {
@@ -407,6 +415,29 @@ mod tests {
         assert_eq!(AppRoute::parse("/cluster"), Ok(AppRoute::Brokers));
         assert_eq!(AppRoute::parse("/dlq"), Ok(AppRoute::DlqMessages));
         assert_eq!(AppRoute::OpsSettings.format_path(), "/ops-settings");
+        let topic = RouteKey::parse("orders").expect("topic");
+        assert_eq!(
+            AppRoute::parse("/topics/orders/queues"),
+            Ok(AppRoute::TopicDetail {
+                topic: topic.clone(),
+                tab: TopicTab::Stats,
+            })
+        );
+        assert_eq!(
+            AppRoute::parse("/topics/orders/permissions"),
+            Ok(AppRoute::TopicDetail {
+                topic,
+                tab: TopicTab::Configuration,
+            })
+        );
+        assert_eq!(
+            AppRoute::TopicDetail {
+                topic: RouteKey::parse("orders").expect("topic"),
+                tab: TopicTab::Configuration,
+            }
+            .format_path(),
+            "/topics/orders/configuration"
+        );
     }
 
     #[test]

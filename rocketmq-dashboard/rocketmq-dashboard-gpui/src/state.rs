@@ -203,7 +203,6 @@ impl RequestEpoch {
     }
 
     /// Exposes the epoch for focused tests.
-    #[cfg(test)]
     pub const fn value(self) -> u64 {
         self.0
     }

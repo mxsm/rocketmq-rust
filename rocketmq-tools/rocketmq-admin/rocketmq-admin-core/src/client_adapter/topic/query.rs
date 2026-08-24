@@ -48,11 +48,10 @@ pub(super) fn map_topic_route(route: TopicRouteData) -> TopicRoute {
 }
 
 pub(super) async fn require_topic_route(
-    admin: &mut rocketmq_client_rust::DefaultMQAdminExt,
+    admin: &rocketmq_client_rust::DefaultMQAdminExt,
     topic: &str,
 ) -> Result<TopicRouteData, AdminError> {
-    admin
-        .examine_topic_route_info(CheetahString::from(topic))
+    rocketmq_client_rust::TopicAdmin::examine_topic_route_info(admin, CheetahString::from(topic))
         .await
         .map_err(|error| backend_error("examine_topic_route_info", error))?
         .ok_or_else(|| AdminError::invalid_argument("topic", format!("topic `{topic}` was not found")))

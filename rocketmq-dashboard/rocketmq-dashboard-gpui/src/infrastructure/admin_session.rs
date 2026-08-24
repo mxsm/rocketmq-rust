@@ -29,6 +29,15 @@ use rocketmq_admin_core::{
             DashboardConsumerList, DashboardProducerInfo, DashboardTopicList, DashboardTopicStats,
         },
         security::AdminCredentials,
+        topic::{
+            DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
+            DetailedTopicStats, GetTopicRouteRequest, PatchTopicConfigOutcome, PatchTopicConfigRequest,
+            QueryTopicConfigCasRequest, TopicBatchDeleteAdmin, TopicBatchDeleteOutcome, TopicBatchDeleteRequest,
+            TopicBatchMutationAdmin, TopicBatchMutationOutcome, TopicBatchUpsertRequest, TopicConfigCasState,
+            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationOutcome, TopicMutationPreflightAdmin,
+            TopicOffsetMutationAdmin, TopicOffsetMutationOutcome, TopicOffsetMutationRequest, TopicRoute,
+            TopicSendRequest, TopicSendResult,
+        },
     },
     mutation_client_adapter::{MutationAdminBuilder, MutationAdminSession},
 };
@@ -52,6 +61,21 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
         &'a self,
         target: &'a DashboardBrokerTarget,
     ) -> SessionFuture<'a, AdminResult<DashboardBrokerConfig>>;
+    fn topic_catalog(&self) -> SessionFuture<'_, AdminResult<DetailedTopicCatalog>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_catalog")) })
+    }
+    fn topic_route<'a>(&'a self, _topic: &'a str) -> SessionFuture<'a, AdminResult<Option<TopicRoute>>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_route")) })
+    }
+    fn detailed_topic_stats<'a>(&'a self, _topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicStats>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_stats")) })
+    }
+    fn topic_config<'a>(&'a self, _topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicConfig>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_config")) })
+    }
+    fn topic_consumers<'a>(&'a self, _topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicConsumers>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_consumers")) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
 }
 
@@ -65,7 +89,59 @@ pub(crate) trait DashboardMutationSession: Send {
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
     ) -> SessionFuture<'a, AdminResult<PatchBrokerConfigOutcome>>;
+    fn topic_config_cas_state<'a>(
+        &'a mut self,
+        _request: &'a QueryTopicConfigCasRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicConfigCasState>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_config_cas_state")) })
+    }
+    fn patch_topic_config<'a>(
+        &'a mut self,
+        _request: &'a PatchTopicConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<PatchTopicConfigOutcome>> {
+        Box::pin(async { Err(unsupported_topic_session("patch_topic_config")) })
+    }
+    fn upsert_topic_batch<'a>(
+        &'a mut self,
+        _request: &'a TopicBatchUpsertRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicBatchMutationOutcome>> {
+        Box::pin(async { Err(unsupported_topic_session("upsert_topic_batch")) })
+    }
+    fn delete_topic_batch<'a>(
+        &'a mut self,
+        _request: &'a TopicBatchDeleteRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicBatchDeleteOutcome>> {
+        Box::pin(async { Err(unsupported_topic_session("delete_topic_batch")) })
+    }
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        _request: &'a DeleteTopicsInBrokerRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicMutationOutcome>> {
+        Box::pin(async { Err(unsupported_topic_session("delete_topics_in_broker")) })
+    }
+    fn send_topic_message<'a>(
+        &'a mut self,
+        _request: &'a TopicSendRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicSendResult>> {
+        Box::pin(async { Err(unsupported_topic_session("send_topic_message")) })
+    }
+    fn reset_topic_offset_detailed<'a>(
+        &'a mut self,
+        _request: &'a TopicOffsetMutationRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+        Box::pin(async { Err(unsupported_topic_session("reset_topic_offset_detailed")) })
+    }
+    fn skip_topic_accumulated_detailed<'a>(
+        &'a mut self,
+        _request: &'a TopicOffsetMutationRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+        Box::pin(async { Err(unsupported_topic_session("skip_topic_accumulated_detailed")) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
+}
+
+fn unsupported_topic_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
+    rocketmq_admin_core::core::AdminError::backend(operation, "Topic capability is not implemented by this session")
 }
 
 /// Factory kept injectable so concurrency and shutdown are tested without a network.
@@ -185,6 +261,32 @@ impl DashboardQuerySession for RealQuerySession {
         DashboardAdmin::dashboard_broker_config(&self.inner, target)
     }
 
+    fn topic_catalog(&self) -> SessionFuture<'_, AdminResult<DetailedTopicCatalog>> {
+        Box::pin(async move {
+            let request = Default::default();
+            TopicInspectionAdmin::inspect_topic_catalog(&self.inner, &request).await
+        })
+    }
+
+    fn topic_route<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<Option<TopicRoute>>> {
+        let request = GetTopicRouteRequest {
+            topic: topic.to_owned(),
+        };
+        Box::pin(async move { TopicInspectionAdmin::inspect_topic_route(&self.inner, &request).await })
+    }
+
+    fn detailed_topic_stats<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicStats>> {
+        TopicInspectionAdmin::inspect_topic_stats(&self.inner, topic)
+    }
+
+    fn topic_config<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicConfig>> {
+        TopicInspectionAdmin::inspect_topic_config(&self.inner, topic)
+    }
+
+    fn topic_consumers<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DetailedTopicConsumers>> {
+        TopicInspectionAdmin::inspect_topic_consumers(&self.inner, topic)
+    }
+
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })
     }
@@ -207,6 +309,62 @@ impl DashboardMutationSession for RealMutationSession {
         request: &'a PatchBrokerConfigRequest,
     ) -> SessionFuture<'a, AdminResult<PatchBrokerConfigOutcome>> {
         BrokerMutationAdmin::patch_config_if_generation(&mut self.inner, request)
+    }
+
+    fn topic_config_cas_state<'a>(
+        &'a mut self,
+        request: &'a QueryTopicConfigCasRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicConfigCasState>> {
+        TopicMutationPreflightAdmin::query_config_cas_state(&mut self.inner, request)
+    }
+
+    fn patch_topic_config<'a>(
+        &'a mut self,
+        request: &'a PatchTopicConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<PatchTopicConfigOutcome>> {
+        TopicMutationAdmin::patch_config_if_version(&mut self.inner, request)
+    }
+
+    fn upsert_topic_batch<'a>(
+        &'a mut self,
+        request: &'a TopicBatchUpsertRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicBatchMutationOutcome>> {
+        TopicBatchMutationAdmin::upsert_topic_batch(&mut self.inner, request)
+    }
+
+    fn delete_topic_batch<'a>(
+        &'a mut self,
+        request: &'a TopicBatchDeleteRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicBatchDeleteOutcome>> {
+        TopicBatchDeleteAdmin::delete_topic_batch(&mut self.inner, request)
+    }
+
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicsInBrokerRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicMutationOutcome>> {
+        TopicMutationAdmin::delete_topics_in_broker(&mut self.inner, request)
+    }
+
+    fn send_topic_message<'a>(
+        &'a mut self,
+        request: &'a TopicSendRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicSendResult>> {
+        TopicMutationAdmin::send_topic_test_message(&mut self.inner, request)
+    }
+
+    fn reset_topic_offset_detailed<'a>(
+        &'a mut self,
+        request: &'a TopicOffsetMutationRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+        TopicOffsetMutationAdmin::reset_consumer_offset_detailed(&mut self.inner, request)
+    }
+
+    fn skip_topic_accumulated_detailed<'a>(
+        &'a mut self,
+        request: &'a TopicOffsetMutationRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+        TopicOffsetMutationAdmin::skip_accumulated_detailed(&mut self.inner, request)
     }
 
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {

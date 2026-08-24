@@ -40,3 +40,22 @@ pub mod inspector_store;
 
 #[path = "features/broker_inspector.rs"]
 pub mod broker_inspector;
+
+#[path = "features/topics_store.rs"]
+pub mod topics_store;
+
+#[path = "features/topic_dialogs.rs"]
+pub mod topic_dialogs;
+
+#[path = "features/topic_mutations.rs"]
+mod topic_mutations;
+
+#[path = "features/topic_detail.rs"]
+pub mod topic_detail;
+
+#[path = "features/topics.rs"]
+pub mod topics;
+
+#[cfg(test)]
+#[path = "features/topics_product_tests.rs"]
+mod topics_product_tests;

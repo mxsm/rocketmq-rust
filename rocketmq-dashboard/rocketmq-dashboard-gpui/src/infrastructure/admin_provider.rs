@@ -32,9 +32,15 @@ use super::{
 
 #[path = "admin_provider/delivery03.rs"]
 mod delivery03;
+#[path = "admin_provider/topics.rs"]
+mod topics;
 
 pub(crate) use delivery03::{
     SafeBrokerInfo, SafeBrokerList, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
+};
+pub(crate) use topics::{
+    SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest, SafeTopicOffsetRequest,
+    SafeTopicPatchOutcome, SafeTopicQueuePatchRequest, SafeTopicSendRequest,
 };
 
 struct CancelOnDrop(CancellationToken);

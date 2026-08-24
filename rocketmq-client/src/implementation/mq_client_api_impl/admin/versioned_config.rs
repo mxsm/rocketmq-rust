@@ -16,6 +16,8 @@ use super::*;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::BrokerConfigPatchOutcome;
 #[cfg(feature = "admin-mutation")]
+use crate::admin::MutationTopicConfigVersioned;
+#[cfg(feature = "admin-mutation")]
 use crate::admin::SubscriptionGroupConfigPatch;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::SubscriptionGroupConfigPatchOutcome;
@@ -80,6 +82,32 @@ fn topic_config_versioned_from_response(response: &RemotingCommand) -> RocketMQR
             reason: format!("Topic config response version is missing: {error}"),
         })?;
     Ok(TopicConfigVersioned {
+        version: header.topic_version,
+        config: mapping.topic_config,
+    })
+}
+
+#[cfg(feature = "admin-mutation")]
+fn mutation_topic_config_versioned_from_response(
+    response: &RemotingCommand,
+) -> RocketMQResult<MutationTopicConfigVersioned> {
+    let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {
+        operation: "get_topic_config_with_version",
+        reason: "Topic config response body is empty".to_owned(),
+    })?;
+    let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref()).map_err(|error| {
+        RocketMQError::ResponseProcessFailed {
+            operation: "get_topic_config_with_version",
+            reason: format!("Topic config response body is invalid: {error}"),
+        }
+    })?;
+    let header = response
+        .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
+        .map_err(|error| RocketMQError::ResponseProcessFailed {
+            operation: "get_topic_config_with_version",
+            reason: format!("Topic config response version is missing: {error}"),
+        })?;
+    Ok(MutationTopicConfigVersioned {
         version: header.topic_version,
         config: mapping.topic_config,
     })
@@ -241,6 +269,34 @@ impl MQClientAPIImpl {
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return topic_config_versioned_from_response(&response);
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or_else(String::new, |remark| remark.to_string())
+        ))
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn get_topic_config_with_version_for_mutation(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<MutationTopicConfigVersioned> {
+        let request = self.create_request_command(
+            RequestCode::GetTopicConfig,
+            GetTopicConfigRequestHeader {
+                topic,
+                topic_request_header: None,
+            },
+        );
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return mutation_topic_config_versioned_from_response(&response);
         }
         Err(mq_client_err!(
             response.code(),

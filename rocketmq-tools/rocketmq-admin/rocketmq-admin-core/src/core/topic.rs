@@ -122,6 +122,91 @@ pub struct TopicCatalog {
     pub targets: Vec<TopicTargetOption>,
 }
 
+/// Stable completeness for a detailed Topic inspection.
+///
+/// An all-target failure is returned as [`crate::core::AdminError`] instead of
+/// being represented by this enum. This keeps a partial value from being
+/// mistaken for a successful empty response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicInspectionCompleteness {
+    Complete,
+    Partial {
+        successful_target_count: usize,
+        failed_target_count: usize,
+    },
+}
+
+impl TopicInspectionCompleteness {
+    #[must_use]
+    pub const fn is_complete(self) -> bool {
+        matches!(self, Self::Complete)
+    }
+}
+
+/// Closed stages at which one detailed Topic target can fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicInspectionStage {
+    CatalogConfig,
+    CatalogRoute,
+    Stats,
+    Configuration,
+    Consumer,
+}
+
+/// Stable failure categories that do not expose backend response bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicInspectionFailureCode {
+    NotFound,
+    InvalidData,
+    Unavailable,
+}
+
+/// One redacted target failure from a detailed Topic inspection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicInspectionFailure {
+    pub target: String,
+    pub stage: TopicInspectionStage,
+    pub code: TopicInspectionFailureCode,
+    pub retryable: bool,
+}
+
+/// Catalog metadata whose absence remains explicit instead of being replaced
+/// with zeroes or guessed values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailedTopicCatalogItem {
+    pub topic: String,
+    pub category: String,
+    pub message_type: Option<String>,
+    pub clusters: Vec<String>,
+    pub brokers: Vec<String>,
+    pub read_queue_count: Option<u32>,
+    pub write_queue_count: Option<u32>,
+    pub perm: Option<i32>,
+    pub order: Option<bool>,
+    pub system_topic: bool,
+}
+
+/// Exact writable master target discovered during catalog inspection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBrokerTarget {
+    pub cluster_name: String,
+    pub broker_name: String,
+    pub broker_addr: String,
+}
+
+/// Detailed Topic catalog with explicit partial-discovery evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailedTopicCatalog {
+    pub items: Vec<DetailedTopicCatalogItem>,
+    pub targets: Vec<TopicTargetOption>,
+    pub broker_targets: Vec<TopicBrokerTarget>,
+    pub completeness: TopicInspectionCompleteness,
+    pub failures: Vec<TopicInspectionFailure>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TopicCurrentStatsItem {
     pub topic: String,
@@ -162,6 +247,14 @@ pub struct TopicStats {
     pub offsets: Vec<TopicQueueOffset>,
 }
 
+/// Detailed queue offsets with per-broker failure evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailedTopicStats {
+    pub stats: TopicStats,
+    pub completeness: TopicInspectionCompleteness,
+    pub failures: Vec<TopicInspectionFailure>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTopicConfigRequest {
     pub topic: String,
@@ -194,6 +287,32 @@ pub struct TopicConfigDetail {
     pub message_type: String,
     pub attributes: BTreeMap<String, String>,
     pub inconsistent_fields: Vec<String>,
+}
+
+/// One exact broker configuration with the version required by queue-count
+/// compare-and-set editing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailedTopicConfigTarget {
+    pub topic_name: String,
+    pub broker_name: String,
+    pub broker_addr: String,
+    pub cluster_name: String,
+    pub version: u64,
+    pub read_queue_nums: u32,
+    pub write_queue_nums: u32,
+    pub perm: u32,
+    pub order: bool,
+    pub message_type: String,
+}
+
+/// Per-target Topic configuration without raw attributes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailedTopicConfig {
+    pub topic: String,
+    pub targets: Vec<DetailedTopicConfigTarget>,
+    pub inconsistent_fields: Vec<String>,
+    pub completeness: TopicInspectionCompleteness,
+    pub failures: Vec<TopicInspectionFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +408,7 @@ impl TopicBatchUpsertRequest {
         self.message_type.as_deref()
     }
 
+    #[cfg(feature = "mutation-client-adapter")]
     pub(crate) fn canonical_for_execution(&self) -> AdminResult<CanonicalTopicBatchUpsertRequest> {
         CanonicalTopicBatchUpsertRequest::try_new(
             self.topic.clone(),
@@ -486,6 +606,7 @@ impl TopicBatchDeleteRequest {
         &self.cluster_names
     }
 
+    #[cfg(feature = "mutation-client-adapter")]
     pub(crate) fn canonical_for_execution(&self) -> AdminResult<Self> {
         Self::try_new(self.topic.clone(), self.cluster_names.clone())
     }
@@ -529,6 +650,78 @@ impl DeleteTopicsInBrokerRequest {
 pub struct TopicMutationOutcome {
     pub message: String,
     pub target_count: usize,
+}
+
+/// Closed failure categories for one detailed Topic offset target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicOffsetMutationFailureCode {
+    InvalidData,
+    Unavailable,
+}
+
+/// One broker/queue result from a detailed reset or skip operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicOffsetTargetOutcome {
+    pub broker_name: String,
+    pub queue_id: Option<i32>,
+    pub applied: bool,
+    pub failure: Option<TopicOffsetMutationFailureCode>,
+    pub retryable: bool,
+}
+
+/// Failure-aware results that retain already-applied offset targets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicOffsetMutationOutcome {
+    pub targets: Vec<TopicOffsetTargetOutcome>,
+}
+
+/// Exact cluster-scoped request for a detailed reset or skip operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicOffsetMutationRequest {
+    topic: String,
+    consumer_group: String,
+    cluster_name: String,
+    timestamp: Option<u64>,
+    force: bool,
+}
+
+impl TopicOffsetMutationRequest {
+    pub fn try_new(
+        topic: impl Into<String>,
+        consumer_group: impl Into<String>,
+        cluster_name: impl Into<String>,
+        timestamp: Option<u64>,
+        force: bool,
+    ) -> AdminResult<Self> {
+        Ok(Self {
+            topic: required("topic", topic)?,
+            consumer_group: required("consumer_group", consumer_group)?,
+            cluster_name: required("cluster_name", cluster_name)?,
+            timestamp,
+            force,
+        })
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    pub fn cluster_name(&self) -> &str {
+        &self.cluster_name
+    }
+
+    pub const fn timestamp(&self) -> Option<u64> {
+        self.timestamp
+    }
+
+    pub const fn force(&self) -> bool {
+        self.force
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +826,15 @@ pub struct TopicConsumers {
     pub items: Vec<TopicConsumerInfo>,
 }
 
+/// Consumer summaries with failures retained per consumer group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetailedTopicConsumers {
+    pub topic: String,
+    pub items: Vec<TopicConsumerInfo>,
+    pub completeness: TopicInspectionCompleteness,
+    pub failures: Vec<TopicInspectionFailure>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResetTopicConsumerOffsetRequest {
     pub consumer_group: String,
@@ -720,6 +922,77 @@ pub trait TopicQueryAdmin: Send {
     fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers>;
 }
 
+/// Exact parameters for advancing one consumer group's Topic offsets to the
+/// latest available position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkipTopicAccumulatedRequest {
+    topic: String,
+    consumer_group: String,
+    cluster_name: Option<String>,
+    force: bool,
+}
+
+impl SkipTopicAccumulatedRequest {
+    pub fn try_new(
+        topic: impl Into<String>,
+        consumer_group: impl Into<String>,
+        cluster_name: Option<String>,
+        force: bool,
+    ) -> AdminResult<Self> {
+        Ok(Self {
+            topic: required("topic", topic)?,
+            consumer_group: required("consumer_group", consumer_group)?,
+            cluster_name: cluster_name
+                .map(|cluster| required("cluster_name", cluster))
+                .transpose()?,
+            force,
+        })
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    pub fn cluster_name(&self) -> Option<&str> {
+        self.cluster_name.as_deref()
+    }
+
+    pub const fn force(&self) -> bool {
+        self.force
+    }
+}
+
+/// Concurrent, failure-aware Topic inspection for operator-facing clients.
+///
+/// This extension is separate from [`TopicQueryAdmin`] so existing query
+/// implementations remain source compatible.
+pub trait TopicInspectionAdmin: Send + Sync {
+    fn inspect_topic_catalog<'a>(&'a self, request: &'a TopicCatalogRequest) -> AdminFuture<'a, DetailedTopicCatalog>;
+
+    fn inspect_topic_route<'a>(&'a self, request: &'a GetTopicRouteRequest) -> AdminFuture<'a, Option<TopicRoute>>;
+
+    fn inspect_topic_stats<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, DetailedTopicStats>;
+
+    fn inspect_topic_config<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, DetailedTopicConfig>;
+
+    fn inspect_topic_consumers<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, DetailedTopicConsumers>;
+}
+
+/// Narrow preflight query available to an isolated mutation identity.
+///
+/// Implementing this trait does not grant catalog, route, stats, consumer, or
+/// any other general read capability.
+pub trait TopicMutationPreflightAdmin: Send {
+    fn query_config_cas_state<'a>(
+        &'a mut self,
+        request: &'a QueryTopicConfigCasRequest,
+    ) -> AdminFuture<'a, TopicConfigCasState>;
+}
+
 /// Topic mutations require the explicit mutation adapter feature.
 pub trait TopicMutationAdmin: Send {
     fn patch_config_if_version<'a>(
@@ -774,6 +1047,28 @@ pub trait TopicBatchDeleteAdmin: Send {
         &'a mut self,
         request: &'a TopicBatchDeleteRequest,
     ) -> AdminFuture<'a, TopicBatchDeleteOutcome>;
+}
+
+/// Separate skip-accumulated mutation capability. Implementations must advance
+/// the exact Topic/group pair once and must not emulate success locally.
+pub trait TopicSkipMutationAdmin: Send {
+    fn skip_accumulated<'a>(
+        &'a mut self,
+        request: &'a SkipTopicAccumulatedRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome>;
+}
+
+/// Detailed, exact-cluster offset mutations that retain per-target partial outcomes.
+pub trait TopicOffsetMutationAdmin: Send {
+    fn reset_consumer_offset_detailed<'a>(
+        &'a mut self,
+        request: &'a TopicOffsetMutationRequest,
+    ) -> AdminFuture<'a, TopicOffsetMutationOutcome>;
+
+    fn skip_accumulated_detailed<'a>(
+        &'a mut self,
+        request: &'a TopicOffsetMutationRequest,
+    ) -> AdminFuture<'a, TopicOffsetMutationOutcome>;
 }
 
 impl<T: TopicAdmin + ?Sized> TopicQueryAdmin for T {

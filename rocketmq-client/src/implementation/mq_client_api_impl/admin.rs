@@ -23,6 +23,7 @@ use rocketmq_protocol::protocol::header::get_all_topic_config_request_header::Ge
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::protocol::DataVersion;
 
+#[cfg(feature = "admin-full")]
 mod compatibility;
 mod versioned_config;
 

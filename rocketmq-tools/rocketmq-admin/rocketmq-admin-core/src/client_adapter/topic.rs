@@ -284,7 +284,7 @@ impl TopicAdmin for AdminSession {
     fn get_topic_stats<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicStats> {
         Box::pin(async move {
             self.ensure_open()?;
-            let route = require_topic_route(&mut self.inner, topic).await?;
+            let route = require_topic_route(&self.inner, topic).await?;
             let mut stats = TopicStatsTable::new();
             let mut successful_brokers = 0usize;
             let mut last_error = None;
@@ -342,7 +342,7 @@ impl TopicAdmin for AdminSession {
                 .examine_broker_cluster_info()
                 .await
                 .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
-            let route = require_topic_route(&mut self.inner, &request.topic).await?;
+            let route = require_topic_route(&self.inner, &request.topic).await?;
             let configs = collect_route_topic_configs(&mut self.inner, &route, &request.topic).await?;
             let selected = match request.broker_name.as_deref() {
                 Some(name) => configs
@@ -401,7 +401,7 @@ impl TopicAdmin for AdminSession {
             let clusters = if let Some(cluster_name) = request.cluster_name.as_ref() {
                 vec![cluster_name.clone()]
             } else {
-                let route = require_topic_route(&mut self.inner, topic).await?;
+                let route = require_topic_route(&self.inner, topic).await?;
                 let mut clusters = route
                     .broker_datas
                     .iter()
@@ -567,7 +567,7 @@ impl TopicAdmin for AdminSession {
                 return Err(AdminError::invalid_argument("messageBody", "must not be empty"));
             }
 
-            let route = require_topic_route(&mut self.inner, &request.topic).await?;
+            let route = require_topic_route(&self.inner, &request.topic).await?;
             let configs = collect_route_topic_configs(&mut self.inner, &route, &request.topic).await?;
             let selected = configs.first().ok_or_else(|| {
                 AdminError::invalid_argument("topic", format!("topic `{}` has no online broker", request.topic))
@@ -682,6 +682,7 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
 }
 
 mod batch;
+mod inspection;
 mod query;
 
 use query::*;
