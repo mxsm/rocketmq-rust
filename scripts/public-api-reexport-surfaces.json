@@ -1,0 +1,43 @@
+{
+  "profiles": {
+    "rocketmq-auth:default": {
+      "item_paths": [
+        "rocketmq_auth::MaintenanceAuthorizationContext",
+        "rocketmq_auth::MaintenanceAuthorizationError",
+        "rocketmq_auth::MaintenanceAuthorizationGrant",
+        "rocketmq_auth::MaintenanceAuthorizer",
+        "rocketmq_auth::MaintenanceCapability",
+        "rocketmq_auth::MaintenancePolicy",
+        "rocketmq_auth::MaintenancePrincipalBinding",
+        "rocketmq_auth::MaintenanceRequestClass",
+        "rocketmq_auth::MaintenanceResourceBudget",
+        "rocketmq_auth::MaintenanceRole",
+        "rocketmq_auth::MaintenanceRoleGrant",
+        "rocketmq_auth::MAINTENANCE_POLICY_SCHEMA_VERSION",
+        "rocketmq_auth::SecurityPrincipal",
+        "rocketmq_auth::SecurityResource"
+      ],
+      "package": "rocketmq-auth"
+    },
+    "rocketmq-filter:default": {
+      "item_paths": [
+        "rocketmq_filter::filter::FilterFactory",
+        "rocketmq_filter::filter::Filter",
+        "rocketmq_filter::filter::FilterError",
+        "rocketmq_filter::filter::FilterSpi",
+        "rocketmq_filter::filter::SqlFilter",
+        "rocketmq_filter::filter::FilterCompileError",
+        "rocketmq_filter::filter::FilterCompileErrorKind",
+        "rocketmq_filter::filter::FilterCompileSource",
+        "rocketmq_filter::filter::FilterCompileStage",
+        "rocketmq_filter::filter::Filter::compile",
+        "rocketmq_filter::filter::Filter::try_compile",
+        "rocketmq_filter::filter::Filter::of_type",
+        "rocketmq_filter::filter::FilterError::new",
+        "rocketmq_filter::filter::FilterError::message"
+      ],
+      "package": "rocketmq-filter"
+    }
+  },
+  "schema_version": 1
+}

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import re
 import shutil
@@ -33,8 +34,10 @@ import m09_compatibility_matrix
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_API_INTENT = ROOT / "scripts" / "public-api-intent.json"
 DEFAULT_FREEZE_POLICY = ROOT / "scripts" / "public-api-freeze-policy.json"
+DEFAULT_REEXPORT_SURFACE_INVENTORY = ROOT / "scripts" / "public-api-reexport-surfaces.json"
 SCHEMA_VERSION = 3
 IDENTITY = "structural"
+REEXPORT_SURFACE_INVENTORY_SCHEMA_VERSION = 1
 LIB_KINDS = {"lib", "rlib", "proc-macro"}
 RUSTDOC_TOOLCHAIN = "nightly-2026-07-05"
 STRUCTURAL_ITEM_FIELDS = (
@@ -385,7 +388,483 @@ def _record(
     }
 
 
-def semantic_public_items(package: str, document: dict[str, Any]) -> list[dict[str, str]]:
+def _normalized_reexport_selection(selected_reexport_paths: Iterable[str]) -> set[str]:
+    selected = list(selected_reexport_paths)
+    if any(not isinstance(item_path, str) or not item_path for item_path in selected):
+        raise SnapshotError("selected re-export paths must be non-empty strings")
+    if any("*" in item_path for item_path in selected):
+        raise SnapshotError("selected re-export paths must be exact paths, not wildcards")
+    if len(selected) != len(set(selected)):
+        raise SnapshotError("selected re-export paths must not contain duplicates")
+    return set(selected)
+
+
+def _public_reexport_record(
+    package: str,
+    item_path: str,
+    use_item: dict[str, Any],
+    *,
+    alias_kind: str,
+    target_path: str,
+    target_kind: str,
+    target_signature: Any,
+) -> dict[str, str]:
+    return {
+        "package": package,
+        "module": item_path.rsplit("::", 1)[0] if "::" in item_path else "",
+        "item_path": item_path,
+        "kind": "reexport",
+        "visibility": "public",
+        "signature": json.dumps(
+            {
+                "alias_kind": alias_kind,
+                "target_kind": target_kind,
+                "target_path": target_path,
+                "target_signature": target_signature,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "feature": _item_feature(use_item),
+    }
+
+
+def _rustdoc_paths(document: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    paths = document.get("paths", {})
+    if not isinstance(paths, dict):
+        return {}
+    result: dict[str, tuple[str, str]] = {}
+    for item_id, path_record in paths.items():
+        if not isinstance(path_record, dict):
+            continue
+        path = path_record.get("path")
+        kind = path_record.get("kind")
+        if (
+            not isinstance(path, list)
+            or not path
+            or any(not isinstance(part, str) or not part for part in path)
+            or not isinstance(kind, str)
+            or not kind
+        ):
+            continue
+        result[str(item_id)] = ("::".join(path), kind)
+    return result
+
+
+@dataclass(frozen=True)
+class _ReexportTarget:
+    """The canonical rustdoc target behind a public export binding."""
+
+    path: str
+    kind: str
+    item_id: str
+    item: dict[str, Any] | None
+
+    def identity(self) -> tuple[str, str, str]:
+        return self.path, self.kind, self.item_id
+
+
+@dataclass(frozen=True)
+class _ReexportBinding:
+    """A named public binding within a semantic rustdoc module."""
+
+    target: _ReexportTarget
+    alias_kind: str
+    source_item: dict[str, Any]
+    origin: str
+
+
+def _collect_selected_reexports(
+    package: str,
+    document: dict[str, Any],
+    records: dict[str, dict[str, str]],
+    selected_reexport_paths: set[str],
+) -> None:
+    """Collect selected public re-export aliases from rustdoc's semantic module graph."""
+
+    index = document.get("index", {})
+    if not isinstance(index, dict):
+        raise SnapshotError(f"rustdoc index for {package} must be an object")
+    paths = _rustdoc_paths(document)
+    root_id = str(document.get("root", ""))
+    root = _item_by_id(index, root_id)
+    root_path = paths.get(root_id, ("", ""))[0]
+    if root is None or not root_path:
+        raise SnapshotError(f"rustdoc root for selected re-exports is missing for {package}")
+    root_kind, root_value = _item_kind_and_value(root)
+    if root_kind != "module" or not isinstance(root_value, dict):
+        raise SnapshotError(f"rustdoc root for selected re-exports is not a module for {package}")
+
+    def resolve_target(item_id: Any) -> _ReexportTarget | None:
+        current_id = str(item_id)
+        visited: set[str] = set()
+        while current_id not in visited:
+            visited.add(current_id)
+            target_item = _item_by_id(index, current_id)
+            target_path = paths.get(current_id)
+            if target_item is not None:
+                target_kind, target_value = _item_kind_and_value(target_item)
+                if target_kind == "use" and isinstance(target_value, dict):
+                    nested_id = target_value.get("id")
+                    if nested_id is None:
+                        return None
+                    current_id = str(nested_id)
+                    continue
+                if target_path is not None:
+                    return _ReexportTarget(
+                        path=target_path[0],
+                        kind=target_path[1],
+                        item_id=current_id,
+                        item=target_item,
+                    )
+                return None
+            if target_path is not None:
+                return _ReexportTarget(
+                    path=target_path[0],
+                    kind=target_path[1],
+                    item_id=current_id,
+                    item=None,
+                )
+            return None
+        return None
+
+    def binding_sort_key(binding: _ReexportBinding) -> tuple[str, str, str, str]:
+        return (
+            binding.target.path,
+            binding.target.kind,
+            binding.alias_kind,
+            _item_feature(binding.source_item),
+        )
+
+    def add_explicit_binding(
+        bindings: dict[str, _ReexportBinding],
+        name: str,
+        binding: _ReexportBinding,
+        module_path: str,
+    ) -> None:
+        previous = bindings.get(name)
+        if previous is None:
+            bindings[name] = binding
+            return
+        if previous.target.identity() != binding.target.identity():
+            raise SnapshotError(f"conflicting explicit public bindings for {module_path}::{name}")
+        if binding_sort_key(binding) < binding_sort_key(previous):
+            bindings[name] = binding
+
+    def public_bindings(
+        module_id: Any,
+        module_stack: set[str],
+    ) -> dict[str, _ReexportBinding]:
+        module_key = str(module_id)
+        if module_key in module_stack:
+            return {}
+        module = _item_by_id(index, module_key)
+        if module is None:
+            return {}
+        module_kind, module_value = _item_kind_and_value(module)
+        if module_kind != "module" or not isinstance(module_value, dict):
+            return {}
+        module_path = paths.get(module_key, (f"<module:{module_key}>", "module"))[0]
+        next_stack = {*module_stack, module_key}
+        explicit: dict[str, _ReexportBinding] = {}
+        glob_sources: list[tuple[_ReexportTarget, dict[str, Any]]] = []
+        for child_id in _reference_list(module_value.get("items")):
+            child = _item_by_id(index, child_id)
+            if child is None or child.get("visibility") != "public":
+                continue
+            child_kind, child_value = _item_kind_and_value(child)
+            if child_kind == "use" and isinstance(child_value, dict):
+                target_id = child_value.get("id")
+                if target_id is None:
+                    continue
+                if child_value.get("is_glob"):
+                    target = resolve_target(target_id)
+                    if target is not None and target.kind == "module":
+                        glob_sources.append((target, child))
+                    continue
+                name = child_value.get("name")
+                target = resolve_target(target_id)
+                if isinstance(name, str) and name and target is not None:
+                    canonical_name = target.path.rsplit("::", 1)[-1]
+                    add_explicit_binding(
+                        explicit,
+                        name,
+                        _ReexportBinding(
+                            target=target,
+                            alias_kind="plain" if name == canonical_name else "renamed",
+                            source_item=child,
+                            origin="named",
+                        ),
+                        module_path,
+                    )
+                continue
+            name = child.get("name")
+            target = resolve_target(child_id)
+            if isinstance(name, str) and name and target is not None:
+                add_explicit_binding(
+                    explicit,
+                    name,
+                    _ReexportBinding(
+                        target=target,
+                        alias_kind="direct",
+                        source_item=child,
+                        origin="direct",
+                    ),
+                    module_path,
+                )
+
+        globbed: dict[str, list[_ReexportBinding]] = {}
+        for target, source_item in glob_sources:
+            for name, binding in public_bindings(target.item_id, next_stack).items():
+                if name in explicit:
+                    continue
+                globbed.setdefault(name, []).append(
+                    _ReexportBinding(
+                        target=binding.target,
+                        alias_kind="glob",
+                        source_item=source_item,
+                        origin="glob",
+                    )
+                )
+        resolved = dict(explicit)
+        for name, bindings in globbed.items():
+            identities = {binding.target.identity() for binding in bindings}
+            if len(identities) != 1:
+                raise SnapshotError(f"ambiguous public glob bindings for {module_path}::{name}")
+            resolved[name] = min(bindings, key=binding_sort_key)
+        return {name: resolved[name] for name in sorted(resolved)}
+
+    def targets_at_path(canonical_path: str) -> list[_ReexportTarget]:
+        targets = [
+            _ReexportTarget(
+                path=path,
+                kind=kind,
+                item_id=item_id,
+                item=_item_by_id(index, item_id),
+            )
+            for item_id, (path, kind) in paths.items()
+            if path == canonical_path
+        ]
+        return sorted(targets, key=lambda target: (target.kind, target.item_id))
+
+    def unique_target_at_path(
+        canonical_path: str,
+        *,
+        context: str,
+    ) -> _ReexportTarget | None:
+        targets = targets_at_path(canonical_path)
+        if len(targets) > 1:
+            raise SnapshotError(f"ambiguous rustdoc targets for {context}: {canonical_path}")
+        return targets[0] if targets else None
+
+    def public_external_glob_sources(module_id: Any) -> list[tuple[_ReexportTarget, dict[str, Any]]]:
+        module = _item_by_id(index, str(module_id))
+        if module is None:
+            return []
+        module_kind, module_value = _item_kind_and_value(module)
+        if module_kind != "module" or not isinstance(module_value, dict):
+            return []
+        result: list[tuple[_ReexportTarget, dict[str, Any]]] = []
+        for child_id in _reference_list(module_value.get("items")):
+            child = _item_by_id(index, child_id)
+            if child is None or child.get("visibility") != "public":
+                continue
+            child_kind, child_value = _item_kind_and_value(child)
+            if child_kind != "use" or not isinstance(child_value, dict) or not child_value.get("is_glob"):
+                continue
+            target_id = child_value.get("id")
+            if target_id is None:
+                continue
+            target = resolve_target(target_id)
+            if target is not None and target.kind == "module" and target.item is None:
+                result.append((target, child))
+        return result
+
+    matched: set[str] = set()
+
+    def add_associated(
+        target: _ReexportTarget,
+        alias_path: str,
+        alias_kind: str,
+        source_item: dict[str, Any],
+    ) -> None:
+        if target.item is None:
+            return
+        _, target_value = _item_kind_and_value(target.item)
+        direct_ids = _direct_associated_ids(target.kind, target_value)
+        inherent_ids = _inherent_associated_ids(target.kind, target_value, index)
+        for position, child_id in enumerate((*direct_ids, *inherent_ids)):
+            child = _item_by_id(index, child_id)
+            if child is None:
+                continue
+            relationship_kind = target.kind if position < len(direct_ids) else "impl"
+            if not _is_public_associated(relationship_kind, child):
+                continue
+            child_name = child.get("name")
+            if not isinstance(child_name, str) or not child_name:
+                continue
+            child_alias_path = f"{alias_path}::{child_name}"
+            if child_alias_path not in selected_reexport_paths:
+                continue
+            child_kind, _ = _item_kind_and_value(child)
+            child_target_path = paths.get(str(child_id), (f"{target.path}::{child_name}", child_kind))[0]
+            matched.add(child_alias_path)
+            records.setdefault(
+                child_alias_path,
+                _public_reexport_record(
+                    package,
+                    child_alias_path,
+                    source_item,
+                    alias_kind=f"{alias_kind}-associated",
+                    target_path=child_target_path,
+                    target_kind=child_kind,
+                    target_signature=_semantic_value(_item_kind_and_value(child)[1], index),
+                ),
+            )
+
+    def add_target(
+        alias_path: str,
+        alias_kind: str,
+        source_item: dict[str, Any],
+        target: _ReexportTarget,
+    ) -> None:
+        if alias_path in selected_reexport_paths:
+            target_signature = None
+            if target.item is not None:
+                target_signature = _semantic_value(_item_kind_and_value(target.item)[1], index)
+            matched.add(alias_path)
+            records.setdefault(
+                alias_path,
+                _public_reexport_record(
+                    package,
+                    alias_path,
+                    source_item,
+                    alias_kind=alias_kind,
+                    target_path=target.path,
+                    target_kind=target.kind,
+                    target_signature=target_signature,
+                ),
+            )
+        add_associated(target, alias_path, alias_kind, source_item)
+
+    def add_external_module_descendants(
+        target: _ReexportTarget,
+        alias_path: str,
+        alias_kind: str,
+        source_item: dict[str, Any],
+    ) -> None:
+        """Map exact selected descendants of an external module through its public alias."""
+
+        prefix = f"{alias_path}::"
+        for selected_path in sorted(path for path in selected_reexport_paths if path.startswith(prefix)):
+            suffix = selected_path.removeprefix(prefix)
+            descendant = unique_target_at_path(
+                f"{target.path}::{suffix}",
+                context=selected_path,
+            )
+            if descendant is not None:
+                add_target(
+                    selected_path,
+                    f"{alias_kind}-external-descendant",
+                    source_item,
+                    descendant,
+                )
+
+    def add_external_glob_descendants(
+        module_id: Any,
+        public_path: str,
+        bindings: dict[str, _ReexportBinding],
+    ) -> None:
+        """Resolve selected descendants of external glob modules from rustdoc path entries only."""
+
+        sources = public_external_glob_sources(module_id)
+        if not sources:
+            return
+        module_path = paths.get(str(module_id), (f"<module:{module_id}>", "module"))[0]
+        prefix = f"{public_path}::"
+        selected_by_name: dict[str, list[tuple[str, str]]] = {}
+        for selected_path in selected_reexport_paths:
+            if not selected_path.startswith(prefix):
+                continue
+            suffix = selected_path.removeprefix(prefix)
+            name, _, _ = suffix.partition("::")
+            if name and name not in bindings:
+                selected_by_name.setdefault(name, []).append((selected_path, suffix))
+        for name, selected_paths in sorted(selected_by_name.items()):
+            candidates: list[tuple[_ReexportTarget, _ReexportTarget, dict[str, Any]]] = []
+            for source_target, source_item in sources:
+                target = unique_target_at_path(
+                    f"{source_target.path}::{name}",
+                    context=f"{module_path}::{name}",
+                )
+                if target is not None:
+                    candidates.append((target, source_target, source_item))
+            identities = {target.identity() for target, _, _ in candidates}
+            if len(identities) > 1:
+                raise SnapshotError(f"ambiguous public glob bindings for {module_path}::{name}")
+            if not candidates:
+                continue
+            _, source_target, source_item = min(candidates, key=lambda entry: entry[1].item_id)
+            for selected_path, suffix in sorted(selected_paths):
+                descendant = unique_target_at_path(
+                    f"{source_target.path}::{suffix}",
+                    context=selected_path,
+                )
+                if descendant is None:
+                    continue
+                add_target(
+                    selected_path,
+                    "glob-external-descendant",
+                    source_item,
+                    descendant,
+                )
+
+    def walk_public_alias(
+        module_id: Any,
+        public_path: str,
+        module_stack: set[str],
+        through_module_alias: bool,
+    ) -> None:
+        module_key = str(module_id)
+        if module_key in module_stack:
+            return
+        bindings = public_bindings(module_key, module_stack)
+        for name, binding in bindings.items():
+            alias_path = f"{public_path}::{name}"
+            alias_kind = binding.alias_kind
+            if binding.origin == "direct" and through_module_alias:
+                alias_kind = "module-descendant"
+            add_target(alias_path, alias_kind, binding.source_item, binding.target)
+            if binding.target.kind == "module" and binding.target.item is not None:
+                walk_public_alias(
+                    binding.target.item_id,
+                    alias_path,
+                    {*module_stack, module_key},
+                    through_module_alias or binding.origin != "direct",
+                )
+            elif binding.target.kind == "module":
+                add_external_module_descendants(
+                    binding.target,
+                    alias_path,
+                    alias_kind,
+                    binding.source_item,
+                )
+        add_external_glob_descendants(module_key, public_path, bindings)
+
+    walk_public_alias(root_id, root_path, set(), False)
+    missing = sorted(selected_reexport_paths - matched)
+    if missing:
+        raise SnapshotError(
+            f"selected public re-export paths were not found for {package}: {', '.join(missing)}"
+        )
+
+
+def semantic_public_items(
+    package: str,
+    document: dict[str, Any],
+    *,
+    selected_reexport_paths: Iterable[str] = (),
+) -> list[dict[str, str]]:
     """Build stable, readable API records from rustdoc's public API graph."""
 
     index = document.get("index", {})
@@ -474,6 +953,9 @@ def semantic_public_items(package: str, document: dict[str, Any]) -> list[dict[s
 
         if root_kind == "module" and root_path is not None:
             add_public_proc_macros(root_id, root_path, root_value)
+    selected = _normalized_reexport_selection(selected_reexport_paths)
+    if selected:
+        _collect_selected_reexports(package, document, records, selected)
     return sorted(
         records.values(),
         key=lambda item: tuple(item[field] for field in STRUCTURAL_ITEM_FIELDS),
@@ -506,7 +988,12 @@ def _rustdoc_command(profile: dict[str, Any]) -> list[str]:
     return command
 
 
-def snapshot_profile(profile: dict[str, Any], *, refresh: bool = True) -> dict[str, Any]:
+def snapshot_profile(
+    profile: dict[str, Any],
+    *,
+    refresh: bool = True,
+    selected_reexport_paths: Iterable[str] = (),
+) -> dict[str, Any]:
     cache_path = _profile_cache_path(profile["id"])
     if refresh:
         run(_rustdoc_command(profile))
@@ -524,7 +1011,11 @@ def snapshot_profile(profile: dict[str, Any], *, refresh: bool = True) -> dict[s
     result.update(
         {
             "crate_version": document.get("crate_version"),
-            "public_api": semantic_public_items(profile["package"], document),
+            "public_api": semantic_public_items(
+                profile["package"],
+                document,
+                selected_reexport_paths=selected_reexport_paths,
+            ),
         }
     )
     return result
@@ -573,11 +1064,63 @@ def load_freeze_policy(path: Path = DEFAULT_FREEZE_POLICY) -> dict[str, Any]:
     return policy
 
 
+def load_reexport_surface_inventory(
+    profiles: Iterable[dict[str, Any]],
+    path: Path = DEFAULT_REEXPORT_SURFACE_INVENTORY,
+) -> dict[str, tuple[str, ...]]:
+    """Load exact re-export paths selected for compatibility-surface tracking."""
+
+    try:
+        inventory = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SnapshotError(f"cannot read public API re-export inventory {path}: {error}") from error
+    if not isinstance(inventory, dict) or set(inventory) != {"schema_version", "profiles"}:
+        raise SnapshotError("public API re-export inventory must contain only schema_version and profiles")
+    if inventory.get("schema_version") != REEXPORT_SURFACE_INVENTORY_SCHEMA_VERSION:
+        raise SnapshotError(
+            "public API re-export inventory schema_version must be "
+            f"{REEXPORT_SURFACE_INVENTORY_SCHEMA_VERSION}"
+        )
+    selections = inventory.get("profiles")
+    if not isinstance(selections, dict):
+        raise SnapshotError("public API re-export inventory profiles must be an object")
+    known_profiles = {profile.get("id"): profile for profile in profiles}
+    result: dict[str, tuple[str, ...]] = {}
+    for profile_id, selection in selections.items():
+        if not isinstance(profile_id, str) or profile_id not in known_profiles:
+            raise SnapshotError(f"public API re-export inventory has unknown profile: {profile_id!r}")
+        if not isinstance(selection, dict) or set(selection) != {"package", "item_paths"}:
+            raise SnapshotError(
+                f"public API re-export inventory selection {profile_id} must contain only package and item_paths"
+            )
+        profile = known_profiles[profile_id]
+        if selection.get("package") != profile.get("package"):
+            raise SnapshotError(
+                f"public API re-export inventory selection {profile_id} has the wrong package"
+            )
+        item_paths = selection.get("item_paths")
+        if not isinstance(item_paths, list) or not item_paths:
+            raise SnapshotError(
+                f"public API re-export inventory selection {profile_id} must have non-empty item_paths"
+            )
+        normalized = _normalized_reexport_selection(item_paths)
+        target = profile.get("target")
+        if not isinstance(target, str) or any(
+            not item_path.startswith(f"{target}::") for item_path in normalized
+        ):
+            raise SnapshotError(
+                f"public API re-export inventory selection {profile_id} has an item path outside its target"
+            )
+        result[profile_id] = tuple(sorted(normalized))
+    return result
+
+
 def generate_snapshot(
     *,
     refresh: bool = True,
     scope: str = "core-release",
     freeze_policy_path: Path = DEFAULT_FREEZE_POLICY,
+    reexport_surface_inventory_path: Path = DEFAULT_REEXPORT_SURFACE_INVENTORY,
 ) -> dict[str, Any]:
     metadata = workspace_metadata()
     targets = workspace_library_targets(scope=scope, metadata=metadata)
@@ -588,13 +1131,21 @@ def generate_snapshot(
     )
     if not refresh:
         validate_existing_artifacts(profiles)
+    reexport_selections = load_reexport_surface_inventory(
+        profiles,
+        reexport_surface_inventory_path,
+    )
     profile_snapshots: dict[str, dict[str, Any]] = {}
     for index, profile in enumerate(profiles, start=1):
         print(
             f"PUBLIC_API_SNAPSHOT_PROFILE {index}/{len(profiles)} {profile['id']}",
             flush=True,
         )
-        profile_snapshots[profile["id"]] = snapshot_profile(profile, refresh=refresh)
+        profile_snapshots[profile["id"]] = snapshot_profile(
+            profile,
+            refresh=refresh,
+            selected_reexport_paths=reexport_selections.get(profile["id"], ()),
+        )
 
     packages: dict[str, dict[str, Any]] = {}
     for package, target in targets:
@@ -754,7 +1305,35 @@ def _validate_frozen_contracts(baseline: dict[str, Any]) -> None:
             )
 
 
-def validate_baseline_contract(baseline: dict[str, Any]) -> None:
+def _validate_reexport_surface_inventory_coverage(
+    baseline: dict[str, Any],
+    reexport_surface_inventory_path: Path,
+) -> None:
+    profiles = baseline["profiles"]
+    profile_specs = [
+        {
+            "id": profile_id,
+            "package": profile.get("package"),
+            "target": profile.get("target"),
+        }
+        for profile_id, profile in profiles.items()
+        if isinstance(profile, dict)
+    ]
+    selections = load_reexport_surface_inventory(profile_specs, reexport_surface_inventory_path)
+    for profile_id, item_paths in selections.items():
+        available = {item["item_path"] for item in profiles[profile_id]["public_api"]}
+        missing = sorted(set(item_paths) - available)
+        if missing:
+            raise SnapshotError(
+                f"public API re-export inventory paths are absent from {profile_id}: {', '.join(missing)}"
+            )
+
+
+def validate_baseline_contract(
+    baseline: dict[str, Any],
+    *,
+    reexport_surface_inventory_path: Path | None = None,
+) -> None:
     if baseline.get("schema_version") != SCHEMA_VERSION:
         raise SnapshotError(f"baseline schema_version must be {SCHEMA_VERSION}")
     if baseline.get("identity") != IDENTITY:
@@ -771,6 +1350,8 @@ def validate_baseline_contract(baseline: dict[str, Any]) -> None:
     _validate_profiles(baseline)
     _validate_decisions(baseline.get("compatibility_decisions"))
     _validate_frozen_contracts(baseline)
+    if reexport_surface_inventory_path is not None:
+        _validate_reexport_surface_inventory_coverage(baseline, reexport_surface_inventory_path)
 
 
 def _approval_for(
@@ -1014,6 +1595,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--identity", choices=(IDENTITY,), default=IDENTITY)
     parser.add_argument("--freeze-policy", type=Path, default=DEFAULT_FREEZE_POLICY)
     parser.add_argument(
+        "--reexport-surface-inventory",
+        type=Path,
+        default=DEFAULT_REEXPORT_SURFACE_INVENTORY,
+    )
+    parser.add_argument(
         "--from-existing",
         action="store_true",
         help="assemble from per-profile rustdoc JSON cached after the current HEAD",
@@ -1024,16 +1610,24 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        reexport_surface_inventory_path = args.reexport_surface_inventory.resolve()
         baseline: dict[str, Any] | None = None
         if args.check:
             baseline = json.loads(args.check.read_text(encoding="utf-8"))
-            validate_baseline_contract(baseline)
+            validate_baseline_contract(
+                baseline,
+                reexport_surface_inventory_path=reexport_surface_inventory_path,
+            )
         candidate = generate_snapshot(
             refresh=not args.from_existing,
             scope=args.scope,
             freeze_policy_path=args.freeze_policy.resolve(),
+            reexport_surface_inventory_path=reexport_surface_inventory_path,
         )
-        validate_baseline_contract(candidate)
+        validate_baseline_contract(
+            candidate,
+            reexport_surface_inventory_path=reexport_surface_inventory_path,
+        )
         if args.write_baseline:
             write_json(args.write_baseline, candidate)
             print(
