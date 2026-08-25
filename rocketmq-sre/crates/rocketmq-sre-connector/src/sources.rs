@@ -269,7 +269,9 @@ where
         }
 
         let started_at = Instant::now();
-        let result = self.query_uncached(source, &query, operation, &session).await;
+        // Source dispatch combines several large async implementations. Keep that state on the heap so
+        // callers do not embed the complete dispatch future in their thread stack.
+        let result = Box::pin(self.query_uncached(source, &query, operation, &session)).await;
         let mut output = match result {
             Ok(output) => {
                 self.record_success(source, output.freshness_seconds).await;

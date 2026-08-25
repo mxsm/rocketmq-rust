@@ -30,6 +30,7 @@ use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
@@ -45,18 +46,21 @@ use rocketmq_transport::api::v1::ServerConfig;
 use tokio::sync::oneshot;
 
 const CHILD_MODE_ENV: &str = "ROCKETMQ_CLIENT_STACK_TEST_CHILD";
+const PRODUCER_CHILD_MODE_ENV: &str = "ROCKETMQ_CLIENT_PRODUCER_STACK_TEST_CHILD";
 const NAMESRV_ADDR_ENV: &str = "ROCKETMQ_CLIENT_STACK_TEST_NAMESRV_ADDR";
 const STARTUP_MARKER: &str = "CLIENT_STACK_STARTUP_OK";
 const SHUTDOWN_MARKER: &str = "CLIENT_STACK_SHUTDOWN_OK";
+const PRODUCER_STARTUP_MARKER: &str = "CLIENT_PRODUCER_STACK_STARTUP_OK";
+const PRODUCER_SHUTDOWN_MARKER: &str = "CLIENT_PRODUCER_STACK_SHUTDOWN_OK";
 const WINDOWS_MAIN_STACK_SIZE: usize = 1024 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-struct ConsumerProcess {
+struct ClientProcess {
     child: Option<Child>,
 }
 
-impl ConsumerProcess {
+impl ClientProcess {
     fn new(child: Child) -> Self {
         Self { child: Some(child) }
     }
@@ -82,7 +86,7 @@ impl ConsumerProcess {
     }
 }
 
-impl Drop for ConsumerProcess {
+impl Drop for ClientProcess {
     fn drop(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
@@ -189,6 +193,36 @@ fn run_consumer_child() {
     thread.join().expect("consumer startup thread should not panic");
 }
 
+fn run_producer_child() {
+    let namesrv_addr = std::env::var(NAMESRV_ADDR_ENV).expect("child NameServer address should be present");
+    let thread = std::thread::Builder::new()
+        .name("rocketmq-client-producer-stack-probe".to_owned())
+        .stack_size(WINDOWS_MAIN_STACK_SIZE)
+        .spawn(move || {
+            let owner = RuntimeOwner::new(RuntimeConfig {
+                worker_threads: 2,
+                thread_name: "rocketmq-client-producer-stack-test".to_owned(),
+                ..RuntimeConfig::default()
+            })
+            .expect("create producer client process runtime");
+            let client_runtime = ClientRuntime::try_new(
+                owner.root_context().component("client"),
+                ClientRuntimeConfig::default(),
+                TelemetryHandle::noop(),
+            )
+            .expect("create producer client runtime");
+            owner.block_on(run_producer_startup(Arc::clone(&client_runtime), namesrv_addr));
+            let report = owner.block_on(client_runtime.shutdown());
+            assert!(report.is_healthy(), "{}", report.to_json());
+            owner
+                .shutdown_runtime_blocking()
+                .expect("producer process runtime should stop cleanly");
+        })
+        .expect("start 1 MiB producer startup thread");
+
+    thread.join().expect("producer startup thread should not panic");
+}
+
 async fn run_consumer_startup(client_runtime: Arc<ClientRuntime>, namesrv_addr: String) {
     let mut consumer = DefaultMQPushConsumer::builder(client_runtime)
         .consumer_group(format!("windows_stack_test_{}", std::process::id()))
@@ -210,61 +244,76 @@ async fn run_consumer_startup(client_runtime: Arc<ClientRuntime>, namesrv_addr: 
     std::io::stdout().flush().expect("flush shutdown marker");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_consumer_starts_without_stack_overflow() {
-    if std::env::var_os(CHILD_MODE_ENV).is_some() {
-        run_consumer_child();
-        return;
-    }
+async fn run_producer_startup(client_runtime: Arc<ClientRuntime>, namesrv_addr: String) {
+    let mut producer = DefaultMQProducer::builder(client_runtime)
+        .producer_group(format!("windows_producer_stack_test_{}", std::process::id()))
+        .name_server_addr(namesrv_addr)
+        .build();
+    producer.start().await.expect("start test producer");
 
+    println!("{PRODUCER_STARTUP_MARKER}");
+    std::io::stdout().flush().expect("flush producer startup marker");
+
+    producer.shutdown().await;
+    println!("{PRODUCER_SHUTDOWN_MARKER}");
+    std::io::stdout().flush().expect("flush producer shutdown marker");
+}
+
+async fn assert_client_process_startup(
+    child_mode_env: &'static str,
+    test_name: &'static str,
+    startup_marker: &'static str,
+    shutdown_marker: &'static str,
+    client_kind: &'static str,
+) {
     let root = tempfile::tempdir().expect("create client process root");
     let namesrv_port = available_port();
     let namesrv_addr = format!("127.0.0.1:{namesrv_port}");
     let (namesrv_shutdown, namesrv_handle) = start_namesrv(root.path(), namesrv_port).await;
     let child = Command::new(std::env::current_exe().expect("resolve client stack test executable"))
         .arg("--exact")
-        .arg("windows_consumer_starts_without_stack_overflow")
+        .arg(test_name)
         .arg("--nocapture")
-        .env(CHILD_MODE_ENV, "1")
+        .env(child_mode_env, "1")
         .env(NAMESRV_ADDR_ENV, &namesrv_addr)
         .env("RUST_LOG", "warn")
         .env_remove("NAMESRV_ADDR")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start consumer process");
-    let mut consumer = ConsumerProcess::new(child);
+        .unwrap_or_else(|error| panic!("start {client_kind} process: {error}"));
+    let mut client = ClientProcess::new(child);
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let output = loop {
-        if consumer
+        if client
             .child_mut()
             .try_wait()
-            .expect("inspect consumer startup status")
+            .expect("inspect client startup status")
             .is_some()
         {
-            break consumer.wait_with_output();
+            break client.wait_with_output();
         }
         if Instant::now() >= deadline {
-            let output = consumer.terminate_with_output();
-            panic!("Consumer startup timed out:\n{}", process_output(&output));
+            let output = client.terminate_with_output();
+            panic!("{client_kind} startup timed out:\n{}", process_output(&output));
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     };
 
     assert!(
         output.status.success(),
-        "Consumer exited before startup completed:\n{}",
+        "{client_kind} exited before startup completed:\n{}",
         process_output(&output)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(STARTUP_MARKER),
-        "Consumer did not emit startup marker:\n{}",
+        String::from_utf8_lossy(&output.stdout).contains(startup_marker),
+        "{client_kind} did not emit startup marker:\n{}",
         process_output(&output)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains(SHUTDOWN_MARKER),
-        "Consumer did not complete clean shutdown:\n{}",
+        String::from_utf8_lossy(&output.stdout).contains(shutdown_marker),
+        "{client_kind} did not complete clean shutdown:\n{}",
         process_output(&output)
     );
 
@@ -273,4 +322,38 @@ async fn windows_consumer_starts_without_stack_overflow() {
         .await
         .expect("NameServer shutdown should be bounded")
         .expect("NameServer task should not panic");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_consumer_starts_without_stack_overflow() {
+    if std::env::var_os(CHILD_MODE_ENV).is_some() {
+        run_consumer_child();
+        return;
+    }
+
+    assert_client_process_startup(
+        CHILD_MODE_ENV,
+        "windows_consumer_starts_without_stack_overflow",
+        STARTUP_MARKER,
+        SHUTDOWN_MARKER,
+        "Consumer",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_producer_starts_without_stack_overflow() {
+    if std::env::var_os(PRODUCER_CHILD_MODE_ENV).is_some() {
+        run_producer_child();
+        return;
+    }
+
+    assert_client_process_startup(
+        PRODUCER_CHILD_MODE_ENV,
+        "windows_producer_starts_without_stack_overflow",
+        PRODUCER_STARTUP_MARKER,
+        PRODUCER_SHUTDOWN_MARKER,
+        "Producer",
+    )
+    .await;
 }

@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -49,6 +51,9 @@ const INITIAL_DELAY: Duration = Duration::from_secs(5 * 60);
 const CLEAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TOPIC_SCAN_YIELD_DELAY: Duration = Duration::from_millis(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+// Erase the scan future before it enters generic scheduler layers so Windows startup stacks stay bounded.
+type CleanTaskFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 #[derive(Default)]
 struct CleanServiceLifecycle {
@@ -144,11 +149,11 @@ impl TopicQueueMappingCleanService {
 
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
             let this = this.clone();
-            async move {
+            Box::pin(async move {
                 if let Err(err) = this.run_once().await {
                     warn!("TopicQueueMappingCleanService scan failed: {}", err);
                 }
-            }
+            }) as CleanTaskFuture
         }) {
             self.inner.running.store(false, Ordering::Release);
             warn!(?error, "failed to spawn TopicQueueMappingCleanService scan task");

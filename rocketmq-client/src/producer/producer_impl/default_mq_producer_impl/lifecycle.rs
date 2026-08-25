@@ -763,7 +763,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
     pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
-        self.start_with_factory(true).await
+        Box::pin(self.start_with_factory(true)).await
     }
 
     #[inline]
@@ -894,7 +894,7 @@ impl DefaultMQProducerImpl {
 
     /// Shutdown the producer gracefully
     pub async fn shutdown(&self) -> rocketmq_error::RocketMQResult<()> {
-        self.shutdown_with_factory(true).await
+        Box::pin(self.shutdown_with_factory(true)).await
     }
 
     pub(super) async fn shutdown_producer_tasks(&self) {

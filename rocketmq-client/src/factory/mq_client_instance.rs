@@ -610,7 +610,9 @@ impl MQClientInstance {
         let Some(producer_impl) = default_producer.default_mqproducer_impl.as_mut() else {
             return Err(mq_client_err!("default producer impl is None"));
         };
-        producer_impl.start_with_factory(false).await
+        // A user producer starts this internal producer through the same factory future. Erase the nested
+        // lifecycle future here so the combined startup chain stays within the default Windows main stack.
+        Box::pin(producer_impl.start_with_factory(false)).await
     }
 
     async fn shutdown_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
