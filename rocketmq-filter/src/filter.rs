@@ -18,6 +18,14 @@
 //! It includes the core `Filter` trait (SPI), a factory for filter management, and
 //! default implementations like SQL-92 filtering.
 //!
+//! New callers should use [`Filter::try_compile`] and handle the structured,
+//! redaction-safe [`FilterCompileError`]. The deprecated 1.x
+//! [`Filter::compile`] facade and local string [`FilterError`] remain available
+//! for compatibility. Their future removal requires a complete release cycle,
+//! an explicit 2.0 breaking window, and individual reviewed post-freeze
+//! approvals for each affected frozen public item; this module does not
+//! authorize removal.
+//!
 //! # Architecture
 //!
 //! The filter system consists of three main components:
@@ -49,27 +57,13 @@
 //! let expr = filter.try_compile("age > 18 AND region = 'US'")?;
 //! ```
 //!
-//! ## Registering Custom Filters
+//! ## Using Registered Filters
 //!
 //! ```rust,ignore
 //! use rocketmq_filter::filter::{Filter, FilterFactory};
-//! use std::sync::Arc;
 //!
-//! // Implement the Filter trait
-//! struct CustomFilter;
-//! impl Filter for CustomFilter {
-//!     fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError> {
-//!         // Custom implementation
-//!     }
-//!     
-//!     fn of_type(&self) -> &str {
-//!         "CUSTOM"
-//!     }
-//! }
-//!
-//! // Register it
-//! let factory = FilterFactory::instance();
-//! factory.register(Arc::new(CustomFilter));
+//! let filter = FilterFactory::instance().get("SQL92").unwrap();
+//! let expression = filter.try_compile("age > 18")?;
 //! ```
 //!
 //! # Thread Safety

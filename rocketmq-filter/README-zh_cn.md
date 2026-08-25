@@ -91,7 +91,7 @@ use rocketmq_filter::filter::{Filter, FilterFactory};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let filter = FilterFactory::get_sql_filter();
-    let expression = filter.compile("color = 'blue' AND retries >= 3")?;
+    let expression = filter.try_compile("color = 'blue' AND retries >= 3")?;
 
     let mut context = MessageEvaluationContext::new();
     context.put("color", "blue");
@@ -101,6 +101,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(result, Value::Boolean(true));
 
     Ok(())
+}
+```
+
+### 类型化 filter 编译
+
+新代码必须调用 `Filter::try_compile` 并处理 `FilterCompileError`。它的 kind、stage、可选的原始 UTF-8 字节偏移量和
+SQL92 source 分类均为稳定且可安全脱敏的元数据；被拒绝的表达式可以转换为带有 `ErrorKind::Filter` 的
+`RocketMQError`。
+
+已废弃的 1.x `Filter::compile` facade 及其本地字符串 `FilterError` 仍为现有实现和调用方保留。本次变更不会删除
+任一 API，也不构成删除授权。任何未来删除都必须经过完整 release cycle、明确的 2.0 breaking window，并为每个受影响的
+冻结 public item 取得逐项 reviewed post-freeze approval。
+
+#### 未来 custom filter implementer 迁移
+
+只有在未来获得批准的 2.0 breaking window 中，custom `Filter` implementer 才会将 required trait implementation
+从返回本地字符串 `FilterError` 的 `compile` 迁移为返回 `FilterCompileError` 的 `try_compile`。当前 1.x trait 仍要求
+legacy `compile` 方法。以下仅为 future 2.0 sketch，仍须遵守上述 approvals，且不是当前 1.x 可编译代码：
+
+```rust,ignore
+// 仅为未来 2.0 sketch；不适用于当前 1.x Filter trait。
+impl Filter for CustomFilter {
+    fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
+        // 编译自定义表达式，并返回类型化、可安全脱敏的失败信息。
+    }
 }
 ```
 

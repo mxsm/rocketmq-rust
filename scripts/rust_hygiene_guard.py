@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -72,13 +73,63 @@ DEBT_FIELDS = {
     "expiry",
 }
 UNSAFE_DEBT_FIELDS = {"ordinal"}
+TYPED_FILTER_DEBT_FIELDS = {"ordinal"}
 UNSAFE_DEBT_KINDS = {"unsafe_block", "unsafe_fn", "unsafe_impl", "unsafe_trait", "unsafe_extern"}
 PROTOCOL_PREFIX = "rocketmq-protocol/"
+FILTER_LEGACY_COMPATIBILITY_OWNERS = {
+    "rocketmq-filter/src/filter.rs",
+    "rocketmq-filter/src/filter/filter_spi.rs",
+    "rocketmq-filter/src/filter/filter_sql_filter.rs",
+    "rocketmq-filter/src/filter/sql_runtime/compile_error.rs",
+}
+FILTER_DEPRECATION_NOTE = "use Filter::try_compile and FilterCompileError"
+TYPED_FILTER_DEBT_KINDS = {"legacy_filter_compile", "local_filter_error"}
+TYPED_FILTER_BASELINE_METADATA = {
+    "classification": "legacy_filter_compatibility",
+    "owner": "rocketmq-filter maintainers",
+    "reachability": "production-compatibility-owner",
+    "justification": "compiler-resolved legacy Filter compatibility use retained only in a canonical owner",
+    "expiry": "2.0.0",
+}
+FILTER_COMPILE_DEFINITION_PATHS = frozenset(
+    {
+        "filter::filter_spi::Filter::compile",
+        "rocketmq_filter::filter::Filter::compile",
+    }
+)
+FILTER_ERROR_DEFINITION_PATHS = frozenset(
+    {
+        "filter::filter_spi::FilterError",
+        "filter::filter_spi::FilterError::new",
+        "filter::filter_spi::FilterError::message",
+        "rocketmq_filter::filter::FilterError",
+        "rocketmq_filter::filter::FilterError::new",
+        "rocketmq_filter::filter::FilterError::message",
+    }
+)
+DEPRECATED_DIAGNOSTIC = re.compile(
+    r"^use of deprecated (?P<form>[^`]+) `(?P<definition>[^`]+)`: (?P<note>.+)$"
+)
+FILTER_ERROR_DEPRECATION_ANCHOR = re.compile(
+    rf'^\#\[deprecated\(since = "1\.0\.0", note = "{re.escape(FILTER_DEPRECATION_NOTE)}"\)\]\r?\n'
+    r"^\#\[derive\(Debug, Clone\)\]\r?\n"
+    r"^pub struct FilterError\b",
+    re.MULTILINE,
+)
+FILTER_COMPILE_DEPRECATION_ANCHOR = re.compile(
+    rf'^    \#\[deprecated\(since = "1\.0\.0", note = "{re.escape(FILTER_DEPRECATION_NOTE)}"\)\]\r?\n'
+    r"^    \#\[allow\(\r?\n"
+    r"(?:(?!^    \)\]).*\r?\n)*?"
+    r"^    \)\]\r?\n"
+    r"^    fn compile\(&self,",
+    re.MULTILINE,
+)
 BASELINE_POLICY = {
     "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment; protocol unsafe identities may not grow.",
     "safe_raw_pointer_api": "Public safe functions must not accept raw pointers.",
     "debt": "Existing panic surfaces, manual Pin projection, protocol unsafe regions, and mod.rs files may be deleted but not added.",
     "legacy_runtime": "Non-canonical production RocketMQRuntime use is forbidden.",
+    "typed_filter": "Deprecated Filter::compile and local FilterError diagnostics are compiler-resolved; only exact baseline-recorded occurrences in canonical compatibility owners are retained.",
 }
 
 REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
@@ -145,6 +196,17 @@ class SafetyFinding(NamedTuple):
     path: str
     line: int
     reason: str
+
+
+class TypedFilterGuardError(RuntimeError):
+    """A compiler-resolved typed-filter check could not be verified."""
+
+
+class TypedFilterDiagnostic(NamedTuple):
+    kind: str
+    relative: str
+    offset: int
+    line: int
 
 
 def is_test_only(offset: int, ranges: list[tuple[int, int]]) -> bool:
@@ -243,6 +305,30 @@ def cfg_requires_test(expression: str) -> bool:
     return all(requirements)
 
 
+def cfg_requires_builtin_test(expression: str) -> bool:
+    """Return whether a cfg expression is impossible unless Rust's test cfg is set.
+
+    This deliberately does not treat feature flags as test-only. A feature such
+    as ``test-support`` can be enabled in a production build, while ``test`` is
+    supplied only by Rust's built-in test compilation mode.
+    """
+
+    expression = expression.strip()
+    if expression == "test":
+        return True
+    match = re.fullmatch(r"(?P<operator>all|any)\s*\((?P<arguments>.*)\)", expression, re.DOTALL)
+    if match is None:
+        return False
+    requirements = [
+        cfg_requires_builtin_test(argument) for argument in split_cfg_arguments(match.group("arguments"))
+    ]
+    if not requirements:
+        return False
+    if match.group("operator") == "all":
+        return any(requirements)
+    return all(requirements)
+
+
 def cfg_test_item_ranges(masked: str, source: str | None = None) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     for match in CFG_ATTRIBUTE.finditer(masked):
@@ -252,6 +338,49 @@ def cfg_test_item_ranges(masked: str, source: str | None = None) -> list[tuple[i
             else match.group("body")
         )
         if not cfg_requires_test(body):
+            continue
+        cursor = match.end()
+        while True:
+            whitespace = re.match(r"\s*", masked[cursor:])
+            cursor += len(whitespace.group(0)) if whitespace else 0
+            if not masked.startswith("#[", cursor):
+                break
+            attribute_end = masked.find("]", cursor + 2)
+            if attribute_end == -1:
+                break
+            cursor = attribute_end + 1
+
+        opening = masked.find("{", cursor)
+        semicolon = masked.find(";", cursor)
+        if semicolon != -1 and (opening == -1 or semicolon < opening):
+            ranges.append((match.start(), semicolon + 1))
+            continue
+        if opening == -1:
+            continue
+        depth = 0
+        for index in range(opening, len(masked)):
+            if masked[index] == "{":
+                depth += 1
+            elif masked[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    ranges.append((match.start(), index + 1))
+                    break
+    return ranges
+
+
+def cfg_builtin_test_item_ranges(masked: str, source: str) -> list[tuple[int, int]]:
+    """Find items that require the built-in ``cfg(test)`` condition.
+
+    The source scanner's broader test-support convention is intentionally not
+    used by the compiler-diagnostic guard: feature flags remain production
+    reachable for this migration rule.
+    """
+
+    ranges: list[tuple[int, int]] = []
+    for match in CFG_ATTRIBUTE.finditer(masked):
+        body = source[match.start("body"):match.end("body")]
+        if not cfg_requires_builtin_test(body):
             continue
         cursor = match.end()
         while True:
@@ -328,6 +457,333 @@ def legacy_runtime_offsets(masked: str, relative: str) -> list[int]:
         for match in LEGACY_RUNTIME.finditer(masked)
         if not any(start <= match.start() < end for start, end in allowed)
     ]
+
+
+def filter_deprecation_kind(message: object) -> str | None:
+    """Classify only frozen legacy filter definitions from a rustc diagnostic."""
+
+    if not isinstance(message, str):
+        raise TypedFilterGuardError("deprecated diagnostic has no message text")
+    match = DEPRECATED_DIAGNOSTIC.fullmatch(message)
+    if match is None:
+        return None
+    definition = match.group("definition")
+    form = match.group("form")
+    if definition not in FILTER_COMPILE_DEFINITION_PATHS | FILTER_ERROR_DEFINITION_PATHS:
+        return None
+    if match.group("note") != FILTER_DEPRECATION_NOTE:
+        raise TypedFilterGuardError(
+            f"frozen filter deprecation note drifted for {definition!r}: {match.group('note')!r}"
+        )
+    if definition in FILTER_COMPILE_DEFINITION_PATHS and form == "method":
+        return "legacy_filter_compile"
+    if definition in FILTER_ERROR_DEFINITION_PATHS:
+        return "local_filter_error"
+    raise TypedFilterGuardError(f"unknown frozen filter deprecated definition: {definition!r}")
+
+
+def validate_filter_deprecation_anchors(root: Path) -> None:
+    """Fail closed if the two frozen definitions stop advertising the migration note."""
+
+    source_path = root / "rocketmq-filter/src/filter/filter_spi.rs"
+    try:
+        source = source_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise TypedFilterGuardError(f"cannot verify Filter deprecation anchors: {error}") from error
+    masked = rust_source.mask_comments_and_literals(source)
+    error_anchor = FILTER_ERROR_DEPRECATION_ANCHOR.search(source)
+    compile_anchor = FILTER_COMPILE_DEPRECATION_ANCHOR.search(source)
+    trait = re.search(r"^pub trait Filter\b", masked, re.MULTILINE)
+    trait_opening = masked.find("{", trait.end()) if trait is not None else -1
+    trait_closing = (
+        matching_delimiter(masked, trait_opening, "{", "}") if trait_opening >= 0 else None
+    )
+    compile_code = (
+        masked[compile_anchor.start():compile_anchor.end()] if compile_anchor is not None else ""
+    )
+    error_code = masked[error_anchor.start():error_anchor.end()] if error_anchor is not None else ""
+    if (
+        error_anchor is None
+        or compile_anchor is None
+        or trait is None
+        or trait_closing is None
+        or not trait.start() <= compile_anchor.start() < trait_closing
+        or not re.search(r"^    #\[deprecated\(", compile_code, re.MULTILINE)
+        or not re.search(r"^    #\[allow\(", compile_code, re.MULTILINE)
+        or not re.search(r"^    fn compile\(&self,", compile_code, re.MULTILINE)
+        or not re.search(r"^#\[deprecated\(", error_code, re.MULTILINE)
+        or not re.search(r"^#\[derive\(Debug, Clone\)", error_code, re.MULTILINE)
+        or not re.search(r"^pub struct FilterError\b", error_code, re.MULTILINE)
+    ):
+        raise TypedFilterGuardError("frozen Filter and FilterError deprecation anchors are missing or drifted")
+
+
+def cargo_metadata(root: Path) -> dict[str, object]:
+    """Load the resolved workspace graph required for the reverse dependency closure."""
+
+    command = ["cargo", "metadata", "--locked", "--all-features", "--format-version", "1"]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except OSError as error:
+        raise TypedFilterGuardError(f"cargo metadata could not start: {error}") from error
+    if completed.returncode != 0:
+        raise TypedFilterGuardError(
+            f"cargo metadata failed with exit {completed.returncode}: {completed.stderr.strip()}"
+        )
+    try:
+        metadata = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise TypedFilterGuardError(f"cargo metadata emitted invalid JSON: {error}") from error
+    if not isinstance(metadata, dict):
+        raise TypedFilterGuardError("cargo metadata did not return an object")
+    return metadata
+
+
+def filter_reverse_dependency_packages(metadata: dict[str, object]) -> list[str]:
+    """Return the workspace package names in rocketmq-filter's resolved reverse closure."""
+
+    packages = metadata.get("packages")
+    members = metadata.get("workspace_members")
+    resolve = metadata.get("resolve")
+    if not isinstance(packages, list) or not isinstance(members, list) or not isinstance(resolve, dict):
+        raise TypedFilterGuardError("cargo metadata is missing packages, workspace members, or resolve graph")
+    by_id = {
+        package.get("id"): package
+        for package in packages
+        if isinstance(package, dict) and isinstance(package.get("id"), str)
+    }
+    workspace_members = {member for member in members if isinstance(member, str)}
+    filter_ids = [
+        package_id
+        for package_id in workspace_members
+        if isinstance(by_id.get(package_id), dict) and by_id[package_id].get("name") == "rocketmq-filter"
+    ]
+    if len(filter_ids) != 1:
+        raise TypedFilterGuardError("cargo metadata must resolve exactly one workspace rocketmq-filter package")
+    nodes = resolve.get("nodes")
+    if not isinstance(nodes, list):
+        raise TypedFilterGuardError("cargo metadata resolve graph has no nodes")
+    reverse: dict[str, set[str]] = {package_id: set() for package_id in workspace_members}
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("id"), str) or not isinstance(node.get("deps"), list):
+            raise TypedFilterGuardError("cargo metadata resolve node is malformed")
+        node_id = node["id"]
+        if node_id not in workspace_members:
+            continue
+        for dependency in node["deps"]:
+            if not isinstance(dependency, dict) or not isinstance(dependency.get("pkg"), str):
+                raise TypedFilterGuardError("cargo metadata dependency edge is malformed")
+            dependency_id = dependency["pkg"]
+            if dependency_id in reverse:
+                reverse[dependency_id].add(node_id)
+    closure = {filter_ids[0]}
+    pending = [filter_ids[0]]
+    while pending:
+        package_id = pending.pop()
+        for dependent in reverse.get(package_id, set()):
+            if dependent not in closure:
+                closure.add(dependent)
+                pending.append(dependent)
+    names: list[str] = []
+    for package_id in sorted(closure):
+        package = by_id.get(package_id)
+        name = package.get("name") if isinstance(package, dict) else None
+        if not isinstance(name, str) or not name:
+            raise TypedFilterGuardError(f"workspace package {package_id!r} has no name")
+        names.append(name)
+    if len(names) != len(set(names)):
+        raise TypedFilterGuardError("rocketmq-filter reverse closure has ambiguous package names")
+    return sorted(names)
+
+
+def read_utf8_source(path: Path) -> str:
+    """Read compiler-addressed source without translating CRLF byte positions."""
+
+    with path.open(encoding="utf-8", newline="") as source:
+        return source.read()
+
+
+def normalise_primary_span(record: dict[str, object], root: Path) -> tuple[str, str, int, int]:
+    """Resolve a unique compiler primary span to a UTF-8 source offset under the repository root."""
+
+    message = record.get("message")
+    if not isinstance(message, dict) or not isinstance(message.get("spans"), list):
+        raise TypedFilterGuardError("typed filter diagnostic has no spans")
+    primary = [span for span in message["spans"] if isinstance(span, dict) and span.get("is_primary")]
+    if len(primary) != 1:
+        raise TypedFilterGuardError("typed filter diagnostic has no unique primary span")
+    span = primary[0]
+    file_name = span.get("file_name")
+    byte_start = span.get("byte_start")
+    line_start = span.get("line_start")
+    if not isinstance(file_name, str) or not isinstance(byte_start, int) or not isinstance(line_start, int):
+        raise TypedFilterGuardError("typed filter primary span is malformed")
+    path = Path(file_name)
+    path = path if path.is_absolute() else root / path
+    try:
+        relative = path.resolve().relative_to(root.resolve()).as_posix()
+    except (OSError, ValueError) as error:
+        raise TypedFilterGuardError(f"typed filter primary span is outside the repository: {file_name!r}") from error
+    try:
+        source = read_utf8_source(path)
+    except OSError as error:
+        raise TypedFilterGuardError(f"cannot read typed filter primary source {relative}: {error}") from error
+    encoded = source.encode("utf-8")
+    if byte_start < 0 or byte_start > len(encoded):
+        raise TypedFilterGuardError(f"typed filter primary span has invalid byte offset in {relative}")
+    try:
+        offset = len(encoded[:byte_start].decode("utf-8"))
+    except UnicodeDecodeError as error:
+        raise TypedFilterGuardError(f"typed filter primary span is not on a UTF-8 boundary in {relative}") from error
+    computed_line = source.count("\n", 0, offset) + 1
+    if line_start != computed_line:
+        raise TypedFilterGuardError(f"typed filter primary span has inconsistent line information in {relative}")
+    return relative, source, offset, computed_line
+
+
+def typed_filter_diagnostic(record: object, root: Path) -> TypedFilterDiagnostic | None:
+    """Classify one cargo compiler-message record, rejecting incomplete frozen diagnostics."""
+
+    if not isinstance(record, dict) or record.get("reason") != "compiler-message":
+        return None
+    message = record.get("message")
+    if not isinstance(message, dict):
+        raise TypedFilterGuardError("cargo compiler-message is malformed")
+    code = message.get("code")
+    code_value = code.get("code") if isinstance(code, dict) else None
+    if code_value != "deprecated":
+        return None
+    kind = filter_deprecation_kind(message.get("message"))
+    if kind is None:
+        return None
+    target = record.get("target")
+    target_kind = target.get("kind") if isinstance(target, dict) else None
+    if not isinstance(target_kind, list) or not target_kind or not all(isinstance(value, str) for value in target_kind):
+        raise TypedFilterGuardError("typed filter diagnostic has no target kind")
+    relative, source, offset, line = normalise_primary_span(record, root)
+    if "test" in target_kind:
+        return None
+    masked = rust_source.mask_comments_and_literals(source)
+    test_ranges = rust_source.test_module_ranges(masked) + cfg_builtin_test_item_ranges(masked, source)
+    if is_test_only(offset, test_ranges):
+        return None
+    return TypedFilterDiagnostic(kind, relative, offset, line)
+
+
+def enclosing_typed_filter_item(masked: str, offset: int) -> str:
+    """Name the containing function or implementation header for a typed-filter occurrence."""
+
+    functions: list[tuple[int, int, str]] = []
+    for match in FUNCTION.finditer(masked):
+        opening = masked.find("{", match.end())
+        if opening == -1:
+            continue
+        closing = matching_delimiter(masked, opening, "{", "}")
+        if closing is not None and match.start() <= offset <= closing:
+            functions.append((match.start(), closing, match.group(1)))
+    if functions:
+        return max(functions, key=lambda candidate: candidate[0])[2]
+
+    implementations: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"\bimpl\b", masked):
+        opening = masked.find("{", match.end())
+        if opening == -1:
+            continue
+        closing = matching_delimiter(masked, opening, "{", "}")
+        if closing is not None and match.start() <= offset < opening:
+            header = re.sub(r"\s+", " ", masked[match.start():opening]).strip()
+            implementations.append((match.start(), closing, header))
+    if implementations:
+        return max(implementations, key=lambda candidate: candidate[0])[2]
+    return "<module>"
+
+
+def typed_filter_debt_entries(diagnostics: list[TypedFilterDiagnostic], root: Path) -> list[dict[str, object]]:
+    """Turn unique production diagnostics into stable, owner-local baseline identities."""
+
+    occurrences: dict[tuple[str, str, str], list[TypedFilterDiagnostic]] = {}
+    for diagnostic in diagnostics:
+        source = read_utf8_source(root / diagnostic.relative)
+        masked = rust_source.mask_comments_and_literals(source)
+        item = enclosing_typed_filter_item(masked, diagnostic.offset)
+        occurrences.setdefault((diagnostic.relative, diagnostic.kind, item), []).append(diagnostic)
+    entries: list[dict[str, object]] = []
+    for (relative, kind, item), group in sorted(occurrences.items()):
+        unique = {(diagnostic.offset, diagnostic.line): diagnostic for diagnostic in group}
+        for ordinal, diagnostic in enumerate(unique[key] for key in sorted(unique)):
+            entries.append(
+                {
+                    "identity": f"{relative}:{kind}:{item}:{ordinal}",
+                    "path": relative,
+                    "kind": kind,
+                    "item": item,
+                    "line": diagnostic.line,
+                    **TYPED_FILTER_BASELINE_METADATA,
+                    "ordinal": ordinal,
+                }
+            )
+    return entries
+
+
+def run_typed_filter_clippy(root: Path, packages: list[str], *, all_features: bool) -> list[TypedFilterDiagnostic]:
+    """Parse cargo's JSON diagnostics for one resolved feature pass."""
+
+    if not packages:
+        raise TypedFilterGuardError("cargo metadata produced an empty typed filter package closure")
+    command = ["cargo", "clippy", "--locked"]
+    for package in packages:
+        command.extend(["-p", package])
+    command.append("--all-targets")
+    if all_features:
+        command.append("--all-features")
+    command.extend(["--no-deps", "--message-format=json", "--", "--force-warn", "deprecated"])
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except OSError as error:
+        raise TypedFilterGuardError(f"cargo clippy could not start: {error}") from error
+    if completed.returncode != 0:
+        raise TypedFilterGuardError(
+            f"cargo clippy failed with exit {completed.returncode}: {completed.stderr.strip()}"
+        )
+    diagnostics: list[TypedFilterDiagnostic] = []
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise TypedFilterGuardError(f"cargo clippy emitted malformed JSON: {error}") from error
+        classified = typed_filter_diagnostic(record, root)
+        if classified is not None:
+            diagnostics.append(classified)
+    return diagnostics
+
+
+def scan_typed_filter_deprecations(root: Path) -> list[dict[str, object]]:
+    """Resolve legacy Filter use through rustc instead of source-text heuristics."""
+
+    validate_filter_deprecation_anchors(root)
+    packages = filter_reverse_dependency_packages(cargo_metadata(root))
+    diagnostics = run_typed_filter_clippy(root, packages, all_features=False)
+    diagnostics.extend(run_typed_filter_clippy(root, packages, all_features=True))
+    return typed_filter_debt_entries(diagnostics, root)
 
 
 def matching_generic_delimiter(masked: str, opening: int) -> int | None:
@@ -630,22 +1086,53 @@ def scan_tree(
 def load_baseline(path: Path, *, scope: str = "all", root: Path = ROOT) -> set[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if (
-        payload.get("schema_version") != 3
+        payload.get("schema_version") != 4
         or payload.get("policy") != BASELINE_POLICY
         or not isinstance(payload.get("entries"), list)
     ):
         raise ValueError("rust hygiene baseline has an unsupported schema")
     for entry in payload["entries"]:
         unsafe = isinstance(entry, dict) and entry.get("kind") in UNSAFE_DEBT_KINDS
-        expected = DEBT_FIELDS | (UNSAFE_DEBT_FIELDS if unsafe else set())
+        typed_filter = isinstance(entry, dict) and entry.get("kind") in TYPED_FILTER_DEBT_KINDS
+        expected = DEBT_FIELDS | (
+            UNSAFE_DEBT_FIELDS if unsafe else TYPED_FILTER_DEBT_FIELDS if typed_filter else set()
+        )
         if not isinstance(entry, dict) or set(entry) != expected:
             raise ValueError("rust hygiene baseline contains an invalid debt entry")
         if any(not isinstance(entry[field], str) or not entry[field] for field in DEBT_FIELDS - {"line"}):
             raise ValueError("rust hygiene baseline contains empty debt metadata")
         if not isinstance(entry["line"], int) or entry["line"] < 1:
             raise ValueError("rust hygiene baseline contains an invalid line")
-        if unsafe and (not isinstance(entry["ordinal"], int) or entry["ordinal"] < 0):
+        typed_identity_kind = next(
+            (
+                kind
+                for kind in TYPED_FILTER_DEBT_KINDS
+                if f":{kind}:" in entry["identity"]
+            ),
+            None,
+        )
+        if typed_identity_kind is not None and entry["kind"] != typed_identity_kind:
+            raise ValueError("rust hygiene baseline contains a disguised typed filter kind")
+        identity_prefix = f"{entry['path']}:{entry['kind']}:{entry['item']}:"
+        if not entry["identity"].startswith(identity_prefix):
+            raise ValueError("rust hygiene baseline contains a structurally inconsistent identity")
+        identity_ordinal = entry["identity"][len(identity_prefix):]
+        if not identity_ordinal.isascii() or not identity_ordinal.isdecimal():
+            raise ValueError("rust hygiene baseline contains an invalid identity ordinal")
+        if (unsafe or typed_filter) and (
+            not isinstance(entry["ordinal"], int) or entry["ordinal"] < 0
+        ):
             raise ValueError("rust hygiene baseline contains an invalid unsafe ordinal")
+        if (unsafe or typed_filter) and int(identity_ordinal) != entry["ordinal"]:
+            raise ValueError("rust hygiene baseline contains an identity ordinal mismatch")
+        if typed_filter and entry["path"] not in FILTER_LEGACY_COMPATIBILITY_OWNERS:
+            raise ValueError("rust hygiene baseline contains a non-canonical typed filter compatibility owner")
+        if typed_filter:
+            expected_identity = f"{entry['path']}:{entry['kind']}:{entry['item']}:{entry['ordinal']}"
+            if entry["identity"] != expected_identity:
+                raise ValueError("rust hygiene baseline contains a forged typed filter identity")
+            if any(entry[field] != value for field, value in TYPED_FILTER_BASELINE_METADATA.items()):
+                raise ValueError("rust hygiene baseline contains invalid typed filter metadata")
     scope_document = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
     identities = [
         entry.get("identity")
@@ -680,6 +1167,11 @@ def main() -> int:
         )
         return 2
     safety_findings, debt = scan_tree(root, scope=args.scope)
+    try:
+        debt.extend(scan_typed_filter_deprecations(root))
+    except TypedFilterGuardError as error:
+        print(f"RUST_HYGIENE_GUARD_FAILED typed_filter={error}", file=sys.stderr)
+        return 1
     if safety_findings:
         for finding in safety_findings:
             print(f"{finding.path}:{finding.line}: {finding.reason}", file=sys.stderr)
@@ -717,6 +1209,7 @@ def main() -> int:
         f"protocol_unsafe={protocol_unsafe} "
         f"panic_surface={counts['panic_surface']} "
         f"legacy_mod_rs={counts['legacy_mod_rs']} "
+        f"typed_filter={sum(counts[kind] for kind in TYPED_FILTER_DEBT_KINDS)} "
         f"reviewed_invariants={reviewed_invariants} excluded_test_sources=0"
     )
     return 0

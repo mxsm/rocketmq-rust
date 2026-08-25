@@ -182,6 +182,43 @@ let report = owner.shutdown_runtime_blocking_with_timeout(timeout)?;
 report.assert_no_task_leak().map_err(|message| anyhow::anyhow!(message))?;
 ```
 
+### Typed filter compilation compatibility facade
+
+New filter callers use `Filter::try_compile`, which returns `FilterCompileError`
+with a stable kind, stage, optional original UTF-8 byte offset, and source
+classification. The error is redaction-safe and converts to `RocketMQError`
+with `ErrorKind::Filter`.
+
+```rust,ignore
+use rocketmq_filter::filter::{Filter, FilterFactory};
+
+let filter = FilterFactory::instance().get("SQL92").expect("SQL92 is registered");
+let expression = filter.try_compile("color = 'blue' AND retries >= 3")?;
+```
+
+`Filter::compile` and its local string `FilterError` remain deprecated but
+available 1.x compatibility facades for existing callers and filter
+implementations. This guide neither removes them nor creates a deletion
+approval. Any future deletion requires the complete release cycle, an explicit
+2.0 breaking window, and an individual reviewed post-freeze approval for every
+affected frozen public item.
+
+Custom `Filter` implementers keep the required legacy `compile` method
+throughout 1.x. Only in a future, approved 2.0 breaking window would that
+required implementation migrate from `compile` returning the local string
+`FilterError` to `try_compile` returning `FilterCompileError`. This is a future
+2.0 sketch only, remains subject to the approvals above, and is not current
+1.x-compilable code:
+
+```rust,ignore
+// Future 2.0 sketch only; not valid for the current 1.x Filter trait.
+impl Filter for CustomFilter {
+    fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
+        // Compile the custom expression and return typed, redaction-safe failures.
+    }
+}
+```
+
 ### Mapped buffer reads
 
 The former `MappedBuffer::read_zero_copy` name was inaccurate because the

@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -326,6 +328,503 @@ fn decode() {
             "use rocketmq_runtime::RocketMQRuntime;", "crate/src/lib.rs"
         )
         self.assertEqual(1, len(safety))
+
+    def test_typed_filter_classifier_matches_only_frozen_definitions(self):
+        compile_message = (
+            "use of deprecated method `rocketmq_filter::filter::Filter::compile`: "
+            "use Filter::try_compile and FilterCompileError"
+        )
+        error_message = (
+            "use of deprecated associated function `filter::filter_spi::FilterError::new`: "
+            "use Filter::try_compile and FilterCompileError"
+        )
+        error_projection = (
+            "use of deprecated method `rocketmq_filter::filter::FilterError::message`: "
+            "use Filter::try_compile and FilterCompileError"
+        )
+        unrelated_compile = "use of deprecated method `crate::Compiler::compile`: another migration"
+        unrelated_error = "use of deprecated struct `rocketmq_error::FilterError`: another migration"
+
+        self.assertEqual("legacy_filter_compile", self.guard.filter_deprecation_kind(compile_message))
+        self.assertEqual("local_filter_error", self.guard.filter_deprecation_kind(error_message))
+        self.assertEqual("local_filter_error", self.guard.filter_deprecation_kind(error_projection))
+        self.assertIsNone(self.guard.filter_deprecation_kind(unrelated_compile))
+        self.assertIsNone(self.guard.filter_deprecation_kind(unrelated_error))
+
+    def test_typed_filter_classifier_fails_closed_for_drift_without_matching_other_crates(self):
+        with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "note drifted"):
+            self.guard.filter_deprecation_kind(
+                "use of deprecated method `rocketmq_filter::filter::Filter::compile`: different note"
+            )
+        self.assertIsNone(
+            self.guard.filter_deprecation_kind(
+                "use of deprecated method `consumer::filter::Filter::compile`: "
+                "use Filter::try_compile and FilterCompileError"
+            )
+        )
+
+    def test_typed_filter_anchor_validation_binds_attributes_to_the_frozen_items(self):
+        note = self.guard.FILTER_DEPRECATION_NOTE
+
+        def write_fixture(root, compile_item):
+            target = root / "rocketmq-filter" / "src" / "filter"
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "filter_spi.rs").write_text(
+                f'''#[deprecated(since = "1.0.0", note = "{note}")]
+#[derive(Debug, Clone)]
+pub struct FilterError;
+
+pub trait Filter {{
+{compile_item}
+}}
+''',
+                encoding="utf-8",
+            )
+
+        valid_item = f'''    #[deprecated(since = "1.0.0", note = "{note}")]
+    #[allow(
+        deprecated,
+        reason = "fixture",
+    )]
+    fn compile(&self, expr: &str);
+'''
+        moved_item = f'''    #[deprecated(since = "1.0.0", note = "{note}")]
+    #[allow(
+        deprecated,
+        reason = "fixture",
+    )]
+    fn unrelated(&self);
+    fn compile(&self, expr: &str);
+'''
+        deleted_item = "    fn compile(&self, expr: &str);\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_fixture(root, valid_item)
+            self.guard.validate_filter_deprecation_anchors(root)
+            write_fixture(root, moved_item)
+            with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "anchors"):
+                self.guard.validate_filter_deprecation_anchors(root)
+            write_fixture(root, deleted_item)
+            with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "anchors"):
+                self.guard.validate_filter_deprecation_anchors(root)
+
+    def test_typed_filter_anchor_validation_masks_trait_braces_in_comments_and_strings(self):
+        note = self.guard.FILTER_DEPRECATION_NOTE
+
+        def write_fixture(root, trait_item, unrelated_item=""):
+            target = root / "rocketmq-filter" / "src" / "filter"
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "filter_spi.rs").write_text(
+                f'''#[deprecated(since = "1.0.0", note = "{note}")]
+#[derive(Debug, Clone)]
+pub struct FilterError;
+
+pub trait Filter {{
+    // {{
+    /* {{ */
+    const QUOTED: &str = "{{";
+    const RAW: &str = r#" }} "#;
+{trait_item}
+}}
+
+impl Unrelated {{
+{unrelated_item}
+}}
+// }}
+/* }} */
+const OUTSIDE_QUOTED: &str = "}}";
+const OUTSIDE_RAW: &str = r#" {{ "#;
+''',
+                encoding="utf-8",
+            )
+
+        anchor = f'''    #[deprecated(since = "1.0.0", note = "{note}")]
+    #[allow(
+        deprecated,
+        reason = "fixture",
+    )]
+    fn compile(&self, expr: &str);
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_fixture(root, anchor)
+            self.guard.validate_filter_deprecation_anchors(root)
+            write_fixture(root, "    fn compile(&self, expr: &str);\n", anchor)
+            with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "anchors"):
+                self.guard.validate_filter_deprecation_anchors(root)
+
+    def test_typed_filter_baseline_rejects_forged_identity_and_metadata(self):
+        entry = {
+            "identity": "rocketmq-filter/src/filter.rs:local_filter_error:<module>:0",
+            "path": "rocketmq-filter/src/filter.rs",
+            "kind": "local_filter_error",
+            "item": "<module>",
+            "line": 87,
+            "classification": "legacy_filter_compatibility",
+            "owner": "rocketmq-filter maintainers",
+            "ordinal": 0,
+            "reachability": "production-compatibility-owner",
+            "justification": "compiler-resolved legacy Filter compatibility use retained only in a canonical owner",
+            "expiry": "2.0.0",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            for key, value, expected in (
+                ("identity", "rocketmq-broker/src/lib.rs:local_filter_error:<module>:0", "identity"),
+                (
+                    "identity",
+                    "rocketmq-filter/src/filter.rs:legacy_filter_compile:evil:0",
+                    "disguised typed",
+                ),
+                ("owner", "rocketmq-broker maintainers", "invalid typed"),
+            ):
+                fixture = dict(entry)
+                fixture[key] = value
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 4,
+                            "policy": self.guard.BASELINE_POLICY,
+                            "entries": [fixture],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, expected):
+                    self.guard.load_baseline(path, scope="core-release", root=ROOT)
+
+    def test_typed_filter_builtin_cfg_requires_test_and_never_feature_only(self):
+        self.assertTrue(self.guard.cfg_requires_builtin_test("test"))
+        self.assertTrue(
+            self.guard.cfg_requires_builtin_test('all(test, feature = "test-support")')
+        )
+        self.assertTrue(
+            self.guard.cfg_requires_builtin_test('any(test, all(test, feature = "test-support"))')
+        )
+        self.assertFalse(self.guard.cfg_requires_builtin_test('feature = "test-support"'))
+        self.assertFalse(
+            self.guard.cfg_requires_builtin_test('any(test, feature = "test-support")')
+        )
+
+    def test_typed_filter_metadata_reverse_closure_is_dynamic(self):
+        metadata = {
+            "workspace_members": ["filter", "broker", "proxy-local", "proxy", "unrelated"],
+            "packages": [
+                {"id": "filter", "name": "rocketmq-filter"},
+                {"id": "broker", "name": "rocketmq-broker"},
+                {"id": "proxy-local", "name": "rocketmq-proxy-local"},
+                {"id": "proxy", "name": "rocketmq-proxy"},
+                {"id": "unrelated", "name": "unrelated"},
+            ],
+            "resolve": {
+                "nodes": [
+                    {"id": "filter", "deps": []},
+                    {"id": "broker", "deps": [{"pkg": "filter"}]},
+                    {"id": "proxy-local", "deps": [{"pkg": "filter"}]},
+                    {"id": "proxy", "deps": [{"pkg": "proxy-local"}]},
+                    {"id": "unrelated", "deps": []},
+                ]
+            },
+        }
+
+        self.assertEqual(
+            ["rocketmq-broker", "rocketmq-filter", "rocketmq-proxy", "rocketmq-proxy-local"],
+            self.guard.filter_reverse_dependency_packages(metadata),
+        )
+        with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "resolve graph"):
+            self.guard.filter_reverse_dependency_packages({"packages": [], "workspace_members": []})
+
+    def test_typed_filter_diagnostic_fails_closed_for_missing_primary_or_target(self):
+        message = (
+            "use of deprecated method `rocketmq_filter::filter::Filter::compile`: "
+            "use Filter::try_compile and FilterCompileError"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "consumer" / "src" / "lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text("fn legacy() {}\n", encoding="utf-8")
+            record = {
+                "reason": "compiler-message",
+                "target": {"kind": ["lib"]},
+                "message": {"code": {"code": "deprecated"}, "message": message, "spans": []},
+            }
+            with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "unique primary"):
+                self.guard.typed_filter_diagnostic(record, root)
+            record["message"]["spans"] = [
+                {
+                    "is_primary": True,
+                    "file_name": str(source),
+                    "byte_start": 0,
+                    "line_start": 1,
+                }
+            ]
+            record.pop("target")
+            with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "target kind"):
+                self.guard.typed_filter_diagnostic(record, root)
+
+    def test_typed_filter_diagnostic_exempts_only_test_targets_not_benches_or_examples(self):
+        message = (
+            "use of deprecated method `rocketmq_filter::filter::Filter::compile`: "
+            "use Filter::try_compile and FilterCompileError"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "consumer" / "src" / "lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text("fn legacy() {}\n", encoding="utf-8")
+
+            def record(kind):
+                return {
+                    "reason": "compiler-message",
+                    "target": {"kind": [kind]},
+                    "message": {
+                        "code": {"code": "deprecated"},
+                        "message": message,
+                        "spans": [
+                            {
+                                "is_primary": True,
+                                "file_name": str(source),
+                                "byte_start": 0,
+                                "line_start": 1,
+                            }
+                        ],
+                    },
+                }
+
+            self.assertIsNotNone(self.guard.typed_filter_diagnostic(record("bench"), root))
+            self.assertIsNotNone(self.guard.typed_filter_diagnostic(record("example"), root))
+            self.assertIsNone(self.guard.typed_filter_diagnostic(record("test"), root))
+
+    def test_typed_filter_primary_span_requires_a_utf8_byte_boundary(self):
+        message = (
+            "use of deprecated method `rocketmq_filter::filter::Filter::compile`: "
+            "use Filter::try_compile and FilterCompileError"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "consumer" / "src" / "lib.rs"
+            source.parent.mkdir(parents=True)
+            contents = 'fn legacy() { let label = "秘密"; }\n'
+            source.write_text(contents, encoding="utf-8")
+            boundary = len(contents[:contents.index("秘")].encode("utf-8"))
+
+            def record(byte_start):
+                return {
+                    "reason": "compiler-message",
+                    "target": {"kind": ["lib"]},
+                    "message": {
+                        "code": {"code": "deprecated"},
+                        "message": message,
+                        "spans": [
+                            {
+                                "is_primary": True,
+                                "file_name": str(source),
+                                "byte_start": byte_start,
+                                "line_start": 1,
+                            }
+                        ],
+                    },
+                }
+
+            with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "not on a UTF-8 boundary"):
+                self.guard.typed_filter_diagnostic(record(boundary + 1), root)
+            finding = self.guard.typed_filter_diagnostic(record(boundary), root)
+
+        self.assertEqual(contents.index("秘"), finding.offset)
+        self.assertEqual(1, finding.line)
+
+    def test_typed_filter_clippy_stream_fails_closed_for_malformed_json_and_nonzero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            malformed = self.guard.subprocess.CompletedProcess(
+                ["cargo"], 0, stdout="{bad\n", stderr="fixture stderr"
+            )
+            with mock.patch.object(self.guard.subprocess, "run", return_value=malformed):
+                with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "malformed JSON"):
+                    self.guard.run_typed_filter_clippy(root, ["probe"], all_features=False)
+            nonzero = self.guard.subprocess.CompletedProcess(
+                ["cargo"], 7, stdout="", stderr="fixture stderr"
+            )
+            with mock.patch.object(self.guard.subprocess, "run", return_value=nonzero):
+                with self.assertRaisesRegex(self.guard.TypedFilterGuardError, "exit 7"):
+                    self.guard.run_typed_filter_clippy(root, ["probe"], all_features=True)
+
+    def test_typed_filter_compiler_guard_covers_renames_aliases_and_test_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            filter_crate = root / "rocketmq-filter"
+            consumer = root / "consumer"
+            (filter_crate / "src" / "filter").mkdir(parents=True)
+            (consumer / "src").mkdir(parents=True)
+            (consumer / "tests").mkdir()
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["rocketmq-filter", "consumer"]\nresolver = "2"\n',
+                encoding="utf-8",
+            )
+            (filter_crate / "Cargo.toml").write_text(
+                '[package]\nname = "rocketmq-filter"\nversion = "0.1.0"\nedition = "2021"\n',
+                encoding="utf-8",
+            )
+            (filter_crate / "src" / "lib.rs").write_text("pub mod filter;\n", encoding="utf-8")
+            (filter_crate / "src" / "filter.rs").write_text(
+                "pub mod filter_spi;\npub use filter_spi::{Filter, FilterError};\n",
+                encoding="utf-8",
+            )
+            (filter_crate / "src" / "filter" / "filter_spi.rs").write_text(
+                """#[deprecated(since = \"1.0.0\", note = \"use Filter::try_compile and FilterCompileError\")]
+#[derive(Debug, Clone)]
+pub struct FilterError { message: String }
+impl FilterError {
+    pub fn new(message: impl Into<String>) -> Self { Self { message: message.into() } }
+    pub fn message(&self) -> &str { &self.message }
+}
+pub trait Filter {
+    #[deprecated(since = \"1.0.0\", note = \"use Filter::try_compile and FilterCompileError\")]
+    #[allow(
+        deprecated,
+        reason = \"fixture keeps the frozen compatibility signature\",
+    )]
+    fn compile(&self, expression: &str) -> Result<(), FilterError>;
+}
+""",
+                encoding="utf-8",
+            )
+            (consumer / "Cargo.toml").write_text(
+                """[package]
+name = "consumer"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+test-support = []
+
+[dependencies]
+legacy_filter = { package = "rocketmq-filter", path = "../rocketmq-filter" }
+""",
+                encoding="utf-8",
+            )
+            (consumer / "src" / "lib.rs").write_text(
+                """use legacy_filter::filter::*;
+use legacy_filter::filter as module_alias;
+
+#[derive(Debug)]
+pub struct External;
+
+#[allow(deprecated)]
+impl Filter for External {
+    fn compile(&self, _: &str) -> Result<(), FilterError> { Ok(()) }
+}
+
+fn make() -> External { External }
+
+pub fn glob_legacy() { let _ = make().compile("glob"); }
+
+mod nested {
+    use legacy_filter::filter::{Filter as NestedFilter, FilterError as NestedError};
+    use super::External;
+    pub fn nested_legacy() {
+        let value = External;
+        let _ = value.compile("nested");
+        let _ = NestedError::new("nested");
+    }
+}
+
+pub fn module_alias_legacy() {
+    let value: &dyn module_alias::Filter = &External;
+    let _ = value.compile("alias");
+}
+
+pub fn dependency_rename_legacy() {
+    let value: &dyn legacy_filter::filter::Filter = &External;
+    let _ = value.compile("rename");
+}
+
+pub fn generic_receiver_legacy<T: Filter>(value: &T) { let _ = value.compile("generic"); }
+pub fn factory_inferred_name_legacy() { let pigeon = make(); let _ = pigeon.compile("factory"); }
+pub struct FilterFactory;
+impl FilterFactory { pub fn get(&self) -> External { External } }
+pub fn factory_object_arbitrary_name_legacy() {
+    let factory = FilterFactory;
+    let marmot = factory.get();
+    let _ = marmot.compile("factory-object");
+}
+pub fn chained_receiver_legacy() { let _ = make().compile("chain"); }
+pub fn fully_qualified_legacy() {
+    let value = make();
+    let _ = legacy_filter::filter::Filter::compile(&value, "qualified");
+}
+type LegacyAlias = Box<dyn Filter>;
+pub struct Holder { pub value: LegacyAlias }
+pub fn field_and_type_alias_legacy(holder: &Holder) { let _ = holder.value.compile("field"); }
+
+#[allow(deprecated)]
+pub fn allow_is_still_reported() { let _ = make().compile("allow"); }
+
+#[expect(deprecated)]
+pub fn expect_is_still_reported() { let _ = make().compile("expect"); }
+
+#[cfg(feature = "test-support")]
+pub fn feature_test_support_is_production() { let _ = make().compile("feature"); }
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn mixed_cfg_is_production() { let _ = make().compile("mixed"); }
+
+#[cfg(test)]
+fn builtin_test_is_exempt() { let _ = make().compile("builtin"); }
+
+pub struct Compiler;
+impl Compiler { pub fn compile(&self) {} }
+pub fn unrelated_compilers(filter: Compiler, image_filter: Compiler) {
+    filter.compile();
+    image_filter.compile();
+    let _ = core::mem::size_of::<crate::rocketmq_error::FilterError>();
+}
+pub mod rocketmq_error { pub struct FilterError; }
+""",
+                encoding="utf-8",
+            )
+            (consumer / "tests" / "integration.rs").write_text(
+                """use legacy_filter::filter::Filter;
+
+#[derive(Debug)]
+struct External;
+impl Filter for External {
+    fn compile(&self, _: &str) -> Result<(), legacy_filter::filter::FilterError> { Ok(()) }
+}
+
+#[test]
+fn integration_test_is_exempt() { let _ = External.compile("integration"); }
+""",
+                encoding="utf-8",
+            )
+
+            generated = self.guard.subprocess.run(
+                ["cargo", "generate-lockfile"], cwd=root, capture_output=True, text=True, check=False
+            )
+            self.assertEqual(0, generated.returncode, generated.stderr)
+            entries = self.guard.scan_typed_filter_deprecations(root)
+
+        identities = {entry["identity"] for entry in entries}
+        self.assertTrue(identities)
+        self.assertTrue(any(identity.startswith("rocketmq-filter/src/filter/") for identity in identities))
+        self.assertTrue(any("glob_legacy" in identity for identity in identities))
+        self.assertTrue(any("nested_legacy" in identity for identity in identities))
+        self.assertTrue(any("module_alias_legacy" in identity for identity in identities))
+        self.assertTrue(any("dependency_rename_legacy" in identity for identity in identities))
+        self.assertTrue(any("generic_receiver_legacy" in identity for identity in identities))
+        self.assertTrue(any("factory_inferred_name_legacy" in identity for identity in identities))
+        self.assertTrue(any("factory_object_arbitrary_name_legacy" in identity for identity in identities))
+        self.assertTrue(any("chained_receiver_legacy" in identity for identity in identities))
+        self.assertTrue(any("fully_qualified_legacy" in identity for identity in identities))
+        self.assertTrue(any("field_and_type_alias_legacy" in identity for identity in identities))
+        self.assertTrue(any("allow_is_still_reported" in identity for identity in identities))
+        self.assertTrue(any("expect_is_still_reported" in identity for identity in identities))
+        self.assertTrue(any("feature_test_support_is_production" in identity for identity in identities))
+        self.assertTrue(any("mixed_cfg_is_production" in identity for identity in identities))
+        self.assertFalse(any("builtin_test_is_exempt" in identity for identity in identities))
+        self.assertFalse(any("integration_test_is_exempt" in identity for identity in identities))
+        self.assertFalse(any("unrelated_compilers" in identity for identity in identities))
 
     def test_panic_aliases_are_counted_but_panic_module_members_are_not(self):
         source = """
