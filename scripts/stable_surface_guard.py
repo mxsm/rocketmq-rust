@@ -33,6 +33,7 @@ import public_api_snapshot
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "scripts" / "stable-surface-policy.json"
 DEFAULT_API_BASELINE = ROOT / "scripts" / "public-api-snapshot-baseline.json"
+DEFAULT_API_REEXPORT_INVENTORY = public_api_snapshot.DEFAULT_REEXPORT_SURFACE_INVENTORY
 FEATURE_ATTRIBUTE_RE = re.compile(r"#!\s*\[\s*feature\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
 FEATURE_START_RE = re.compile(r"#!\s*\[\s*feature\b")
 FEATURE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -135,6 +136,27 @@ def scan_features(root: Path, *, scope: str = "all") -> set[NightlyFeature]:
     return findings
 
 
+def resolve_api_contract_inputs(
+    api_baseline: Path | None,
+    api_reexport_inventory: Path | None,
+    *,
+    mode: str,
+    scope: str,
+) -> tuple[Path | None, Path | None]:
+    """Resolve API freeze inputs without allowing the production contract to bypass its inventory."""
+
+    if api_baseline is None and api_reexport_inventory is not None:
+        raise InputError("--api-reexport-inventory requires --api-baseline")
+    baseline = api_baseline.resolve() if api_baseline is not None else None
+    inventory = api_reexport_inventory.resolve() if api_reexport_inventory is not None else None
+    default_baseline = DEFAULT_API_BASELINE.resolve()
+    if baseline is None and mode == "target" and scope == "core-release":
+        baseline = default_baseline
+    if baseline == default_baseline and inventory is None:
+        inventory = DEFAULT_API_REEXPORT_INVENTORY.resolve()
+    return baseline, inventory
+
+
 def validate(
     root: Path,
     policy_path: Path,
@@ -142,9 +164,12 @@ def validate(
     *,
     scope: str = "all",
     api_baseline: Path | None = None,
+    api_reexport_inventory: Path | None = None,
 ) -> str:
     if not root.is_dir():
         raise InputError(f"root does not exist: {root}")
+    if api_baseline is None and api_reexport_inventory is not None:
+        raise InputError("api_reexport_inventory requires api_baseline")
     policy = load_policy(policy_path)
     allowed = policy_features(policy)
     if scope != "all":
@@ -171,7 +196,10 @@ def validate(
     if api_baseline is not None:
         try:
             baseline = json.loads(api_baseline.read_text(encoding="utf-8"))
-            public_api_snapshot.validate_baseline_contract(baseline)
+            public_api_snapshot.validate_baseline_contract(
+                baseline,
+                reexport_surface_inventory_path=api_reexport_inventory,
+            )
         except (OSError, json.JSONDecodeError, public_api_snapshot.SnapshotError) as error:
             raise InputError(f"invalid public API freeze: {error}") from error
         api_status = "verified"
@@ -186,6 +214,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--api-baseline", type=Path)
+    parser.add_argument("--api-reexport-inventory", type=Path)
     parser.add_argument("--mode", choices=("baseline", "target"), default="baseline")
     parser.add_argument(
         "--scope",
@@ -197,16 +226,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    api_baseline = args.api_baseline
-    if api_baseline is None and args.mode == "target" and args.scope == "core-release":
-        api_baseline = DEFAULT_API_BASELINE
     try:
+        api_baseline, api_reexport_inventory = resolve_api_contract_inputs(
+            args.api_baseline,
+            args.api_reexport_inventory,
+            mode=args.mode,
+            scope=args.scope,
+        )
         message = validate(
             args.root.resolve(),
             args.policy.resolve(),
             args.mode,
             scope=args.scope,
-            api_baseline=api_baseline.resolve() if api_baseline is not None else None,
+            api_baseline=api_baseline,
+            api_reexport_inventory=api_reexport_inventory,
         )
     except InputError as error:
         print(f"STABLE_SURFACE_GUARD_ERROR: {error}", file=sys.stderr)

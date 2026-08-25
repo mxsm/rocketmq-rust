@@ -24,6 +24,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUARD = REPO_ROOT / "scripts" / "stable_surface_guard.py"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import stable_surface_guard as stable_guard
 
 
 class StableSurfaceGuardTests(unittest.TestCase):
@@ -69,7 +71,9 @@ class StableSurfaceGuardTests(unittest.TestCase):
         self,
         *,
         mode: str = "baseline",
+        scope: str = "all",
         api_baseline: Path | None = None,
+        api_reexport_inventory: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command = [
             sys.executable,
@@ -80,9 +84,13 @@ class StableSurfaceGuardTests(unittest.TestCase):
             str(self.policy),
             "--mode",
             mode,
+            "--scope",
+            scope,
         ]
         if api_baseline is not None:
             command.extend(("--api-baseline", str(api_baseline)))
+        if api_reexport_inventory is not None:
+            command.extend(("--api-reexport-inventory", str(api_reexport_inventory)))
         return subprocess.run(
             command,
             check=False,
@@ -160,6 +168,123 @@ class StableSurfaceGuardTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("api_freeze=verified", result.stdout)
+
+    def test_explicit_default_baseline_resolves_the_default_reexport_inventory(self) -> None:
+        baseline, inventory = stable_guard.resolve_api_contract_inputs(
+            stable_guard.DEFAULT_API_BASELINE,
+            None,
+            mode="baseline",
+            scope="all",
+        )
+
+        self.assertEqual(stable_guard.DEFAULT_API_BASELINE.resolve(), baseline)
+        self.assertEqual(stable_guard.DEFAULT_API_REEXPORT_INVENTORY.resolve(), inventory)
+
+    def test_inventory_without_a_baseline_is_rejected(self) -> None:
+        with self.assertRaisesRegex(stable_guard.InputError, "requires --api-baseline"):
+            stable_guard.resolve_api_contract_inputs(
+                None,
+                self.policy,
+                mode="baseline",
+                scope="all",
+            )
+        with self.assertRaisesRegex(stable_guard.InputError, "requires api_baseline"):
+            stable_guard.validate(
+                self.root,
+                self.policy,
+                "baseline",
+                api_reexport_inventory=self.policy,
+            )
+
+        empty_inventory = self.root / "empty-api-reexport-inventory.json"
+        empty_inventory.write_text("{}", encoding="utf-8")
+        for inventory in (empty_inventory, stable_guard.DEFAULT_API_REEXPORT_INVENTORY):
+            with self.subTest(inventory=inventory):
+                result = self.run_guard_with_api(
+                    mode="target",
+                    scope="core-release",
+                    api_reexport_inventory=inventory,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("requires --api-baseline", result.stderr)
+
+    def test_target_mode_accepts_an_explicit_reexport_inventory_for_a_custom_baseline(self) -> None:
+        self.source.write_text("pub fn value() {}\n", encoding="utf-8")
+        self.write_policy([])
+        baseline = self.root / "api-baseline.json"
+        baseline.write_text(json.dumps(self.api_freeze_fixture()), encoding="utf-8")
+        inventory = self.root / "api-reexport-inventory.json"
+        inventory.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "profiles": {
+                        "rocketmq-store:default": {
+                            "package": "rocketmq-store",
+                            "item_paths": ["rocketmq_store::MappedFileBuilder"],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_guard_with_api(
+            mode="target",
+            api_baseline=baseline,
+            api_reexport_inventory=inventory,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("api_freeze=verified", result.stdout)
+
+    def test_target_mode_rejects_missing_or_unknown_explicit_reexport_inventory_selection(self) -> None:
+        self.source.write_text("pub fn value() {}\n", encoding="utf-8")
+        self.write_policy([])
+        baseline = self.root / "api-baseline.json"
+        baseline.write_text(json.dumps(self.api_freeze_fixture()), encoding="utf-8")
+        invalid_inventories = (
+            (
+                "missing",
+                {
+                    "schema_version": 1,
+                    "profiles": {
+                        "rocketmq-store:default": {
+                            "package": "rocketmq-store",
+                            "item_paths": ["rocketmq_store::Missing"],
+                        }
+                    },
+                },
+                "paths are absent",
+            ),
+            (
+                "unknown",
+                {
+                    "schema_version": 1,
+                    "profiles": {
+                        "rocketmq-unknown:default": {
+                            "package": "rocketmq-store",
+                            "item_paths": ["rocketmq_store::MappedFileBuilder"],
+                        }
+                    },
+                },
+                "unknown profile",
+            ),
+        )
+        for name, value, expected in invalid_inventories:
+            with self.subTest(name=name):
+                inventory = self.root / f"{name}-inventory.json"
+                inventory.write_text(json.dumps(value), encoding="utf-8")
+
+                result = self.run_guard_with_api(
+                    mode="target",
+                    api_baseline=baseline,
+                    api_reexport_inventory=inventory,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(expected, result.stderr)
 
     @staticmethod
     def api_freeze_fixture() -> dict[str, object]:

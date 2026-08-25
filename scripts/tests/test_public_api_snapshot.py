@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 
@@ -195,6 +197,389 @@ def rustdoc_proc_macro_fixture(*, include_v3_path: bool = False) -> dict[str, ob
             "kind": "proc_macro",
         }
     return {"crate_version": "1.0.0", "root": root_id, "paths": paths, "index": index}
+
+
+def rustdoc_reexport_fixture() -> dict[str, object]:
+    def item(name: str | None, visibility: str, kind: str, value: object) -> dict[str, object]:
+        return {
+            "id": name,
+            "crate_id": 0,
+            "name": name,
+            "visibility": visibility,
+            "attrs": [],
+            "inner": {kind: value},
+        }
+
+    index: dict[str, object] = {
+        "root": item(
+            "demo",
+            "public",
+            "module",
+            {
+                "is_crate": True,
+                "is_stripped": False,
+                "items": ["api", "private", "alias-a-use", "alias-b-use", "root-api-glob"],
+            },
+        ),
+        "api": item(
+            "api",
+            "public",
+            "module",
+            {
+                "is_crate": False,
+                "is_stripped": False,
+                "items": [
+                    "plain-use",
+                    "renamed-use",
+                    "external-use",
+                    "glob-use",
+                    "trait-use",
+                    "error-use",
+                    "existing-use",
+                    "private-use",
+                    "child",
+                ],
+            },
+        ),
+        "child": item(
+            "Child",
+            "public",
+            "module",
+            {"is_crate": False, "is_stripped": False, "items": ["child-thing"]},
+        ),
+        "child-thing": item(
+            "ChildThing",
+            "public",
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        ),
+        "private": item(
+            "private",
+            "default",
+            "module",
+            {"is_crate": False, "is_stripped": False, "items": ["hidden-use"]},
+        ),
+        "source": item(
+            "source",
+            "public",
+            "module",
+            {
+                "is_crate": False,
+                "is_stripped": False,
+                "items": ["glob-thing", "nested-glob", "cycle-glob"],
+            },
+        ),
+        "nested": item(
+            "nested",
+            "public",
+            "module",
+            {"is_crate": False, "is_stripped": False, "items": ["nested-thing"]},
+        ),
+        "cycle-a": item(
+            "cycle_a",
+            "public",
+            "module",
+            {"is_crate": False, "is_stripped": False, "items": ["cycle-a-glob"]},
+        ),
+        "cycle-b": item(
+            "cycle_b",
+            "public",
+            "module",
+            {"is_crate": False, "is_stripped": False, "items": ["cycle-b-glob", "cycle-thing"]},
+        ),
+        "thing": item(
+            "Thing",
+            "public",
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        ),
+        "glob-thing": item(
+            "GlobThing",
+            "public",
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        ),
+        "nested-thing": item(
+            "NestedThing",
+            "public",
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        ),
+        "cycle-thing": item(
+            "CycleThing",
+            "public",
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        ),
+        "trait": item(
+            "Trait",
+            "public",
+            "trait",
+            {
+                "is_auto": False,
+                "is_unsafe": False,
+                "is_dyn_compatible": True,
+                "items": ["compile", "try-compile"],
+                "generics": {"params": [], "where_predicates": []},
+                "bounds": [],
+                "implementations": [],
+            },
+        ),
+        "error": item(
+            "Error",
+            "public",
+            "struct",
+            {
+                "kind": {"plain": {"fields": [], "has_stripped_fields": False}},
+                "generics": {"params": [], "where_predicates": []},
+                "impls": ["error-impl"],
+            },
+        ),
+        "compile": item(
+            "compile",
+            "default",
+            "function",
+            {
+                "sig": {"inputs": [], "output": {"primitive": "bool"}, "is_c_variadic": False},
+                "generics": {"params": [], "where_predicates": []},
+                "header": {"is_const": False, "is_unsafe": False, "is_async": False, "abi": "Rust"},
+                "has_body": False,
+            },
+        ),
+        "try-compile": item(
+            "try_compile",
+            "default",
+            "function",
+            {
+                "sig": {"inputs": [], "output": {"primitive": "bool"}, "is_c_variadic": False},
+                "generics": {"params": [], "where_predicates": []},
+                "header": {"is_const": False, "is_unsafe": False, "is_async": False, "abi": "Rust"},
+                "has_body": True,
+            },
+        ),
+        "error-impl": item(
+            None,
+            "default",
+            "impl",
+            {
+                "trait": None,
+                "is_synthetic": False,
+                "items": ["error-new", "error-message"],
+            },
+        ),
+        "error-new": item(
+            "new",
+            "public",
+            "function",
+            {
+                "sig": {"inputs": [], "output": {"generic": "Self"}, "is_c_variadic": False},
+                "generics": {"params": [], "where_predicates": []},
+                "header": {"is_const": False, "is_unsafe": False, "is_async": False, "abi": "Rust"},
+                "has_body": True,
+            },
+        ),
+        "error-message": item(
+            "message",
+            "public",
+            "function",
+            {
+                "sig": {"inputs": [], "output": {"primitive": "str"}, "is_c_variadic": False},
+                "generics": {"params": [], "where_predicates": []},
+                "header": {"is_const": False, "is_unsafe": False, "is_async": False, "abi": "Rust"},
+                "has_body": True,
+            },
+        ),
+        "existing": item(
+            "Existing",
+            "public",
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        ),
+    }
+    for use_id, visibility, name, target_id, is_glob in (
+        ("plain-use", "public", "Thing", "thing", False),
+        ("renamed-use", "public", "RenamedThing", "thing", False),
+        ("external-use", "public", "ExternalThing", "external", False),
+        ("glob-use", "public", None, "source", True),
+        ("trait-use", "public", "Trait", "trait", False),
+        ("error-use", "public", "Error", "error", False),
+        ("existing-use", "public", "Existing", "thing", False),
+        ("private-use", "default", "PrivateImport", "thing", False),
+        ("hidden-use", "public", "HiddenImport", "thing", False),
+        ("nested-glob", "public", None, "nested", True),
+        ("cycle-glob", "public", None, "cycle-a", True),
+        ("cycle-a-glob", "public", None, "cycle-b", True),
+        ("cycle-b-glob", "public", None, "cycle-a", True),
+        ("alias-a-use", "public", "AliasA", "api", False),
+        ("alias-b-use", "public", "AliasB", "api", False),
+        ("root-api-glob", "public", None, "api", True),
+    ):
+        index[use_id] = item(
+            None,
+            visibility,
+            "use",
+            {"source": "semantic-only", "name": name, "id": target_id, "is_glob": is_glob},
+        )
+    paths = {
+        "root": {"crate_id": 0, "path": ["demo"], "kind": "module"},
+        "api": {"crate_id": 0, "path": ["demo", "api"], "kind": "module"},
+        "child": {"crate_id": 0, "path": ["demo", "api", "Child"], "kind": "module"},
+        "child-thing": {"crate_id": 0, "path": ["demo", "api", "Child", "ChildThing"], "kind": "struct"},
+        "private": {"crate_id": 0, "path": ["demo", "private"], "kind": "module"},
+        "source": {"crate_id": 0, "path": ["demo", "api", "source"], "kind": "module"},
+        "nested": {"crate_id": 0, "path": ["demo", "api", "source", "nested"], "kind": "module"},
+        "cycle-a": {"crate_id": 0, "path": ["demo", "api", "source", "cycle_a"], "kind": "module"},
+        "cycle-b": {"crate_id": 0, "path": ["demo", "api", "source", "cycle_b"], "kind": "module"},
+        "thing": {"crate_id": 0, "path": ["demo", "hidden", "Thing"], "kind": "struct"},
+        "glob-thing": {"crate_id": 0, "path": ["demo", "api", "source", "GlobThing"], "kind": "struct"},
+        "nested-thing": {"crate_id": 0, "path": ["demo", "api", "source", "nested", "NestedThing"], "kind": "struct"},
+        "cycle-thing": {"crate_id": 0, "path": ["demo", "api", "source", "cycle_b", "CycleThing"], "kind": "struct"},
+        "trait": {"crate_id": 0, "path": ["demo", "hidden", "Trait"], "kind": "trait"},
+        "error": {"crate_id": 0, "path": ["demo", "hidden", "Error"], "kind": "struct"},
+        "existing": {"crate_id": 0, "path": ["demo", "api", "Existing"], "kind": "struct"},
+        "external": {"crate_id": 4, "path": ["external_crate", "ExternalThing"], "kind": "struct"},
+    }
+    return {"crate_version": "1.0.0", "root": "root", "paths": paths, "index": index}
+
+
+def rustdoc_binding_resolution_fixture(
+    *,
+    explicit_after_glob: bool = False,
+    glob_target_ids: tuple[str, ...] = ("glob-thing",),
+    include_explicit: bool = True,
+) -> dict[str, object]:
+    """A minimal semantic fixture for module bindings and Rust shadowing rules."""
+
+    def item(name: str | None, kind: str, value: object) -> dict[str, object]:
+        return {
+            "id": name,
+            "crate_id": 0,
+            "name": name,
+            "visibility": "public",
+            "attrs": [],
+            "inner": {kind: value},
+        }
+
+    def unit_struct(name: str) -> dict[str, object]:
+        return item(
+            name,
+            "struct",
+            {"kind": "unit", "generics": {"params": [], "where_predicates": []}, "impls": []},
+        )
+
+    index: dict[str, object] = {
+        "root": item("demo", "module", {"is_crate": True, "is_stripped": False, "items": ["api"]}),
+        "api": item("api", "module", {"is_crate": False, "is_stripped": False, "items": []}),
+        "explicit-thing": unit_struct("Thing"),
+        "glob-thing": unit_struct("Thing"),
+        "shared-thing": unit_struct("Thing"),
+        "same-path-a": unit_struct("Thing"),
+        "same-path-b": item(
+            "Thing",
+            "struct",
+            {
+                "kind": "unit",
+                "generics": {
+                    "params": [{"name": "T", "kind": {"type": {"bounds": []}}}],
+                    "where_predicates": [],
+                },
+                "impls": [],
+            },
+        ),
+    }
+    api_items: list[str] = []
+    glob_items: list[str] = []
+    for position, target_id in enumerate(glob_target_ids):
+        source_id = f"glob-source-{position}"
+        source_use_id = f"glob-source-{position}-thing"
+        glob_use_id = f"glob-use-{position}"
+        index[source_id] = item(
+            f"glob_source_{position}",
+            "module",
+            {"is_crate": False, "is_stripped": False, "items": [source_use_id]},
+        )
+        index[source_use_id] = item(
+            None,
+            "use",
+            {"source": "semantic-only", "name": "Thing", "id": target_id, "is_glob": False},
+        )
+        index[glob_use_id] = item(
+            None,
+            "use",
+            {"source": "semantic-only", "name": None, "id": source_id, "is_glob": True},
+        )
+        glob_items.append(glob_use_id)
+    if include_explicit:
+        index["explicit-use"] = item(
+            None,
+            "use",
+            {"source": "semantic-only", "name": "Thing", "id": "explicit-thing", "is_glob": False},
+        )
+        if explicit_after_glob:
+            api_items.extend([*glob_items, "explicit-use"])
+        else:
+            api_items.extend(["explicit-use", *glob_items])
+    else:
+        api_items.extend(glob_items)
+    index["api"]["inner"]["module"]["items"] = api_items
+
+    paths: dict[str, object] = {
+        "root": {"crate_id": 0, "path": ["demo"], "kind": "module"},
+        "api": {"crate_id": 0, "path": ["demo", "api"], "kind": "module"},
+        "explicit-thing": {"crate_id": 0, "path": ["demo", "hidden", "explicit", "Thing"], "kind": "struct"},
+        "glob-thing": {"crate_id": 0, "path": ["demo", "hidden", "glob", "Thing"], "kind": "struct"},
+        "shared-thing": {"crate_id": 0, "path": ["demo", "hidden", "shared", "Thing"], "kind": "struct"},
+        "same-path-a": {"crate_id": 0, "path": ["demo", "hidden", "same", "Thing"], "kind": "struct"},
+        "same-path-b": {"crate_id": 0, "path": ["demo", "hidden", "same", "Thing"], "kind": "struct"},
+    }
+    for position in range(len(glob_target_ids)):
+        paths[f"glob-source-{position}"] = {
+            "crate_id": 0,
+            "path": ["demo", "hidden", f"glob_source_{position}"],
+            "kind": "module",
+        }
+    return {"crate_version": "1.0.0", "root": "root", "paths": paths, "index": index}
+
+
+def rustdoc_external_module_reexport_fixture() -> dict[str, object]:
+    def item(name: str | None, kind: str, value: object) -> dict[str, object]:
+        return {
+            "id": name,
+            "crate_id": 0,
+            "name": name,
+            "visibility": "public",
+            "attrs": [],
+            "inner": {kind: value},
+        }
+
+    index = {
+        "root": item(
+            "demo",
+            "module",
+            {"is_crate": True, "is_stripped": False, "items": ["alias-use", "glob-use"]},
+        ),
+        "alias-use": item(
+            None,
+            "use",
+            {"source": "external_crate::api", "name": "Alias", "id": "external-api", "is_glob": False},
+        ),
+        "glob-use": item(
+            None,
+            "use",
+            {"source": "external_crate::api", "name": None, "id": "external-api", "is_glob": True},
+        ),
+    }
+    paths = {
+        "root": {"crate_id": 0, "path": ["demo"], "kind": "module"},
+        "external-api": {"crate_id": 4, "path": ["external_crate", "api"], "kind": "module"},
+        "external-child": {"crate_id": 4, "path": ["external_crate", "api", "Child"], "kind": "module"},
+        "external-thing": {
+            "crate_id": 4,
+            "path": ["external_crate", "api", "Child", "Thing"],
+            "kind": "struct",
+        },
+    }
+    return {"crate_version": "1.0.0", "root": "root", "paths": paths, "index": index}
 
 
 class PublicApiSnapshotTests(unittest.TestCase):
@@ -652,6 +1037,402 @@ class PublicApiSnapshotTests(unittest.TestCase):
             "compatibility_decisions": [],
             "frozen_contracts": [],
         }
+
+
+class PublicApiReexportTests(unittest.TestCase):
+    SELECTED_PATHS = (
+        "demo::api::Thing",
+        "demo::api::RenamedThing",
+        "demo::api::ExternalThing",
+        "demo::api::GlobThing",
+        "demo::api::NestedThing",
+        "demo::api::CycleThing",
+        "demo::api::Trait",
+        "demo::api::Trait::compile",
+        "demo::api::Trait::try_compile",
+        "demo::api::Error",
+        "demo::api::Error::new",
+        "demo::api::Error::message",
+        "demo::api::Existing",
+    )
+
+    @staticmethod
+    def _selected_records(document: dict[str, object] | None = None) -> dict[str, dict[str, str]]:
+        records = snapshot.semantic_public_items(
+            "rocketmq-model",
+            document or rustdoc_reexport_fixture(),
+            selected_reexport_paths=PublicApiReexportTests.SELECTED_PATHS,
+        )
+        return {record["item_path"]: record for record in records}
+
+    @staticmethod
+    def _snapshot(records: list[dict[str, str]]) -> dict[str, object]:
+        baseline = PublicApiSnapshotTests.structural_snapshot()
+        baseline["profiles"]["rocketmq-model:default"]["public_api"] = records
+        return baseline
+
+    def test_reexport_collection_is_opt_in_and_private_edges_do_not_leak(self) -> None:
+        records = snapshot.semantic_public_items("rocketmq-model", rustdoc_reexport_fixture())
+        paths = {record["item_path"] for record in records}
+
+        self.assertNotIn("demo::api::Thing", paths)
+        self.assertNotIn("demo::api::PrivateImport", paths)
+        self.assertNotIn("demo::private::HiddenImport", paths)
+
+    def test_selected_reexports_cover_plain_rename_glob_nested_cycle_and_external_targets(self) -> None:
+        records = self._selected_records()
+
+        self.assertEqual(set(self.SELECTED_PATHS), set(self.SELECTED_PATHS) & set(records))
+        self.assertEqual("reexport", records["demo::api::Thing"]["kind"])
+        self.assertEqual("plain", json.loads(records["demo::api::Thing"]["signature"])["alias_kind"])
+        self.assertEqual("renamed", json.loads(records["demo::api::RenamedThing"]["signature"])["alias_kind"])
+        self.assertEqual("glob", json.loads(records["demo::api::GlobThing"]["signature"])["alias_kind"])
+        self.assertIn("demo::api::NestedThing", records)
+        self.assertIn("demo::api::CycleThing", records)
+        external_signature = json.loads(records["demo::api::ExternalThing"]["signature"])
+        self.assertEqual("external_crate::ExternalThing", external_signature["target_path"])
+        self.assertIsNone(external_signature["target_signature"])
+
+    def test_module_reexport_aliases_each_expose_their_public_descendants(self) -> None:
+        selected = (
+            "demo::AliasA::Child::ChildThing",
+            "demo::AliasB::Child::ChildThing",
+        )
+        records = {
+            record["item_path"]: record
+            for record in snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_reexport_fixture(),
+                selected_reexport_paths=selected,
+            )
+        }
+
+        self.assertEqual(set(selected), set(selected) & set(records))
+        for item_path in selected:
+            signature = json.loads(records[item_path]["signature"])
+            self.assertEqual("module-descendant", signature["alias_kind"])
+            self.assertEqual("demo::api::Child::ChildThing", signature["target_path"])
+
+    def test_glob_exported_child_module_exposes_its_public_subtree(self) -> None:
+        item_path = "demo::Child::ChildThing"
+        records = {
+            record["item_path"]: record
+            for record in snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_reexport_fixture(),
+                selected_reexport_paths=(item_path,),
+            )
+        }
+
+        signature = json.loads(records[item_path]["signature"])
+        self.assertEqual("module-descendant", signature["alias_kind"])
+        self.assertEqual("demo::api::Child::ChildThing", signature["target_path"])
+
+    def test_explicit_binding_shadows_glob_regardless_of_rustdoc_item_order(self) -> None:
+        item_path = "demo::api::Thing"
+        for explicit_after_glob in (False, True):
+            with self.subTest(explicit_after_glob=explicit_after_glob):
+                records = {
+                    record["item_path"]: record
+                    for record in snapshot.semantic_public_items(
+                        "rocketmq-model",
+                        rustdoc_binding_resolution_fixture(
+                            explicit_after_glob=explicit_after_glob,
+                        ),
+                        selected_reexport_paths=(item_path,),
+                    )
+                }
+                signature = json.loads(records[item_path]["signature"])
+                self.assertEqual("plain", signature["alias_kind"])
+                self.assertEqual("demo::hidden::explicit::Thing", signature["target_path"])
+
+    def test_glob_bindings_with_the_same_target_dedupe_but_conflicts_fail_closed(self) -> None:
+        item_path = "demo::api::Thing"
+        records = {
+            record["item_path"]: record
+            for record in snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_binding_resolution_fixture(
+                    glob_target_ids=("shared-thing", "shared-thing"),
+                    include_explicit=False,
+                ),
+                selected_reexport_paths=(item_path,),
+            )
+        }
+        self.assertEqual("glob", json.loads(records[item_path]["signature"])["alias_kind"])
+        self.assertEqual("demo::hidden::shared::Thing", json.loads(records[item_path]["signature"])["target_path"])
+
+        with self.assertRaisesRegex(snapshot.SnapshotError, "ambiguous public glob bindings"):
+            snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_binding_resolution_fixture(
+                    glob_target_ids=("glob-thing", "shared-thing"),
+                    include_explicit=False,
+                ),
+                selected_reexport_paths=(item_path,),
+            )
+
+        with self.assertRaisesRegex(snapshot.SnapshotError, "ambiguous public glob bindings"):
+            snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_binding_resolution_fixture(
+                    glob_target_ids=("same-path-a", "same-path-b"),
+                    include_explicit=False,
+                ),
+                selected_reexport_paths=(item_path,),
+            )
+
+    def test_external_module_alias_and_glob_subtrees_use_rustdoc_paths_only(self) -> None:
+        alias_path = "demo::Alias::Child::Thing"
+        glob_path = "demo::Child::Thing"
+        records = {
+            record["item_path"]: record
+            for record in snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_external_module_reexport_fixture(),
+                selected_reexport_paths=(alias_path, glob_path),
+            )
+        }
+
+        alias_signature = json.loads(records[alias_path]["signature"])
+        glob_signature = json.loads(records[glob_path]["signature"])
+        self.assertEqual("renamed-external-descendant", alias_signature["alias_kind"])
+        self.assertEqual("glob-external-descendant", glob_signature["alias_kind"])
+        self.assertEqual("external_crate::api::Child::Thing", alias_signature["target_path"])
+        self.assertEqual("external_crate::api::Child::Thing", glob_signature["target_path"])
+        self.assertIsNone(alias_signature["target_signature"])
+        self.assertIsNone(glob_signature["target_signature"])
+
+    def test_external_module_alias_target_drift_changes_the_public_facade_signature(self) -> None:
+        item_path = "demo::Alias::Child::Thing"
+        before = {
+            record["item_path"]: record
+            for record in snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_external_module_reexport_fixture(),
+                selected_reexport_paths=(item_path,),
+            )
+        }[item_path]
+        changed_document = rustdoc_external_module_reexport_fixture()
+        changed_document["paths"]["external-api"]["path"] = ["external_crate", "renamed_api"]
+        changed_document["paths"]["external-child"]["path"] = [
+            "external_crate",
+            "renamed_api",
+            "Child",
+        ]
+        changed_document["paths"]["external-thing"]["path"] = [
+            "external_crate",
+            "renamed_api",
+            "Child",
+            "Thing",
+        ]
+        after = {
+            record["item_path"]: record
+            for record in snapshot.semantic_public_items(
+                "rocketmq-model",
+                changed_document,
+                selected_reexport_paths=(item_path,),
+            )
+        }[item_path]
+
+        differences = snapshot.compare_snapshots(self._snapshot([before]), self._snapshot([after]))
+
+        self.assertEqual(1, len(differences))
+        self.assertEqual("item-changed", differences[0]["kind"])
+        self.assertEqual(["signature"], differences[0]["changed_fields"])
+        self.assertFalse(differences[0]["allowed"])
+
+    def test_selected_associated_items_use_the_public_alias_parent_and_target_semantics(self) -> None:
+        records = self._selected_records()
+        try_compile = json.loads(records["demo::api::Trait::try_compile"]["signature"])
+        error_new = json.loads(records["demo::api::Error::new"]["signature"])
+
+        self.assertEqual("plain-associated", try_compile["alias_kind"])
+        self.assertEqual("demo::hidden::Trait::try_compile", try_compile["target_path"])
+        self.assertEqual("function", try_compile["target_kind"])
+        self.assertEqual({"primitive": "bool"}, try_compile["target_signature"]["sig"]["output"])
+        self.assertEqual("demo::hidden::Error::new", error_new["target_path"])
+        self.assertEqual("function", records["demo::hidden::Trait::try_compile"]["kind"])
+        self.assertEqual("reexport", records["demo::api::Trait::try_compile"]["kind"])
+
+    def test_existing_canonical_path_wins_dedupe_over_selected_reexport(self) -> None:
+        records = self._selected_records()
+
+        self.assertEqual("struct", records["demo::api::Existing"]["kind"])
+        self.assertEqual(
+            1,
+            sum(record["item_path"] == "demo::api::Existing" for record in records.values()),
+        )
+
+    def test_associated_target_signature_drift_is_a_breaking_public_facade_change(self) -> None:
+        before = self._selected_records()["demo::api::Trait::try_compile"]
+        changed_document = rustdoc_reexport_fixture()
+        changed_document["index"]["try-compile"]["inner"]["function"]["sig"]["output"] = {
+            "primitive": "str"
+        }
+        after = self._selected_records(changed_document)["demo::api::Trait::try_compile"]
+        baseline = self._snapshot([before])
+        candidate = self._snapshot([after])
+
+        differences = snapshot.compare_snapshots(baseline, candidate)
+
+        self.assertEqual(1, len(differences))
+        self.assertEqual("item-changed", differences[0]["kind"])
+        self.assertEqual("demo::api::Trait::try_compile", differences[0]["item_path"])
+        self.assertEqual(["signature"], differences[0]["changed_fields"])
+        self.assertFalse(differences[0]["allowed"])
+
+    def test_alias_retarget_is_a_breaking_public_facade_change(self) -> None:
+        before = self._selected_records()["demo::api::Thing"]
+        changed_document = rustdoc_reexport_fixture()
+        changed_document["paths"]["thing"]["path"] = ["demo", "other", "Thing"]
+        after = self._selected_records(changed_document)["demo::api::Thing"]
+        baseline = self._snapshot([before])
+        candidate = self._snapshot([after])
+
+        differences = snapshot.compare_snapshots(baseline, candidate)
+
+        self.assertEqual(1, len(differences))
+        self.assertEqual("item-changed", differences[0]["kind"])
+        self.assertEqual("demo::api::Thing", differences[0]["item_path"])
+        self.assertEqual(["signature"], differences[0]["changed_fields"])
+        self.assertFalse(differences[0]["allowed"])
+
+    def test_selected_reexport_removal_requires_an_exact_approval(self) -> None:
+        record = self._selected_records()["demo::api::Trait::try_compile"]
+        baseline = self._snapshot([record])
+        candidate = self._snapshot([])
+
+        unapproved = snapshot.compare_snapshots(baseline, candidate)
+        self.assertEqual("item-removed", unapproved[0]["kind"])
+        self.assertFalse(unapproved[0]["allowed"])
+
+        decision = {
+            "id": "API-POST-REEXPORT-001",
+            "classification": "approved-break",
+            "applies_to": "post-freeze",
+            "profile_id": "rocketmq-model:default",
+            "package": "rocketmq-model",
+            "item_path": "demo::api::Trait::try_compile",
+            "change": "removed",
+            "replacement": "demo::api::Trait::try_compile_v2",
+            "reason": "Synthetic exact-match approval test.",
+            "approved_by": "release-approver",
+            "approved_on": "2026-08-25",
+        }
+        baseline["compatibility_decisions"] = [decision]
+        candidate["compatibility_decisions"] = copy.deepcopy(baseline["compatibility_decisions"])
+
+        approved = snapshot.compare_snapshots(baseline, candidate)
+        self.assertEqual("approved-break", approved[0]["classification"])
+        self.assertTrue(approved[0]["allowed"])
+
+    def test_reexport_mismatched_approvals_do_not_allow_removal_or_signature_changes(self) -> None:
+        record = self._selected_records()["demo::api::Trait::try_compile"]
+        for field, value in (
+            ("profile_id", "rocketmq-filter:default"),
+            ("package", "rocketmq-filter"),
+            ("item_path", "demo::api::Trait::compile"),
+            ("change", "signature"),
+            ("change", "any"),
+        ):
+            with self.subTest(removal_field=field, removal_value=value):
+                baseline = self._snapshot([record])
+                candidate = self._snapshot([])
+                decision = {
+                    "id": "API-POST-REEXPORT-MISMATCH",
+                    "classification": "approved-break",
+                    "applies_to": "post-freeze",
+                    "profile_id": "rocketmq-model:default",
+                    "package": "rocketmq-model",
+                    "item_path": "demo::api::Trait::try_compile",
+                    "change": "removed",
+                    "replacement": "demo::api::Trait::try_compile_v2",
+                    "reason": "Synthetic re-export mismatch test.",
+                    "approved_by": "release-approver",
+                    "approved_on": "2026-08-25",
+                }
+                decision[field] = value
+                baseline["compatibility_decisions"] = [decision]
+                candidate["compatibility_decisions"] = copy.deepcopy(baseline["compatibility_decisions"])
+
+                difference = snapshot.compare_snapshots(baseline, candidate)[0]
+                self.assertEqual("item-removed", difference["kind"])
+                self.assertFalse(difference["allowed"])
+
+        before = self._selected_records()["demo::api::Thing"]
+        changed_document = rustdoc_reexport_fixture()
+        changed_document["paths"]["thing"]["path"] = ["demo", "other", "Thing"]
+        after = self._selected_records(changed_document)["demo::api::Thing"]
+        baseline = self._snapshot([before])
+        candidate = self._snapshot([after])
+        decision = {
+            "id": "API-POST-REEXPORT-ANY",
+            "classification": "approved-break",
+            "applies_to": "post-freeze",
+            "profile_id": "rocketmq-model:default",
+            "package": "rocketmq-model",
+            "item_path": "demo::api::Thing",
+            "change": "any",
+            "replacement": "demo::api::ThingV2",
+            "reason": "Wildcard approvals are not accepted.",
+            "approved_by": "release-approver",
+            "approved_on": "2026-08-25",
+        }
+        baseline["compatibility_decisions"] = [decision]
+        candidate["compatibility_decisions"] = copy.deepcopy(baseline["compatibility_decisions"])
+
+        difference = snapshot.compare_snapshots(baseline, candidate)[0]
+        self.assertEqual("item-changed", difference["kind"])
+        self.assertFalse(difference["allowed"])
+
+    def test_selection_and_inventory_fail_closed(self) -> None:
+        profiles = [
+            {"id": "demo:default", "package": "demo-package", "target": "demo"},
+        ]
+        valid = {
+            "schema_version": 1,
+            "profiles": {
+                "demo:default": {
+                    "package": "demo-package",
+                    "item_paths": ["demo::api::Thing"],
+                }
+            },
+        }
+        invalid_documents = (
+            {"schema_version": 1, "profiles": {"unknown:default": valid["profiles"]["demo:default"]}},
+            {"schema_version": 1, "profiles": {"demo:default": {"package": "wrong", "item_paths": ["demo::api::Thing"]}}},
+            {"schema_version": 1, "profiles": {"demo:default": {"package": "demo-package"}}},
+            {"schema_version": 1, "profiles": {"demo:default": {"package": "demo-package", "item_paths": []}}},
+            {"schema_version": 1, "profiles": {"demo:default": {"package": "demo-package", "item_paths": ["demo::api::Thing", "demo::api::Thing"]}}},
+            {"schema_version": 1, "profiles": {"demo:default": {"package": "demo-package", "item_paths": ["demo::api::*"]}}},
+            {"schema_version": 1, "profiles": {"demo:default": {"package": "demo-package", "item_paths": ["other::Thing"]}}},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            inventory_path = Path(directory) / "inventory.json"
+            inventory_path.write_text(json.dumps(valid), encoding="utf-8")
+            self.assertEqual(
+                {"demo:default": ("demo::api::Thing",)},
+                snapshot.load_reexport_surface_inventory(profiles, inventory_path),
+            )
+            for invalid in invalid_documents:
+                with self.subTest(invalid=invalid):
+                    inventory_path.write_text(json.dumps(invalid), encoding="utf-8")
+                    with self.assertRaises(snapshot.SnapshotError):
+                        snapshot.load_reexport_surface_inventory(profiles, inventory_path)
+
+        with self.assertRaises(snapshot.SnapshotError):
+            snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_reexport_fixture(),
+                selected_reexport_paths=("demo::api::Thing", "demo::api::Thing"),
+            )
+        with self.assertRaises(snapshot.SnapshotError):
+            snapshot.semantic_public_items(
+                "rocketmq-model",
+                rustdoc_reexport_fixture(),
+                selected_reexport_paths=("demo::api::Missing",),
+            )
 
 
 if __name__ == "__main__":
