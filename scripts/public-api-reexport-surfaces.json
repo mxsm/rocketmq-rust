@@ -37,6 +37,20 @@
         "rocketmq_filter::filter::FilterError::message"
       ],
       "package": "rocketmq-filter"
+    },
+    "rocketmq-runtime:default": {
+      "item_paths": [
+        "rocketmq_runtime::RocketMQRuntime",
+        "rocketmq_runtime::RocketMQRuntime::Multi",
+        "rocketmq_runtime::RocketMQRuntime::get_handle",
+        "rocketmq_runtime::RocketMQRuntime::get_runtime",
+        "rocketmq_runtime::RocketMQRuntime::new_multi",
+        "rocketmq_runtime::RocketMQRuntime::schedule_at_fixed_rate",
+        "rocketmq_runtime::RocketMQRuntime::schedule_at_fixed_rate_mut",
+        "rocketmq_runtime::RocketMQRuntime::shutdown",
+        "rocketmq_runtime::RocketMQRuntime::shutdown_timeout"
+      ],
+      "package": "rocketmq-runtime"
     }
   },
   "schema_version": 1

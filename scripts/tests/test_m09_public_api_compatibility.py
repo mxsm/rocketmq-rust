@@ -24,6 +24,119 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "scripts" / "public-api-snapshot-baseline.json"
+REEXPORT_SURFACES = ROOT / "scripts" / "public-api-reexport-surfaces.json"
+
+RUNTIME_ROOT_REEXPORTS = (
+    (
+        "rocketmq_runtime::RocketMQRuntime",
+        "plain",
+        "enum",
+        "rocketmq_runtime::legacy::RocketMQRuntime",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::Multi",
+        "plain-associated",
+        "variant",
+        "rocketmq_runtime::legacy::RocketMQRuntime::Multi",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::get_handle",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::get_handle",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::get_runtime",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::get_runtime",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::new_multi",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::new_multi",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::schedule_at_fixed_rate",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::schedule_at_fixed_rate",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::schedule_at_fixed_rate_mut",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::schedule_at_fixed_rate_mut",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::shutdown",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::shutdown",
+    ),
+    (
+        "rocketmq_runtime::RocketMQRuntime::shutdown_timeout",
+        "plain-associated",
+        "function",
+        "rocketmq_runtime::legacy::RocketMQRuntime::shutdown_timeout",
+    ),
+)
+
+RUNTIME_CANONICAL_RECORDS = {
+    "rocketmq_runtime::legacy::RocketMQRuntime": (
+        "enum",
+        "public",
+        '{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::Multi": (
+        "variant",
+        "default",
+        '{"discriminant":null,"kind":{"tuple_arity":1}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::Multi::0": (
+        "struct_field",
+        "default",
+        '{"resolved_path":{"args":null,"path":"tokio::runtime::Runtime"}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::get_handle": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[],"where_predicates":[]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}]],"is_c_variadic":false,"output":{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"resolved_path":{"args":null,"path":"tokio::runtime::Handle"}}}}}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::get_runtime": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[],"where_predicates":[]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}]],"is_c_variadic":false,"output":{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"resolved_path":{"args":null,"path":"tokio::runtime::Runtime"}}}}}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::new_multi": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[],"where_predicates":[]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["threads",{"primitive":"usize"}],["name",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"primitive":"str"}}}]],"is_c_variadic":false,"output":{"generic":"Self"}}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::schedule_at_fixed_rate": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[{"kind":{"type":{"bounds":[],"default":null,"is_synthetic":false}},"name":"F"}],"where_predicates":[{"bound_predicate":{"bounds":[{"trait_bound":{"generic_params":[],"modifier":"none","trait":{"args":{"parenthesized":{"inputs":[],"output":null}},"path":"Fn"}}},{"trait_bound":{"generic_params":[],"modifier":"none","trait":{"args":null,"path":"Send"}}},{"outlives":"\'static"}],"generic_params":[],"type":{"generic":"F"}}}]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}],["task",{"generic":"F"}],["initial_delay",{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"path":"Duration"}}}],"constraints":[]}},"path":"Option"}}],["period",{"resolved_path":{"args":null,"path":"Duration"}}]],"is_c_variadic":false,"output":null}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::schedule_at_fixed_rate_mut": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[{"kind":{"type":{"bounds":[],"default":null,"is_synthetic":false}},"name":"F"}],"where_predicates":[{"bound_predicate":{"bounds":[{"trait_bound":{"generic_params":[],"modifier":"none","trait":{"args":{"parenthesized":{"inputs":[],"output":null}},"path":"FnMut"}}},{"trait_bound":{"generic_params":[],"modifier":"none","trait":{"args":null,"path":"Send"}}},{"outlives":"\'static"}],"generic_params":[],"type":{"generic":"F"}}}]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"generic":"Self"}}}],["task",{"generic":"F"}],["initial_delay",{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"path":"Duration"}}}],"constraints":[]}},"path":"Option"}}],["period",{"resolved_path":{"args":null,"path":"Duration"}}]],"is_c_variadic":false,"output":null}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::shutdown": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[],"where_predicates":[]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"generic":"Self"}]],"is_c_variadic":false,"output":null}}',
+    ),
+    "rocketmq_runtime::legacy::RocketMQRuntime::shutdown_timeout": (
+        "function",
+        "public",
+        '{"default_unstable":null,"generics":{"params":[],"where_predicates":[]},"has_body":true,"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["self",{"generic":"Self"}],["timeout",{"resolved_path":{"args":null,"path":"Duration"}}]],"is_c_variadic":false,"output":null}}',
+    ),
+}
+
+
 def load_module(name: str, relative: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / relative)
     if spec is None or spec.loader is None:
@@ -236,6 +349,70 @@ class PublicApiCompatibilityTests(unittest.TestCase):
             if decision["classification"] != "compatible-addition":
                 self.assertTrue(decision["approved_by"])
                 self.assertTrue(decision["approved_on"])
+
+    def test_runtime_root_reexports_freeze_the_exact_legacy_facade(self) -> None:
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        inventory = json.loads(REEXPORT_SURFACES.read_text(encoding="utf-8"))
+        profile = baseline["profiles"]["rocketmq-runtime:default"]
+        expected_paths = tuple(item_path for item_path, *_ in RUNTIME_ROOT_REEXPORTS)
+
+        self.assertIn("rocketmq-runtime:default", inventory["profiles"])
+        self.assertEqual(
+            {
+                "package": "rocketmq-runtime",
+                "item_paths": list(expected_paths),
+            },
+            inventory["profiles"]["rocketmq-runtime:default"],
+        )
+
+        records = {item["item_path"]: item for item in profile["public_api"]}
+        canonical_records = {
+            item_path: (
+                record["kind"],
+                record["visibility"],
+                record["signature"],
+            )
+            for item_path, record in records.items()
+            if item_path.startswith("rocketmq_runtime::legacy::RocketMQRuntime")
+        }
+        self.assertEqual(RUNTIME_CANONICAL_RECORDS, canonical_records)
+
+        runtime_reexports = {
+            item_path: record
+            for item_path, record in records.items()
+            if item_path.startswith("rocketmq_runtime::RocketMQRuntime")
+            and record["kind"] == "reexport"
+        }
+        self.assertEqual(set(expected_paths), set(runtime_reexports))
+
+        for item_path, alias_kind, target_kind, target_path in RUNTIME_ROOT_REEXPORTS:
+            with self.subTest(item_path=item_path):
+                record = runtime_reexports[item_path]
+                self.assertEqual(
+                    {
+                        "package": "rocketmq-runtime",
+                        "module": (
+                            "rocketmq_runtime"
+                            if item_path == "rocketmq_runtime::RocketMQRuntime"
+                            else "rocketmq_runtime::RocketMQRuntime"
+                        ),
+                        "item_path": item_path,
+                        "kind": "reexport",
+                        "visibility": "public",
+                        "feature": "default",
+                    },
+                    {field: record[field] for field in record if field != "signature"},
+                )
+                signature = json.loads(record["signature"])
+                self.assertEqual(
+                    {
+                        "alias_kind": alias_kind,
+                        "target_kind": target_kind,
+                        "target_path": target_path,
+                        "target_signature": json.loads(RUNTIME_CANONICAL_RECORDS[target_path][2]),
+                    },
+                    signature,
+                )
 
 
 if __name__ == "__main__":
