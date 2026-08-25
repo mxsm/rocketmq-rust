@@ -39,12 +39,13 @@ use rocketmq_error::FilterCompileStage;
 
 use crate::expression::Expression;
 
-/// Error type for filter compilation and evaluation failures.
+/// Deprecated local string error retained for 1.x filter compilation compatibility.
 ///
-/// This error wraps various failure scenarios during filter operations:
-/// - Expression parsing errors
-/// - Type conversion failures
-/// - Invalid expression syntax
+/// New filter compilation paths return [`FilterCompileError`], whose stable
+/// metadata is safe to expose at service boundaries. This compatibility type
+/// remains available throughout 1.x; any future removal requires a complete
+/// release cycle, an explicit 2.0 breaking window, and individual reviewed
+/// post-freeze approvals for every affected frozen public item.
 #[deprecated(since = "1.0.0", note = "use Filter::try_compile and FilterCompileError")]
 #[derive(Debug, Clone)]
 pub struct FilterError {
@@ -96,6 +97,10 @@ impl std::error::Error for FilterError {}
 /// filter implementations. Each filter type (SQL92, Tag, etc.) must implement
 /// this trait to participate in the message filtering pipeline.
 ///
+/// New callers should use [`Self::try_compile`]. The deprecated 1.x
+/// [`Self::compile`] facade remains available for compatibility and is not
+/// removed or authorized for removal by this API documentation.
+///
 /// # Type Parameters
 ///
 /// Implementations must be `Send + Sync` to support multi-threaded filtering.
@@ -103,21 +108,10 @@ impl std::error::Error for FilterError {}
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_filter::filter::{Filter, FilterError};
-/// use rocketmq_filter::expression::Expression;
+/// use rocketmq_filter::filter::{Filter, FilterFactory};
 ///
-/// struct CustomFilter;
-///
-/// impl Filter for CustomFilter {
-///     fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError> {
-///         // Parse and compile the expression
-///         Ok(Box::new(MyExpression::parse(expr)?))
-///     }
-///
-///     fn of_type(&self) -> &str {
-///         "CUSTOM"
-///     }
-/// }
+/// let filter = FilterFactory::instance().get("SQL92").unwrap();
+/// let expression = filter.try_compile("age > 18")?;
 /// ```
 ///
 /// # Thread Safety
@@ -126,7 +120,7 @@ impl std::error::Error for FilterError {}
 /// Implementations should be stateless or use interior mutability with
 /// appropriate synchronization.
 pub trait Filter: Send + Sync + fmt::Debug {
-    /// Compiles an expression string into an executable expression object.
+    /// Compiles an expression string through the deprecated 1.x compatibility facade.
     ///
     /// This method parses the input string according to the filter's syntax
     /// rules and produces an `Expression` that can be evaluated against messages.
@@ -138,7 +132,7 @@ pub trait Filter: Send + Sync + fmt::Debug {
     /// # Returns
     ///
     /// * `Ok(Box<dyn Expression>)` - Successfully compiled expression
-    /// * `Err(FilterError)` - Compilation failed due to syntax or semantic errors
+    /// * `Err(FilterError)` - Legacy string-only compilation failure
     ///
     /// # Examples
     ///
@@ -149,10 +143,9 @@ pub trait Filter: Send + Sync + fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Returns `FilterError` if:
-    /// - Expression syntax is invalid
-    /// - Referenced properties don't exist
-    /// - Type constraints are violated
+    /// New code should call [`Self::try_compile`] to preserve structured failure
+    /// metadata. This wrapper remains available throughout 1.x and is not
+    /// authorized for removal by this documentation.
     #[deprecated(since = "1.0.0", note = "use Filter::try_compile and FilterCompileError")]
     #[allow(
         deprecated,
@@ -165,6 +158,9 @@ pub trait Filter: Send + Sync + fmt::Debug {
     /// Filters that only implement the legacy [`Self::compile`] method continue
     /// to work. Their failures are classified as
     /// [`FilterCompileErrorKind::LegacyAdapter`] during the compatibility stage.
+    /// Future removal of that adapter requires a complete release cycle, an
+    /// explicit 2.0 breaking window, and individual reviewed post-freeze
+    /// approvals for every affected frozen public item.
     fn try_compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
         #[allow(
             deprecated,

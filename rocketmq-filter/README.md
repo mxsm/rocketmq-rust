@@ -95,7 +95,7 @@ use rocketmq_filter::filter::{Filter, FilterFactory};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let filter = FilterFactory::get_sql_filter();
-    let expression = filter.compile("color = 'blue' AND retries >= 3")?;
+    let expression = filter.try_compile("color = 'blue' AND retries >= 3")?;
 
     let mut context = MessageEvaluationContext::new();
     context.put("color", "blue");
@@ -105,6 +105,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(result, Value::Boolean(true));
 
     Ok(())
+}
+```
+
+### Typed filter compilation
+
+New code must call `Filter::try_compile` and handle `FilterCompileError`. Its kind, stage, optional raw UTF-8 byte
+offset, and SQL92 source classification are stable and redaction-safe; a rejected expression can be converted to
+`RocketMQError` with `ErrorKind::Filter`.
+
+The deprecated 1.x `Filter::compile` façade and its local string `FilterError` remain available for existing
+implementations and callers. This change does not remove either API or authorize removal. Any future deletion
+requires a complete release cycle, an explicit 2.0 breaking window, and individual reviewed post-freeze approvals
+for every affected frozen public item.
+
+#### Future custom filter implementer migration
+
+Only in a future, approved 2.0 breaking window would custom `Filter` implementers migrate their required trait
+implementation from `compile` returning the local string `FilterError` to `try_compile` returning
+`FilterCompileError`. The current 1.x trait still requires the legacy `compile` method. The following is a future
+2.0 sketch only, remains subject to the approvals above, and is not current 1.x-compilable code:
+
+```rust,ignore
+// Future 2.0 sketch only; not valid for the current 1.x Filter trait.
+impl Filter for CustomFilter {
+    fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
+        // Compile the custom expression and return typed, redaction-safe failures.
+    }
 }
 ```
 
