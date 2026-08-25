@@ -49,10 +49,6 @@ _asset_bundler_cache
 _site
 
 .claude/*
-!.claude/CLAUDE.md
-!.claude/rules/
-.claude/rules/*
-!.claude/rules/*.md
 !.claude/skills/
 !.claude/skills/**
 !.claude/glossary/**
