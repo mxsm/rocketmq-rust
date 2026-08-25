@@ -598,7 +598,8 @@ def check(repo_root: Path, manifest_path: Path) -> int:
         print(
             "request-header migration guard passed: "
             f"{summary['entryCount']} registered, {summary['v3Count']} V3, "
-            f"{summary['v2Count']} frozen V2, 0 unreviewed differences"
+            f"{summary['v2Count']} V2, {summary['pendingCount']} pending, "
+            f"{len(legacy_derives)} production legacy derive uses"
         )
         return 0
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
