@@ -386,7 +386,7 @@ def _record(
 
 
 def semantic_public_items(package: str, document: dict[str, Any]) -> list[dict[str, str]]:
-    """Build stable, readable API records from rustdoc's public path table."""
+    """Build stable, readable API records from rustdoc's public API graph."""
 
     index = document.get("index", {})
     path_by_id = {
@@ -441,6 +441,39 @@ def semantic_public_items(package: str, document: dict[str, Any]) -> list[dict[s
         feature = _item_feature(item)
         records[item_path] = _record(package, item_path, item, index)
         add_associated(item_id, item_path, feature)
+
+    root_id = document.get("root")
+    root = _item_by_id(index, root_id)
+    if root is not None:
+        root_kind, root_value = _item_kind_and_value(root)
+        root_path = path_by_id.get(str(root_id))
+        if root_path is None:
+            root_name = root.get("name")
+            root_path = root_name if isinstance(root_name, str) and root_name else None
+
+        visited_modules: set[str] = set()
+
+        def add_public_proc_macros(module_id: Any, module_path: str, module_value: Any) -> None:
+            module_key = str(module_id)
+            if module_key in visited_modules or not isinstance(module_value, dict):
+                return
+            visited_modules.add(module_key)
+            for child_id in _reference_list(module_value.get("items")):
+                child = _item_by_id(index, child_id)
+                if child is None:
+                    continue
+                child_kind, child_value = _item_kind_and_value(child)
+                child_name = child.get("name")
+                if not isinstance(child_name, str) or not child_name:
+                    continue
+                child_path = path_by_id.get(str(child_id), f"{module_path}::{child_name}")
+                if child_kind == "proc_macro" and child.get("visibility") == "public":
+                    records[child_path] = _record(package, child_path, child, index)
+                elif child_kind == "module" and child.get("visibility") == "public":
+                    add_public_proc_macros(child_id, child_path, child_value)
+
+        if root_kind == "module" and root_path is not None:
+            add_public_proc_macros(root_id, root_path, root_value)
     return sorted(
         records.values(),
         key=lambda item: tuple(item[field] for field in STRUCTURAL_ITEM_FIELDS),
@@ -754,7 +787,7 @@ def _approval_for(
             and decision.get("profile_id") == profile_id
             and decision.get("package") == package
             and decision.get("item_path") == item_path
-            and decision.get("change") in {change, "any"}
+            and decision.get("change") == change
             and decision.get("classification") == "approved-break"
             and isinstance(decision.get("approved_by"), str)
             and decision["approved_by"].strip()

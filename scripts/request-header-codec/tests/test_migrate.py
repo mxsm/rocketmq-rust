@@ -18,7 +18,9 @@ import importlib.util
 import json
 import sys
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 
 
@@ -56,6 +58,32 @@ class MigrationGuardTests(unittest.TestCase):
         self.assertEqual(migrate.serialize(expected), migrate.serialize(self.manifest))
         self.assertEqual(len(self.headers), 152)
         self.assertEqual(sum(header.codec == "v3" for header in self.headers.values()), 152)
+        self.assertEqual(
+            {
+                "entryCount": 152,
+                "mappedCount": 143,
+                "rustOnlyExtensionCount": 9,
+                "v2Count": 0,
+                "v3Count": 152,
+                "pendingCount": 0,
+                "migratedCount": 152,
+            },
+            self.manifest["summary"],
+        )
+        self.assertEqual([], self.legacy_derives)
+
+    def test_check_reports_completed_migration_counts(self) -> None:
+        output = StringIO()
+
+        with redirect_stdout(output):
+            result = migrate.check(self.repo_root, SCRIPT.parent / "migration.json")
+
+        self.assertEqual(0, result)
+        self.assertEqual(
+            "request-header migration guard passed: "
+            "152 registered, 152 V3, 0 V2, 0 pending, 0 production legacy derive uses\n",
+            output.getvalue(),
+        )
 
     def test_duplicate_simple_names_keep_distinct_stable_paths(self) -> None:
         graph, depths = migrate.flatten_graph(self.headers, self.repo_root)

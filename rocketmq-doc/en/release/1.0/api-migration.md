@@ -28,6 +28,26 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
+### Request-header derive retirement readiness
+
+`rocketmq_macros::RequestHeaderCodec` (V1) and
+`rocketmq_macros::RequestHeaderCodecV2` remain deprecated public 1.x derives
+and compatibility adapters. New request headers should use the recommended
+`rocketmq_macros::RequestHeaderCodecV3` derive with its explicit
+`#[header(...)]` wire metadata.
+
+The checked-in registry and migration guard provide completion evidence:
+`152 registered, 152 V3, 0 V2, 0 pending, 0 production legacy derive uses`.
+This does not change compatibility behavior. Existing wire behavior,
+compatibility adapters, helper attributes, fixtures, and the 13 intentional
+deprecated-use allows remain in place.
+
+Any future removal requires the complete release cycle, an explicit 2.0
+breaking window, and an individual exact reviewed post-freeze approval for
+each frozen item: `rocketmq_macros::RequestHeaderCodec` and
+`rocketmq_macros::RequestHeaderCodecV2`. This change creates no approval and
+does not announce or approve 2.0.
+
 ### Auth security-contract ownership and policy models
 
 Runtime-neutral security contracts are owned by `rocketmq-security-api`. Import
