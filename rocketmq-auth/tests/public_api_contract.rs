@@ -14,9 +14,11 @@
 
 use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthenticationStrategy;
+use rocketmq_auth::AuthorizationRequest;
 use rocketmq_auth::AuthorizationStrategy;
-use rocketmq_auth::Resource;
-use rocketmq_auth::SecurityResource;
+use rocketmq_auth::PolicyDecision;
+use rocketmq_auth::PolicyResource;
+use rocketmq_security_api::Resource as SecurityResource;
 
 #[test]
 fn auth_consumers_use_only_intentional_root_exports() {
@@ -42,12 +44,14 @@ fn auth_consumers_use_only_intentional_root_exports() {
 
     fn accepts_authentication_strategy<T: AuthenticationStrategy>() {}
     fn accepts_authorization_strategy<T: AuthorizationStrategy>() {}
-    fn accepts_domain_resource(_: Option<Resource>) {}
+    fn accepts_policy_resource(_: Option<PolicyResource>) {}
     fn accepts_security_resource(_: Option<SecurityResource>) {}
 
     let _ = AuthConfig::default();
     let _ = accepts_authentication_strategy::<rocketmq_auth::AllowAllAuthenticationStrategy>;
     let _ = accepts_authorization_strategy::<rocketmq_auth::StatelessAuthorizationStrategy>;
-    accepts_domain_resource(None);
+    accepts_policy_resource(None);
     accepts_security_resource(None);
+    let _ = PolicyDecision::Allow;
+    let _ = AuthorizationRequest::default();
 }

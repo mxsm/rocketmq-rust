@@ -68,6 +68,9 @@ pub use authorization::chain::AuthorizationHandler;
 pub use authorization::chain::AuthorizationHandlerChain;
 pub use authorization::context::authentication_context::AuthenticationContext;
 pub use authorization::context::default_authorization_context::DefaultAuthorizationContext;
+/// Canonical decision type for authorization policy models.
+pub use authorization::enums::decision::Decision as PolicyDecision;
+/// Frozen 1.x compatibility name for [`PolicyDecision`].
 pub use authorization::enums::decision::Decision;
 pub use authorization::enums::policy_type::PolicyType;
 pub use authorization::evaluator::AuthorizationEvaluator;
@@ -82,7 +85,13 @@ pub use authorization::model::acl::Acl;
 pub use authorization::model::environment::Environment;
 pub use authorization::model::policy::Policy;
 pub use authorization::model::policy_entry::PolicyEntry;
+/// Canonical request type for authorization policy models.
+pub use authorization::model::request_context::RequestContext as AuthorizationRequest;
+/// Frozen 1.x compatibility name for [`AuthorizationRequest`].
 pub use authorization::model::request_context::RequestContext;
+/// Canonical resource type for authorization policy models.
+pub use authorization::model::resource::Resource as PolicyResource;
+/// Frozen 1.x compatibility name for [`PolicyResource`].
 pub use authorization::model::resource::Resource;
 pub use authorization::provider::AuthorizationError;
 pub use authorization::provider::AuthorizationProvider;
@@ -128,64 +137,64 @@ pub use layered_authorization::project_policy_decision;
 pub use maintenance::LoadedMaintenancePolicy;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizationContext; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceAuthorizationContext; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceAuthorizationContext;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizationError; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceAuthorizationError; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceAuthorizationError;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizationGrant; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceAuthorizationGrant; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceAuthorizationGrant;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizer; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceAuthorizer; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceAuthorizer;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceCapability; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceCapability; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceCapability;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenancePolicy; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenancePolicy; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenancePolicy;
 pub use maintenance::MaintenancePolicyError;
 pub use maintenance::MaintenancePolicyReference;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenancePrincipalBinding; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenancePrincipalBinding; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenancePrincipalBinding;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceRequestClass; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceRequestClass; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceRequestClass;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceResourceBudget; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceResourceBudget; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceResourceBudget;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceRole; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceRole; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceRole;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceRoleGrant; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MaintenanceRoleGrant; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MaintenanceRoleGrant;
 #[deprecated(
     since = "1.1.0",
-    note = "use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION; this compatibility path will be removed in 2.0.0"
+    note = "use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
 )]
 pub use maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
 pub use permission::Permission;
@@ -200,7 +209,15 @@ pub use runtime::ProviderRegistry;
 pub use secret_provider::EncryptedFileSecretProvider;
 pub use secret_provider::EnvironmentSecretProvider;
 pub use secret_provider::SecretProviderRegistry;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::Principal; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
+)]
 pub use security_api::Principal as SecurityPrincipal;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::Resource; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
+)]
 pub use security_api::Resource as SecurityResource;
 
 #[doc(hidden)]

@@ -36,8 +36,8 @@ use rocketmq_auth::DefaultAuthenticationContextBuilder;
 use rocketmq_auth::DefaultAuthenticationProvider;
 use rocketmq_auth::DefaultAuthorizationContext;
 use rocketmq_auth::DefaultAuthorizationProvider;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::ProviderRegistry;
-use rocketmq_auth::Resource;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
@@ -168,14 +168,14 @@ impl AuthenticatedPrincipal {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizationContextSpec {
-    resource: Resource,
+    resource: PolicyResource,
     actions: Vec<Action>,
 }
 
 impl AuthorizationContextSpec {
     pub fn topic(resource: &ResourceIdentity, actions: Vec<Action>) -> Self {
         Self {
-            resource: Resource::of_topic(resource.to_string().as_str()),
+            resource: PolicyResource::of_topic(resource.to_string().as_str()),
             actions,
         }
     }
@@ -188,12 +188,12 @@ impl AuthorizationContextSpec {
         let resource_name = resource.to_string();
         if NamespaceUtil::is_retry_topic(resource_name.as_str()) {
             Self {
-                resource: Resource::of_group(resource_name),
+                resource: PolicyResource::of_group(resource_name),
                 actions: retry_actions,
             }
         } else {
             Self {
-                resource: Resource::of_topic(resource_name.as_str()),
+                resource: PolicyResource::of_topic(resource_name.as_str()),
                 actions: topic_actions,
             }
         }
@@ -201,7 +201,7 @@ impl AuthorizationContextSpec {
 
     pub fn group(resource: &ResourceIdentity, actions: Vec<Action>) -> Self {
         Self {
-            resource: Resource::of_group(resource.to_string()),
+            resource: PolicyResource::of_group(resource.to_string()),
             actions,
         }
     }
@@ -910,9 +910,9 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_auth::cal_signature;
-    use rocketmq_auth::Decision;
     use rocketmq_auth::Policy;
-    use rocketmq_auth::Resource;
+    use rocketmq_auth::PolicyDecision;
+    use rocketmq_auth::PolicyResource;
     use rocketmq_auth::UserStatus;
     use rocketmq_auth::UserType;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -1124,10 +1124,10 @@ mod tests {
             "User:alice",
             SubjectType::User,
             Policy::of(
-                vec![Resource::of_topic("TopicA")],
+                vec![PolicyResource::of_topic("TopicA")],
                 vec![Action::Pub],
                 None,
-                Decision::Allow,
+                PolicyDecision::Allow,
             ),
         );
         let metadata_service = TestAuthMetadataService {
@@ -1222,10 +1222,10 @@ mod tests {
                 "sre-reader",
                 SubjectType::User,
                 Policy::of(
-                    vec![Resource::of_cluster("DefaultCluster")],
+                    vec![PolicyResource::of_cluster("DefaultCluster")],
                     vec![Action::Get, Action::Update],
                     None,
-                    Decision::Allow,
+                    PolicyDecision::Allow,
                 ),
             ))
             .await
@@ -1353,7 +1353,7 @@ accounts:
 
         let principal = AuthenticatedPrincipal::white_listed(None, "10.10.1.2".to_owned(), None);
         let contexts = vec![AuthorizationContextSpec {
-            resource: Resource::of_topic("TopicA"),
+            resource: PolicyResource::of_topic("TopicA"),
             actions: vec![Action::Pub],
         }];
 
@@ -1386,10 +1386,10 @@ accounts:
                 "alice",
                 SubjectType::User,
                 Policy::of(
-                    vec![Resource::of_topic("TopicA")],
+                    vec![PolicyResource::of_topic("TopicA")],
                     vec![Action::Pub],
                     None,
-                    Decision::Allow,
+                    PolicyDecision::Allow,
                 ),
             ))
             .await
@@ -1435,10 +1435,10 @@ accounts:
                 "alice",
                 SubjectType::User,
                 Policy::of(
-                    vec![Resource::of_topic("TopicA")],
+                    vec![PolicyResource::of_topic("TopicA")],
                     vec![Action::Pub],
                     None,
-                    Decision::Deny,
+                    PolicyDecision::Deny,
                 ),
             ))
             .await

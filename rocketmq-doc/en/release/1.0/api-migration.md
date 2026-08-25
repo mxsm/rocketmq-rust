@@ -28,6 +28,26 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
+### Auth security-contract ownership and policy models
+
+Runtime-neutral security contracts are owned by `rocketmq-security-api`. Import
+`Principal`, `Resource`, and maintenance-policy contracts directly from that
+crate. `rocketmq-auth` owns the ACL policy model; new source should use its
+canonical `PolicyDecision`, `PolicyResource`, and `AuthorizationRequest` names.
+
+The frozen 1.x `rocketmq-auth::{Decision, Resource, RequestContext}` names
+remain source-compatible aliases with identical types. `SecurityPrincipal` and
+`SecurityResource`, together with the twelve maintenance re-exports, remain
+available as deprecated 1.x compatibility paths while applications migrate to
+the owning crate. This documentation does not delete any alias, create a
+deletion approval, or announce or approve a 2.0 release. Any future removal is
+only intended for a 2.0 source-compatibility boundary and remains subject to
+compatibility, migration, and release gates.
+
+This source-ownership preparation does not change `AuthorizationHandlerChain`
+first-success behavior, whitelist or profile behavior, wire or Serde
+representations, defaults, error behavior, or fail-closed behavior.
+
 ### Fallible client runtime construction
 
 `ClientRuntime::new` was removed because runtime startup can fail. Propagate the

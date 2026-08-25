@@ -14,12 +14,12 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_auth::Acl;
-use rocketmq_auth::Decision;
 use rocketmq_auth::Environment;
 use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyDecision;
 use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::PolicyType;
-use rocketmq_auth::Resource;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
 use rocketmq_auth::UserStatus;
@@ -118,7 +118,7 @@ fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> RocketMQResult<PolicyEn
         .resource
         .as_ref()
         .ok_or_else(|| RocketMQError::illegal_argument("The resource is null."))?;
-    let resource = Resource::of_str(resource_key.as_str())
+    let resource = PolicyResource::of_str(resource_key.as_str())
         .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid resource '{}'", resource_key)))?;
 
     let actions = entry
@@ -155,7 +155,7 @@ fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> RocketMQResult<PolicyEn
         .decision
         .as_ref()
         .ok_or_else(|| RocketMQError::illegal_argument("The decision is null."))?;
-    let decision = Decision::get_by_name(decision_name.as_str())
+    let decision = PolicyDecision::get_by_name(decision_name.as_str())
         .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid decision '{}'", decision_name)))?;
 
     Ok(PolicyEntry::of(resource, actions, environment, decision))
