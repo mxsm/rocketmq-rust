@@ -143,14 +143,14 @@ cargo clippy --all-targets --all-features -- -D warnings
 | Root workspace Rust crates and `rocketmq-dashboard/rocketmq-dashboard-common/` | Repository root | Root workspace Rust profile plus applicable focused tests for behavior changes | Apply every matching specialized gate below |
 | `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially client, model, protocol, transport, runtime, error, observability, or admin-core |
 | `rocketmq-sre/` | Its standalone workspace root | Follow `rocketmq-sre/AGENTS.md` | Include every SRE Cargo member and the execution dependency boundary |
-| `rocketmq-sre/ui/` | Its project root | Follow its local `AGENTS.md`; run `npm ci`, lint, tests, API check, and production build | Include OpenAPI, routes, shared UI, and package metadata changes |
-| `rocketmq-sre/sdk/typescript/` | Its project root | Follow its local `AGENTS.md`; run `npm ci` and `npm test` | Preserve the fixed read-only SDK and local-only draft boundary |
+| `rocketmq-sre/ui/` | Its project root | Follow its local `AGENTS.md` | Include OpenAPI, routes, shared UI, and package metadata changes |
+| `rocketmq-sre/sdk/typescript/` | Its project root | Follow its local `AGENTS.md` | Preserve the fixed read-only SDK and local-only draft boundary |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Its project root | Follow its `AGENTS.md` | Revalidate for `rocketmq-dashboard-common/` or shared dashboard behavior changes |
-| `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md`; CI uses `npm ci` and `npm run build` | Include shared frontend config, shell behavior, and package metadata changes |
+| `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md` | Include shared frontend config, shell behavior, and package metadata changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Its Cargo root | Follow its `AGENTS.md` | Revalidate when a root path dependency used by the backend changes |
 | `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | Its Cargo root | Follow its `AGENTS.md` | Include dashboard-common, admin-core, client/model/protocol/transport/error, and API contract changes |
-| `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | Its project root | Follow its `AGENTS.md`; CI uses `npm ci` and `npm run build` | Include API contract, routing, shared UI, and package metadata changes |
-| `rocketmq-website/` | Its project root | Follow `rocketmq-website/AGENTS.md`; CI uses `npm ci` and `npm run build` | Include Docusaurus config, navigation, generated-doc commands, and package metadata changes |
+| `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | Its project root | Follow its `AGENTS.md` | Include API contract, routing, shared UI, and package metadata changes |
+| `rocketmq-website/` | Its project root | Follow `rocketmq-website/AGENTS.md` | Include Docusaurus config, navigation, generated-doc commands, and package metadata changes |
 | `AGENTS.md`, `**/AGENTS.md`, `**/Cargo.toml`, `**/package.json`, `.github/workflows/**` | Repository root | AGENTS routing drift control below plus `git diff --check` | This row is additive; also run the owning project profile when build configuration or behavior changes |
 
 ## Specialized gates
@@ -206,16 +206,8 @@ cargo test -p rocketmq-broker --features rocksdb_store pop_consumer
 
 ### RocketMQ MCP
 
-If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes, run from the MCP project root:
-
-```bash
-cargo check --locked
-python scripts/check_read_only_boundary.py
-cargo test --locked
-cargo test --locked --all-features
-cargo clippy --locked --all-targets --features streamable-http -- -D warnings
-cargo doc --locked --no-deps
-```
+If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes,
+run the mandatory profile in `rocketmq-tools/rocketmq-mcp/AGENTS.md` from the MCP project root.
 
 Preserve the MCP deny-by-default boundary: default tools remain read-only/diagnostic; `dangerous-tools` requires
 compile-time and runtime opt-in, confirmation, and audit; Streamable HTTP remains authenticated by default;

@@ -82,6 +82,7 @@ assert_same_directory_agents() {
 }
 
 ROOT_AGENTS_TEXT="$(read_repository_text "AGENTS.md")"
+MCP_AGENTS_TEXT="$(read_repository_text "rocketmq-tools/rocketmq-mcp/AGENTS.md")"
 
 REQUIRED_ROUTE_PATHS=(
   "fuzz/"
@@ -114,8 +115,6 @@ REQUIRED_ROOT_TERMS=(
   "cargo fmt --all -- --check"
   "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings"
   "cargo clippy --all-targets --all-features -- -D warnings"
-  "npm ci"
-  "npm run build"
   ".\\scripts\\check-agents-routing.ps1"
   "./scripts/check-agents-routing.sh"
   ".\\scripts\\runtime-audit.ps1 -SkipBaseline"
@@ -126,12 +125,15 @@ REQUIRED_ROOT_TERMS=(
   "otlp-metrics"
   "Validation routes are cumulative"
   "rocketmq-tools/rocketmq-mcp/"
-  "${REQUIRED_MCP_COMMANDS[@]}"
   "rocketmq-doc/en/agents-routing-validation-adr.md"
 )
 
 for term in "${REQUIRED_ROOT_TERMS[@]}"; do
   assert_text_contains "$ROOT_AGENTS_TEXT" "$term" "Root AGENTS.md"
+done
+
+for command in "${REQUIRED_MCP_COMMANDS[@]}"; do
+  assert_text_contains "$MCP_AGENTS_TEXT" "$command" "rocketmq-mcp AGENTS.md validation"
 done
 
 REQUIRED_SHARED_PATHS=(
