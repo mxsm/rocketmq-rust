@@ -21,6 +21,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::evaluate_request;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::Decision;
+use rocketmq_security_api::IngressDecision;
+use rocketmq_security_api::IngressPolicy;
+use rocketmq_security_api::LayerEvaluation;
+use rocketmq_security_api::LayerFailureKind;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
@@ -30,6 +34,7 @@ use rocketmq_security_api::Resource;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::SigningError;
+use rocketmq_security_api::LAYERED_AUTHORIZATION_DENIED_REASON;
 
 fn empty_fields() -> &'static HashMap<CheetahString, CheetahString> {
     static EMPTY: OnceLock<HashMap<CheetahString, CheetahString>> = OnceLock::new();
@@ -54,6 +59,7 @@ pub fn request_view<'a>(command: &'a RemotingCommand, peer: Option<&'a PeerInfo>
 /// Injected transport ports; provider implementations remain in composition crates.
 pub struct TransportSecurity {
     profile: SecurityBootstrapProfile,
+    ingress_policy: Option<Arc<dyn IngressPolicy>>,
     policy: Option<Arc<dyn RequestPolicy>>,
     signer: Option<Arc<dyn OutboundSigner>>,
 }
@@ -65,6 +71,12 @@ impl TransportSecurity {
         self.profile
     }
 
+    /// Returns whether this adapter was constructed for a secure-enforced process.
+    #[must_use]
+    pub const fn is_secure_enforced(&self) -> bool {
+        matches!(self.profile, SecurityBootstrapProfile::SecureEnforced)
+    }
+
     /// Creates an explicitly insecure transport adapter for loopback-only development.
     ///
     /// The listener address restriction is enforced by the process security bootstrap before bind.
@@ -74,6 +86,7 @@ impl TransportSecurity {
     ) -> Self {
         Self {
             profile: SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+            ingress_policy: None,
             policy,
             signer,
         }
@@ -83,8 +96,39 @@ impl TransportSecurity {
     pub fn secure_enforced(policy: Option<Arc<dyn RequestPolicy>>, signer: Option<Arc<dyn OutboundSigner>>) -> Self {
         Self {
             profile: SecurityBootstrapProfile::SecureEnforced,
+            ingress_policy: None,
             policy,
             signer,
+        }
+    }
+
+    /// Installs a coarse ingress policy for the transport dispatch boundary.
+    ///
+    /// When configured, this policy is evaluated before a request reaches the
+    /// service processor. The legacy `RequestPolicy` remains available only as
+    /// the compatibility fallback when no ingress policy has been installed.
+    #[must_use]
+    pub fn with_ingress_policy(mut self, ingress_policy: Arc<dyn IngressPolicy>) -> Self {
+        self.ingress_policy = Some(ingress_policy);
+        self
+    }
+
+    /// Projects a request onto the coarse ingress continuation contract.
+    ///
+    /// This method does not authenticate or evaluate detailed resource policy.
+    /// A missing secure ingress policy is unavailable and must be resolved as a
+    /// fail-closed denial by the caller.
+    pub fn authorize_ingress(
+        &self,
+        command: &RemotingCommand,
+        peer: Option<&PeerInfo>,
+    ) -> LayerEvaluation<IngressDecision> {
+        match &self.ingress_policy {
+            Some(policy) => policy.evaluate_ingress(request_view(command, peer)),
+            None => match self.profile {
+                SecurityBootstrapProfile::DevelopmentInsecureLoopback => Ok(IngressDecision::AllowToContinue),
+                SecurityBootstrapProfile::SecureEnforced => Err(LayerFailureKind::Unavailable),
+            },
         }
     }
 
@@ -104,6 +148,23 @@ impl TransportSecurity {
         };
         let context = RequestContext::new(request_view(command, peer), principal, resource, action);
         evaluate_request(policy.as_ref(), &context)
+    }
+
+    pub(crate) fn authorize_for_dispatch(
+        &self,
+        command: &RemotingCommand,
+        peer: Option<&PeerInfo>,
+        principal: Option<&Principal>,
+        resource: Resource,
+        action: Action,
+    ) -> Decision {
+        if self.ingress_policy.is_some() {
+            return match self.authorize_ingress(command, peer) {
+                Ok(IngressDecision::AllowToContinue) => Decision::Allow,
+                Ok(IngressDecision::Deny) | Err(_) => Decision::deny(LAYERED_AUTHORIZATION_DENIED_REASON),
+            };
+        }
+        self.authorize(command, peer, principal, resource, action)
     }
 
     pub fn sign(&self, command: &mut RemotingCommand, peer: Option<&PeerInfo>) -> Result<(), SigningError> {

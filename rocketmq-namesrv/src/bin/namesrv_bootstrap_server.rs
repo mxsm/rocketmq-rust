@@ -17,7 +17,6 @@
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::bail;
 use anyhow::Context;
@@ -41,7 +40,7 @@ use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::config::is_tls_config_key;
 use rocketmq_namesrv::config::DEFAULT_NAMESRV_LISTEN_PORT;
 use rocketmq_namesrv::parse_command_and_config_file;
-use rocketmq_namesrv::security::NameServerTransportPolicy;
+use rocketmq_namesrv::security::build_namesrv_transport_security;
 use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
@@ -52,7 +51,6 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
-use rocketmq_security_api::Principal;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapError;
@@ -61,7 +59,6 @@ use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TlsMode;
 use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v1::TransportSecurity;
 use serde::Deserialize;
 use tracing::info;
 
@@ -213,7 +210,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         telemetry_guard.subscriber_install_status(),
     );
     log_security_bootstrap(validated_security);
-    let (transport_security, transport_principal) = build_namesrv_transport_security(validated_security);
+    let transport_security = build_namesrv_transport_security(validated_security);
 
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
@@ -262,7 +259,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .set_name_server_config(namesrv_config)
         .set_server_config(server_config)
         .set_tokio_client_config(tokio_client_config)
-        .set_transport_security(transport_security, transport_principal);
+        .set_transport_security(transport_security, None);
     #[cfg(feature = "embedded-controller")]
     let builder = builder.set_controller_config_opt(controller_config);
     #[cfg(not(feature = "embedded-controller"))]
@@ -339,15 +336,8 @@ fn validate_namesrv_security(
     let has_public_listener = listeners.iter().any(|listener| !listener.ip().is_loopback());
     let outcome = match security_bootstrap.validate(&listeners) {
         Ok(outcome) => outcome,
-        Err(SecurityBootstrapError::DevelopmentListenerNotLoopback)
-            if namesrv_config.allow_insecure_public_listener =>
-        {
-            security_bootstrap.validate(&[]).map_err(anyhow::Error::from)?
-        }
         Err(SecurityBootstrapError::DevelopmentListenerNotLoopback) => {
-            bail!(
-                "allowInsecurePublicListener is required for a non-loopback NameServer listener in the development-insecure profile"
-            );
+            bail!("development-insecure NameServer listeners must be loopback-only");
         }
         Err(error) => return Err(error.into()),
     };
@@ -383,26 +373,6 @@ fn validate_namesrv_security(
     }
 
     Ok(outcome)
-}
-
-fn build_namesrv_transport_security(outcome: SecurityBootstrapOutcome) -> (Arc<TransportSecurity>, Option<Principal>) {
-    match outcome {
-        SecurityBootstrapOutcome::Validated(validated)
-            if validated.profile() == SecurityBootstrapProfile::SecureEnforced =>
-        {
-            (
-                Arc::new(TransportSecurity::secure_enforced(
-                    Some(Arc::new(NameServerTransportPolicy)),
-                    None,
-                )),
-                Some(Principal::new("namesrv.protocol-authorization")),
-            )
-        }
-        SecurityBootstrapOutcome::Disabled | SecurityBootstrapOutcome::Validated(_) => (
-            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
-            None,
-        ),
-    }
 }
 
 fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
@@ -1026,6 +996,8 @@ struct Args {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_protocol::code::request_code::RequestCode;
+
     use super::*;
 
     fn secure_bootstrap(root: &std::path::Path) -> SecurityBootstrap {
@@ -1166,10 +1138,36 @@ mod tests {
         )
         .expect_err("a public file Prometheus listener must fail closed");
         let message = error.to_string();
-        assert!(message.contains("allowInsecurePublicListener"));
         assert!(message.contains("development-insecure"));
+        assert!(message.contains("loopback-only"));
+        assert!(!message.contains("allowInsecurePublicListener"));
         assert!(!message.contains("0.0.0.0"));
         assert!(!message.contains("5557"));
+    }
+
+    #[test]
+    fn development_security_rejects_public_listener_even_with_migration_opt_in() {
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+        let namesrv = NamesrvConfig {
+            allow_insecure_public_listener: true,
+            ..NamesrvConfig::default()
+        };
+        let server = ServerConfig {
+            bind_address: "0.0.0.0".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+
+        let error = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+            .expect_err("development profile must not fabricate validation for public listeners");
+        let message = error.to_string();
+        assert!(message.contains("development-insecure"));
+        assert!(message.contains("loopback-only"));
+        assert!(!message.contains("allowInsecurePublicListener"));
+        assert!(!message.contains("0.0.0.0"));
+        assert!(!message.contains("9876"));
     }
 
     #[test]
@@ -1205,6 +1203,103 @@ mod tests {
             SecurityBootstrapOutcome::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced
         ));
+    }
+
+    #[test]
+    fn validated_bootstrap_installs_only_the_coarse_ingress_projection() {
+        let root = tempfile::tempdir().expect("temporary security root");
+        let security = secure_bootstrap(root.path());
+        let mut namesrv = NamesrvConfig::default();
+        namesrv.auth_config.authentication_enabled = true;
+        namesrv.auth_config.authorization_enabled = true;
+        namesrv.auth_config.auth_config_path = root.path().join("auth").to_string_lossy().as_ref().into();
+        namesrv.auth_config.acl_file = root.path().join("material.pem").to_string_lossy().as_ref().into();
+        let mut server = ServerConfig {
+            bind_address: "0.0.0.0".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+        server.tls_config.enable = true;
+        server.tls_config.server.mode = TlsMode::Enforcing;
+        let outcome = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+            .expect("secure bootstrap should validate before installing transport security");
+        assert!(matches!(
+            outcome,
+            SecurityBootstrapOutcome::Validated(validated)
+                if validated.profile() == SecurityBootstrapProfile::SecureEnforced && validated.listener_count() == 1
+        ));
+        let transport_security = build_namesrv_transport_security(outcome);
+        assert!(transport_security.is_secure_enforced());
+        assert_eq!(
+            transport_security.authorize_ingress(
+                &rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                    RequestCode::GetRouteinfoByTopic,
+                ),
+                None,
+            ),
+            Ok(rocketmq_security_api::IngressDecision::AllowToContinue)
+        );
+        assert_eq!(
+            transport_security.authorize_ingress(
+                &rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                    RequestCode::SendMessage,
+                ),
+                None,
+            ),
+            Ok(rocketmq_security_api::IngressDecision::Deny)
+        );
+
+        let development_bootstrap = SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
+        let development_server = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+        let development_outcome = validate_namesrv_security(
+            &development_bootstrap,
+            &NamesrvConfig::default(),
+            &development_server,
+            None,
+            None,
+            None,
+        )
+        .expect("development bootstrap should validate its loopback listener");
+        assert!(matches!(
+            development_outcome,
+            SecurityBootstrapOutcome::Validated(validated)
+                if validated.profile() == SecurityBootstrapProfile::DevelopmentInsecureLoopback
+                    && validated.listener_count() == 1
+        ));
+        let development = build_namesrv_transport_security(development_outcome);
+        assert!(!development.is_secure_enforced());
+        assert_eq!(
+            development.authorize_ingress(
+                &rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                    RequestCode::GetRouteinfoByTopic,
+                ),
+                None,
+            ),
+            Ok(rocketmq_security_api::IngressDecision::AllowToContinue)
+        );
+
+        let disabled_namesrv = NamesrvConfig {
+            allow_insecure_public_listener: true,
+            ..NamesrvConfig::default()
+        };
+        let disabled_outcome = validate_namesrv_security(
+            &SecurityBootstrap::Disabled,
+            &disabled_namesrv,
+            &ServerConfig::default(),
+            None,
+            None,
+            None,
+        )
+        .expect("explicit Disabled migration mode should select compatibility transport");
+        assert_eq!(disabled_outcome, SecurityBootstrapOutcome::Disabled);
+        let disabled = build_namesrv_transport_security(disabled_outcome);
+        assert!(!disabled.is_secure_enforced());
     }
 
     #[test]

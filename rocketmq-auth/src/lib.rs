@@ -18,6 +18,7 @@ mod authorization;
 mod bootstrap;
 mod config;
 mod credential_rotation;
+mod layered_authorization;
 mod maintenance;
 mod migration;
 mod permission;
@@ -121,6 +122,9 @@ pub use credential_rotation::CredentialVerification;
 pub use credential_rotation::CredentialVerificationSource;
 pub use credential_rotation::RetiringCredentialSnapshot;
 pub use credential_rotation::ValidatedCredential;
+pub use layered_authorization::project_authorization_error;
+pub use layered_authorization::project_authorization_result;
+pub use layered_authorization::project_policy_decision;
 pub use maintenance::LoadedMaintenancePolicy;
 #[deprecated(
     since = "1.1.0",

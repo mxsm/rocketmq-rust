@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::Decision;
+use rocketmq_security_api::IngressDecision;
+use rocketmq_security_api::IngressPolicy;
+use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::RequestPolicy;
+use rocketmq_security_api::SecurityBootstrapOutcome;
+use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_transport::api::v1::TransportSecurity;
 
 /// Low-cardinality authorization classes for every NameServer request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +94,44 @@ pub const fn classify_namesrv_request(code: RequestCode) -> Option<NameServerReq
 /// transport dispatcher.
 #[doc(hidden)]
 pub struct NameServerTransportPolicy;
+
+/// Builds the NameServer transport boundary selected by a validated bootstrap outcome.
+///
+/// A [`SecurityBootstrapOutcome::Disabled`] result selects the legacy
+/// development-compatible transport behavior. It is an explicit migration
+/// choice, not a validated loopback-listener proof. A validated development
+/// outcome has already proved every supplied listener is loopback-only.
+///
+/// This is hidden from the public documentation because the bootstrap binary is
+/// the only production composition root. It remains public so that binary and
+/// library targets use the exact same outcome-to-transport projection.
+#[doc(hidden)]
+#[must_use]
+pub fn build_namesrv_transport_security(outcome: SecurityBootstrapOutcome) -> Arc<TransportSecurity> {
+    match outcome {
+        SecurityBootstrapOutcome::Disabled => Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+            SecurityBootstrapProfile::SecureEnforced => Arc::new(
+                TransportSecurity::secure_enforced(None, None).with_ingress_policy(Arc::new(NameServerTransportPolicy)),
+            ),
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => {
+                Arc::new(TransportSecurity::development_insecure_loopback(None, None))
+            }
+        },
+    }
+}
+
+impl IngressPolicy for NameServerTransportPolicy {
+    fn evaluate_ingress(
+        &self,
+        request: rocketmq_security_api::SecurityRequestView<'_>,
+    ) -> LayerEvaluation<IngressDecision> {
+        match classify_namesrv_request(RequestCode::from(request.code())) {
+            Some(_) => Ok(IngressDecision::AllowToContinue),
+            None => Ok(IngressDecision::Deny),
+        }
+    }
+}
 
 impl RequestPolicy for NameServerTransportPolicy {
     fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {

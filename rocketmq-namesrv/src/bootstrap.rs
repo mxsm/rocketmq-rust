@@ -57,6 +57,7 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_security_api::LayerRequirement;
 use rocketmq_security_api::Principal;
 use rocketmq_transport::api::v1::ChannelEventListener;
 #[cfg(test)]
@@ -1022,6 +1023,11 @@ impl NameServerRuntime {
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle.clone());
 
+        let auth_runtime = self.inner.auth_runtime();
+        let detailed_requirement = namesrv_detailed_authorization_requirement(
+            self.inner.transport_security.as_deref(),
+            auth_runtime.as_deref(),
+        );
         let mut name_server_request_processor = NameServerRequestProcessor::new_with_in_flight_tracker(
             self.inner.in_flight_request_tracker(),
             self.inner.namesrv_metrics(),
@@ -1029,7 +1035,8 @@ impl NameServerRuntime {
         )
         .with_runtime_handle(runtime_handle)
         .with_workload_admission(Arc::clone(&self.inner.workload_admission))
-        .with_auth_runtime(self.inner.auth_runtime());
+        .with_auth_runtime(auth_runtime)
+        .with_detailed_authorization_requirement(detailed_requirement);
 
         // Register topic route query processor
         name_server_request_processor.register_processor(RequestCode::GetRouteinfoByTopic, route_request_processor);
@@ -1041,6 +1048,18 @@ impl NameServerRuntime {
 
         debug!("Request processor pipeline configured");
         name_server_request_processor
+    }
+}
+
+fn namesrv_detailed_authorization_requirement(
+    transport_security: Option<&TransportSecurity>,
+    auth_runtime: Option<&AuthRuntime>,
+) -> LayerRequirement {
+    match transport_security {
+        Some(security) if security.is_secure_enforced() => LayerRequirement::Required,
+        _ => auth_runtime
+            .map(AuthRuntime::detailed_authorization_requirement)
+            .unwrap_or(LayerRequirement::Optional),
     }
 }
 
@@ -1888,6 +1907,7 @@ mod tests {
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
+    use rocketmq_auth::AuthConfig;
     #[cfg(feature = "embedded-controller")]
     use rocketmq_controller::Controller;
     #[cfg(feature = "embedded-controller")]
@@ -1941,17 +1961,46 @@ mod tests {
     #[cfg(feature = "embedded-controller")]
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::SecurityBootstrap;
+    use rocketmq_security_api::SecurityBootstrapConfig;
+    use rocketmq_security_api::SecurityBootstrapOutcome;
+    use rocketmq_security_api::SecurityBootstrapProfile;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::v1::ConnectionState;
     use rocketmq_transport::api::v1::RPCHook;
+    use rocketmq_transport::api::v1::RequestContext;
     use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::api::v1::ServerConfig;
     use rocketmq_transport::api::v1::TlsMode;
+    use rocketmq_transport::api::v1::TransportTelemetry;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::oneshot;
     use tokio::time::sleep;
 
     use super::*;
+
+    #[test]
+    fn secure_transport_forces_required_detailed_authorization() {
+        let secure = TransportSecurity::secure_enforced(None, None);
+        let development = TransportSecurity::development_insecure_loopback(None, None);
+
+        assert_eq!(
+            namesrv_detailed_authorization_requirement(Some(&secure), None),
+            LayerRequirement::Required
+        );
+        assert_eq!(
+            namesrv_detailed_authorization_requirement(Some(&development), None),
+            LayerRequirement::Optional
+        );
+        assert_eq!(
+            namesrv_detailed_authorization_requirement(None, None),
+            LayerRequirement::Optional
+        );
+    }
 
     fn test_task_group(name: &'static str) -> rocketmq_runtime::TaskGroup {
         RuntimeContext::from_current(name)
@@ -1983,6 +2032,225 @@ mod tests {
 
     fn build_default_bootstrap() -> NameServerBootstrap {
         build_bootstrap_with_config(NamesrvConfig::default())
+    }
+
+    struct LayeredDispatchFixture {
+        service: ChildServiceContext,
+        dispatcher: Arc<AuthorizedCommandDispatcher<NameServerRequestProcessor>>,
+        auth_runtime: Option<Arc<AuthRuntime>>,
+        bootstrap: NameServerBootstrap,
+    }
+
+    async fn layered_dispatch_fixture(
+        runtime: &RuntimeContext,
+        name: &'static str,
+        security_outcome: SecurityBootstrapOutcome,
+        namesrv_config: NamesrvConfig,
+    ) -> LayeredDispatchFixture {
+        let service = runtime.service_context(name);
+        let transport_security = crate::security::build_namesrv_transport_security(security_outcome);
+        let bootstrap = Builder::new(service.clone(), TelemetryHandle::noop())
+            .set_name_server_config(namesrv_config)
+            .set_transport_security(Arc::clone(&transport_security), None)
+            .build();
+        bootstrap
+            .name_server_runtime
+            .initialize_auth_runtime()
+            .await
+            .expect("test NameServer auth runtime should initialize");
+        let processor = bootstrap.name_server_runtime.init_processors();
+        let process_budget = service.process_budget();
+        let admission = Arc::new(
+            AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+                .expect("test admission limits should be valid"),
+        );
+        let dispatcher = Arc::new(
+            AuthorizedCommandDispatcher::try_new(
+                processor,
+                Vec::new(),
+                &process_budget,
+                TransportTelemetry::noop(),
+                transport_security,
+                admission,
+            )
+            .expect("test dispatcher should fit the process budget"),
+        );
+
+        LayeredDispatchFixture {
+            service,
+            dispatcher,
+            auth_runtime: bootstrap.name_server_runtime.inner.auth_runtime(),
+            bootstrap,
+        }
+    }
+
+    fn layered_route_request(opaque: i32) -> RemotingCommand {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("layered-dispatch-topic"), Some(true)),
+        )
+        .set_opaque(opaque);
+        request.make_custom_header_to_net();
+        request
+    }
+
+    async fn dispatch_layered_request(fixture: &LayeredDispatchFixture, request: RemotingCommand) -> RemotingCommand {
+        fixture
+            .dispatcher
+            .dispatch_embedded(
+                fixture.service.task_group(),
+                RequestContext::try_embedded(Some(Principal::new("namesrv-layered-test")), None)
+                    .expect("test embedded identity should be accepted"),
+                request,
+            )
+            .await
+            .expect("layered dispatch should return a response")
+    }
+
+    async fn shutdown_layered_dispatch_fixture(fixture: LayeredDispatchFixture) {
+        if let Some(auth_runtime) = fixture.auth_runtime {
+            auth_runtime
+                .shutdown()
+                .await
+                .expect("test auth runtime should shut down");
+        }
+        let report = fixture.service.task_group().shutdown(Duration::from_secs(1)).await;
+        report
+            .assert_no_task_leak()
+            .expect("layered dispatch tasks should be owned");
+        drop(fixture.bootstrap);
+    }
+
+    fn test_security_outcome(bootstrap: SecurityBootstrap, listener: SocketAddr) -> SecurityBootstrapOutcome {
+        bootstrap
+            .validate(&[listener])
+            .expect("test security bootstrap should validate its listener")
+    }
+
+    fn secure_test_security_outcome() -> SecurityBootstrapOutcome {
+        let root = tempfile::tempdir().expect("temporary security root");
+        let material = root.path().join("material.pem");
+        std::fs::write(&material, "test-material").expect("security material should be written");
+        let outcome = test_security_outcome(
+            SecurityBootstrap::Enabled(
+                SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced)
+                    .with_trust_anchor(&material)
+                    .with_tls_identity(&material, &material)
+                    .with_secret_provider(rocketmq_security_api::MOUNTED_FILES_SECRET_PROVIDER)
+                    .with_admin_identity(&material)
+                    .with_request_policy(&material),
+            ),
+            SocketAddr::from(([0, 0, 0, 0], 9876)),
+        );
+        assert!(matches!(
+            outcome,
+            SecurityBootstrapOutcome::Validated(validated)
+                if validated.profile() == SecurityBootstrapProfile::SecureEnforced && validated.listener_count() == 1
+        ));
+        outcome
+    }
+
+    fn development_test_security_outcome() -> SecurityBootstrapOutcome {
+        let outcome = test_security_outcome(
+            SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+                SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+            )),
+            SocketAddr::from(([127, 0, 0, 1], 9876)),
+        );
+        assert!(matches!(
+            outcome,
+            SecurityBootstrapOutcome::Validated(validated)
+                if validated.profile() == SecurityBootstrapProfile::DevelopmentInsecureLoopback
+                    && validated.listener_count() == 1
+        ));
+        outcome
+    }
+
+    #[tokio::test]
+    async fn layered_dispatch_uses_production_ingress_and_detailed_authorization_pipeline() {
+        let runtime = RuntimeContext::from_current("namesrv-layered-dispatch-test");
+
+        let secure_without_auth = layered_dispatch_fixture(
+            &runtime,
+            "secure-without-auth",
+            secure_test_security_outcome(),
+            NamesrvConfig::default(),
+        )
+        .await;
+        let coarse_denied = dispatch_layered_request(
+            &secure_without_auth,
+            RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(0x7101),
+        )
+        .await;
+        assert_eq!(ResponseCode::from(coarse_denied.code()), ResponseCode::NoPermission);
+        assert_eq!(
+            coarse_denied.remark().map(CheetahString::as_str),
+            Some(rocketmq_security_api::LAYERED_AUTHORIZATION_DENIED_REASON)
+        );
+
+        let required_abstention = dispatch_layered_request(&secure_without_auth, layered_route_request(0x7102)).await;
+        assert_eq!(
+            ResponseCode::from(required_abstention.code()),
+            ResponseCode::NoPermission
+        );
+        assert_ne!(
+            required_abstention.remark().map(CheetahString::as_str),
+            Some(rocketmq_security_api::LAYERED_AUTHORIZATION_DENIED_REASON),
+            "a known request must have passed coarse ingress and been rejected by required detailed authorization"
+        );
+        shutdown_layered_dispatch_fixture(secure_without_auth).await;
+
+        let route_code = RequestCode::GetRouteinfoByTopic.to_i32().to_string();
+        let secure_with_whitelist = layered_dispatch_fixture(
+            &runtime,
+            "secure-with-whitelist",
+            secure_test_security_outcome(),
+            NamesrvConfig {
+                auth_config: AuthConfig {
+                    authentication_enabled: true,
+                    authorization_enabled: true,
+                    authentication_whitelist: CheetahString::from_string(route_code.clone()),
+                    authorization_whitelist: CheetahString::from_string(route_code),
+                    ..AuthConfig::default()
+                },
+                ..NamesrvConfig::default()
+            },
+        )
+        .await;
+        let whitelisted = dispatch_layered_request(&secure_with_whitelist, layered_route_request(0x7103)).await;
+        assert_eq!(ResponseCode::from(whitelisted.code()), ResponseCode::TopicNotExist);
+        shutdown_layered_dispatch_fixture(secure_with_whitelist).await;
+
+        let disabled = layered_dispatch_fixture(
+            &runtime,
+            "disabled-compatibility",
+            test_security_outcome(SecurityBootstrap::Disabled, SocketAddr::from(([0, 0, 0, 0], 9876))),
+            NamesrvConfig {
+                allow_insecure_public_listener: true,
+                ..NamesrvConfig::default()
+            },
+        )
+        .await;
+        let optional_abstention = dispatch_layered_request(&disabled, layered_route_request(0x7104)).await;
+        assert_eq!(
+            ResponseCode::from(optional_abstention.code()),
+            ResponseCode::TopicNotExist
+        );
+        shutdown_layered_dispatch_fixture(disabled).await;
+
+        let development = layered_dispatch_fixture(
+            &runtime,
+            "development-loopback",
+            development_test_security_outcome(),
+            NamesrvConfig::default(),
+        )
+        .await;
+        let development_response = dispatch_layered_request(&development, layered_route_request(0x7105)).await;
+        assert_eq!(
+            ResponseCode::from(development_response.code()),
+            ResponseCode::TopicNotExist
+        );
+        shutdown_layered_dispatch_fixture(development).await;
     }
 
     struct PartiallyStartedRouteLookup {

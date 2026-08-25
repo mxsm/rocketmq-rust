@@ -17,6 +17,10 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_security_api::DetailedDecision;
+use rocketmq_security_api::LayerEvaluation;
+use rocketmq_security_api::LayerFailureKind;
+use rocketmq_security_api::LayerRequirement;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
 use rocketmq_transport::api::v1::Channel;
@@ -54,6 +58,8 @@ use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_permission_manager::PlainPermissionManager;
 use crate::permission::Permission;
+use crate::project_authorization_error;
+use crate::project_authorization_result;
 use crate::AuthMetrics;
 use crate::AuthMetricsSnapshot;
 
@@ -403,6 +409,20 @@ impl AuthRuntime {
         self.config.authentication_enabled || self.config.authorization_enabled
     }
 
+    /// Returns whether this runtime requires a detailed authorization result.
+    ///
+    /// Disabled authorization is an explicit compatibility boundary and is the
+    /// only configuration state represented by `Optional` here. Authentication
+    /// failures and authorization failures remain fail-closed layer failures.
+    #[must_use]
+    pub const fn detailed_authorization_requirement(&self) -> LayerRequirement {
+        if self.config.authorization_enabled {
+            LayerRequirement::Required
+        } else {
+            LayerRequirement::Optional
+        }
+    }
+
     pub async fn reload_acl_file(&self) -> RocketMQResult<usize> {
         Ok(load_configured_acl_file(
             &self.provider_registry,
@@ -498,6 +518,35 @@ impl AuthRuntime {
             .await?;
         self.authorization_service
             .authorize_remoting(channel_context, command)
+            .await
+    }
+
+    /// Evaluates authentication and detailed authorization for a remoting request.
+    ///
+    /// The global ACL whitelist remains an allow decision. When authorization is
+    /// disabled, the authorization service returns `Abstain`; callers must resolve
+    /// that value through the explicitly selected layer requirement. Errors never
+    /// become an abstention and deliberately carry no request or credential data.
+    pub async fn evaluate_remoting_detailed(
+        &self,
+        channel_context: &(dyn std::any::Any + Send + Sync),
+        command: &RemotingCommand,
+    ) -> LayerEvaluation<DetailedDecision> {
+        let source_ip = source_ip_from_channel_context(channel_context);
+        let channel_id = channel_id_from_channel_context(channel_context);
+        let is_whitelisted = self
+            .is_acl_white_remote_address(access_key_from_command(command), source_ip.as_deref())
+            .map_err(|_| LayerFailureKind::Error)?;
+        if is_whitelisted {
+            return Ok(DetailedDecision::Allow);
+        }
+
+        self.authentication_service
+            .authenticate_remoting(command, channel_id.as_deref())
+            .await
+            .map_err(|_| LayerFailureKind::Error)?;
+        self.authorization_service
+            .authorize_remoting_detailed(channel_context, command)
             .await
     }
 
@@ -646,6 +695,47 @@ impl AuthorizationService {
         }
 
         Ok(())
+    }
+
+    /// Evaluates remoting authorization using the layered detailed contract.
+    ///
+    /// This adapter leaves the legacy `authorize_remoting` API unchanged. A
+    /// disabled authorization service explicitly abstains; policy denials remain
+    /// denials, while provider and context errors retain a fail-closed failure kind.
+    pub async fn authorize_remoting_detailed(
+        &self,
+        channel_context: &(dyn std::any::Any + Send + Sync),
+        command: &RemotingCommand,
+    ) -> LayerEvaluation<DetailedDecision> {
+        if !self.config.authorization_enabled {
+            return Ok(DetailedDecision::Abstain);
+        }
+        if self.whitelist.contains(&command.code().to_string()) {
+            self.metrics.record_whitelist_check(true);
+            return Ok(DetailedDecision::Allow);
+        }
+
+        let contexts = self
+            .provider
+            .new_contexts_from_remoting_command(channel_context, command)
+            .map_err(|error| {
+                self.metrics.record_authorization_result(false);
+                project_authorization_error(&error)
+            })?;
+
+        for context in contexts {
+            match project_authorization_result(self.provider.authorize(&context).await) {
+                Ok(DetailedDecision::Allow) => {}
+                Ok(DetailedDecision::Deny | DetailedDecision::Abstain) => {
+                    return Ok(DetailedDecision::Deny);
+                }
+                Err(failure) => {
+                    return Err(failure);
+                }
+            }
+        }
+
+        Ok(DetailedDecision::Allow)
     }
 }
 
@@ -1347,6 +1437,57 @@ accounts:
         let command = send_message_command("topic-a", "alice", &signature);
 
         runtime.check_remoting(&(), &command).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn detailed_authorization_records_each_provider_decision_once() {
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .expect("test auth runtime should initialize");
+
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        authn_provider
+            .create_user(user)
+            .await
+            .expect("test user should be stored");
+
+        let authz_provider = runtime.provider_registry().authorization_metadata_provider();
+        authz_provider
+            .create_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("topic-a")],
+                    vec![Action::Pub],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .expect("test ACL should be stored");
+
+        let command = send_message_command(
+            "topic-a",
+            "alice",
+            &acl_signer::cal_signature("alicetopic-a".as_bytes(), "secret")
+                .expect("test signature should be generated"),
+        );
+        assert_eq!(
+            runtime.evaluate_remoting_detailed(&(), &command).await,
+            Ok(DetailedDecision::Allow)
+        );
+
+        let snapshot = runtime.metrics_snapshot();
+        assert_eq!(snapshot.authorization_successes, 1);
+        assert_eq!(snapshot.authorization_failures, 0);
+        runtime.shutdown().await.expect("test auth runtime should shut down");
     }
 
     #[tokio::test]
