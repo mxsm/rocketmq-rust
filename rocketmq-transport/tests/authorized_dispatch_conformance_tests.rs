@@ -31,6 +31,9 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::Decision;
+use rocketmq_security_api::IngressDecision;
+use rocketmq_security_api::IngressPolicy;
+use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::v1::AdmissionClass;
@@ -120,6 +123,31 @@ impl RequestPolicy for AllowOnlyNamedPrincipal {
         } else {
             Decision::deny("principal is not authorized")
         }
+    }
+}
+
+struct CountingLegacyPolicy {
+    calls: Arc<AtomicUsize>,
+}
+
+impl RequestPolicy for CountingLegacyPolicy {
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Decision::Allow
+    }
+}
+
+struct DenyIngressPolicy {
+    calls: Arc<AtomicUsize>,
+}
+
+impl IngressPolicy for DenyIngressPolicy {
+    fn evaluate_ingress(
+        &self,
+        _request: rocketmq_security_api::SecurityRequestView<'_>,
+    ) -> LayerEvaluation<IngressDecision> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(IngressDecision::Deny)
     }
 }
 
@@ -369,4 +397,56 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
         Err(error) => error,
     };
     assert!(matches!(error, DispatchError::Response(ResponseSinkError::Cancelled)));
+}
+
+#[tokio::test]
+async fn configured_ingress_deny_short_circuits_legacy_policy_and_handler() {
+    let runtime = RuntimeContext::from_current("authorized-dispatch-ingress-short-circuit");
+    let service = runtime.service_context("ingress-short-circuit");
+    let process_budget = service.process_budget();
+    let admission = Arc::new(
+        AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+            .expect("test admission limits should be valid"),
+    );
+    let ingress_calls = Arc::new(AtomicUsize::new(0));
+    let legacy_calls = Arc::new(AtomicUsize::new(0));
+    let security = Arc::new(
+        TransportSecurity::secure_enforced(
+            Some(Arc::new(CountingLegacyPolicy {
+                calls: Arc::clone(&legacy_calls),
+            })),
+            None,
+        )
+        .with_ingress_policy(Arc::new(DenyIngressPolicy {
+            calls: Arc::clone(&ingress_calls),
+        })),
+    );
+    let processor = ConformanceProcessor::new(ProcessorBehavior::Echo);
+    let dispatcher = Arc::new(
+        AuthorizedCommandDispatcher::try_new(
+            processor.clone(),
+            Vec::new(),
+            &process_budget,
+            TransportTelemetry::noop(),
+            security,
+            admission,
+        )
+        .expect("test dispatcher should fit the process budget"),
+    );
+
+    let response = dispatcher
+        .dispatch_embedded(
+            service.task_group(),
+            embedded_context("allowed", None),
+            RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(48),
+        )
+        .await
+        .expect("ingress denial should produce a response");
+
+    assert_eq!(response.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(ingress_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(legacy_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(processor.calls.load(Ordering::SeqCst), 0);
+    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    report.assert_no_task_leak().expect("test tasks should be owned");
 }

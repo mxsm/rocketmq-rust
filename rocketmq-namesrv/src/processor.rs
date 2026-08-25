@@ -27,6 +27,10 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_security_api::combine_layered_authorization;
+use rocketmq_security_api::DetailedDecision;
+use rocketmq_security_api::IngressDecision;
+use rocketmq_security_api::LayerRequirement;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
@@ -105,6 +109,7 @@ pub struct NameServerRequestProcessor {
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
     in_flight_requests: Option<Arc<InFlightRequestTracker>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    detailed_authorization_requirement: Option<LayerRequirement>,
     runtime_handle: Option<NameServerRuntimeHandle>,
     workload_admission: Option<Arc<NameServerWorkloadAdmission>>,
     metrics: NameServerMetrics,
@@ -124,6 +129,7 @@ impl NameServerRequestProcessor {
             default_request_processor: None,
             in_flight_requests: None,
             auth_runtime: None,
+            detailed_authorization_requirement: None,
             runtime_handle: None,
             workload_admission: None,
             metrics: NameServerMetrics::noop(),
@@ -141,6 +147,7 @@ impl NameServerRequestProcessor {
             default_request_processor: None,
             in_flight_requests: Some(in_flight_requests),
             auth_runtime: None,
+            detailed_authorization_requirement: None,
             runtime_handle: None,
             workload_admission: None,
             metrics,
@@ -158,6 +165,11 @@ impl NameServerRequestProcessor {
 
     pub(crate) fn with_auth_runtime(mut self, auth_runtime: Option<Arc<AuthRuntime>>) -> Self {
         self.auth_runtime = auth_runtime;
+        self
+    }
+
+    pub(crate) fn with_detailed_authorization_requirement(mut self, requirement: LayerRequirement) -> Self {
+        self.detailed_authorization_requirement = Some(requirement);
         self
     }
 
@@ -198,29 +210,40 @@ impl RequestProcessor for NameServerRequestProcessor {
             }
         };
         let metric_class = metric_workload_class(WorkloadAdmissionClass::from(request_class));
-        if let Some(auth_runtime) = &self.auth_runtime {
-            if auth_runtime.check_remoting(&ctx, request).await.is_err() {
-                tracing::warn!(
-                    remote_endpoint = %ctx.remote_address(),
-                    request_class = request_class.as_str(),
-                    reason_code = "protocol-auth-denied",
-                    "NameServer request denied"
-                );
-                let error =
-                    RocketMQError::authentication_failed("NameServer request authentication or authorization failed");
-                self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
-                self.metrics.record_request(
-                    metric_class,
-                    NameServerRequestOutcome::Rejected,
-                    request_started.elapsed(),
-                    0,
-                );
-                return Ok(Some(self.command_factory.command_from_error_with_remark_and_opaque(
-                    &error,
-                    error.to_string(),
-                    request.opaque(),
-                )));
-            }
+        let detailed_requirement = self.detailed_authorization_requirement.unwrap_or_else(|| {
+            self.auth_runtime
+                .as_ref()
+                .map(|auth_runtime| auth_runtime.detailed_authorization_requirement())
+                .unwrap_or(LayerRequirement::Optional)
+        });
+        let detailed = match &self.auth_runtime {
+            Some(auth_runtime) => auth_runtime.evaluate_remoting_detailed(&ctx, request).await,
+            None => Ok(DetailedDecision::Abstain),
+        };
+        if matches!(
+            combine_layered_authorization(Ok(IngressDecision::AllowToContinue), detailed_requirement, || detailed,),
+            rocketmq_security_api::Decision::Deny { .. }
+        ) {
+            tracing::warn!(
+                remote_endpoint = %ctx.remote_address(),
+                request_class = request_class.as_str(),
+                reason_code = "protocol-auth-denied",
+                "NameServer request denied"
+            );
+            let error =
+                RocketMQError::authentication_failed("NameServer request authentication or authorization failed");
+            self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
+            self.metrics.record_request(
+                metric_class,
+                NameServerRequestOutcome::Rejected,
+                request_started.elapsed(),
+                0,
+            );
+            return Ok(Some(self.command_factory.command_from_error_with_remark_and_opaque(
+                &error,
+                error.to_string(),
+                request.opaque(),
+            )));
         }
         let admission_class = WorkloadAdmissionClass::from(request_class);
         let admission_config = self
@@ -406,15 +429,69 @@ mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
 
+    use cheetah_string::CheetahString;
     use rocketmq_auth::AuthConfig;
     use rocketmq_auth::AuthRuntimeBuilder;
     use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
     use rocketmq_transport::test_support::TestChannelBuilder;
 
     use super::*;
+
+    fn route_request(opaque: i32) -> RemotingCommand {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("layered-auth-topic"), Some(true)),
+        )
+        .set_opaque(opaque);
+        request.make_custom_header_to_net();
+        request
+    }
+
+    fn route_processor(
+        bootstrap: &crate::bootstrap::NameServerBootstrap,
+        auth_runtime: Option<Arc<AuthRuntime>>,
+        requirement: LayerRequirement,
+    ) -> NameServerRequestProcessor {
+        let runtime_handle = NameServerRuntimeHandle::new(&bootstrap.runtime_inner());
+        let mut processor = NameServerRequestProcessor::new()
+            .with_auth_runtime(auth_runtime)
+            .with_detailed_authorization_requirement(requirement);
+        processor.register_processor(
+            RequestCode::GetRouteinfoByTopic,
+            NameServerRequestProcessorWrapper::ClientRequestProcessor(Arc::new(ClientRequestProcessor::new(
+                runtime_handle,
+            ))),
+        );
+        processor
+    }
+
+    fn test_channel_context(
+        runtime: &RuntimeContext,
+        name: &'static str,
+    ) -> (
+        rocketmq_runtime::ChildServiceContext,
+        Channel,
+        Arc<ConnectionHandlerContextWrapper>,
+    ) {
+        let channel_service = runtime.service_context(name);
+        let (transport, _peer) = tokio::io::duplex(4096);
+        let channel = TestChannelBuilder::new(
+            Connection::new_with_plaintext_stream(transport),
+            channel_service.task_group().clone(),
+        )
+        .addresses(
+            SocketAddr::from(([127, 0, 0, 1], 9876)),
+            SocketAddr::from(([127, 0, 0, 1], 10911)),
+        )
+        .build()
+        .expect("test channel should initialize");
+        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        (channel_service, channel, context)
+    }
 
     #[test]
     fn cloned_nameserver_processors_share_the_dispatch_table() {
@@ -495,5 +572,143 @@ mod tests {
         auth_runtime.shutdown().await.expect("auth runtime should shut down");
         let report = channel_service.task_group().shutdown(Duration::from_secs(1)).await;
         report.assert_no_task_leak().expect("channel tasks should be owned");
+    }
+
+    #[tokio::test]
+    async fn required_abstention_denies_before_the_route_handler() {
+        let runtime = RuntimeContext::from_current("namesrv-required-abstain-test");
+        let bootstrap = crate::bootstrap::Builder::new(
+            runtime.service_context("namesrv-bootstrap"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .build();
+        let mut processor = route_processor(&bootstrap, None, LayerRequirement::Required);
+        let (channel_service, channel, context) = test_channel_context(&runtime, "namesrv-channel");
+        let mut request = route_request(0x5a5b);
+
+        let response = processor
+            .process_request(channel, context, &mut request)
+            .await
+            .expect("required abstention should produce a response")
+            .expect("required abstention should return a command");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(response.opaque(), 0x5a5b);
+        let report = channel_service.task_group().shutdown(Duration::from_secs(1)).await;
+        report.assert_no_task_leak().expect("channel tasks should be owned");
+    }
+
+    #[tokio::test]
+    async fn optional_abstention_allows_the_route_handler_to_run() {
+        let runtime = RuntimeContext::from_current("namesrv-optional-abstain-test");
+        let bootstrap = crate::bootstrap::Builder::new(
+            runtime.service_context("namesrv-bootstrap"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .build();
+        let mut processor = route_processor(&bootstrap, None, LayerRequirement::Optional);
+        let (channel_service, channel, context) = test_channel_context(&runtime, "namesrv-channel");
+        let mut request = route_request(0x5a5c);
+
+        let response = processor
+            .process_request(channel, context, &mut request)
+            .await
+            .expect("optional abstention should reach the route handler")
+            .expect("route handler should return a command");
+
+        assert_ne!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_ne!(
+            ResponseCode::from(response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        let report = channel_service.task_group().shutdown(Duration::from_secs(1)).await;
+        report.assert_no_task_leak().expect("channel tasks should be owned");
+    }
+
+    #[tokio::test]
+    async fn auth_whitelists_allow_the_route_handler_but_detailed_denial_blocks_it() {
+        let runtime = RuntimeContext::from_current("namesrv-layered-auth-handler-test");
+        let route_code = RequestCode::GetRouteinfoByTopic.to_i32().to_string();
+        let whitelisted_runtime = Arc::new(
+            AuthRuntimeBuilder::new(
+                AuthConfig {
+                    authentication_enabled: true,
+                    authorization_enabled: true,
+                    authentication_whitelist: CheetahString::from_string(route_code.clone()),
+                    authorization_whitelist: CheetahString::from_string(route_code),
+                    ..AuthConfig::default()
+                },
+                runtime.service_context("namesrv-whitelist-auth"),
+            )
+            .build()
+            .await
+            .expect("whitelisted auth runtime should initialize"),
+        );
+        let bootstrap = crate::bootstrap::Builder::new(
+            runtime.service_context("namesrv-bootstrap"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .build();
+        let mut allowed_processor = route_processor(
+            &bootstrap,
+            Some(Arc::clone(&whitelisted_runtime)),
+            LayerRequirement::Required,
+        );
+        let (channel_service, channel, context) = test_channel_context(&runtime, "namesrv-allowed-channel");
+        let mut allowed_request = route_request(0x5a5d);
+        let allowed = allowed_processor
+            .process_request(channel, context, &mut allowed_request)
+            .await
+            .expect("whitelisted authorization should reach the route handler")
+            .expect("route handler should return a command");
+        assert_eq!(ResponseCode::from(allowed.code()), ResponseCode::TopicNotExist);
+
+        let denying_runtime = Arc::new(
+            AuthRuntimeBuilder::new(
+                AuthConfig {
+                    authentication_enabled: true,
+                    authorization_enabled: true,
+                    ..AuthConfig::default()
+                },
+                runtime.service_context("namesrv-denying-auth"),
+            )
+            .build()
+            .await
+            .expect("denying auth runtime should initialize"),
+        );
+        let mut denied_processor = route_processor(
+            &bootstrap,
+            Some(Arc::clone(&denying_runtime)),
+            LayerRequirement::Required,
+        );
+        let (denied_channel_service, denied_channel, denied_context) =
+            test_channel_context(&runtime, "namesrv-denied-channel");
+        let mut denied_request = route_request(0x5a5e);
+        let denied = denied_processor
+            .process_request(denied_channel, denied_context, &mut denied_request)
+            .await
+            .expect("detailed denial should produce a response")
+            .expect("detailed denial should return a command");
+        assert_eq!(ResponseCode::from(denied.code()), ResponseCode::NoPermission);
+
+        whitelisted_runtime
+            .shutdown()
+            .await
+            .expect("whitelisted auth runtime should shut down");
+        denying_runtime
+            .shutdown()
+            .await
+            .expect("denying auth runtime should shut down");
+        let report = channel_service.task_group().shutdown(Duration::from_secs(1)).await;
+        report
+            .assert_no_task_leak()
+            .expect("allowed channel tasks should be owned");
+        let report = denied_channel_service
+            .task_group()
+            .shutdown(Duration::from_secs(1))
+            .await;
+        report
+            .assert_no_task_leak()
+            .expect("denied channel tasks should be owned");
     }
 }

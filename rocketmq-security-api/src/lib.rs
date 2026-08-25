@@ -16,6 +16,8 @@
 
 //! Runtime-neutral security contracts.
 
+/// Layered ingress and detailed authorization contracts.
+pub mod layered_authorization;
 pub mod maintenance;
 /// Resource pattern types and operations.
 pub mod resource_pattern;
@@ -24,6 +26,14 @@ pub mod resource_type;
 pub mod secret_provider;
 pub mod secure_deployment;
 
+pub use layered_authorization::combine_layered_authorization;
+pub use layered_authorization::DetailedDecision;
+pub use layered_authorization::IngressDecision;
+pub use layered_authorization::IngressPolicy;
+pub use layered_authorization::LayerEvaluation;
+pub use layered_authorization::LayerFailureKind;
+pub use layered_authorization::LayerRequirement;
+pub use layered_authorization::LAYERED_AUTHORIZATION_DENIED_REASON;
 pub use maintenance::MaintenanceAuthorizationContext;
 pub use maintenance::MaintenanceAuthorizationError;
 pub use maintenance::MaintenanceAuthorizationGrant;

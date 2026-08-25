@@ -159,7 +159,7 @@ impl AuthorizedDispatchSession {
             response.send(deadline_response(opaque)).await?;
             return Ok(DispatchOutcome::Rejected);
         }
-        if let Decision::Deny { reason } = self.boundary.security.authorize(
+        if let Decision::Deny { reason } = self.boundary.security.authorize_for_dispatch(
             &command,
             context.peer(),
             context.principal(),
