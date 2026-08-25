@@ -1,1 +1,1 @@
-use ./AGENTS.md
+@AGENTS.md
