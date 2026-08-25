@@ -75,9 +75,9 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_auth::Acl;
     use rocketmq_auth::AuthConfig;
-    use rocketmq_auth::Decision;
     use rocketmq_auth::Policy;
-    use rocketmq_auth::Resource;
+    use rocketmq_auth::PolicyDecision;
+    use rocketmq_auth::PolicyResource;
     use rocketmq_auth::User;
     use rocketmq_auth::UserStatus;
     use rocketmq_auth::UserType;
@@ -648,17 +648,17 @@ mod tests {
                 rocketmq_auth::SubjectType::User,
                 vec![
                     Policy::of(
-                        vec![Resource::of_topic("topic-a")],
+                        vec![PolicyResource::of_topic("topic-a")],
                         vec![Action::Pub],
                         None,
-                        Decision::Allow,
+                        PolicyDecision::Allow,
                     ),
                     Policy::of_type(
                         rocketmq_auth::PolicyType::Default,
-                        vec![Resource::of_topic("topic-a")],
+                        vec![PolicyResource::of_topic("topic-a")],
                         vec![Action::Sub],
                         None,
-                        Decision::Allow,
+                        PolicyDecision::Allow,
                     ),
                 ],
             ))

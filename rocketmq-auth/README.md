@@ -55,6 +55,33 @@ Optional gRPC metadata parsing support is available through the `grpc` feature:
 rocketmq-auth = { version = "1.0.0", features = ["grpc"] }
 ```
 
+## Security-contract ownership and policy-model migration
+
+Import runtime-neutral security contracts directly from `rocketmq-security-api`:
+
+```rust
+use rocketmq_security_api::{Principal, Resource};
+```
+
+Import `rocketmq-auth` policy models through their canonical names:
+
+```rust
+use rocketmq_auth::{AuthorizationRequest, PolicyDecision, PolicyResource};
+```
+
+The frozen 1.x names `Decision`, `Resource`, and `RequestContext` remain available with identical types for source
+compatibility. `SecurityPrincipal` and `SecurityResource` are deprecated 1.x re-exports; migrate to
+`rocketmq-security-api::{Principal, Resource}`. The twelve deprecated maintenance re-exports
+(`MaintenanceAuthorizationContext`, `MaintenanceAuthorizationError`, `MaintenanceAuthorizationGrant`,
+`MaintenanceAuthorizer`, `MaintenanceCapability`, `MaintenancePolicy`, `MaintenancePrincipalBinding`,
+`MaintenanceRequestClass`, `MaintenanceResourceBudget`, `MaintenanceRole`, `MaintenanceRoleGrant`, and
+`MAINTENANCE_POLICY_SCHEMA_VERSION`) also remain available while consumers migrate to `rocketmq-security-api`.
+
+Any removal is only intended for a future 2.0 source-compatibility boundary and remains subject to compatibility,
+migration, and release gates. This preparation grants no deletion approval and does not announce or approve a 2.0
+release. It changes neither `AuthorizationHandlerChain` first-success semantics nor whitelist/profile behavior,
+wire or Serde representations, defaults, error behavior, or fail-closed behavior.
+
 ## Quick Start
 
 Create an auth runtime from `AuthConfig` and point it at a RocketMQ-style ACL file:

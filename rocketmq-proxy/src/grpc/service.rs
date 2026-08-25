@@ -2132,9 +2132,9 @@ mod tests {
     use hmac::Hmac;
     use hmac::Mac;
     use rocketmq_auth::Acl;
-    use rocketmq_auth::Decision;
     use rocketmq_auth::Policy;
-    use rocketmq_auth::Resource;
+    use rocketmq_auth::PolicyDecision;
+    use rocketmq_auth::PolicyResource;
     use rocketmq_auth::User;
     use rocketmq_auth::UserStatus;
     use rocketmq_auth::UserType;
@@ -2723,7 +2723,12 @@ mod tests {
             .create_acl(Acl::of(
                 username,
                 rocketmq_auth::SubjectType::User,
-                Policy::of(vec![Resource::of_topic(topic)], actions, None, Decision::Allow),
+                Policy::of(
+                    vec![PolicyResource::of_topic(topic)],
+                    actions,
+                    None,
+                    PolicyDecision::Allow,
+                ),
             ))
             .await
             .expect("acl should be created");
@@ -2735,10 +2740,10 @@ mod tests {
                 username,
                 rocketmq_auth::SubjectType::User,
                 Policy::of(
-                    vec![Resource::of_group(group.to_owned())],
+                    vec![PolicyResource::of_group(group.to_owned())],
                     actions,
                     None,
-                    Decision::Allow,
+                    PolicyDecision::Allow,
                 ),
             ))
             .await

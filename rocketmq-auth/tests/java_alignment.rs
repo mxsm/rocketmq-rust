@@ -10,9 +10,9 @@ use rocketmq_auth::AuthRuntimeBuilder as ProductionAuthRuntimeBuilder;
 use rocketmq_auth::AuthenticationMetadataProvider;
 use rocketmq_auth::AuthorizationFactory;
 use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::AuthorizationRequest;
 use rocketmq_auth::Policy;
-use rocketmq_auth::RequestContext;
-use rocketmq_auth::Resource;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
@@ -93,10 +93,10 @@ async fn allow_topic_pub(runtime: &AuthRuntime, username: &str, topic: &str) {
         username,
         SubjectType::User,
         Policy::of(
-            vec![Resource::of_topic(topic)],
+            vec![PolicyResource::of_topic(topic)],
             vec![Action::Pub],
             None,
-            rocketmq_auth::Decision::Allow,
+            rocketmq_auth::PolicyDecision::Allow,
         ),
     );
     runtime
@@ -240,16 +240,16 @@ async fn custom_deny_takes_precedence_over_custom_allow_for_same_resource() {
     seed_user(&runtime, "alice", "secret", UserType::Normal).await;
 
     let allow = Policy::of(
-        vec![Resource::of_topic("TopicA")],
+        vec![PolicyResource::of_topic("TopicA")],
         vec![Action::Pub],
         None,
-        rocketmq_auth::Decision::Allow,
+        rocketmq_auth::PolicyDecision::Allow,
     );
     let deny = Policy::of(
-        vec![Resource::of_topic("TopicA")],
+        vec![PolicyResource::of_topic("TopicA")],
         vec![Action::Pub],
         None,
-        rocketmq_auth::Decision::Deny,
+        rocketmq_auth::PolicyDecision::Deny,
     );
     runtime
         .provider_registry()
@@ -540,8 +540,8 @@ fn authorization_factory_caches_provider_by_config_name_and_builds_contexts() {
 #[test]
 fn request_context_exposes_java_model_fields() {
     let user = User::of("alice");
-    let resource = Resource::of_topic("TopicA");
-    let mut context = RequestContext::default();
+    let resource = PolicyResource::of_topic("TopicA");
+    let mut context = AuthorizationRequest::default();
 
     context.set_subject(&user);
     context.set_resource(resource.clone());

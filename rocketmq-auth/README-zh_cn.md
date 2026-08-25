@@ -54,6 +54,32 @@ rocketmq-auth = "1.0.0"
 rocketmq-auth = { version = "1.0.0", features = ["grpc"] }
 ```
 
+## 安全契约所有权与策略模型迁移
+
+运行时中立的安全契约应直接从 `rocketmq-security-api` 导入：
+
+```rust
+use rocketmq_security_api::{Principal, Resource};
+```
+
+`rocketmq-auth` 的策略模型应通过其规范名称导入：
+
+```rust
+use rocketmq_auth::{AuthorizationRequest, PolicyDecision, PolicyResource};
+```
+
+冻结的 1.x 名称 `Decision`、`Resource` 和 `RequestContext` 继续以相同类型提供，以保持源码兼容性。
+`SecurityPrincipal` 和 `SecurityResource` 是已弃用的 1.x 再导出；请迁移到
+`rocketmq-security-api::{Principal, Resource}`。12 个已弃用的维护再导出
+（`MaintenanceAuthorizationContext`、`MaintenanceAuthorizationError`、`MaintenanceAuthorizationGrant`、
+`MaintenanceAuthorizer`、`MaintenanceCapability`、`MaintenancePolicy`、`MaintenancePrincipalBinding`、
+`MaintenanceRequestClass`、`MaintenanceResourceBudget`、`MaintenanceRole`、`MaintenanceRoleGrant` 和
+`MAINTENANCE_POLICY_SCHEMA_VERSION`）同样继续可用，直到使用方迁移到 `rocketmq-security-api`。
+
+任何移除仅计划在未来 2.0 源码兼容性边界中进行，且仍须通过兼容性、迁移和发布门禁。本准备性变更不授予删除批准，
+也不宣布或批准 2.0 发布。它不会改变 `AuthorizationHandlerChain` 的首个成功语义，也不会改变白名单/profile 行为、
+wire 或 Serde 表示、默认值、错误行为或 fail-closed 行为。
+
 ## 快速开始
 
 通过 `AuthConfig` 创建 auth runtime，并指向 RocketMQ 风格的 ACL 文件：

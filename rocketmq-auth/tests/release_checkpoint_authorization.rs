@@ -15,17 +15,17 @@
 use std::collections::BTreeSet;
 use std::fs;
 
-use rocketmq_auth::MaintenanceAuthorizationContext;
-use rocketmq_auth::MaintenanceAuthorizationError;
-use rocketmq_auth::MaintenanceAuthorizer;
-use rocketmq_auth::MaintenanceCapability;
-use rocketmq_auth::MaintenancePolicy;
 use rocketmq_auth::MaintenancePolicyReference;
-use rocketmq_auth::MaintenancePrincipalBinding;
-use rocketmq_auth::MaintenanceRequestClass;
-use rocketmq_auth::MaintenanceResourceBudget;
-use rocketmq_auth::MaintenanceRole;
-use rocketmq_auth::MaintenanceRoleGrant;
+use rocketmq_security_api::MaintenanceAuthorizationContext;
+use rocketmq_security_api::MaintenanceAuthorizationError;
+use rocketmq_security_api::MaintenanceAuthorizer;
+use rocketmq_security_api::MaintenanceCapability;
+use rocketmq_security_api::MaintenancePolicy;
+use rocketmq_security_api::MaintenancePrincipalBinding;
+use rocketmq_security_api::MaintenanceRequestClass;
+use rocketmq_security_api::MaintenanceResourceBudget;
+use rocketmq_security_api::MaintenanceRole;
+use rocketmq_security_api::MaintenanceRoleGrant;
 use sha2::Digest;
 use sha2::Sha256;
 use tempfile::TempDir;

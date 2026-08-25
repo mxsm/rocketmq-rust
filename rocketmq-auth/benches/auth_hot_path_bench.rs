@@ -33,14 +33,14 @@ use rocketmq_auth::AuthenticationStrategy;
 use rocketmq_auth::AuthorizationHandler;
 use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::AuthorizationStrategy;
-use rocketmq_auth::Decision;
 use rocketmq_auth::DefaultAuthenticationContext;
 use rocketmq_auth::DefaultAuthorizationContext;
 use rocketmq_auth::LocalAuthorizationMetadataProvider;
 use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyDecision;
 use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::PolicyType;
-use rocketmq_auth::Resource;
 use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_auth::StatefulAuthenticationStrategy;
 use rocketmq_auth::StatefulAuthorizationStrategy;
@@ -134,14 +134,14 @@ fn bench_acl_authorization(c: &mut Criterion) {
     let entries = (0..128)
         .map(|index| {
             PolicyEntry::of(
-                Resource::of(
+                PolicyResource::of(
                     ResourceType::Topic,
                     Some(format!("Topic{index}")),
                     ResourcePattern::Literal,
                 ),
                 vec![Action::Pub],
                 None,
-                Decision::Allow,
+                PolicyDecision::Allow,
             )
         })
         .collect::<Vec<_>>();
@@ -155,7 +155,7 @@ fn bench_acl_authorization(c: &mut Criterion) {
     let context = DefaultAuthorizationContext::of(
         "alice",
         rocketmq_auth::SubjectType::User,
-        Resource::of_topic("Topic127"),
+        PolicyResource::of_topic("Topic127"),
         Action::Pub,
         "127.0.0.1",
     );
@@ -224,7 +224,7 @@ fn bench_stateful_authorization_cache(c: &mut Criterion) {
     let mut context = DefaultAuthorizationContext::of(
         "alice",
         rocketmq_auth::SubjectType::User,
-        Resource::of_topic("TopicA"),
+        PolicyResource::of_topic("TopicA"),
         Action::Pub,
         "127.0.0.1",
     );
@@ -270,7 +270,7 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
     let mut context = DefaultAuthorizationContext::of(
         "alice",
         rocketmq_auth::SubjectType::User,
-        Resource::of_topic("TopicDenied"),
+        PolicyResource::of_topic("TopicDenied"),
         Action::Pub,
         "127.0.0.1",
     );

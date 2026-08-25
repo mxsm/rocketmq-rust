@@ -20,7 +20,7 @@
 use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthorizationEvaluator;
 use rocketmq_auth::DefaultAuthorizationContext;
-use rocketmq_auth::Resource;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::StatelessAuthorizationStrategy;
 use rocketmq_security_api::Action;
 
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Context 1: User "test" wants to publish to topic "test-topic"
     let mut context1 = DefaultAuthorizationContext::default();
-    context1.set_resource(Resource::of_topic("test-topic"));
+    context1.set_resource(PolicyResource::of_topic("test-topic"));
     context1.set_actions(vec![Action::Pub]);
     context1.set_source_ip("192.168.1.100");
     context1.set_rpc_code("10");
@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Context 2: User "test" wants to subscribe from group "test-group"
     let mut context2 = DefaultAuthorizationContext::default();
-    context2.set_resource(Resource::of_group("test-group".to_string()));
+    context2.set_resource(PolicyResource::of_group("test-group".to_string()));
     context2.set_actions(vec![Action::Sub]);
     context2.set_source_ip("192.168.1.100");
     context2.set_rpc_code("11");

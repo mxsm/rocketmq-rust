@@ -2261,9 +2261,9 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_auth::cal_signature;
     use rocketmq_auth::Acl;
-    use rocketmq_auth::Decision;
     use rocketmq_auth::Policy;
-    use rocketmq_auth::Resource;
+    use rocketmq_auth::PolicyDecision;
+    use rocketmq_auth::PolicyResource;
     use rocketmq_auth::SubjectType;
     use rocketmq_auth::User;
     use rocketmq_auth::UserStatus;
@@ -2563,7 +2563,12 @@ mod tests {
             .create_acl(Acl::of(
                 username,
                 SubjectType::User,
-                Policy::of(vec![Resource::of_topic(topic)], vec![action], None, Decision::Allow),
+                Policy::of(
+                    vec![PolicyResource::of_topic(topic)],
+                    vec![action],
+                    None,
+                    PolicyDecision::Allow,
+                ),
             ))
             .await
             .expect("acl should be created");

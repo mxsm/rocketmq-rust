@@ -23,13 +23,13 @@
 use rocketmq_auth::Acl;
 use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthorizationMetadataProvider;
-use rocketmq_auth::Decision;
 use rocketmq_auth::Environment;
 use rocketmq_auth::NoopMetadataProvider;
 use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyDecision;
 use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::PolicyType;
-use rocketmq_auth::Resource;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
 use rocketmq_security_api::Action;
@@ -82,12 +82,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. Update ACL
     let mut updated_acl = acl;
     // Modify the ACL (e.g., add more policies)
-    let new_resource = Resource::of_topic("new-topic");
+    let new_resource = PolicyResource::of_topic("new-topic");
     let new_entry = PolicyEntry::of(
         new_resource,
         vec![Action::Sub],
         Environment::of("10.0.0.0/8"),
-        Decision::Allow,
+        PolicyDecision::Allow,
     );
     let new_policy = Policy::of_entries(PolicyType::Custom, vec![new_entry]);
     updated_acl.update_policy(new_policy);
@@ -110,8 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Create a sample ACL for demonstration
 fn create_sample_acl() -> Acl {
     // Define resources
-    let order_topic = Resource::of_topic("orders-topic");
-    let payment_topic = Resource::of_topic("payments");
+    let order_topic = PolicyResource::of_topic("orders-topic");
+    let payment_topic = PolicyResource::of_topic("payments");
 
     // Define actions
     let pub_actions = vec![Action::Pub];
@@ -125,14 +125,14 @@ fn create_sample_acl() -> Acl {
         order_topic,
         pub_actions.clone(),
         internal_network.clone(),
-        Decision::Allow,
+        PolicyDecision::Allow,
     );
 
     let payment_entry = PolicyEntry::of(
         payment_topic,
         sub_actions.clone(),
         internal_network.clone(),
-        Decision::Allow,
+        PolicyDecision::Allow,
     );
 
     // Create policy using of_entries (not of which takes resources Vec)

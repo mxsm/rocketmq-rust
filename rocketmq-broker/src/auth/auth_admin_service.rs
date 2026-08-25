@@ -8,9 +8,9 @@ use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::FileAclConfigStore;
 use rocketmq_auth::LocalAuthenticationMetadataProvider;
 use rocketmq_auth::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::PolicyResource;
 use rocketmq_auth::PolicyType;
 use rocketmq_auth::ProviderRegistry;
-use rocketmq_auth::Resource;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
@@ -227,7 +227,7 @@ impl AuthAdminService {
             })
             .transpose()?
             .unwrap_or(PolicyType::Custom);
-        let resource = Resource::of_str(resource_key)
+        let resource = PolicyResource::of_str(resource_key)
             .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid resource '{resource_key}'")))?;
 
         let Some(mut acl) = self
@@ -465,8 +465,8 @@ fn validate_acl(acl: &Acl) -> RocketMQResult<()> {
 mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_auth::Acl;
-    use rocketmq_auth::Decision;
     use rocketmq_auth::Policy;
+    use rocketmq_auth::PolicyDecision;
     use rocketmq_auth::UserStatus;
     use rocketmq_security_api::Action;
     use std::sync::atomic::AtomicU64;
@@ -533,8 +533,8 @@ mod tests {
         user.set_user_status(UserStatus::Enable);
         service.create_user(user).await.unwrap();
         let subject = SubjectRef::parse("alice").unwrap();
-        let first = Resource::of_topic("topic-a");
-        let second = Resource::of_topic("topic-b");
+        let first = PolicyResource::of_topic("topic-a");
+        let second = PolicyResource::of_topic("topic-b");
         let acl = Acl::of(
             "alice",
             SubjectType::User,
@@ -542,7 +542,7 @@ mod tests {
                 vec![first.clone(), second.clone()],
                 vec![Action::Pub],
                 None,
-                Decision::Allow,
+                PolicyDecision::Allow,
             ),
         );
 
@@ -606,17 +606,17 @@ mod tests {
                 SubjectType::User,
                 vec![
                     Policy::of(
-                        vec![Resource::of_topic("topic-a")],
+                        vec![PolicyResource::of_topic("topic-a")],
                         vec![Action::Pub],
                         None,
-                        Decision::Allow,
+                        PolicyDecision::Allow,
                     ),
                     Policy::of_type(
                         PolicyType::Default,
-                        vec![Resource::of_topic("topic-a")],
+                        vec![PolicyResource::of_topic("topic-a")],
                         vec![Action::Sub],
                         None,
-                        Decision::Allow,
+                        PolicyDecision::Allow,
                     ),
                 ],
             ))
@@ -643,10 +643,10 @@ mod tests {
             "alice",
             SubjectType::User,
             Policy::of(
-                vec![Resource::of_topic("topic-a")],
+                vec![PolicyResource::of_topic("topic-a")],
                 vec![Action::Pub],
                 None,
-                Decision::Allow,
+                PolicyDecision::Allow,
             ),
         );
         service
@@ -710,10 +710,10 @@ mod tests {
                 "alice",
                 SubjectType::User,
                 Policy::of(
-                    vec![Resource::of_topic("topic-a")],
+                    vec![PolicyResource::of_topic("topic-a")],
                     vec![Action::Pub],
                     None,
-                    Decision::Allow,
+                    PolicyDecision::Allow,
                 ),
             ))
             .await
@@ -723,10 +723,10 @@ mod tests {
                 "alice",
                 SubjectType::User,
                 Policy::of(
-                    vec![Resource::of_topic("topic-b")],
+                    vec![PolicyResource::of_topic("topic-b")],
                     vec![Action::Sub],
                     None,
-                    Decision::Allow,
+                    PolicyDecision::Allow,
                 ),
             ))
             .await
