@@ -69,6 +69,99 @@ Request processors are fixed when a client is built. Replace the deprecated
 Applications own the runtime and pass an `Arc<ClientRuntime>` to producers and
 consumers. Client APIs do not create hidden Tokio runtimes.
 
+### `RocketMQRuntime` legacy runtime boundary
+
+`RocketMQRuntime` remains a public, deprecated compatibility API throughout
+the 1.x line. This guide does not remove it, change any of its public methods,
+or announce a 2.0 release. Its removal is only intended for a future 2.0
+source-compatibility boundary, after downstream applications have migrated to
+the explicit ownership and shutdown APIs below. Any future removal remains
+subject to the full release cycle, a 2.0 breaking window, and an exact,
+reviewed post-freeze repository-owner approval record for every affected frozen
+public item (package, profile, item path, and change kind). This change creates
+no approval record and does not authorize a removal.
+
+| Legacy 1.x API | Migration target | Required ownership or policy decision |
+|---|---|---|
+| `RocketMQRuntime::new_multi(threads, name)` | `RuntimeOwner::new(RuntimeConfig { .. })?` | Put the worker count and thread name in `RuntimeConfig`; propagate its typed `RuntimeResult` instead of relying on an infallible constructor. |
+| `get_handle()` | `RuntimeOwner::root_context().component(...)` or a child derived from `RuntimeContext` | Pass `ChildServiceContext` (or a narrower capability) to a library. Do not replace this call with a raw Tokio handle. |
+| `get_runtime()` | `RuntimeOwner::block_on(...)` at an owned synchronous entrypoint, or context-owned task operations | Keep the Tokio runtime private to its owner. Libraries receive a context and use its task group, blocking lanes, and diagnostics rather than a raw runtime reference. |
+| `schedule_at_fixed_rate(task, initial_delay, period)` (`Fn`) | `ScheduledTaskGroup::schedule_fixed_rate_no_overlap` | Set `config.initial_delay = initial_delay.unwrap_or(Duration::ZERO)`. The legacy callback was serial, so preserve that non-overlap policy explicitly; a tick is skipped while an async run is active. Choose `schedule_fixed_rate` only when overlapping runs are intentional and reentrant. |
+| `schedule_at_fixed_rate_mut(task, initial_delay, period)` (`FnMut`) | `ScheduledTaskGroup::schedule_fixed_delay` | Set `config.initial_delay = initial_delay.unwrap_or(Duration::ZERO)`. This accepts mutable callback state while keeping runs serial. If fixed-rate cadence is required, make the callback state safe for the chosen explicit no-overlap or allow-overlap policy. |
+| `shutdown()` | `RuntimeOwner::shutdown_background(self)` | Cancels tracked RocketMQ work, returns an immediate `ShutdownReport`, and asks Tokio to finish runtime shutdown in the background. |
+| `shutdown_timeout(timeout)` at a synchronous runtime-owning boundary | `RuntimeOwner::shutdown_runtime_blocking_with_timeout(timeout)?` | Shuts down tracked work and then the owned Tokio runtime within the timeout. It returns typed errors, including `RuntimeError::InsideTokioRuntime` when called from Tokio. |
+| async shutdown that must retain the host Tokio runtime | `RuntimeOwner::shutdown_tasks().await` or `RuntimeContext::shutdown_tasks(timeout).await` | Shuts down only tracked RocketMQ work and returns `ShutdownReport`; it does not close the owned or host Tokio runtime. |
+
+For a process entrypoint that owns Tokio, construct one owner from typed
+configuration and derive child service contexts from it:
+
+```rust,ignore
+use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
+
+let owner = RuntimeOwner::new(RuntimeConfig {
+    worker_threads: threads,
+    thread_name: service_name.to_owned(),
+    ..RuntimeConfig::default()
+})?;
+let service = owner.root_context().component("consumer");
+```
+
+Code that is already executing inside an application-owned Tokio runtime may
+use `RuntimeContext::try_from_current("migration")?` as a migration or test
+harness and derive a `ChildServiceContext` from it. Production composition
+roots use `RuntimeOwner`; neither form grants libraries raw Tokio runtime
+access.
+
+Make the periodic-work policy visible at the call site. The no-overlap choice
+below is the closest replacement for the legacy `Fn` callback. It keeps a
+fixed cadence, skips a tick if the prior run is active, and lets shutdown track
+both the driver and any run it owns.
+
+```rust,ignore
+use std::time::Duration;
+
+use rocketmq_runtime::ScheduledTaskConfig;
+
+let scheduled = service.scheduled_tasks("consumer-maintenance");
+let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
+    "consumer-maintenance.refresh",
+    period,
+);
+config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
+scheduled.schedule_fixed_rate_no_overlap(config, || async {
+    refresh_routes().await;
+})?;
+```
+
+For stateful legacy `FnMut` callbacks, use fixed delay unless a different
+overlap policy has been deliberately designed and documented:
+
+```rust,ignore
+let mut generation = 0_u64;
+let mut config = ScheduledTaskConfig::fixed_delay(
+    "consumer-maintenance.persist",
+    period,
+);
+config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
+scheduled.schedule_fixed_delay(config, move || {
+    generation += 1;
+    async move {
+        persist_generation(generation).await;
+    }
+})?;
+```
+
+At shutdown, choose the matching ownership boundary and make the report part
+of the application's lifecycle result. `shutdown_background` is the immediate
+compatibility path, `shutdown_tasks` closes only tracked RocketMQ work, and
+`shutdown_runtime_blocking_with_timeout` is for synchronous process teardown
+only; the latter returns a typed error if invoked from inside Tokio.
+
+```rust,ignore
+let report = owner.shutdown_runtime_blocking_with_timeout(timeout)?;
+report.assert_no_task_leak().map_err(|message| anyhow::anyhow!(message))?;
+```
+
 ### Mapped buffer reads
 
 The former `MappedBuffer::read_zero_copy` name was inaccurate because the

@@ -21,11 +21,11 @@ shutdown can be verified.
 RocketMQ Rust uses Tokio as the only async runtime. Runtime ownership and task
 lifecycle are explicit:
 
-- application entrypoints create a `RuntimeOwner` or bind a `RuntimeContext`
-  to the current Tokio runtime;
+- application entrypoints create a `RuntimeOwner`; migration and test harnesses
+  may bind a `RuntimeContext` to the current Tokio runtime;
 - broker, namesrv, proxy, controller, and admin tool entrypoints derive their
-  component `ServiceContext` from the runtime owner;
-- every service receives a `ServiceContext`;
+  component `ChildServiceContext` from the runtime owner;
+- every service receives a `ChildServiceContext`;
 - every long-running task is spawned through a `TaskGroup`;
 - every periodic task is registered through a `ScheduledTaskGroup`;
 - blocking work goes through `BlockingExecutor` unless it is a dedicated
@@ -35,13 +35,13 @@ lifecycle are explicit:
 ```mermaid
 flowchart TD
     Entry["Application entrypoint"] --> Owner["RuntimeOwner"]
-    Entry --> Current["RuntimeContext::from_current"]
-    Owner --> Context["RuntimeContext"]
-    Current --> Context
-    Context --> Root["Root TaskGroup"]
-    Context --> Blocking["BlockingExecutor"]
-    Context --> Diagnostics["RuntimeDiagnostics"]
-    Context --> Service["ServiceContext"]
+    Entry --> Current["RuntimeContext (migration/test)"]
+    Owner --> Root["RootServiceContext"]
+    Root --> GroupRoot["Root TaskGroup"]
+    Root --> Blocking["BlockingExecutor"]
+    Root --> Diagnostics["RuntimeDiagnostics"]
+    Root --> Service["ChildServiceContext"]
+    Current --> Service
     Service --> Group["Service TaskGroup"]
     Group --> Scheduled["ScheduledTaskGroup"]
     Group --> Workers["service / worker / IO tasks"]
@@ -55,15 +55,15 @@ flowchart TD
 | Type | Responsibility |
 | --- | --- |
 | `RuntimeConfig` | Configures Tokio worker threads, blocking-thread limit, thread name, optional worker stack size, keep-alive, shutdown timeout, IO/time drivers, and blocking policy. |
-| `RuntimeOwner` | Owns a dedicated Tokio multi-thread runtime and exposes `RuntimeContext`. It separates async task shutdown from blocking runtime shutdown. |
-| `RuntimeContext` | Binds runtime handle, root `TaskGroup`, `BlockingExecutor`, and diagnostics. It can be created from an owned runtime or the current Tokio runtime. |
+| `RuntimeOwner` | Owns a dedicated Tokio multi-thread runtime and exposes a root service context. It separates async task shutdown from blocking runtime shutdown. |
+| `RuntimeContext` | Migration and test harness for a current Tokio runtime. Production composition roots use `RuntimeOwner`; libraries receive `ChildServiceContext`. |
 | `RuntimeHandle` | Lightweight wrapper around `tokio::runtime::Handle`; it is handle access, not lifecycle ownership. |
-| `ServiceContext` | Per-service view containing runtime handle, service task group, blocking executor, and diagnostics. |
+| `ChildServiceContext` | Per-service view containing runtime handle, service task group, blocking executor, and diagnostics. |
 | `TaskGroup` | Structured task scope with task metadata, cancellation, shutdown, abort, child groups, and health reporting. |
 | `ScheduledTaskGroup` | Runs fixed-delay and fixed-rate jobs under a task group and records schedule metrics. |
 | `BlockingExecutor` | Bounded `spawn_blocking` gateway with queue timeout, task timeout, and still-running reaper tracking. |
 | `ShutdownReport` | Serializable shutdown evidence for task completion, cancellation, aborts, leaks, panics, timeouts, detached tasks, and blocking tasks. |
-| `RocketMQRuntime` | Legacy compatibility wrapper. New code should prefer `RuntimeOwner` or `RuntimeContext`. |
+| `RocketMQRuntime` | Legacy compatibility wrapper. Production composition roots use `RuntimeOwner`; libraries receive `ChildServiceContext`; `RuntimeContext` is only a migration and test harness. |
 
 ## Runtime Ownership
 
@@ -74,7 +74,7 @@ use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
 
 fn main() -> rocketmq_runtime::RuntimeResult<()> {
     let owner = RuntimeOwner::new(RuntimeConfig::broker_default())?;
-    let broker = owner.context().service_context("broker");
+    let broker = owner.root_context().component("broker");
 
     broker.spawn_service("heartbeat", async move {
         // tracked service loop
@@ -86,19 +86,32 @@ fn main() -> rocketmq_runtime::RuntimeResult<()> {
 }
 ```
 
-Use `RuntimeContext::from_current` in applications that already run inside
-`#[tokio::main]` or a test runtime. A context created from the current runtime
-can shut down tracked RocketMQ tasks, but it does not own or close the Tokio
-runtime itself.
+Use `RuntimeContext::try_from_current` only in migration or test harnesses
+that already run inside `#[tokio::main]` or a test runtime. It can shut down
+tracked RocketMQ tasks, but it does not own or close the host Tokio runtime.
 
 ### Legacy Compatibility Boundary
 
 `RocketMQRuntime` is retained only for legacy synchronous APIs that still need
-to pass around an owned Tokio runtime. New code should use `RuntimeOwner` for
-owned runtime lifecycle and `RuntimeContext` / `ServiceContext` for borrowed
-runtime integration. Runtime audit classifies remaining `RocketMQRuntime`
-references as either runtime primitives or explicit compatibility adapters so
-new unclassified legacy runtime use cannot grow unnoticed.
+to pass around an owned Tokio runtime. Production composition roots use
+`RuntimeOwner`, libraries receive `ChildServiceContext`, and `RuntimeContext`
+is only a migration and test harness. Runtime audit classifies remaining
+`RocketMQRuntime` references as either runtime primitives or explicit
+compatibility adapters so new unclassified legacy runtime use cannot grow
+unnoticed.
+
+`RocketMQRuntime` and all of its public methods remain available, deprecated
+1.x API. Its removal is intended only for a future 2.0 source-compatibility
+boundary; it has not happened, and this crate does not claim a 2.0 release.
+Any future removal remains subject to the full release cycle, a 2.0 breaking
+window, and exact, reviewed post-freeze repository-owner approval for every
+affected frozen public item. This change creates no approval record and does
+not authorize a removal.
+Migrate construction to `RuntimeOwner::new(RuntimeConfig { .. })?`, inject a
+`ChildServiceContext` instead of exposing a raw Tokio runtime or handle, move
+periodic callbacks to `ScheduledTaskGroup` with an explicit overlap policy,
+and consume the `ShutdownReport` returned by the owner shutdown APIs. The
+full per-method migration is in the [1.0 API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md).
 
 `RuntimeOwner` intentionally separates two phases:
 
@@ -199,7 +212,7 @@ New RocketMQ code should follow these rules:
 
 - do not create ad hoc Tokio runtimes inside business crates;
 - do not call raw `tokio::spawn` for long-running service work;
-- derive a `ServiceContext` and spawn through its `TaskGroup`;
+- derive a `ChildServiceContext` and spawn through its `TaskGroup`;
 - wrap periodic loops in `ScheduledTaskGroup`;
 - route file IO, RocksDB calls, DNS resolution, and other short blocking work
   through `BlockingExecutor`;
