@@ -610,7 +610,7 @@ impl DefaultMQPushConsumerImpl {
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
                 }
-                if let Err(error) = client_instance.start().await {
+                if let Err(error) = Box::pin(client_instance.start()).await {
                     client_instance
                         .unregister_consumer(consumer_config.consumer_group.as_str())
                         .await;
