@@ -14,8 +14,8 @@ Tokio runtime、如何追踪长期任务、如何调度周期任务、如何隔�
 
 RocketMQ Rust 只使用 Tokio 作为异步 runtime。runtime 所有权和任务生命周期必须显式：
 
-- 应用入口使用 `RuntimeOwner`，或在已有 Tokio runtime 中绑定 `RuntimeContext`。
-- broker、namesrv、proxy、controller 和 admin 工具入口从 owner 派生组件级 `ServiceContext`。
+- 应用入口使用 `RuntimeOwner`；迁移和测试 harness 可在已有 Tokio runtime 中绑定 `RuntimeContext`。
+- broker、namesrv、proxy、controller 和 admin 工具入口从 owner 派生组件级 `ChildServiceContext`。
 - 长期服务任务通过 `TaskGroup` 注册和关闭。
 - 周期任务通过 `ScheduledTaskGroup` 管理。
 - 文件 IO、RocksDB、DNS、压缩等短时阻塞工作通过 `BlockingExecutor` 执行。
@@ -25,13 +25,13 @@ RocketMQ Rust 只使用 Tokio 作为异步 runtime。runtime 所有权和任务�
 ```mermaid
 flowchart TD
     Entry["应用入口"] --> Owner["RuntimeOwner"]
-    Entry --> Current["RuntimeContext::from_current"]
-    Owner --> Context["RuntimeContext"]
-    Current --> Context
-    Context --> Root["根 TaskGroup"]
-    Context --> Blocking["BlockingExecutor"]
-    Context --> Diagnostics["RuntimeDiagnostics"]
-    Context --> Service["ServiceContext"]
+    Entry --> Current["RuntimeContext（迁移/测试）"]
+    Owner --> Root["RootServiceContext"]
+    Root --> GroupRoot["根 TaskGroup"]
+    Root --> Blocking["BlockingExecutor"]
+    Root --> Diagnostics["RuntimeDiagnostics"]
+    Root --> Service["ChildServiceContext"]
+    Current --> Service
     Service --> Group["服务 TaskGroup"]
     Group --> Scheduled["ScheduledTaskGroup"]
     Group --> Workers["service / worker / IO tasks"]
@@ -45,14 +45,14 @@ flowchart TD
 | 类型 | 作用 |
 | --- | --- |
 | `RuntimeConfig` | 配置 Tokio worker 线程数、blocking 线程上限、线程名、可选 worker stack、keep-alive、关闭超时、IO/time driver 和 blocking policy。 |
-| `RuntimeOwner` | 持有专用 Tokio 多线程 runtime，并暴露 `RuntimeContext`；关闭时区分任务关闭和 runtime 释放。 |
-| `RuntimeContext` | 绑定当前 runtime handle、根 `TaskGroup`、`BlockingExecutor` 和 diagnostics；可来自 owned runtime 或当前 Tokio runtime。 |
-| `ServiceContext` | 组件级运行时视图，包含 runtime handle、服务 `TaskGroup`、blocking executor 和 diagnostics。 |
+| `RuntimeOwner` | 持有专用 Tokio 多线程 runtime，并暴露根 service context；关闭时区分任务关闭和 runtime 释放。 |
+| `RuntimeContext` | 当前 Tokio runtime 的迁移和测试 harness。生产 composition root 使用 `RuntimeOwner`；库接收 `ChildServiceContext`。 |
+| `ChildServiceContext` | 组件级运行时视图，包含 runtime handle、服务 `TaskGroup`、blocking executor 和 diagnostics。 |
 | `TaskGroup` | 结构化任务作用域，支持任务元数据、取消、关闭、abort、child group 和健康报告。 |
 | `ScheduledTaskGroup` | 在 `TaskGroup` 下运行 fixed-delay / fixed-rate 周期任务，并记录调度指标。 |
 | `BlockingExecutor` | 有界 `spawn_blocking` 网关，提供排队超时、任务超时和仍在运行任务的 reaper 跟踪。 |
 | `ShutdownReport` | 可序列化的关闭证据，记录任务完成、取消、abort、泄漏、panic、timeout、detached task 和 blocking task。 |
-| `RocketMQRuntime` | 旧兼容 wrapper。新代码应使用 `RuntimeOwner`、`RuntimeContext` 或 `ServiceContext`。 |
+| `RocketMQRuntime` | 旧兼容 wrapper。生产 composition root 使用 `RuntimeOwner`，库接收 `ChildServiceContext`；`RuntimeContext` 仅用于迁移和测试 harness。 |
 
 ## 使用方式
 
@@ -63,7 +63,7 @@ use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
 
 fn main() -> rocketmq_runtime::RuntimeResult<()> {
     let owner = RuntimeOwner::new(RuntimeConfig::broker_default())?;
-    let broker = owner.context().service_context("broker");
+    let broker = owner.root_context().component("broker");
 
     broker.spawn_service("heartbeat", async move {
         // tracked service loop
@@ -75,8 +75,8 @@ fn main() -> rocketmq_runtime::RuntimeResult<()> {
 }
 ```
 
-组件运行在已有 Tokio runtime 内时使用 `RuntimeContext::from_current`。这种 context
-可以关闭 RocketMQ 自己登记的任务，但不会拥有或关闭宿主 Tokio runtime。
+仅在迁移或测试 harness 已运行于 `#[tokio::main]` 或测试 runtime 中时使用
+`RuntimeContext::try_from_current`。这种 context 可以关闭 RocketMQ 自己登记的任务，但不会拥有或关闭宿主 Tokio runtime。
 
 ## 工作区接入状态
 
@@ -104,6 +104,14 @@ Standalone dashboard 应用保留宿主 runtime 边界：Tauri/Web backend、GPU
 - dedicated OS threads：用于不适合 Tokio blocking pool 的长期循环，必须提供 stop signal 和 bounded join。
 
 新增代码不得扩大未分类 legacy runtime、raw `tokio::spawn` 或隐藏 runtime owner 的使用范围。
+
+`RocketMQRuntime` 及其全部 public method 在 1.x 中仍然可用，但已弃用。其移除仅意图在未来的
+2.0 source-compatibility boundary 执行；目前尚未移除，本 crate 也没有声称已经发布 2.0。任何未来
+移除仍须经过完整发布周期、2.0 breaking window，并对每个受影响的 frozen public item 获得精确、经
+reviewed post-freeze 的 repository-owner approval。本次变更不创建 approval record，也不授予移除批准。请将构造迁移到
+`RuntimeOwner::new(RuntimeConfig { .. })?`，向库注入 `ChildServiceContext` 而非暴露 raw Tokio
+runtime 或 handle，将周期回调迁移到具有明确 overlap policy 的 `ScheduledTaskGroup`，并消费 owner
+shutdown API 返回的 `ShutdownReport`。逐方法迁移说明见 [1.0 API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md)。
 
 ## 关闭语义
 

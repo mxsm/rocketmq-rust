@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **docs(runtime):** Document `RocketMQRuntime` as a deprecated 1.x compatibility API with removal intended only for a future 2.0 source-compatibility boundary, subject to the full release cycle, a 2.0 breaking window, and exact reviewed post-freeze repository-owner approval for every affected frozen public item; this change grants no removal approval and existing public APIs remain available ([#9724](https://github.com/mxsm/rocketmq-rust/issues/9724)).
 - **fix(namesrv):** Exclude the lifecycle handle from shutdown-report tracing instrumentation ([#9169](https://github.com/mxsm/rocketmq-rust/issues/9169))
 - **refactor(error):** Preserve typed header, JSON, and authorization sources through Controller maintenance handling while retaining the existing error kinds and redacted boundary projections.
 - **fix(controller):** Route online consensus membership changes through `apply_membership_change`, which requires a maintenance authorization grant, optimistic membership version, idempotency key, quorum checks, and audit facts. Direct public `add_learner` and `change_membership` mutation methods are no longer exposed; embedders must migrate online changes to the authorized boundary.
