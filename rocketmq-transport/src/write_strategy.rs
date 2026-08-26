@@ -163,8 +163,142 @@ pub(crate) enum WriterOperation {
     Send(OutboundPayload),
 }
 
+pub(crate) struct StructuredResponseFrame {
+    head: EncodedFrameHead,
+    body: PreparedStructuredResponseBody,
+}
+
+#[allow(
+    dead_code,
+    reason = "the later private response sink constructs this RSP-04 in-memory frame"
+)]
+enum StructuredResponseBody {
+    Empty,
+    Bytes(Bytes),
+    Segments(Vec<Bytes>),
+}
+
+pub(crate) struct PreparedStructuredResponseBody {
+    body: StructuredResponseBody,
+    checked_len: usize,
+}
+
+impl PreparedStructuredResponseBody {
+    pub(crate) fn empty() -> rocketmq_error::RocketMQResult<Self> {
+        Ok(Self {
+            body: StructuredResponseBody::Empty,
+            checked_len: 0,
+        })
+    }
+
+    pub(crate) fn bytes(body: Bytes) -> rocketmq_error::RocketMQResult<Self> {
+        let checked_len = body.len();
+        Ok(Self {
+            body: StructuredResponseBody::Bytes(body),
+            checked_len,
+        })
+    }
+
+    pub(crate) fn segments(body: Vec<Bytes>) -> rocketmq_error::RocketMQResult<Self> {
+        let checked_len = body.iter().try_fold(0_usize, |total, segment| {
+            total.checked_add(segment.len()).ok_or_else(|| {
+                SerializationError::encode_failed("structured-response-frame", "structured body length overflow")
+            })
+        })?;
+        Ok(Self {
+            body: StructuredResponseBody::Segments(body),
+            checked_len,
+        })
+    }
+
+    pub(crate) const fn body_len(&self) -> usize {
+        self.checked_len
+    }
+}
+
+impl StructuredResponseFrame {
+    #[allow(
+        dead_code,
+        reason = "the later private response sink constructs structured frames through checked variants"
+    )]
+    pub(crate) fn new(
+        head: EncodedFrameHead,
+        body: PreparedStructuredResponseBody,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let frame = Self { head, body };
+        frame.validate_body_len()?;
+        Ok(frame)
+    }
+
+    fn validate_body_len(&self) -> rocketmq_error::RocketMQResult<()> {
+        let actual = self.body.checked_len;
+        if actual != self.head.body_len() {
+            return Err(SerializationError::encode_failed(
+                "structured-response-frame",
+                format!(
+                    "structured body length {actual} does not match encoded frame head body length {}",
+                    self.head.body_len()
+                ),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn encoded_len(&self) -> usize {
+        self.head.encoded_len()
+    }
+
+    fn extend_segments<'a>(&'a self, segments: &mut Vec<&'a [u8]>) {
+        segments.extend(self.head.segments());
+        match &self.body.body {
+            StructuredResponseBody::Empty => {}
+            StructuredResponseBody::Bytes(bytes) => segments.push(bytes.as_ref()),
+            StructuredResponseBody::Segments(body_segments) => {
+                segments.extend(body_segments.iter().map(Bytes::as_ref));
+            }
+        }
+    }
+
+    fn copy_to(&self, destination: &mut BytesMut) {
+        destination.reserve(self.encoded_len());
+        for segment in self.head.segments() {
+            destination.extend_from_slice(segment);
+        }
+        match &self.body.body {
+            StructuredResponseBody::Empty => {}
+            StructuredResponseBody::Bytes(bytes) => destination.extend_from_slice(bytes),
+            StructuredResponseBody::Segments(segments) => {
+                for segment in segments {
+                    destination.extend_from_slice(segment);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_segments(&self) -> Vec<&[u8]> {
+        let mut segments = Vec::new();
+        self.extend_segments(&mut segments);
+        segments
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_body_segments(&self) -> Option<&[Bytes]> {
+        match &self.body.body {
+            StructuredResponseBody::Segments(segments) => Some(segments),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) enum OutboundPayload {
     Frame(EncodedFrame),
+    #[allow(
+        dead_code,
+        reason = "the later private response sink enqueues the RSP-04 structured frame"
+    )]
+    StructuredFrame(StructuredResponseFrame),
     FileFrame {
         head: EncodedFrameHead,
         body: FileRegionSequence,
@@ -193,6 +327,7 @@ impl OutboundPayload {
     pub(crate) fn encoded_len(&self) -> usize {
         match self {
             Self::Frame(frame) => frame.encoded_len(),
+            Self::StructuredFrame(frame) => frame.encoded_len(),
             Self::FileFrame { head, .. } => head.encoded_len(),
             Self::Batch { encoded_len, .. } => *encoded_len,
             Self::FrameSegments { encoded_len, .. } => *encoded_len,
@@ -415,6 +550,7 @@ where
             return Ok(());
         }
         let mode = self.mode;
+        validate_structured_payloads(payloads)?;
         if let Some(max_plaintext_frame_bytes) = tls_plaintext_bound(mode) {
             validate_tls_payloads(payloads, max_plaintext_frame_bytes)?;
         }
@@ -789,6 +925,13 @@ fn validate_tls_payloads(payloads: &[&OutboundPayload], max_plaintext_frame_byte
     for payload in payloads {
         match payload {
             OutboundPayload::Frame(frame) => validate_tls_frame(frame, max_plaintext_frame_bytes)?,
+            OutboundPayload::StructuredFrame(frame) if frame.encoded_len() > max_plaintext_frame_bytes => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "structured response frame exceeds TLS plaintext bound",
+                ));
+            }
+            OutboundPayload::StructuredFrame(_) => {}
             OutboundPayload::FileFrame { head, .. } if head.encoded_len() > max_plaintext_frame_bytes => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -834,11 +977,23 @@ fn validate_tls_frame(frame: &EncodedFrame, max_plaintext_frame_bytes: usize) ->
     }
 }
 
+fn validate_structured_payloads(payloads: &[&OutboundPayload]) -> io::Result<()> {
+    for payload in payloads {
+        if let OutboundPayload::StructuredFrame(frame) = payload {
+            frame
+                .validate_body_len()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        }
+    }
+    Ok(())
+}
+
 fn payload_segments<'a>(payloads: &'a [&'a OutboundPayload]) -> io::Result<Vec<&'a [u8]>> {
     let mut segments = Vec::new();
     for payload in payloads {
         match payload {
             OutboundPayload::Frame(frame) => segments.extend(frame.segments()),
+            OutboundPayload::StructuredFrame(frame) => frame.extend_segments(&mut segments),
             OutboundPayload::FileFrame { .. } => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -866,6 +1021,11 @@ where
 {
     match payload {
         OutboundPayload::Frame(frame) => {
+            buffer.clear();
+            frame.copy_to(buffer);
+            write_contiguous(io, buffer.as_ref()).await
+        }
+        OutboundPayload::StructuredFrame(frame) => {
             buffer.clear();
             frame.copy_to(buffer);
             write_contiguous(io, buffer.as_ref()).await
@@ -1062,5 +1222,236 @@ mod file_frame_tests {
         let error = super::preserve_preflight_task_error(PanicDisplay);
 
         assert!(error.get_ref().is_some_and(|source| source.is::<PanicDisplay>()));
+    }
+}
+
+#[cfg(test)]
+mod structured_response_tests {
+    use std::io;
+    use std::io::IoSlice;
+    use std::pin::Pin;
+    use std::task::Context;
+    use std::task::Poll;
+
+    use bytes::Bytes;
+    use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
+    use rocketmq_protocol::protocol::RemotingCommand;
+    use tokio::io::AsyncWrite;
+
+    use super::FrameWriteMode;
+    use super::FrameWriter;
+    use super::OutboundPayload;
+    use super::PreparedStructuredResponseBody;
+    use super::StructuredResponseBody;
+    use super::StructuredResponseFrame;
+
+    #[derive(Default)]
+    struct RecordingIo {
+        output: Vec<u8>,
+        vectored_widths: Vec<usize>,
+        flushes: usize,
+    }
+
+    impl AsyncWrite for RecordingIo {
+        fn poll_write(mut self: Pin<&mut Self>, _context: &mut Context<'_>, buffer: &[u8]) -> Poll<io::Result<usize>> {
+            self.output.extend_from_slice(buffer);
+            Poll::Ready(Ok(buffer.len()))
+        }
+
+        fn poll_write_vectored(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            buffers: &[IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            self.vectored_widths.push(buffers.len());
+            let mut written = 0;
+            for buffer in buffers {
+                self.output.extend_from_slice(buffer);
+                written += buffer.len();
+            }
+            Poll::Ready(Ok(written))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.flushes += 1;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn structured_segments() -> (OutboundPayload, Vec<u8>, usize) {
+        let body = vec![
+            Bytes::from_static(b"first"),
+            Bytes::from_static(b"-second"),
+            Bytes::from_static(b"-third"),
+        ];
+        let body_len = body.iter().map(Bytes::len).sum::<usize>();
+        let owner = PreparedStructuredResponseBody::segments(body).expect("checked structured body");
+        let head = EncodedFrameHead::from_command_and_body_len(
+            RemotingCommand::create_response_command_with_code(901).set_opaque(37),
+            body_len,
+        )
+        .expect("encoded response head");
+        let encoded_len = head.encoded_len();
+        let frame = StructuredResponseFrame::new(head, owner).expect("matching structured frame");
+        let expected = frame
+            .test_segments()
+            .into_iter()
+            .flat_map(|segment| segment.iter().copied())
+            .collect();
+        (OutboundPayload::StructuredFrame(frame), expected, encoded_len)
+    }
+
+    async fn write_payload(
+        payload: &OutboundPayload,
+        mode: FrameWriteMode,
+        max_iov: usize,
+    ) -> (io::Result<()>, RecordingIo, bool, bool) {
+        let mut writer = FrameWriter::new(RecordingIo::default(), mode).expect("recording writer");
+        let mut started = false;
+        let result = writer
+            .write_payloads_with_start(&[payload], max_iov, &mut || started = true)
+            .await;
+        let poisoned = writer.is_poisoned();
+        (result, writer.into_inner(), started, poisoned)
+    }
+
+    #[tokio::test]
+    async fn plaintext_preserves_segment_order_with_single_and_normal_iov_windows() {
+        for (max_iov, expected_widths) in [(1, vec![1, 1, 1, 1, 1]), (3, vec![3, 2])] {
+            let (payload, expected, encoded_len) = structured_segments();
+            let (result, io, started, poisoned) = write_payload(&payload, FrameWriteMode::PlainVectored, max_iov).await;
+
+            result.expect("plaintext structured write");
+            assert!(started);
+            assert!(!poisoned);
+            assert_eq!(io.output, expected);
+            assert_eq!(io.output.len(), encoded_len);
+            assert_eq!(io.vectored_widths, expected_widths);
+            assert_eq!(io.flushes, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn tls_vectored_coalesced_and_auto_modes_receive_identical_complete_plaintext() {
+        let (baseline, expected, encoded_len) = structured_segments();
+        let modes = [
+            FrameWriteMode::TlsVectored {
+                max_plaintext_frame_bytes: encoded_len,
+            },
+            FrameWriteMode::TlsCoalesced {
+                max_plaintext_frame_bytes: encoded_len,
+            },
+            FrameWriteMode::TlsAuto {
+                max_plaintext_frame_bytes: encoded_len,
+                coalesce_below_bytes: encoded_len,
+            },
+            FrameWriteMode::TlsAuto {
+                max_plaintext_frame_bytes: encoded_len,
+                coalesce_below_bytes: 0,
+            },
+        ];
+
+        for mode in modes {
+            let (result, io, started, poisoned) = write_payload(&baseline, mode, 2).await;
+            result.expect("bounded TLS structured write");
+            assert!(started);
+            assert!(!poisoned);
+            assert_eq!(io.output, expected, "{mode:?}");
+            assert_eq!(io.output.len(), encoded_len);
+            assert_eq!(io.flushes, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn every_tls_mode_rejects_an_oversized_complete_frame_before_progress() {
+        let (payload, _, encoded_len) = structured_segments();
+        let modes = [
+            FrameWriteMode::TlsVectored {
+                max_plaintext_frame_bytes: encoded_len - 1,
+            },
+            FrameWriteMode::TlsCoalesced {
+                max_plaintext_frame_bytes: encoded_len - 1,
+            },
+            FrameWriteMode::TlsAuto {
+                max_plaintext_frame_bytes: encoded_len - 1,
+                coalesce_below_bytes: encoded_len,
+            },
+        ];
+
+        for mode in modes {
+            let (result, io, started, poisoned) = write_payload(&payload, mode, 8).await;
+            assert_eq!(
+                result.expect_err("oversized TLS plaintext").kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert!(!started, "{mode:?}");
+            assert!(!poisoned, "{mode:?}");
+            assert!(io.output.is_empty(), "{mode:?}");
+            assert_eq!(io.flushes, 0, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mismatched_structured_head_is_rejected_before_progress() {
+        let head =
+            EncodedFrameHead::from_command_and_body_len(RemotingCommand::create_response_command_with_code(902), 7)
+                .expect("encoded response head");
+        let malformed = StructuredResponseFrame {
+            head,
+            body: PreparedStructuredResponseBody {
+                body: StructuredResponseBody::Bytes(Bytes::from_static(b"six!!!")),
+                checked_len: 6,
+            },
+        };
+        let payload = OutboundPayload::StructuredFrame(malformed);
+
+        let (result, io, started, poisoned) = write_payload(&payload, FrameWriteMode::PlainVectored, 8).await;
+        assert_eq!(
+            result.expect_err("mismatched body length").kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(!started);
+        assert!(!poisoned);
+        assert!(io.output.is_empty());
+        assert_eq!(io.flushes, 0);
+    }
+
+    #[tokio::test]
+    async fn legacy_complete_frame_segments_keep_their_existing_write_shape() {
+        let payload = OutboundPayload::FrameSegments {
+            segments: vec![
+                Bytes::from_static(b"legacy-prefix"),
+                Bytes::from_static(b"legacy-header"),
+                Bytes::from_static(b"legacy-body"),
+            ],
+            encoded_len: 37,
+        };
+        let (result, io, started, poisoned) = write_payload(&payload, FrameWriteMode::PlainVectored, 2).await;
+
+        result.expect("legacy segmented payload");
+        assert!(started);
+        assert!(!poisoned);
+        assert_eq!(io.output, b"legacy-prefixlegacy-headerlegacy-body");
+        assert_eq!(io.vectored_widths, [2, 1]);
+    }
+
+    #[test]
+    fn structured_encoded_len_counts_the_body_exactly_once() {
+        let (payload, expected, encoded_len) = structured_segments();
+        let announced_payload = i32::from_be_bytes(expected[..4].try_into().expect("frame prefix"));
+
+        assert_eq!(payload.encoded_len(), encoded_len);
+        assert_eq!(payload.encoded_len(), expected.len());
+        assert_eq!(announced_payload as usize + 4, expected.len());
+        assert!(matches!(payload, OutboundPayload::StructuredFrame(_)));
+        assert!(!matches!(payload, OutboundPayload::FrameSegments { .. }));
     }
 }
