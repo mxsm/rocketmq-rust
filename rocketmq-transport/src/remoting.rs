@@ -193,7 +193,7 @@ pub(crate) mod inner {
                 return Ok(());
             }
             let Some(response) = response else {
-                metrics_guard.complete_cancelled();
+                metrics_guard.complete_legacy_ambiguous_none();
                 return Ok(());
             };
             let response_code = response.code();

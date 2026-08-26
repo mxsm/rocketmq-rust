@@ -577,6 +577,23 @@ mod tests {
     }
 
     #[test]
+    fn broker_request_errors_exclude_legacy_ambiguous_none() {
+        let manifest: serde_yaml::Value = serde_yaml::from_str(BROKER_MANIFEST).expect("valid broker manifest");
+        let request_errors = manifest["signals"]
+            .as_sequence()
+            .expect("broker signals are a sequence")
+            .iter()
+            .find(|signal| signal["requirement_id"].as_str() == Some("broker.request_errors"))
+            .expect("broker request errors signal");
+        const EXPECTED_QUERY: &str = concat!(
+            "sum by (request_code, response_code, result) ",
+            "(rate(rocketmq_rpc_latency_milliseconds_count{result!=\"success\",result!=\"legacy_ambiguous_none\"}[5m]))"
+        );
+
+        assert_eq!(request_errors["query"].as_str(), Some(EXPECTED_QUERY));
+    }
+
+    #[test]
     fn empty_metric_series_is_missing_and_never_fabricated_as_zero() {
         let signal = ManifestSignal {
             requirement_id: "broker.availability".to_owned(),

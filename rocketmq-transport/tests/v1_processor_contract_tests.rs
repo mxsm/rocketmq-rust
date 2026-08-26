@@ -19,6 +19,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+#[cfg(feature = "observability")]
+use rocketmq_observability::init_observability_with_service_context;
+#[cfg(feature = "observability")]
+use rocketmq_observability::MetricsExporter;
+#[cfg(feature = "observability")]
+use rocketmq_observability::ObservabilityConfig;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
@@ -41,6 +47,12 @@ use rocketmq_transport::api::v1::TransportSecurity;
 use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::test_support::Connection;
+#[cfg(feature = "observability")]
+use tokio::io::AsyncReadExt;
+#[cfg(feature = "observability")]
+use tokio::io::AsyncWriteExt;
+#[cfg(feature = "observability")]
+use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
@@ -50,6 +62,7 @@ const ONEWAY: i32 = 19_750;
 const NONE: i32 = 19_751;
 const DIRECT_WRITE: i32 = 19_752;
 const SENTINEL: i32 = 19_753;
+const ONEWAY_NONE: i32 = 19_754;
 const ORIGINAL_OPAQUE: i32 = 74;
 const MUTATED_OPAQUE: i32 = 8_074;
 const PROCESSOR_RESPONSE_OPAQUE: i32 = 9_074;
@@ -130,7 +143,7 @@ impl RequestProcessor for ContractProcessor {
             opaque: request.opaque(),
         });
         match request.code() {
-            NONE => Ok(None),
+            NONE | ONEWAY_NONE => Ok(None),
             DIRECT_WRITE => {
                 ctx.write_response(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success)
@@ -222,6 +235,10 @@ struct Fixture {
 }
 
 fn fixture(runtime: &RuntimeContext, name: &'static str) -> Fixture {
+    fixture_with_telemetry(runtime, name, TransportTelemetry::noop())
+}
+
+fn fixture_with_telemetry(runtime: &RuntimeContext, name: &'static str, telemetry: TransportTelemetry) -> Fixture {
     let service = runtime.service_context(name);
     let process_budget = service.process_budget();
     let events = EventLog::default();
@@ -236,7 +253,7 @@ fn fixture(runtime: &RuntimeContext, name: &'static str) -> Fixture {
             processor.clone(),
             vec![Arc::new(ContractHook { events: events.clone() })],
             &process_budget,
-            TransportTelemetry::noop(),
+            telemetry,
             Arc::clone(&security),
             admission,
         )
@@ -518,4 +535,112 @@ async fn direct_context_write_followed_by_none_emits_exactly_one_processor_frame
             ..
         }
     )));
+}
+
+#[cfg(feature = "observability")]
+#[tokio::test]
+async fn network_v1_none_outcomes_record_their_distinct_terminal_telemetry() {
+    let runtime = RuntimeContext::from_current("v1-none-terminal-telemetry");
+    let telemetry_service = runtime.service_context("telemetry");
+    let mut observability = ObservabilityConfig {
+        enabled: true,
+        ..ObservabilityConfig::default()
+    };
+    observability.metrics.enabled = true;
+    observability.metrics.exporter = MetricsExporter::Prometheus;
+    observability.prometheus.host = "127.0.0.1".to_owned();
+    let port_reservation = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reserve a Prometheus port");
+    observability.prometheus.port = port_reservation
+        .local_addr()
+        .expect("reserved Prometheus port has an address")
+        .port();
+    drop(port_reservation);
+    observability.prometheus.path = "/metrics".to_owned();
+    let telemetry_runtime = init_observability_with_service_context(&observability, &telemetry_service)
+        .await
+        .expect("test telemetry runtime should initialize");
+    let fixture = fixture_with_telemetry(
+        &runtime,
+        "network",
+        TransportTelemetry::from_handle(&telemetry_runtime.handle()),
+    );
+
+    // The network adapter delegates these requests to RemotingGeneralHandler::process_message_received.
+    let responses = run_network(
+        &fixture,
+        vec![
+            request(NONE, 1),
+            request(ONEWAY_NONE, 2).mark_oneway_rpc(),
+            request(SENTINEL, 3),
+        ],
+        1,
+    )
+    .await;
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].opaque(), 3);
+
+    let metrics = scrape_metrics(
+        telemetry_runtime
+            .prometheus_local_addr()
+            .expect("test telemetry should expose Prometheus metrics"),
+        observability.prometheus.path.as_str(),
+    )
+    .await;
+    assert_rpc_latency_count(&metrics, NONE, -1, "legacy_ambiguous_none");
+    assert_rpc_latency_count(&metrics, ONEWAY_NONE, -1, "oneway");
+
+    let report = telemetry_runtime
+        .shutdown_with_service_context(&telemetry_service, Duration::from_secs(3))
+        .await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[cfg(feature = "observability")]
+async fn scrape_metrics(address: SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("connect to test Prometheus endpoint");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write test Prometheus request");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read test Prometheus response");
+    let response = String::from_utf8(response).expect("Prometheus response is UTF-8");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    response
+        .split_once("\r\n\r\n")
+        .expect("Prometheus response has headers and body")
+        .1
+        .to_owned()
+}
+
+#[cfg(feature = "observability")]
+fn assert_rpc_latency_count(metrics: &str, request_code: i32, response_code: i32, result: &str) {
+    let expected_request_code = format!("request_code=\"{request_code}\"");
+    let expected_response_code = format!("response_code=\"{response_code}\"");
+    let expected_result = format!("result=\"{result}\"");
+    let matching = metrics
+        .lines()
+        .filter(|line| {
+            line.starts_with("rocketmq_rpc_latency_count{")
+                && line.contains(expected_request_code.as_str())
+                && line.contains(expected_response_code.as_str())
+                && line.contains(expected_result.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(matching.len(), 1, "matching RPC metrics: {matching:?}");
+    assert_eq!(
+        matching[0].split_whitespace().last(),
+        Some("1"),
+        "matching RPC metric: {}",
+        matching[0]
+    );
 }

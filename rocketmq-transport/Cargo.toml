@@ -85,6 +85,7 @@ libc = { version = "0.2.186", optional = true }
 anyhow.workspace = true
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 pkcs8.workspace = true
+rocketmq-observability = { workspace = true, features = ["prometheus"] }
 serde_json.workspace = true
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["test-util"] }

@@ -53,7 +53,7 @@ signals:
     registry_reference: rocketmq_rpc_latency
     signal_type: metric
     status: queryable
-    query: sum by (request_code, response_code, result) (rate(rocketmq_rpc_latency_milliseconds_count{result!="success"}[5m]))
+    query: sum by (request_code, response_code, result) (rate(rocketmq_rpc_latency_milliseconds_count{result!="success",result!="legacy_ambiguous_none"}[5m]))
     query_resource: metrics/rocketmq_rpc_latency_milliseconds_count
     freshness_seconds: 60
     expected_attributes: [request_code, response_code, result]
