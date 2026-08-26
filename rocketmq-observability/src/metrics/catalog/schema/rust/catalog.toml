@@ -973,3 +973,12 @@ unit = ""
 labels = ["BACKEND", "STATE"]
 source = "Observability"
 description = "Dashboard SQL connection pool state"
+
+[[metric]]
+index = 215
+symbol = "TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL"
+kind = "Counter"
+unit = "{request}"
+labels = ["PROCESSOR", "REQUEST_CODE"]
+source = "Remoting"
+description = "Requests admitted through the V1 processor compatibility adapter"

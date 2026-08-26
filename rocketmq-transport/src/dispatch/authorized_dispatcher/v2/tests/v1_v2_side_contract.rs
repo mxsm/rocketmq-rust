@@ -44,9 +44,11 @@ use super::event_log::EventLog;
 use super::harness::*;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
+use crate::base::pending_request_table::PendingRequestTable;
 use crate::config::ServerConfig;
 use crate::dispatch::AuthorizedCommandDispatcher;
 use crate::dispatch::HandlerOutcome;
+use crate::dispatch::LegacyProcessorAdapter;
 use crate::dispatch::ResponseBodyKind;
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponsePlan;
@@ -606,6 +608,22 @@ fn record_v2_dispatch_clones(state: &V2State) {
     state.record_dispatch_clones.store(true, Ordering::SeqCst);
 }
 
+fn v1_adapter_dispatcher(
+    behavior: V1Behavior,
+    state: Arc<V1State>,
+    hooks: Vec<Arc<dyn RPCHook>>,
+) -> Arc<AuthorizedCommandDispatcherV2<LegacyProcessorAdapter<V1Processor>>> {
+    Arc::new(AuthorizedCommandDispatcherV2::new_legacy(
+        LegacyProcessorAdapter::new(
+            V1Processor::new(behavior, state),
+            "dsp04-v1-side-contract",
+            TransportTelemetry::noop(),
+            PendingRequestTable::new(),
+        ),
+        hooks,
+    ))
+}
+
 async fn wait_for_v2_observations(state: &V2State, expected: usize) {
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -647,7 +665,10 @@ fn assert_v2_standard_observation(state: &V2State, request_id: crate::dispatch::
     ));
 }
 
-fn assert_no_v2_dispatch_failures(dispatcher: &AuthorizedCommandDispatcherV2<V2Processor>) {
+fn assert_no_v2_dispatch_failures<D>(dispatcher: &AuthorizedCommandDispatcherV2<D>)
+where
+    D: DispatchProcessor,
+{
     let failure_categories = dispatcher.reported_failure_categories();
     assert!(
         failure_categories.is_empty(),
@@ -699,6 +720,39 @@ async fn v1_and_v2_admitted_requests_share_ordering_hook_clone_binding_and_obser
     assert_no_v2_dispatch_failures(&dispatcher);
     v2.drain_close_and_assert_eof().await;
     v2.shutdown().await;
+
+    let mut adapted = DispatchHarness::new("v1-v2-side-contract-standard-adapter").await;
+    let adapted_state = Arc::new(V1State::new());
+    let adapted_dispatcher = v1_adapter_dispatcher(
+        V1Behavior::Standard,
+        Arc::clone(&adapted_state),
+        vec![Arc::new(SideHook {
+            events: adapted_state.events.clone(),
+            clear_oneway: false,
+        })],
+    );
+    adapted_state.record_dispatch_clones.store(true, Ordering::SeqCst);
+    let clone_baseline = adapted_state.clones.load(Ordering::SeqCst);
+    let command = v2_command(STANDARD, ORIGINAL_OPAQUE, false);
+    let (session, _) = adapted.request_session(&command);
+    adapted_dispatcher
+        .dispatch(&adapted.authorized, session, adapted.context(None), command, 256, None)
+        .await
+        .expect("adapted V1 standard side-contract dispatch should be admitted");
+    let response = adapted.receive().await;
+    adapted.drain_requests().await;
+
+    assert_eq!(response.code(), ResponseCode::Success.to_i32());
+    assert_eq!(response.opaque(), ORIGINAL_OPAQUE);
+    assert_eq!(adapted_state.clones.load(Ordering::SeqCst) - clone_baseline, 1);
+    assert_eq!(
+        adapted_state.events.snapshot(),
+        admitted_events(STANDARD, ORIGINAL_OPAQUE)
+    );
+    assert_v1_standard_observation(&adapted_state, STANDARD);
+    assert_no_v2_dispatch_failures(&adapted_dispatcher);
+    adapted.drain_close_and_assert_eof().await;
+    adapted.shutdown().await;
 }
 
 #[tokio::test]

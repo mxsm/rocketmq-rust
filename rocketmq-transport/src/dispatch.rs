@@ -14,6 +14,7 @@
 
 mod authorized_dispatcher;
 mod handler_outcome;
+mod legacy_processor_adapter;
 mod remoting_request;
 mod request_context;
 mod request_control;
@@ -48,6 +49,20 @@ pub(crate) use handler_outcome::InlineResponseSlot;
 pub use handler_outcome::ProtocolNoResponse;
 pub use handler_outcome::ProtocolNoResponseError;
 pub use handler_outcome::ProtocolNoResponseReason;
+pub(crate) use legacy_processor_adapter::DispatchMetricsGuard;
+pub(crate) use legacy_processor_adapter::DispatchProcessor;
+pub(crate) use legacy_processor_adapter::DispatchProcessorError;
+pub(crate) use legacy_processor_adapter::ExplicitV2Processor;
+pub(crate) use legacy_processor_adapter::InternalProcessorCandidate;
+pub(crate) use legacy_processor_adapter::InternalProcessorOutcome;
+pub(crate) use legacy_processor_adapter::LegacyProcessorAdapter;
+pub(crate) use legacy_processor_adapter::LegacyProcessorAdapterError;
+pub(crate) use legacy_processor_adapter::LegacyReplyCandidate;
+#[allow(
+    unused_imports,
+    reason = "DSP-05 exposes the sealed legacy bridge to later coexistence routing"
+)]
+pub(crate) use legacy_processor_adapter::LegacyRequestBridge;
 pub use remoting_request::IngressRequestView;
 pub use remoting_request::RemotingRequest;
 pub use request_context::RequestContext;

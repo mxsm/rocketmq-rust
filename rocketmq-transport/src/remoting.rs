@@ -66,6 +66,23 @@ pub(crate) mod inner {
         Ok(())
     }
 
+    const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
+
+    pub(crate) fn legacy_rejection_response(
+        rejection: crate::runtime::processor::RejectRequestResponse,
+    ) -> Option<RemotingCommand> {
+        let (rejected, response) = rejection;
+        rejected.then(|| {
+            response.unwrap_or_else(|| {
+                RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemBusy, REJECT_REQUEST_MSG)
+            })
+        })
+    }
+
+    pub(crate) fn legacy_processor_error_response() -> RemotingCommand {
+        RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+    }
+
     pub(crate) struct RemotingGeneralHandler<RP> {
         pub(crate) request_processor: RP,
         rpc_hooks: HookRegistry,
@@ -145,17 +162,7 @@ pub(crate) mod inner {
                 is_long_polling_request(request_code),
             );
             let mut request_processor = self.request_processor.clone();
-            let reject_request = request_processor.reject_request(request_code);
-            const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
-            if reject_request.0 {
-                let response = if let Some(response) = reject_request.1 {
-                    response
-                } else {
-                    RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemBusy,
-                        REJECT_REQUEST_MSG,
-                    )
-                };
+            if let Some(response) = legacy_rejection_response(request_processor.reject_request(request_code)) {
                 let response_code = response.code();
                 let write_started = Instant::now();
                 let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
@@ -207,9 +214,7 @@ pub(crate) mod inner {
                     Ok(result) => result,
                     Err(_err) => {
                         metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
-                        Some(RemotingCommand::create_response_command_with_code(
-                            ResponseCode::SystemError,
-                        ))
+                        Some(legacy_processor_error_response())
                     }
                 }
             };
@@ -327,7 +332,7 @@ pub(crate) mod inner {
     }
 
     #[inline]
-    fn is_long_polling_request(request_code: i32) -> bool {
+    pub(crate) fn is_long_polling_request(request_code: i32) -> bool {
         matches!(
             RequestCode::from(request_code),
             RequestCode::PullMessage

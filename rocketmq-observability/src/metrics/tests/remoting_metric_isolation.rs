@@ -23,6 +23,7 @@ use crate::metrics::remoting::RemotingMetrics;
 use crate::metrics::remoting::RequestMetricsGuard;
 use crate::metrics::remoting::RPC_LATENCY;
 use crate::metrics::remoting::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
+use crate::metrics::remoting::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUEST_LATENCY;
 use crate::TelemetryHandle;
@@ -149,6 +150,9 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     let second = RemotingMetrics::new(&second_provider.meter("rocketmq-transport"));
     first.record_inbound_decoded_plaintext_bytes(21);
     second.record_inbound_decoded_plaintext_bytes(17);
+    first.record_legacy_processor_request("broker-send", 10);
+    first.record_legacy_processor_request("broker-send", 10);
+    second.record_legacy_processor_request("namesrv-route", 20);
 
     let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false);
     success.complete_response(0);
@@ -190,6 +194,36 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     );
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUEST_LATENCY), 1);
     assert_eq!(metric_value(&second_points, RPC_LATENCY), 1);
+
+    let first_legacy = first_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL)
+        .collect::<Vec<_>>();
+    assert_eq!(first_legacy.len(), 1);
+    assert_eq!(first_legacy[0].value, 2);
+    assert_eq!(
+        first_legacy[0].attributes,
+        BTreeMap::from([
+            ("processor".to_owned(), CapturedValue::String("broker-send".to_owned()),),
+            ("request_code".to_owned(), CapturedValue::I64(10)),
+        ])
+    );
+    let second_legacy = second_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL)
+        .collect::<Vec<_>>();
+    assert_eq!(second_legacy.len(), 1);
+    assert_eq!(second_legacy[0].value, 1);
+    assert_eq!(
+        second_legacy[0].attributes,
+        BTreeMap::from([
+            (
+                "processor".to_owned(),
+                CapturedValue::String("namesrv-route".to_owned()),
+            ),
+            ("request_code".to_owned(), CapturedValue::I64(20)),
+        ])
+    );
 
     let first_rpc = first_points
         .iter()

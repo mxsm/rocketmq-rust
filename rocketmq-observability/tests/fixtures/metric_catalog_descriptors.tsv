@@ -213,3 +213,4 @@ rust	211	"rocketmq_dashboard_storage_operation_duration_milliseconds"	Histogram	
 rust	212	"rocketmq_dashboard_storage_operation_errors_total"	Counter	""	["backend","operation","error_kind"]	Observability
 rust	213	"rocketmq_dashboard_storage_capacity_bytes"	Gauge	"By"	["backend"]	Observability
 rust	214	"rocketmq_dashboard_storage_pool_connections"	Gauge	""	["backend","state"]	Observability
+rust	215	"rocketmq_transport_legacy_processor_requests_total"	Counter	"{request}"	["processor","request_code"]	Remoting

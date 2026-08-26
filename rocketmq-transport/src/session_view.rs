@@ -154,6 +154,11 @@ impl SessionStateView {
         Self { state_rx, closed_rx }
     }
 
+    /// Proves that both views observe the same pair of lifecycle publishers.
+    pub(crate) fn same_canonical_owner(&self, other: &Self) -> bool {
+        self.state_rx.same_channel(&other.state_rx) && self.closed_rx.same_channel(&other.closed_rx)
+    }
+
     /// Returns whether the session is currently accepting inbound work.
     #[must_use]
     pub fn is_healthy(&self) -> bool {

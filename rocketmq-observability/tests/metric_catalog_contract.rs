@@ -23,9 +23,9 @@ use rocketmq_observability::metrics::catalog::RUST_METRICS;
 
 const FIXTURE: &str = include_str!("fixtures/metric_catalog_descriptors.tsv");
 const JAVA_DESCRIPTOR_COUNT: usize = 94;
-const RUST_DESCRIPTOR_COUNT: usize = 121;
+const RUST_DESCRIPTOR_COUNT: usize = 122;
 const TOTAL_DESCRIPTOR_COUNT: usize = JAVA_DESCRIPTOR_COUNT + RUST_DESCRIPTOR_COUNT;
-const DISTINCT_LABEL_SEQUENCE_COUNT: usize = 60;
+const DISTINCT_LABEL_SEQUENCE_COUNT: usize = 61;
 const DISTINCT_SOURCE_COUNT: usize = 14;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

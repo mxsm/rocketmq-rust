@@ -20,6 +20,8 @@ mod delivery_hooks;
 mod event_log;
 #[path = "tests/harness.rs"]
 mod harness;
+#[path = "tests/legacy_adapter.rs"]
+mod legacy_adapter;
 #[path = "tests/outcomes_deadlines.rs"]
 mod outcomes_deadlines;
 #[path = "tests/v1_v2_side_contract.rs"]

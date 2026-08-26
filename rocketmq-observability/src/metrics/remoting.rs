@@ -14,6 +14,7 @@
 
 pub use crate::semantic::metrics::RPC_LATENCY;
 pub use crate::semantic::metrics::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
+pub use crate::semantic::metrics::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_LISTENER_LATENCY;
 pub use crate::semantic::metrics::TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES;
@@ -164,6 +165,9 @@ impl RemotingMetrics {
     pub fn record_lifecycle_listener_latency(&self, _latency_ms: u64, _event: &'static str) {}
 
     #[inline]
+    pub fn record_legacy_processor_request(&self, _processor: &'static str, _request_code: i32) {}
+
+    #[inline]
     pub fn record_rpc_latency(
         &self,
         _latency_ms: u64,
@@ -193,6 +197,7 @@ struct RemotingMetricInstruments {
     inbound_decoded_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
     lifecycle_events: opentelemetry::metrics::Counter<u64>,
     lifecycle_listener_latency: opentelemetry::metrics::Histogram<u64>,
+    legacy_processor_requests: opentelemetry::metrics::Counter<u64>,
     rpc_latency: opentelemetry::metrics::Histogram<u64>,
 }
 
@@ -318,6 +323,22 @@ impl RemotingMetrics {
     }
 
     #[inline]
+    pub fn record_legacy_processor_request(&self, processor: &'static str, request_code: i32) {
+        if !self.is_active() {
+            return;
+        }
+        if let Some(instruments) = &self.instruments {
+            instruments.legacy_processor_requests.add(
+                1,
+                &[
+                    opentelemetry::KeyValue::new(crate::semantic::labels::PROCESSOR, processor),
+                    opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_CODE, i64::from(request_code)),
+                ],
+            );
+        }
+    }
+
+    #[inline]
     pub fn record_rpc_latency(
         &self,
         latency_ms: u64,
@@ -391,6 +412,12 @@ impl RemotingMetricInstruments {
             .with_unit("ms")
             .build();
 
+        let legacy_processor_requests = meter
+            .u64_counter(TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL)
+            .with_description("Requests admitted through the V1 processor compatibility adapter")
+            .with_unit("{request}")
+            .build();
+
         let rpc_latency = meter
             .u64_histogram(RPC_LATENCY)
             .with_description("Rpc latency")
@@ -406,6 +433,7 @@ impl RemotingMetricInstruments {
             inbound_decoded_plaintext_bytes,
             lifecycle_events,
             lifecycle_listener_latency,
+            legacy_processor_requests,
             rpc_latency,
         }
     }
@@ -455,6 +483,7 @@ mod tests {
         metrics.record_inbound_decoded_plaintext_bytes(256);
         metrics.record_lifecycle_event("connected", "queued");
         metrics.record_lifecycle_listener_latency(2, "connected");
+        metrics.record_legacy_processor_request("test-processor", 10);
         metrics.record_rpc_latency(5, 10, 0, false, RESULT_SUCCESS);
     }
 }

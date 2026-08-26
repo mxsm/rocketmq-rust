@@ -195,6 +195,17 @@ impl ResponsePlan {
         Ok(Self::new(head, ResponseBody::Bytes(body), body_len, 1))
     }
 
+    /// Moves one legacy response command into the owned plan representation.
+    ///
+    /// The body is detached before the head is validated, so a valid contiguous
+    /// body retains its original `Bytes` allocation without cloning or decoding.
+    pub(crate) fn from_legacy_command(mut command: RemotingCommand) -> Result<Self, ResponsePlanError> {
+        match command.take_body() {
+            Some(body) => Self::bytes(command, body),
+            None => Self::command(command),
+        }
+    }
+
     /// Creates a response from ordered body-only byte segments.
     ///
     /// Empty segments are discarded. The remaining segment bytes are accepted
@@ -490,6 +501,30 @@ mod tests {
         )
         .expect("valid segmented response");
         assert_metadata(&segments, ResponseBodyKind::Segments, 9, 2);
+    }
+
+    #[test]
+    fn legacy_command_conversion_moves_the_original_bytes_owner() {
+        let body = Bytes::from_static(b"legacy response body");
+        let body_pointer = body.as_ptr();
+        let plan =
+            ResponsePlan::from_legacy_command(response_head().set_body(body)).expect("valid legacy response command");
+
+        let ResponseBody::Bytes(moved) = plan.test_body() else {
+            panic!("non-empty legacy body must remain contiguous bytes");
+        };
+        assert_eq!(moved.as_ptr(), body_pointer);
+        assert_eq!(moved.as_ref(), b"legacy response body");
+    }
+
+    #[test]
+    fn legacy_command_conversion_rejects_a_malformed_head_before_encoding() {
+        let malformed = RemotingCommand::create_remoting_command(7).set_body(Bytes::from_static(b"body"));
+
+        assert!(matches!(
+            ResponsePlan::from_legacy_command(malformed),
+            Err(ResponsePlanError::RequestHead)
+        ));
     }
 
     #[test]

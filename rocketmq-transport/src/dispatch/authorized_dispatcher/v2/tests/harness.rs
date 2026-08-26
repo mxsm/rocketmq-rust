@@ -16,6 +16,7 @@ pub(super) use std::future::Future;
 pub(super) use std::net::IpAddr;
 pub(super) use std::net::Ipv4Addr;
 pub(super) use std::pin::Pin;
+pub(super) use std::sync::atomic::AtomicBool;
 pub(super) use std::sync::atomic::AtomicU64;
 pub(super) use std::sync::atomic::AtomicUsize;
 pub(super) use std::sync::atomic::Ordering;
@@ -23,6 +24,7 @@ pub(super) use std::sync::Arc;
 pub(super) use std::sync::Mutex;
 pub(super) use std::task::Context;
 pub(super) use std::task::Poll;
+pub(super) use std::task::Waker;
 pub(super) use std::time::Duration;
 pub(super) use std::time::Instant;
 
@@ -43,13 +45,17 @@ pub(super) use crate::admission::AdmissionResource;
 pub(super) use crate::admission::AdmissionScope;
 pub(super) use crate::connection::Connection;
 pub(super) use crate::deadline::RequestDeadline;
+pub(super) use crate::dispatch::HandlerOutcome;
 pub(super) use crate::dispatch::ProtocolNoResponseReason;
+pub(super) use crate::dispatch::RemotingRequest;
 pub(super) use crate::dispatch::ResponseBodyKind;
 pub(super) use crate::dispatch::ResponseDisposition;
 pub(super) use crate::request_ordering::RequestOrdering;
 pub(super) use crate::request_ordering::RequestOrderingKey;
+pub(super) use crate::runtime::processor_v2::RejectRequestDecision;
 pub(super) use crate::runtime::processor_v2::ResponseWriteObservationV2;
 pub(super) use crate::runtime::processor_v2::ResponseWriteOutcomeV2;
+pub(super) use crate::runtime::processor_v2::ResponseWritePath;
 pub(super) use crate::security::TransportSecurity;
 pub(super) use crate::server::run_connected_session;
 pub(super) use crate::server::ConnectionHandler;
@@ -271,6 +277,47 @@ struct CaptureSession {
 struct FlushFailingStream {
     inner: tokio::io::DuplexStream,
     fail_flush: bool,
+    post_start_barrier: Option<Arc<PostStartWriteBarrier>>,
+}
+
+pub(super) struct PostStartWriteBarrier {
+    reached: tokio::sync::Notify,
+    released: AtomicBool,
+    writer_waker: Mutex<Option<Waker>>,
+}
+
+impl PostStartWriteBarrier {
+    fn new() -> Self {
+        Self {
+            reached: tokio::sync::Notify::new(),
+            released: AtomicBool::new(false),
+            writer_waker: Mutex::new(None),
+        }
+    }
+
+    fn poll_ready(&self, context: &Context<'_>) -> Poll<()> {
+        if self.released.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+        *self.writer_waker.lock().expect("post-start writer waker lock") = Some(context.waker().clone());
+        self.reached.notify_one();
+        if self.released.load(Ordering::Acquire) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
+    pub(super) async fn wait_reached(&self) {
+        self.reached.notified().await;
+    }
+
+    pub(super) fn release(&self) {
+        self.released.store(true, Ordering::Release);
+        if let Some(waker) = self.writer_waker.lock().expect("post-start writer waker lock").take() {
+            waker.wake();
+        }
+    }
 }
 
 impl AsyncRead for FlushFailingStream {
@@ -285,6 +332,13 @@ impl AsyncRead for FlushFailingStream {
 
 impl AsyncWrite for FlushFailingStream {
     fn poll_write(mut self: Pin<&mut Self>, context: &mut Context<'_>, buffer: &[u8]) -> Poll<std::io::Result<usize>> {
+        if self
+            .post_start_barrier
+            .as_ref()
+            .is_some_and(|barrier| barrier.poll_ready(context).is_pending())
+        {
+            return Poll::Pending;
+        }
         Pin::new(&mut self.inner).poll_write(context, buffer)
     }
 
@@ -293,6 +347,13 @@ impl AsyncWrite for FlushFailingStream {
         context: &mut Context<'_>,
         buffers: &[std::io::IoSlice<'_>],
     ) -> Poll<std::io::Result<usize>> {
+        if self
+            .post_start_barrier
+            .as_ref()
+            .is_some_and(|barrier| barrier.poll_ready(context).is_pending())
+        {
+            return Poll::Pending;
+        }
         Pin::new(&mut self.inner).poll_write_vectored(context, buffers)
     }
 
@@ -379,11 +440,34 @@ impl DispatchHarness {
         Self::new_with_options(name, AdmissionLimits::default(), false, security).await
     }
 
+    pub(super) async fn new_with_post_start_barrier(name: &'static str) -> (Self, Arc<PostStartWriteBarrier>) {
+        let barrier = Arc::new(PostStartWriteBarrier::new());
+        let harness = Self::new_with_stream_options(
+            name,
+            AdmissionLimits::default(),
+            false,
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            Some(Arc::clone(&barrier)),
+        )
+        .await;
+        (harness, barrier)
+    }
+
     pub(super) async fn new_with_options(
         name: &'static str,
         limits: AdmissionLimits,
         fail_flush: bool,
         security: Arc<TransportSecurity>,
+    ) -> Self {
+        Self::new_with_stream_options(name, limits, fail_flush, security, None).await
+    }
+
+    async fn new_with_stream_options(
+        name: &'static str,
+        limits: AdmissionLimits,
+        fail_flush: bool,
+        security: Arc<TransportSecurity>,
+        post_start_barrier: Option<Arc<PostStartWriteBarrier>>,
     ) -> Self {
         let runtime = RuntimeContext::from_current(name);
         let service = runtime.service_context(name);
@@ -393,6 +477,7 @@ impl DispatchHarness {
         let transport = FlushFailingStream {
             inner: transport,
             fail_flush,
+            post_start_barrier,
         };
         let (session_tx, session_rx) = oneshot::channel();
         let handler = Arc::new(CaptureSession {

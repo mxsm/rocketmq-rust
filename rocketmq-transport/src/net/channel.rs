@@ -33,6 +33,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
@@ -50,6 +51,9 @@ use crate::dispatch::ResponseSink;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::proxy_protocol::ProxyProtocolMetadata;
+use crate::server::SessionHandle;
+use crate::session_view::SessionId;
+use crate::session_view::SessionStateView;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 pub type ChannelId = CheetahString;
@@ -111,6 +115,30 @@ pub struct Channel {
     ///
     /// Used for logging, routing, and distinguishing channels in maps/sets.
     channel_id: ChannelId,
+
+    /// Canonical owner retained only by the crate-private legacy adapter path.
+    #[allow(
+        dead_code,
+        reason = "DSP-05 canonical ownership remains dormant until DSP-06 coexistence routing"
+    )]
+    canonical_owner: Option<CanonicalChannelOwner>,
+}
+
+#[derive(Clone)]
+#[allow(
+    dead_code,
+    reason = "DSP-05 canonical ownership remains dormant until DSP-06 coexistence routing"
+)]
+enum CanonicalChannelOwner {
+    Network {
+        session_id: SessionId,
+        owner: SessionHandle,
+    },
+    Embedded {
+        session_id: SessionId,
+        session_state: SessionStateView,
+        task_cancellation: CancellationToken,
+    },
 }
 
 impl Channel {
@@ -134,6 +162,7 @@ impl Channel {
             transport_peer_address: remote_address,
             proxy_protocol: None,
             channel_id,
+            canonical_owner: None,
         }
     }
 
@@ -148,6 +177,126 @@ impl Channel {
         channel.transport_peer_address = transport_peer_address;
         channel.proxy_protocol = proxy_protocol;
         channel
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge construction remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn new_canonical_network(inner: Arc<ChannelInner>, session: SessionHandle) -> Self {
+        let mut channel = Self::new_with_proxy_protocol(
+            inner,
+            session.local_addr(),
+            session.remote_addr(),
+            session.transport_peer_addr(),
+            session.proxy_protocol().cloned(),
+        );
+        channel.set_channel_id(format!("transport-session-{}", session.session_id()));
+        channel.canonical_owner = Some(CanonicalChannelOwner::Network {
+            session_id: SessionId::from_session_owner(session.session_id()),
+            owner: session,
+        });
+        channel
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge construction remains dormant until DSP-06 embedded routing"
+    )]
+    pub(crate) fn new_canonical_embedded(
+        inner: Arc<ChannelInner>,
+        session_id: SessionId,
+        session_state: SessionStateView,
+        task_group: &TaskGroup,
+    ) -> Self {
+        let address = SocketAddr::from(([127, 0, 0, 1], 0));
+        let mut channel = Self::new(inner, address, address);
+        channel.set_channel_id(format!("embedded-proxy-{}", session_id.owner_id()));
+        channel.canonical_owner = Some(CanonicalChannelOwner::Embedded {
+            session_id,
+            session_state,
+            task_cancellation: task_group.cancellation_token(),
+        });
+        channel
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn canonical_session_id(&self) -> Option<SessionId> {
+        match self.canonical_owner.as_ref() {
+            Some(CanonicalChannelOwner::Network { session_id, .. }) => Some(*session_id),
+            Some(CanonicalChannelOwner::Embedded { session_id, .. }) => Some(*session_id),
+            None => None,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn is_canonical_network_owner(&self, session: &SessionHandle) -> bool {
+        matches!(
+            self.canonical_owner.as_ref(),
+            Some(CanonicalChannelOwner::Network { owner, .. }) if owner.same_canonical_owner(session)
+        ) && self.inner.is_network()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_canonical_session_id_for_test(&mut self, session_id: SessionId) {
+        match self.canonical_owner.as_mut() {
+            Some(CanonicalChannelOwner::Network {
+                session_id: owner_session_id,
+                ..
+            })
+            | Some(CanonicalChannelOwner::Embedded {
+                session_id: owner_session_id,
+                ..
+            }) => *owner_session_id = session_id,
+            None => {}
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 embedded routing"
+    )]
+    pub(crate) fn is_canonical_embedded_owner(
+        &self,
+        session_id: SessionId,
+        session_state: &SessionStateView,
+        response: &ResponseSink,
+        task_group: &TaskGroup,
+    ) -> bool {
+        matches!(
+            self.canonical_owner.as_ref(),
+            Some(CanonicalChannelOwner::Embedded {
+                session_id: owner_session_id,
+                session_state: owner_session_state,
+                task_cancellation,
+            }) if *owner_session_id == session_id
+                && owner_session_state.same_canonical_owner(session_state)
+                // tokio-util 0.7.19 implements equality with Arc::ptr_eq.
+                && *task_cancellation == task_group.cancellation_token()
+        ) && self.inner.is_local_response_owner(response)
+            && response.is_local_plan_owner(session_state, task_group)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn shares_inner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn is_network_transport(&self) -> bool {
+        self.inner.is_network()
     }
 
     // === Address Mutators ===
@@ -271,6 +420,20 @@ impl Channel {
 
     pub(crate) fn pending_request_owner(&self) -> Option<&PendingRequestOwner> {
         self.inner.pending_request_owner()
+    }
+
+    /// Routes one response through this channel's stable correlation owner.
+    #[allow(
+        dead_code,
+        reason = "DSP-05 endpoint correlation remains dormant until DSP-06 response routing"
+    )]
+    pub(crate) fn complete_pending_response(&self, response: RemotingCommand) -> bool {
+        self.inner.complete_pending_response(response)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn legacy_response_terminal_state(&self) -> Option<crate::dispatch::ResponseTerminalState> {
+        self.inner.legacy_response_terminal_state()
     }
 
     pub(crate) async fn send_response(&self, command: RemotingCommand) -> Result<ResponseReceipt, ResponseError> {
@@ -520,6 +683,10 @@ pub struct ChannelInner {
     /// Correlation generation owned by this physical connection.
     pending_request_owner: Option<PendingRequestOwner>,
 
+    /// Plan-bound completion owner for response-shaped public writes made by
+    /// a legacy processor. Ordinary channels leave this absent.
+    legacy_plan_response: Option<ResponseSink>,
+
     /// Tracks the outbound send task for shutdown diagnostics.
     send_task_group: TaskGroup,
     send_task_id: Option<TaskId>,
@@ -650,6 +817,31 @@ impl ChannelInner {
             connection_state: ConnectionStateHandle::healthy(),
             response_table: PendingRequestTable::new(),
             pending_request_owner: None,
+            legacy_plan_response: None,
+            send_task_group: task_group,
+            send_task_id: None,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 embedded bridge construction remains dormant until DSP-06 routing"
+    )]
+    pub(crate) fn new_local_legacy_bridge(
+        response: ResponseSink,
+        task_group: TaskGroup,
+        response_table: PendingRequestTable,
+    ) -> Self {
+        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(0);
+        drop(outbound_queue_rx);
+        let pending_request_owner = Some(response_table.new_owner());
+        Self {
+            outbound_queue_tx: parking_lot::Mutex::new(Some(outbound_queue_tx)),
+            connection: ChannelIo::Local(response.clone()),
+            connection_state: ConnectionStateHandle::healthy(),
+            response_table,
+            pending_request_owner,
+            legacy_plan_response: Some(response),
             send_task_group: task_group,
             send_task_id: None,
         }
@@ -707,7 +899,9 @@ impl ChannelInner {
     ///
     /// Unlike `new_transport_session`, this does not register another fixed child. The caller
     /// chooses the registration lifetime and the returned `ChannelInner` keeps the supplied
-    /// group alive for exactly as long as the snapshot remains reachable.
+    /// group alive for exactly as long as the snapshot remains reachable. Its
+    /// request APIs write through the supplied queued connection directly and
+    /// therefore do not create a second background send task.
     pub(crate) fn new_transport_session_with_task_group(
         connection: Connection,
         response_table: PendingRequestTable,
@@ -715,6 +909,17 @@ impl ChannelInner {
     ) -> rocketmq_error::RocketMQResult<Self> {
         let pending_request_owner = Some(response_table.new_owner());
         Self::try_new_with_send_task_group(connection, response_table, pending_request_owner, task_group, false)
+    }
+
+    pub(crate) fn new_legacy_network_bridge(
+        connection: Connection,
+        response: ResponseSink,
+        response_table: PendingRequestTable,
+        task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let mut inner = Self::new_transport_session_with_task_group(connection, response_table, task_group)?;
+        inner.legacy_plan_response = Some(response);
+        Ok(inner)
     }
 
     fn try_new_with_send_task_group(
@@ -728,7 +933,7 @@ impl ChannelInner {
 
         // Use flume bounded channel for better performance
         // flume provides lock-free operations and better throughput than tokio::mpsc
-        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(if start_send_task { QUEUE_CAPACITY } else { 0 });
+        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(QUEUE_CAPACITY);
 
         let connection_state = connection.state_handle();
         let connection = Arc::new(tokio::sync::Mutex::new(connection));
@@ -751,11 +956,12 @@ impl ChannelInner {
             None
         };
         Ok(Self {
-            outbound_queue_tx: parking_lot::Mutex::new(Some(outbound_queue_tx)),
+            outbound_queue_tx: parking_lot::Mutex::new(start_send_task.then_some(outbound_queue_tx)),
             connection: ChannelIo::Network(connection),
             connection_state,
             response_table,
             pending_request_owner,
+            legacy_plan_response: None,
             send_task_group: task_group,
             send_task_id,
         })
@@ -806,6 +1012,49 @@ impl ChannelInner {
         self.pending_request_owner.as_ref()
     }
 
+    #[allow(
+        dead_code,
+        reason = "DSP-05 endpoint correlation remains dormant until DSP-06 response routing"
+    )]
+    fn complete_pending_response(&self, response: RemotingCommand) -> bool {
+        let Some(owner) = self.pending_request_owner.as_ref() else {
+            return false;
+        };
+        let opaque = response.opaque();
+        self.response_table.complete_response_for_owner(owner, opaque, response)
+    }
+
+    #[cfg(test)]
+    fn legacy_response_terminal_state(&self) -> Option<crate::dispatch::ResponseTerminalState> {
+        self.legacy_plan_response.as_ref()?.terminal_state()
+    }
+
+    fn direct_network_connection(&self) -> Option<&Arc<tokio::sync::Mutex<Connection>>> {
+        match (&self.connection, self.send_task_id) {
+            (ChannelIo::Network(connection), None) => Some(connection),
+            (ChannelIo::Network(_), Some(_)) | (ChannelIo::Local(_), _) => None,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 coexistence routing"
+    )]
+    fn is_network(&self) -> bool {
+        matches!(&self.connection, ChannelIo::Network(_))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge validation remains dormant until DSP-06 embedded routing"
+    )]
+    fn is_local_response_owner(&self, response: &ResponseSink) -> bool {
+        match &self.connection {
+            ChannelIo::Local(owner) => owner.same_completion_owner(response),
+            ChannelIo::Network(_) => false,
+        }
+    }
+
     fn outbound_queue_sender(&self) -> rocketmq_error::RocketMQResult<Sender<ChannelMessage>> {
         self.outbound_queue_tx
             .lock()
@@ -828,6 +1077,15 @@ impl ChannelInner {
 
     /// Sends a command through the serialized writer capability.
     pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        // Request and response numeric codes overlap; only the protocol response
+        // flag selects the legacy completion owner.
+        if command.is_response_type() && self.legacy_plan_response.is_some() {
+            return self
+                .send_response(command)
+                .await
+                .map(|_| ())
+                .map_err(legacy_response_error);
+        }
         match &self.connection {
             ChannelIo::Network(connection) => connection.lock().await.send_command(command).await,
             ChannelIo::Local(response) => response.send(command).await.map_err(response_sink_error),
@@ -835,6 +1093,10 @@ impl ChannelInner {
     }
 
     pub(crate) async fn send_response(&self, command: RemotingCommand) -> Result<ResponseReceipt, ResponseError> {
+        if let Some(response) = self.legacy_plan_response.as_ref() {
+            let receipt = response.reserve_legacy_v1_receipt()?;
+            return response.complete_legacy_v1_reserved(command, receipt).await;
+        }
         match &self.connection {
             ChannelIo::Network(connection) => {
                 let receipt = ResponseReceipt::legacy_v1(ResponseDisposition::TransportWritten)?;
@@ -915,6 +1177,15 @@ impl ChannelInner {
 
     /// Sends a borrowed command through the serialized writer capability.
     pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        // Keep request-shaped commands on the outbound request path even when
+        // their numeric code is also a valid response code.
+        if command.is_response_type() && self.legacy_plan_response.is_some() {
+            return self
+                .send_response_ref(command)
+                .await
+                .map(|_| ())
+                .map_err(legacy_response_error);
+        }
         match &self.connection {
             ChannelIo::Network(connection) => connection.lock().await.send_command_ref(command).await,
             ChannelIo::Local(response) => {
@@ -929,6 +1200,12 @@ impl ChannelInner {
         &self,
         command: &mut RemotingCommand,
     ) -> Result<ResponseReceipt, ResponseError> {
+        if let Some(response) = self.legacy_plan_response.as_ref() {
+            let receipt = response.reserve_legacy_v1_receipt()?;
+            let owned = command.clone();
+            let _ = command.take_body();
+            return response.complete_legacy_v1_reserved(owned, receipt).await;
+        }
         match &self.connection {
             ChannelIo::Network(connection) => {
                 let receipt = ResponseReceipt::legacy_v1(ResponseDisposition::TransportWritten)?;
@@ -1014,17 +1291,39 @@ impl ChannelInner {
                 .register_for_owner_with_bytes(owner, opaque, deadline, retained_bytes, response_tx)?;
         let reservation = ResponseReservation::Pending(guard.token());
 
-        // Enqueue request with response tracking
-        let outbound_queue_tx = self.outbound_queue_sender()?;
         deadline.ensure_before_send("channel")?;
-        outbound_queue_tx
-            .try_send((request, Some(reservation), Some(deadline), Some(progress.clone())))
-            .map_err(|error| match error {
-                flume::TrySendError::Full(_) => RocketMQError::network_queue_full("channel"),
-                flume::TrySendError::Disconnected(_) => {
-                    RocketMQError::network_connection_failed("channel", "outbound queue is closed")
+        if let Some(connection) = self.direct_network_connection() {
+            let mut connection = deadline
+                .timeout(connection.lock())
+                .await
+                .map_err(|_| RocketMQError::network_deadline_exceeded_before_send("channel"))?;
+            deadline.ensure_before_send("channel")?;
+            progress.set(OUTBOUND_WRITING);
+            if let Err(error) = connection
+                .send_command_with_deadline(request, deadline, "channel")
+                .await
+            {
+                if matches!(
+                    error,
+                    RocketMQError::Network(rocketmq_error::NetworkError::DeadlineExceededBeforeSend { .. })
+                ) {
+                    progress.set(OUTBOUND_FAILED_BEFORE_SEND);
                 }
-            })?;
+                return Err(error);
+            }
+            progress.set(OUTBOUND_SENT);
+        } else {
+            // Enqueue request with response tracking.
+            let outbound_queue_tx = self.outbound_queue_sender()?;
+            outbound_queue_tx
+                .try_send((request, Some(reservation), Some(deadline), Some(progress.clone())))
+                .map_err(|error| match error {
+                    flume::TrySendError::Full(_) => RocketMQError::network_queue_full("channel"),
+                    flume::TrySendError::Disconnected(_) => {
+                        RocketMQError::network_connection_failed("channel", "outbound queue is closed")
+                    }
+                })?;
+        }
 
         // Wait for response with timeout
         match deadline.timeout(&mut response_rx).await {
@@ -1074,6 +1373,17 @@ impl ChannelInner {
             return response.send(request).await.map_err(response_sink_error);
         }
 
+        if let Some(connection) = self.direct_network_connection() {
+            let mut connection = deadline
+                .timeout(connection.lock())
+                .await
+                .map_err(|_| RocketMQError::network_deadline_exceeded_before_send("channel"))?;
+            deadline.ensure_before_send("channel")?;
+            return connection
+                .send_command_with_deadline(request, deadline, "channel")
+                .await;
+        }
+
         let outbound_queue_tx = self.outbound_queue_sender()?;
         deadline.ensure_before_send("channel")?;
         outbound_queue_tx
@@ -1112,6 +1422,23 @@ impl ChannelInner {
         if let ChannelIo::Local(response) = &self.connection {
             return response.send(request).await.map_err(response_sink_error);
         }
+        if let Some(connection) = self.direct_network_connection() {
+            let mut connection = match deadline {
+                Some(deadline) => deadline
+                    .timeout(connection.lock())
+                    .await
+                    .map_err(|_| RocketMQError::network_deadline_exceeded_before_send("channel"))?,
+                None => connection.lock().await,
+            };
+            return match deadline {
+                Some(deadline) => {
+                    connection
+                        .send_command_with_deadline(request, deadline, "channel")
+                        .await
+                }
+                None => connection.send_command(request).await,
+            };
+        }
         let outbound_queue_tx = self.outbound_queue_sender()?;
         outbound_queue_tx
             .try_send((request, None, deadline, None))
@@ -1139,6 +1466,10 @@ impl ChannelInner {
 
 fn response_sink_error(error: crate::dispatch::ResponseSinkError) -> RocketMQError {
     RocketMQError::response_process_failed("embedded_response_sink", error.to_string())
+}
+
+fn legacy_response_error(error: ResponseError) -> RocketMQError {
+    RocketMQError::response_process_failed("legacy_response_sink", error.to_string())
 }
 
 #[cfg(test)]
