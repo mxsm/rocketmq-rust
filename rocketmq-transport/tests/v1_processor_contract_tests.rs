@@ -40,6 +40,7 @@ use rocketmq_transport::api::v1::RequestContext;
 use rocketmq_transport::api::v1::RequestOrdering;
 use rocketmq_transport::api::v1::RequestOrderingKey;
 use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::ResponseDisposition;
 use rocketmq_transport::api::v1::ResponseWriteObservation;
 use rocketmq_transport::api::v1::ResponseWriteOutcome;
 use rocketmq_transport::api::v1::ServerConfig;
@@ -95,6 +96,10 @@ enum Event {
         response_code: i32,
         outcome: ResponseWriteOutcome,
     },
+    DirectWrite {
+        code: i32,
+        disposition: ResponseDisposition,
+    },
 }
 
 impl Event {
@@ -104,7 +109,8 @@ impl Event {
             | Self::Reject { code }
             | Self::Before { code, .. }
             | Self::Process { code, .. }
-            | Self::After { code, .. } => *code,
+            | Self::After { code, .. }
+            | Self::DirectWrite { code, .. } => *code,
             Self::Observe { request_code, .. } => *request_code,
         }
     }
@@ -145,12 +151,23 @@ impl RequestProcessor for ContractProcessor {
         match request.code() {
             NONE | ONEWAY_NONE => Ok(None),
             DIRECT_WRITE => {
-                ctx.write_response(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                        .set_opaque(request.opaque())
-                        .set_body(b"direct".to_vec()),
-                )
-                .await;
+                let receipt = ctx
+                    .try_write_response(
+                        RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                            .set_opaque(request.opaque())
+                            .set_body(b"direct".to_vec()),
+                    )
+                    .await
+                    .map_err(|error| {
+                        rocketmq_error::RocketMQError::response_process_failed(
+                            "v1_processor_contract",
+                            error.to_string(),
+                        )
+                    })?;
+                self.events.push(Event::DirectWrite {
+                    code: DIRECT_WRITE,
+                    disposition: receipt.disposition(),
+                });
                 Ok(None)
             }
             _ => Ok(Some(
@@ -518,8 +535,8 @@ async fn network_oneway_and_none_results_do_not_emit_central_responses_or_observ
 #[tokio::test]
 async fn direct_context_write_followed_by_none_emits_exactly_one_processor_frame() {
     let runtime = RuntimeContext::from_current("v1-direct-write-processor-contract");
-    let fixture = fixture(&runtime, "network");
-    let responses = run_network(&fixture, vec![request(DIRECT_WRITE, 5), request(SENTINEL, 6)], 2).await;
+    let network = fixture(&runtime, "network");
+    let responses = run_network(&network, vec![request(DIRECT_WRITE, 5), request(SENTINEL, 6)], 2).await;
 
     assert_eq!(responses.len(), 2);
     assert_eq!(responses[0].opaque(), 5);
@@ -528,7 +545,29 @@ async fn direct_context_write_followed_by_none_emits_exactly_one_processor_frame
         Some(b"direct".as_slice())
     );
     assert_eq!(responses[1].opaque(), 6);
-    assert!(!fixture.events.snapshot().iter().any(|event| matches!(
+    let network_events = network.events.snapshot();
+    assert!(network_events.contains(&Event::DirectWrite {
+        code: DIRECT_WRITE,
+        disposition: ResponseDisposition::TransportWritten,
+    }));
+    assert!(!network_events.iter().any(|event| matches!(
+        event,
+        Event::Observe {
+            request_code: DIRECT_WRITE,
+            ..
+        }
+    )));
+
+    let embedded = fixture(&runtime, "embedded");
+    let response = dispatch_embedded(&embedded, request(DIRECT_WRITE, 7)).await;
+    assert_eq!(response.opaque(), 7);
+    assert_eq!(response.body().map(|body| body.as_ref()), Some(b"direct".as_slice()));
+    let embedded_events = embedded.events.snapshot();
+    assert!(embedded_events.contains(&Event::DirectWrite {
+        code: DIRECT_WRITE,
+        disposition: ResponseDisposition::InProcessAccepted,
+    }));
+    assert!(!embedded_events.iter().any(|event| matches!(
         event,
         Event::Observe {
             request_code: DIRECT_WRITE,

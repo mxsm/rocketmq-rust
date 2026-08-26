@@ -43,6 +43,9 @@ use crate::base::pending_request_table::PendingRequestToken;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::ResponseDisposition;
+use crate::dispatch::ResponseError;
+use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseSink;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
@@ -268,6 +271,17 @@ impl Channel {
 
     pub(crate) fn pending_request_owner(&self) -> Option<&PendingRequestOwner> {
         self.inner.pending_request_owner()
+    }
+
+    pub(crate) async fn send_response(&self, command: RemotingCommand) -> Result<ResponseReceipt, ResponseError> {
+        self.inner.send_response(command).await
+    }
+
+    pub(crate) async fn send_response_ref(
+        &self,
+        command: &mut RemotingCommand,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        self.inner.send_response_ref(command).await
     }
 
     /// Sends a command through the serialized connection writer.
@@ -820,6 +834,20 @@ impl ChannelInner {
         }
     }
 
+    pub(crate) async fn send_response(&self, command: RemotingCommand) -> Result<ResponseReceipt, ResponseError> {
+        match &self.connection {
+            ChannelIo::Network(connection) => {
+                let receipt = ResponseReceipt::legacy_v1(ResponseDisposition::TransportWritten)?;
+                connection.lock().await.send_response(command).await?;
+                Ok(receipt)
+            }
+            ChannelIo::Local(response) => {
+                let receipt = response.reserve_legacy_v1_receipt()?;
+                response.complete_legacy_v1_reserved(command, receipt).await
+            }
+        }
+    }
+
     /// Sends one network command with a leased external file body.
     pub async fn send_file_region_command(
         &self,
@@ -893,6 +921,25 @@ impl ChannelInner {
                 let owned = command.clone();
                 let _ = command.take_body();
                 response.send(owned).await.map_err(response_sink_error)
+            }
+        }
+    }
+
+    pub(crate) async fn send_response_ref(
+        &self,
+        command: &mut RemotingCommand,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        match &self.connection {
+            ChannelIo::Network(connection) => {
+                let receipt = ResponseReceipt::legacy_v1(ResponseDisposition::TransportWritten)?;
+                connection.lock().await.send_response_ref(command).await?;
+                Ok(receipt)
+            }
+            ChannelIo::Local(response) => {
+                let receipt = response.reserve_legacy_v1_receipt()?;
+                let owned = command.clone();
+                let _ = command.take_body();
+                response.complete_legacy_v1_reserved(owned, receipt).await
             }
         }
     }

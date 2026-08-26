@@ -24,6 +24,10 @@ use tokio_util::sync::CancellationToken;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::ResponseDisposition;
+use crate::dispatch::ResponseError;
+use crate::dispatch::ResponseReceipt;
+use crate::dispatch::ResponseTerminalState;
 use crate::server::SessionHandle;
 
 /// Typed failure produced by a response output capability.
@@ -52,6 +56,7 @@ pub enum ResponseSinkError {
 struct LocalResponseState {
     sender: Option<oneshot::Sender<Result<RemotingCommand, ResponseSinkError>>>,
     encoded: BytesMut,
+    terminal_state: Option<ResponseTerminalState>,
 }
 
 #[derive(Clone)]
@@ -64,13 +69,49 @@ pub struct LocalResponseSink {
 
 impl LocalResponseSink {
     fn complete(&self, result: Result<RemotingCommand, ResponseSinkError>) -> Result<(), ResponseSinkError> {
-        let sender = self
-            .state
-            .lock()
-            .sender
-            .take()
-            .ok_or(ResponseSinkError::AlreadyCompleted)?;
-        sender.send(result).map_err(|_| ResponseSinkError::ReceiverDropped)
+        let mut state = self.state.lock();
+        let sender = state.sender.take().ok_or(ResponseSinkError::AlreadyCompleted)?;
+        let terminal_state = if result.is_ok() {
+            ResponseTerminalState::Completed
+        } else {
+            ResponseTerminalState::Failed {
+                progress: crate::dispatch::WriteProgress::NotStarted,
+            }
+        };
+        match sender.send(result) {
+            Ok(()) => {
+                state.terminal_state = Some(terminal_state);
+                Ok(())
+            }
+            Err(_) => {
+                state.terminal_state = Some(ResponseTerminalState::Closed);
+                Err(ResponseSinkError::ReceiverDropped)
+            }
+        }
+    }
+
+    fn complete_legacy_v1(
+        &self,
+        command: RemotingCommand,
+        receipt: ResponseReceipt,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        let mut state = self.state.lock();
+        let Some(sender) = state.sender.take() else {
+            return Err(ResponseError::AlreadyCompleted {
+                state: state.terminal_state.unwrap_or(ResponseTerminalState::Closed),
+            });
+        };
+
+        match sender.send(Ok(command)) {
+            Ok(()) => {
+                state.terminal_state = Some(ResponseTerminalState::Completed);
+                Ok(receipt)
+            }
+            Err(_) => {
+                state.terminal_state = Some(ResponseTerminalState::Closed);
+                Err(ResponseError::SessionClosed)
+            }
+        }
     }
 
     fn send_bytes(&self, bytes: Bytes) -> Result<(), ResponseSinkError> {
@@ -91,8 +132,16 @@ impl LocalResponseSink {
             ));
         }
         let sender = state.sender.take().ok_or(ResponseSinkError::AlreadyCompleted)?;
-        drop(state);
-        sender.send(Ok(command)).map_err(|_| ResponseSinkError::ReceiverDropped)
+        match sender.send(Ok(command)) {
+            Ok(()) => {
+                state.terminal_state = Some(ResponseTerminalState::Completed);
+                Ok(())
+            }
+            Err(_) => {
+                state.terminal_state = Some(ResponseTerminalState::Closed);
+                Err(ResponseSinkError::ReceiverDropped)
+            }
+        }
     }
 }
 
@@ -114,6 +163,7 @@ impl ResponseSink {
             state: Arc::new(parking_lot::Mutex::new(LocalResponseState {
                 sender: Some(sender),
                 encoded: BytesMut::new(),
+                terminal_state: None,
             })),
         };
         (Self::Local(sink), LocalResponseReceiver { receiver })
@@ -123,6 +173,25 @@ impl ResponseSink {
     #[must_use]
     pub const fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
+    }
+
+    pub(crate) fn reserve_legacy_v1_receipt(&self) -> Result<ResponseReceipt, ResponseError> {
+        let disposition = match self {
+            Self::Network(_) => ResponseDisposition::TransportWritten,
+            Self::Local(_) => ResponseDisposition::InProcessAccepted,
+        };
+        ResponseReceipt::legacy_v1(disposition)
+    }
+
+    pub(crate) async fn complete_legacy_v1_reserved(
+        &self,
+        command: RemotingCommand,
+        receipt: ResponseReceipt,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        match self {
+            Self::Network(session) => session.connection().send_response(command).await.map(|()| receipt),
+            Self::Local(sink) => sink.complete_legacy_v1(command, receipt),
+        }
     }
 
     /// Delivers one materialized response.
@@ -210,5 +279,204 @@ impl LocalResponseReceiver {
             }
         };
         result.map_err(|_| ResponseSinkError::ReceiverDropped)?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use rocketmq_runtime::RuntimeContext;
+    use tokio::io::DuplexStream;
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::admission::AdmissionController;
+    use crate::admission::AdmissionLimits;
+    use crate::connection::Connection;
+    use crate::net::channel::ChannelInner;
+    use crate::security::TransportSecurity;
+    use crate::server::run_connected_session;
+    use crate::server::ConnectionHandler;
+
+    struct CaptureSession {
+        sender: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
+    }
+
+    impl ConnectionHandler for CaptureSession {
+        fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.sender.lock().expect("capture session lock").take() {
+                    let _ = sender.send(session);
+                }
+            })
+        }
+
+        fn command(
+            &self,
+            _session: SessionHandle,
+            _command: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async {})
+        }
+    }
+
+    async fn connected_network_sink(
+        name: &'static str,
+    ) -> (RuntimeContext, ResponseSink, DuplexStream, tokio::task::JoinHandle<()>) {
+        let runtime = RuntimeContext::from_current(name);
+        let service = runtime.service_context(name);
+        let (transport, peer) = tokio::io::duplex(4096);
+        let (session_tx, session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let local_addr: SocketAddr = "127.0.0.1:19011".parse().expect("local address");
+        let remote_addr: SocketAddr = "127.0.0.1:19012".parse().expect("remote address");
+        let runner = tokio::spawn(run_connected_session(
+            Connection::new_with_plaintext_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            handler,
+        ));
+        let session = session_rx.await.expect("capture connected session");
+
+        (runtime, ResponseSink::Network(Arc::new(session)), peer, runner)
+    }
+
+    fn legacy_v1_receipt(sink: &ResponseSink) -> ResponseReceipt {
+        sink.reserve_legacy_v1_receipt()
+            .expect("V1 receipt identity should be available")
+    }
+
+    #[tokio::test]
+    async fn network_sink_reservation_and_local_channel_adapter_write_transport_receipts() {
+        let (runtime, sink, peer, runner) = connected_network_sink("response-sink-network-receipt-test").await;
+
+        assert_eq!(
+            legacy_v1_receipt(&sink).disposition(),
+            ResponseDisposition::TransportWritten
+        );
+
+        let channel = ChannelInner::new_local(
+            sink,
+            runtime
+                .service_context("response-sink-network-channel")
+                .task_group()
+                .clone(),
+        );
+        let owned_receipt = channel
+            .send_response(RemotingCommand::create_remoting_command(1).set_opaque(71))
+            .await
+            .expect("network response should write one owned frame");
+        let mut borrowed = RemotingCommand::create_remoting_command(2)
+            .set_opaque(72)
+            .set_body(b"borrowed network body".to_vec());
+        let borrowed_receipt = channel
+            .send_response_ref(&mut borrowed)
+            .await
+            .expect("network response should write one borrowed frame");
+
+        assert_eq!(owned_receipt.disposition(), ResponseDisposition::TransportWritten);
+        assert_eq!(borrowed_receipt.disposition(), ResponseDisposition::TransportWritten);
+        assert!(
+            borrowed.body().is_none(),
+            "borrowed response body should be consumed after handoff"
+        );
+
+        let mut peer = Connection::new_with_plaintext_stream(peer);
+        let owned = peer
+            .receive_command()
+            .await
+            .expect("network peer should receive owned response")
+            .expect("owned response frame should decode");
+        let borrowed = peer
+            .receive_command()
+            .await
+            .expect("network peer should receive borrowed response")
+            .expect("borrowed response frame should decode");
+        assert_eq!(owned.opaque(), 71);
+        assert_eq!(borrowed.opaque(), 72);
+        assert_eq!(
+            borrowed.body().map(bytes::Bytes::as_ref),
+            Some(&b"borrowed network body"[..])
+        );
+
+        drop(channel);
+        drop(peer);
+        runner
+            .await
+            .expect("connected session runner should stop after peer closes");
+    }
+
+    #[tokio::test]
+    async fn legacy_v1_local_completion_returns_an_in_process_receipt() {
+        let (sink, receiver) = ResponseSink::local();
+        let command = RemotingCommand::create_remoting_command(1).set_opaque(77);
+
+        let receipt = sink
+            .complete_legacy_v1_reserved(command, legacy_v1_receipt(&sink))
+            .await
+            .expect("local response completion should hand off the command");
+
+        assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
+        let cancellation = CancellationToken::new();
+        let received = receiver
+            .receive(&cancellation, None)
+            .await
+            .expect("local response receiver should receive the command");
+        assert_eq!(received.opaque(), 77);
+    }
+
+    #[tokio::test]
+    async fn legacy_v1_local_completion_reports_receiver_drop_and_prior_terminal_state() {
+        let (sink, receiver) = ResponseSink::local();
+        drop(receiver);
+
+        let error = sink
+            .complete_legacy_v1_reserved(RemotingCommand::create_remoting_command(1), legacy_v1_receipt(&sink))
+            .await
+            .expect_err("dropped receiver should close the local response session");
+        assert!(matches!(error, ResponseError::SessionClosed));
+
+        let duplicate = sink
+            .complete_legacy_v1_reserved(RemotingCommand::create_remoting_command(2), legacy_v1_receipt(&sink))
+            .await
+            .expect_err("closed local response sink should reject a second completion");
+        assert!(matches!(
+            duplicate,
+            ResponseError::AlreadyCompleted {
+                state: ResponseTerminalState::Closed
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn legacy_v1_local_completion_reports_completed_for_duplicates() {
+        let (sink, _receiver) = ResponseSink::local();
+
+        sink.complete_legacy_v1_reserved(RemotingCommand::create_remoting_command(1), legacy_v1_receipt(&sink))
+            .await
+            .expect("first completion should succeed");
+        let duplicate = sink
+            .complete_legacy_v1_reserved(RemotingCommand::create_remoting_command(2), legacy_v1_receipt(&sink))
+            .await
+            .expect_err("second completion should be rejected");
+
+        assert!(matches!(
+            duplicate,
+            ResponseError::AlreadyCompleted {
+                state: ResponseTerminalState::Completed
+            }
+        ));
     }
 }

@@ -242,7 +242,12 @@ async fn typed_response_encode_failure_is_not_started_and_keeps_direct_writer_he
         .send_response(RemotingCommand::create_remoting_command(1).set_body(vec![1]))
         .await
         .expect_err("body above the zero-byte profile must fail encoding");
-    assert!(matches!(error, ResponseError::Encode { .. }));
+    let ResponseError::Encode { source } = &error else {
+        panic!("oversized response must retain the typed encoding failure")
+    };
+    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    let _ = source.kind();
+    assert!(Error::source(&error).is_some());
     assert_eq!(connection.state(), ConnectionState::Healthy);
 
     connection
@@ -512,6 +517,36 @@ async fn typed_response_write_and_flush_failures_are_possibly_partial_with_a_typ
             assert_eq!(writes.load(Ordering::Acquire), 2);
         }
     }
+}
+
+#[tokio::test]
+async fn typed_borrowed_response_late_transport_failure_preserves_source_after_body_take() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let mut connection = Connection::new_with_plaintext_stream(FailingResponseTransport {
+        writes: Arc::clone(&writes),
+        phase: DirectFailurePhase::PartialThenError,
+    });
+    let mut command = RemotingCommand::create_remoting_command(7).set_body(b"borrowed-body".to_vec());
+
+    let error = connection
+        .send_response_ref(&mut command)
+        .await
+        .expect_err("injected late transport failure");
+
+    assert!(
+        command.body().is_none(),
+        "borrowed response body must be taken before the late write failure"
+    );
+    let ResponseError::Transport { progress, source } = &error else {
+        panic!("late transport failure must retain typed response completion")
+    };
+    assert_eq!(*progress, WriteProgress::PossiblyPartial);
+    let RocketMQError::Shared(shared) = source else {
+        panic!("late transport failure must preserve the writer source")
+    };
+    assert!(matches!(shared.as_error(), RocketMQError::IO(_)));
+    assert!(Error::source(&error).is_some());
+    assert_eq!(writes.load(Ordering::Acquire), 2);
 }
 
 #[tokio::test]
