@@ -670,11 +670,23 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::dispatch::AuthenticationState".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::EmbeddedCaller".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::dispatch::OriginalRequestIdentity".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
             use_tree: "crate::dispatch::RequestId".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::RequestOrigin".to_owned(),
         },
     ];
     if boundary.uses != expected_uses {
@@ -690,22 +702,22 @@ fn lib_rs_exposes_only_the_curated_versioned_boundary() {
 }
 
 #[test]
-fn public_api_v2_exposes_exactly_the_curated_request_identity_types() {
+fn public_api_v2_exposes_exactly_the_curated_request_identity_and_ingress_fact_types() {
     let boundary =
         inspect_public_boundary(include_str!("../src/public_api_v2.rs")).expect("public_api_v2.rs must tokenize");
 
     validate_public_api_v2_boundary(&boundary)
-        .expect("public_api_v2.rs must expose only RequestDeadline, RequestId, and OriginalRequestIdentity");
+        .expect("public_api_v2.rs must expose only approved request identity and ingress fact types");
 }
 
 #[test]
 fn public_api_v2_rejects_unapproved_public_surface() {
     for source in [
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::RequestId; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::net::channel::Channel;",
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::RequestId; pub use crate::dispatch::OriginalRequestIdentity; pub use rocketmq_runtime::OperationContext;",
-        "pub use crate::deadline::{RequestDeadline,RequestId};",
-        "pub use crate::deadline::*;",
-        "pub mod request_model {} pub use crate::deadline::RequestDeadline; pub use crate::dispatch::RequestId; pub use crate::dispatch::OriginalRequestIdentity;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::net::channel::Channel;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use rocketmq_runtime::OperationContext;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::deadline::{RequestDeadline,RequestId};",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::deadline::*;",
+        "pub mod request_model {} pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin;",
     ] {
         let boundary = inspect_public_boundary(source).expect("adversarial V2 fixture must parse");
 
@@ -716,8 +728,11 @@ fn public_api_v2_rejects_unapproved_public_surface() {
 macro_rules! expose_extra { () => { pub use crate::net::channel::Channel; }; }
 expose_extra!();
 pub use crate::deadline::RequestDeadline;
+pub use crate::dispatch::AuthenticationState;
+pub use crate::dispatch::EmbeddedCaller;
 pub use crate::dispatch::RequestId;
 pub use crate::dispatch::OriginalRequestIdentity;
+pub use crate::dispatch::RequestOrigin;
 "#;
     let error = inspect_public_boundary(source).expect_err("public V2 macro invocation must be rejected");
 
@@ -730,8 +745,8 @@ pub use crate::dispatch::OriginalRequestIdentity;
 #[test]
 fn public_api_v2_rejects_direct_public_items() {
     for source in [
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::RequestId; pub use crate::dispatch::OriginalRequestIdentity; pub type Channel = crate::net::channel::Channel;",
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::RequestId; pub use crate::dispatch::OriginalRequestIdentity; pub struct Leaked;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub type Channel = crate::net::channel::Channel;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub struct Leaked;",
     ] {
         let error = inspect_public_boundary(source).expect_err("direct public V2 item must be rejected");
 

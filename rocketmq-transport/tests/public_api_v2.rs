@@ -14,11 +14,15 @@
 
 use std::time::Duration;
 
+use rocketmq_security_api::Principal;
 use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
 use rocketmq_transport::api::v1::RequestId as V1RequestId;
+use rocketmq_transport::api::v2::AuthenticationState;
+use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
 use rocketmq_transport::api::v2::RequestId as V2RequestId;
+use rocketmq_transport::api::v2::RequestOrigin;
 
 fn assert_same_deadline_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
 
@@ -48,4 +52,34 @@ fn v2_reuses_v1_request_id_and_exposes_read_only_original_identity() {
     let v2_value: Option<V2RequestId> = assert_same_request_id_type(v1_value);
     assert!(v2_value.is_none());
     assert_original_identity_contract(None);
+}
+
+#[test]
+fn v2_exposes_read_only_origin_and_authenticated_principal() {
+    fn authenticated_principal(state: &AuthenticationState) -> Option<&Principal> {
+        state.principal()
+    }
+
+    fn has_authenticated_principal(state: &AuthenticationState) -> bool {
+        match state {
+            AuthenticationState::Anonymous | AuthenticationState::SecurityDisabled => false,
+            AuthenticationState::Authenticated(principal, ..) => principal.id() == "v2-user",
+            _ => state.principal().is_some(),
+        }
+    }
+
+    fn inspect_origin(origin: &RequestOrigin) -> Option<std::net::SocketAddr> {
+        match origin {
+            RequestOrigin::Network { peer, .. } => Some(peer.address()),
+            RequestOrigin::Embedded { caller } => {
+                let _known_caller = matches!(caller, EmbeddedCaller::BrokerProxy);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    let _: fn(&AuthenticationState) -> Option<&Principal> = authenticated_principal;
+    let _: fn(&AuthenticationState) -> bool = has_authenticated_principal;
+    let _: fn(&RequestOrigin) -> Option<std::net::SocketAddr> = inspect_origin;
 }
