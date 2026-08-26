@@ -126,9 +126,11 @@ impl RequestLifecycleProvenance {
 )]
 pub(crate) struct RemotingRequestBuilder {
     original: OriginalRequestIdentity,
-    received_at: Instant,
-    context: RequestContext,
-    lifecycle: RequestLifecycleProvenance,
+    meta: RequestMeta,
+    origin: crate::dispatch::RequestOrigin,
+    authentication: crate::dispatch::AuthenticationState,
+    session: SessionView,
+    control: RequestControlView,
     inline_response: InlineResponseSlot,
     command: RemotingCommand,
 }
@@ -145,11 +147,17 @@ impl RemotingRequestBuilder {
         lifecycle: RequestLifecycleProvenance,
         command: RemotingCommand,
     ) -> Self {
+        let context = context.into_parts();
+        let meta = RequestMeta::new(received_at, context.deadline);
+        let control =
+            RequestControlView::from_meta(&meta, lifecycle.session.state().clone(), &lifecycle.parent_task_group);
         Self {
             original,
-            received_at,
-            context,
-            lifecycle,
+            meta,
+            origin: context.origin,
+            authentication: context.authentication,
+            session: lifecycle.session,
+            control,
             inline_response: InlineResponseSlot::disabled(),
             command,
         }
@@ -171,6 +179,29 @@ impl RemotingRequestBuilder {
         }
     }
 
+    pub(crate) const fn control(&self) -> &RequestControlView {
+        &self.control
+    }
+
+    pub(crate) const fn deadline(&self) -> Option<crate::deadline::RequestDeadline> {
+        self.meta.deadline()
+    }
+
+    pub(crate) const fn command(&self) -> &RemotingCommand {
+        &self.command
+    }
+
+    pub(crate) const fn peer(&self) -> Option<&rocketmq_security_api::PeerInfo> {
+        match &self.origin {
+            crate::dispatch::RequestOrigin::Network { peer } => Some(peer),
+            crate::dispatch::RequestOrigin::Embedded { .. } => None,
+        }
+    }
+
+    pub(crate) const fn principal(&self) -> Option<&rocketmq_security_api::Principal> {
+        self.authentication.principal()
+    }
+
     pub(crate) fn build(self) -> Result<RemotingRequest, RemotingRequestBuildError> {
         if self.command.is_response_type() {
             return Err(RemotingRequestBuildError::ResponseCommand);
@@ -178,19 +209,11 @@ impl RemotingRequestBuilder {
         if !self.original.matches_command(&self.command) {
             return Err(RemotingRequestBuildError::OriginalCommandMismatch);
         }
-        if self.original.request_id().owner_id() != self.lifecycle.session.id().owner_id() {
+        if self.original.request_id().owner_id() != self.session.id().owner_id() {
             return Err(RemotingRequestBuildError::SessionOwnerMismatch);
         }
 
-        let context = self.context.into_parts();
-        let meta = RequestMeta::new(self.received_at, context.deadline);
-        let control = RequestControlView::from_meta(
-            &meta,
-            self.lifecycle.session.state().clone(),
-            &self.lifecycle.parent_task_group,
-        );
-
-        match (&context.origin, &self.lifecycle.session) {
+        match (&self.origin, &self.session) {
             (RequestOrigin::Network { peer }, SessionView::Network { remote_addr, .. }) => {
                 if peer.address() != *remote_addr {
                     return Err(RemotingRequestBuildError::NetworkPeerMismatch);
@@ -203,7 +226,7 @@ impl RemotingRequestBuilder {
                 return Err(RemotingRequestBuildError::EmbeddedSessionMismatch);
             }
             (RequestOrigin::Embedded { .. }, SessionView::Embedded { .. }) => {
-                if context.authentication.principal().is_none() {
+                if self.authentication.principal().is_none() {
                     return Err(RemotingRequestBuildError::MissingEmbeddedAuthentication);
                 }
             }
@@ -215,11 +238,11 @@ impl RemotingRequestBuilder {
 
         Ok(RemotingRequest {
             original: self.original,
-            meta,
-            origin: context.origin,
-            authentication: context.authentication,
-            session: self.lifecycle.session,
-            control,
+            meta: self.meta,
+            origin: self.origin,
+            authentication: self.authentication,
+            session: self.session,
+            control: self.control,
             extensions: Default::default(),
             inline_response: self.inline_response,
             command: self.command,

@@ -24,7 +24,17 @@ mod response_plan;
 mod response_sink;
 
 pub use authorized_dispatcher::AuthorizedCommandDispatcher;
+#[allow(
+    unused_imports,
+    reason = "DSP-03 exposes the private V2 dispatcher core to later coexistence routing"
+)]
+pub(crate) use authorized_dispatcher::AuthorizedCommandDispatcherV2;
 pub use authorized_dispatcher::AuthorizedDispatchBoundary;
+#[allow(
+    unused_imports,
+    reason = "DSP-03 exposes the private V2 dispatcher failure to later coexistence routing"
+)]
+pub(crate) use authorized_dispatcher::AuthorizedDispatchV2Error;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
 pub use handler_outcome::DeferredRegistration;

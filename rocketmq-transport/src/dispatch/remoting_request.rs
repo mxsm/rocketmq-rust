@@ -255,6 +255,45 @@ impl RemotingRequest {
     ) -> Result<HandlerOutcome, HandlerOutcomeContractError> {
         self.inline_response.resolve(self.original, outcome)
     }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"
+    )]
+    pub(crate) fn with_body_free_hook_command<T>(
+        &mut self,
+        apply: impl FnOnce(&mut RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
+    ) -> rocketmq_error::RocketMQResult<T> {
+        let body = self.command.take_body();
+        let result = apply(&mut self.command);
+        let attached_body = self.command.take_body();
+        if let Some(body) = body {
+            self.command.set_body_mut_ref(body);
+        }
+        if attached_body.is_some() {
+            return Err(rocketmq_error::RocketMQError::invariant_violated(
+                "RPC hook attached a request body through the body-free V2 projection",
+            ));
+        }
+        result
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"
+    )]
+    pub(crate) fn with_body_free_hook_request<T>(
+        &mut self,
+        apply: impl FnOnce(&RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
+    ) -> rocketmq_error::RocketMQResult<T> {
+        let body = self.command.take_body();
+        let result = apply(&self.command);
+        debug_assert!(self.command.body().is_none());
+        if let Some(body) = body {
+            self.command.set_body_mut_ref(body);
+        }
+        result
+    }
 }
 
 /// Immutable request facts used before processor mutation, such as ordering.

@@ -39,6 +39,33 @@ pub(crate) mod inner {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::RemotingCommandType;
 
+    pub(crate) fn run_before_rpc_hooks(
+        snapshot: Option<&HookSnapshot>,
+        remote_address: SocketAddr,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<()> {
+        if let Some(snapshot) = snapshot {
+            for hook in snapshot.hooks() {
+                hook.do_before_request(remote_address, request)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn run_after_rpc_hooks(
+        snapshot: Option<&HookSnapshot>,
+        remote_address: SocketAddr,
+        request: &RemotingCommand,
+        response: &mut RemotingCommand,
+    ) -> RocketMQResult<()> {
+        if let Some(snapshot) = snapshot {
+            for hook in snapshot.hooks() {
+                hook.do_after_response(remote_address, request, response)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) struct RemotingGeneralHandler<RP> {
         pub(crate) request_processor: RP,
         rpc_hooks: HookRegistry,
@@ -271,10 +298,8 @@ pub(crate) mod inner {
             remote_address: SocketAddr,
             request: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
-            if let (Some(snapshot), Some(request)) = (snapshot, request) {
-                for hook in snapshot.hooks() {
-                    hook.do_before_request(remote_address, request)?;
-                }
+            if let Some(request) = request {
+                run_before_rpc_hooks(snapshot, remote_address, request)?;
             }
             Ok(())
         }
@@ -286,10 +311,8 @@ pub(crate) mod inner {
             request: &RemotingCommand,
             response: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
-            if let (Some(snapshot), Some(response)) = (snapshot, response) {
-                for hook in snapshot.hooks() {
-                    hook.do_after_response(remote_address, request, response)?;
-                }
+            if let Some(response) = response {
+                run_after_rpc_hooks(snapshot, remote_address, request, response)?;
             }
             Ok(())
         }
