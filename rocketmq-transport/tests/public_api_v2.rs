@@ -22,8 +22,10 @@ use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
 use rocketmq_transport::api::v2::ProxyInfoSnapshot;
+use rocketmq_transport::api::v2::RequestControlView;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
 use rocketmq_transport::api::v2::RequestId as V2RequestId;
+use rocketmq_transport::api::v2::RequestMeta;
 use rocketmq_transport::api::v2::RequestOrigin;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::SessionStateView;
@@ -46,6 +48,25 @@ fn assert_original_identity_contract(identity: Option<OriginalRequestIdentity>) 
 
 fn closed<'a>(state: &'a SessionStateView) -> impl Future<Output = ()> + 'a {
     state.closed()
+}
+
+fn cancelled<'a>(control: &'a RequestControlView) -> impl Future<Output = ()> + 'a {
+    control.cancelled()
+}
+
+fn assert_request_meta_contract(meta: Option<RequestMeta>) {
+    if let Some(meta) = meta {
+        let _: std::time::Instant = meta.received_at();
+        let _: Option<V2RequestDeadline> = meta.deadline();
+    }
+}
+
+fn assert_request_control_contract(control: Option<RequestControlView>) {
+    if let Some(control) = control {
+        let _: Option<V2RequestDeadline> = control.deadline();
+        let _: bool = control.is_cancelled();
+        std::mem::drop(cancelled(&control));
+    }
 }
 
 fn assert_session_view_contract(view: SessionView) {
@@ -128,4 +149,10 @@ fn v2_exposes_read_only_origin_and_authenticated_principal() {
 #[test]
 fn v2_exposes_read_only_network_and_embedded_session_views() {
     let _: fn(SessionView) = assert_session_view_contract;
+}
+
+#[test]
+fn v2_exposes_read_only_request_metadata_and_control() {
+    assert_request_meta_contract(None);
+    assert_request_control_contract(None);
 }
