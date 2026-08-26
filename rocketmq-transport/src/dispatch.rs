@@ -19,6 +19,7 @@ mod request_control;
 mod request_identity;
 mod request_origin;
 mod response;
+mod response_plan;
 mod response_sink;
 
 pub use authorized_dispatcher::AuthorizedCommandDispatcher;
@@ -44,6 +45,9 @@ pub use response::ResponseErrorKind;
 pub use response::ResponseReceipt;
 pub use response::ResponseTerminalState;
 pub use response::WriteProgress;
+pub use response_plan::ResponseBodyKind;
+pub use response_plan::ResponsePlan;
+pub use response_plan::ResponsePlanError;
 pub use response_sink::LocalResponseReceiver;
 pub use response_sink::ResponseSink;
 pub use response_sink::ResponseSinkError;

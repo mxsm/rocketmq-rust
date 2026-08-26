@@ -85,11 +85,12 @@ pub mod api {
 
     /// Curated source API boundary for the 2.x release line.
     ///
-    /// The trusted mutable request aggregate and its immutable supporting
-    /// timing, identity, origin, authentication, and session views approved for
-    /// the 2.x request model are exposed here. This narrow surface intentionally
-    /// excludes legacy channels, session handles, operation contexts, and raw
-    /// cancellation authority.
+    /// This surface exposes the trusted mutable request aggregate, immutable
+    /// ingress facts, and an owned [`ResponsePlan`](crate::api::v2::ResponsePlan).
+    /// A response plan provides only response metadata; raw body storage,
+    /// complete-frame encoders, response sinks, and raw file leases remain
+    /// private to the transport. Legacy channels, session handles, operation
+    /// contexts, and other legacy transport authority are also excluded.
     pub mod v2 {
         pub use crate::public_api_v2::*;
     }
