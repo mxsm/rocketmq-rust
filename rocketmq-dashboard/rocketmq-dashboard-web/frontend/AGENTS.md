@@ -20,11 +20,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-web/frontend/`.
 - Do not show internal migration/API parity hints in the product UI.
 
 ## Java Dashboard parity
-- When matching behavior, inspect the local Java frontend at:
-
-```text
-D:\Github\Java\rocketmq-dashboard\frontend-new
-```
+- When matching behavior, inspect the upstream [RocketMQ Dashboard frontend](https://github.com/apache/rocketmq-dashboard/tree/master/frontend-new).
 
 - Preserve Java Dashboard operational flows where practical: Topic, Consumer, Producer, Broker/Cluster, Message, DLQMessage, MessageTrace, Proxy, OPS, and ACL.
 - Do not copy the old Java visual style directly.
