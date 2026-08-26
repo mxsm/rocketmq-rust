@@ -21,6 +21,7 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::v1::CachedConnectionState;
 use rocketmq_transport::api::v1::ClientShutdownReport;
 use rocketmq_transport::api::v1::ClientSnapshot;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::PendingUsage;
 use rocketmq_transport::api::v1::RemotingClient;
@@ -110,6 +111,46 @@ fn assert_versioned_response_contract(
     let _: bool = error.retryable();
 }
 
+fn assert_v1_response_context_method_signatures(context: &ConnectionHandlerContext) {
+    let command = rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(1);
+    let write = context.try_write_response(command);
+    let _: &dyn std::future::Future<Output = Result<ResponseReceipt, ResponseError>> = &write;
+    drop(write);
+
+    let mut borrowed = rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(2);
+    let write_ref = context.try_write_response_ref(&mut borrowed);
+    let _: &dyn std::future::Future<Output = Result<ResponseReceipt, ResponseError>> = &write_ref;
+    drop(write_ref);
+
+    let compatibility = context
+        .write_response(rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(3));
+    let _: &dyn std::future::Future<Output = ()> = &compatibility;
+    drop(compatibility);
+
+    let mut borrowed_compatibility =
+        rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(4);
+    let compatibility_ref = context.write_response_ref(&mut borrowed_compatibility);
+    let _: &dyn std::future::Future<Output = ()> = &compatibility_ref;
+    drop(compatibility_ref);
+
+    #[allow(
+        deprecated,
+        reason = "public API contract test intentionally freezes legacy future outputs"
+    )]
+    {
+        let write =
+            context.write(rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(5));
+        let _: &dyn std::future::Future<Output = ()> = &write;
+        drop(write);
+
+        let mut borrowed_write =
+            rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(6);
+        let write_ref = context.write_ref(&mut borrowed_write);
+        let _: &dyn std::future::Future<Output = ()> = &write_ref;
+        drop(write_ref);
+    }
+}
+
 async fn assert_checked_server_method_signatures() {
     let runtime = RuntimeContext::try_from_current("transport-public-api-v1-checked-signatures").unwrap();
     let config = Arc::new(ServerConfig::default());
@@ -172,6 +213,7 @@ fn prelude_reexports_the_curated_composition_root_surface() {
 #[test]
 fn versioned_api_exposes_response_contract_types_without_prelude_exports() {
     assert_versioned_response_contract(None, None, ResponseError::DeadlineExceeded);
+    let _ = assert_v1_response_context_method_signatures as fn(&ConnectionHandlerContext);
     let _: Option<ResponseTerminalState> = Some(ResponseTerminalState::Completed);
     let _: Option<ResponseDisposition> = Some(ResponseDisposition::TransportWritten);
     let _: Option<WriteProgress> = Some(WriteProgress::NotStarted);

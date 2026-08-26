@@ -605,15 +605,33 @@ where
         opaque: i32,
     ) {
         match response_result {
-            Ok(Some(response)) => ctx.write_response(response.set_opaque(opaque)).await,
+            Ok(Some(response)) => {
+                if let Err(error) = ctx.try_write_response(response.set_opaque(opaque)).await {
+                    warn!(
+                        kind = error.kind().as_str(),
+                        progress = error.write_progress().map_or("none", |progress| progress.as_str()),
+                        retryable = error.retryable(),
+                        "detached fast failure response write failed; not retrying"
+                    );
+                }
+            }
             Ok(None) => {}
             Err(_error) => {
-                ctx.write_response(system_error_response(
-                    command_factory,
-                    opaque,
-                    "fast failure response channel closed before detached request completed",
-                ))
-                .await;
+                if let Err(error) = ctx
+                    .try_write_response(system_error_response(
+                        command_factory,
+                        opaque,
+                        "fast failure response channel closed before detached request completed",
+                    ))
+                    .await
+                {
+                    warn!(
+                        kind = error.kind().as_str(),
+                        progress = error.write_progress().map_or("none", |progress| progress.as_str()),
+                        retryable = error.retryable(),
+                        "detached fast failure response write failed; not retrying"
+                    );
+                }
             }
         }
     }

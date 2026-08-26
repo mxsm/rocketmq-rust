@@ -1150,7 +1150,14 @@ where
 
             if let Ok(Some(response)) = response {
                 let command = response.set_opaque(opaque).mark_response_type();
-                ctx.write_response(command).await;
+                if let Err(error) = ctx.try_write_response(command).await {
+                    error!(
+                        kind = error.kind().as_str(),
+                        progress = error.write_progress().map_or("none", |progress| progress.as_str()),
+                        retryable = error.retryable(),
+                        "long polling wakeup response write failed; not retrying"
+                    );
+                }
             }
         };
         spawn_wakeup_pull_task(self.wakeup_task_group.get(), task);
@@ -1739,7 +1746,6 @@ mod tests {
 
         assert!(!processor.contains(concat!("WAKEUP_WRITE_", "LOCK_SHARDS")));
         assert!(!processor.contains("wakeup_write_locks"));
-        assert!(processor.contains("ctx.write_response(command).await"));
         for source in [processor, result_handler] {
             assert!(!source.contains(concat!("Broker", "RuntimeInner")));
             assert!(!source.contains(concat!("Arc", "Mut")));

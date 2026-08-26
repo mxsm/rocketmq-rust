@@ -1040,6 +1040,28 @@ impl Connection {
         .map_err(SendFailure::into_response)
     }
 
+    /// Sends a borrowed server response through the canonical writer with a
+    /// stage-aware completion error.
+    pub(crate) async fn send_response_ref(&mut self, command: &mut RemotingCommand) -> Result<(), ResponseError> {
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        let frame = self
+            .limits
+            .encode_command(command.clone())
+            .map_err(|source| ResponseError::Encode { source })?;
+        let _ = command.take_body();
+        self.send_payload_inner(
+            OutboundPayload::Frame(frame),
+            class,
+            None,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
+        .map_err(SendFailure::into_response)
+    }
+
     /// Sends a `RemotingCommand` to the peer (consumes command).
     ///
     /// Encodes the command into immutable prefix/header/body segments, then flushes it to the

@@ -83,7 +83,10 @@ use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
 use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::ResponseError;
+use rocketmq_transport::api::v1::ResponseReceipt;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 use tracing::Instrument;
@@ -560,14 +563,9 @@ where
                 MessageType::NormalMsg,
             )
             .await;
-        send_message_callback(&mut send_message_context, &mut response);
-        if result.1 {
-            Ok(None)
-        } else if result.0.is_some() {
-            Ok(result.0)
-        } else {
-            Ok(Some(response))
-        }
+        finish_send_message_response(result, response, |response| {
+            send_message_callback(&mut send_message_context, response);
+        })
     }
 
     async fn send_message<F>(
@@ -728,14 +726,38 @@ where
                 MessageType::NormalMsg,
             )
             .await;
-        send_message_callback(&mut send_message_context, &mut response);
-        if result.1 {
-            Ok(None)
-        } else if result.0.is_some() {
-            Ok(result.0)
-        } else {
-            Ok(Some(response))
-        }
+        finish_send_message_response(result, response, |response| {
+            send_message_callback(&mut send_message_context, response);
+        })
+    }
+}
+
+async fn complete_direct_send_message_response(
+    response_write: impl Future<Output = Result<ResponseReceipt, ResponseError>>,
+) -> (Option<RemotingCommand>, bool) {
+    if let Err(error) = response_write.await {
+        error!(
+            kind = error.kind().as_str(),
+            progress = error.write_progress().map_or("none", |progress| progress.as_str()),
+            retryable = error.retryable(),
+            "send message response write failed; not retrying"
+        );
+    }
+    (None, true)
+}
+
+fn finish_send_message_response(
+    result: (Option<RemotingCommand>, bool),
+    mut response: RemotingCommand,
+    send_message_callback: impl FnOnce(&mut RemotingCommand),
+) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    send_message_callback(&mut response);
+    if result.1 {
+        Ok(None)
+    } else if result.0.is_some() {
+        Ok(result.0)
+    } else {
+        Ok(Some(response))
     }
 }
 
@@ -1044,8 +1066,7 @@ where
             }
 
             response.set_opaque_mut(request.opaque());
-            ctx.write_response_ref(response).await;
-            (None, true)
+            complete_direct_send_message_response(ctx.try_write_response_ref(response)).await
         } else {
             if has_send_message_hook {
                 let request_body_len = request.body().as_ref().map_or(0, |body| body.len() as i32);
@@ -1988,6 +2009,11 @@ fn no_retry_queue_response(command_factory: &RemotingCommandFactory) -> Remoting
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
     use std::collections::HashMap;
     use std::future::Future;
 
@@ -2010,6 +2036,9 @@ mod tests {
     use rocketmq_store::StoreHealthError;
     use rocketmq_store::StoreHealthSnapshot;
     use rocketmq_store::SyncFlushRuntimeInfo;
+    use rocketmq_transport::api::v1::ResponseError;
+    use rocketmq_transport::api::v1::ResponseReceipt;
+    use rocketmq_transport::test_support::LocalRequestHarness;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
     use crate::mqtrace::send_message_hook::SendMessageHook;
@@ -2018,6 +2047,8 @@ mod tests {
     use super::add_send_response_metadata;
     use super::append_message_with_store;
     use super::broker_send_permission_denied;
+    use super::complete_direct_send_message_response;
+    use super::finish_send_message_response;
     use super::has_registered_send_message_hooks;
     use super::has_valid_compaction_key;
     use super::map_put_status_to_response;
@@ -2169,6 +2200,48 @@ mod tests {
 
         let hooks: Vec<Box<dyn SendMessageHook>> = vec![Box::new(NoopSendMessageHook)];
         assert!(has_registered_send_message_hooks(&hooks));
+    }
+
+    #[tokio::test]
+    async fn direct_send_response_failure_does_not_enable_central_fallback() {
+        let harness = LocalRequestHarness::new(crate::test_task_group("send-message-direct-write-failure"))
+            .await
+            .expect("local transport harness should start");
+        let context = harness.context();
+        context.connection_ref().close();
+        let attempts = AtomicUsize::new(0);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut response = RemotingCommand::create_success_response_command().set_body(b"direct".to_vec());
+
+        let direct_result = {
+            let write_events = Arc::clone(&events);
+            let response_write = async {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                write_events.lock().expect("write event lock").push("write");
+                let error = context
+                    .try_write_response_ref(&mut response)
+                    .await
+                    .expect_err("closed session should reject the direct response write");
+                assert!(matches!(error, ResponseError::SessionClosed));
+                Err::<ResponseReceipt, ResponseError>(error)
+            };
+            complete_direct_send_message_response(response_write).await
+        };
+
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+        assert!(direct_result.0.is_none());
+        assert!(direct_result.1);
+        assert!(response.body().is_none(), "the single direct write consumed the body");
+        let callback_events = Arc::clone(&events);
+        let outer = finish_send_message_response(direct_result, response, move |_| {
+            callback_events.lock().expect("callback event lock").push("callback");
+        })
+        .expect("direct write failure remains a successful processor outcome");
+        assert!(
+            outer.is_none(),
+            "a failed direct write must not produce a central fallback response"
+        );
+        assert_eq!(events.lock().expect("event lock").as_slice(), ["write", "callback"]);
     }
 
     #[test]
