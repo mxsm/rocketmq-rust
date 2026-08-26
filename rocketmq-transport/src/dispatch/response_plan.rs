@@ -14,12 +14,17 @@
 
 //! Owned V2 response heads and body storage.
 
+mod binding;
+
 use std::fmt;
 
 use bytes::Bytes;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::file_region::FileRegionSequence;
+
+pub(crate) use binding::BoundResponsePlan;
+pub(crate) use binding::ResponseBindingError;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -125,6 +130,19 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// fn encoded_is_not_a_public_body_kind(kind: ResponseBodyKind) {
 ///     assert_eq!(kind, ResponseBodyKind::Encoded);
 /// }
+/// ```
+///
+/// ```compile_fail
+/// use rocketmq_transport::api::v2::OriginalRequestIdentity;
+/// use rocketmq_transport::api::v2::ResponsePlan;
+///
+/// fn cannot_bind_a_plan_outside_the_transport(plan: ResponsePlan, identity: OriginalRequestIdentity) {
+///     let _ = plan.bind(identity);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use rocketmq_transport::api::v2::BoundResponsePlan;
 /// ```
 pub struct ResponsePlan {
     head: RemotingCommand,
