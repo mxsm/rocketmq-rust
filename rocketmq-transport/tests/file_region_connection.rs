@@ -18,6 +18,8 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_error::NetworkError;
+use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -197,7 +199,7 @@ fn explicit_sendfile_on_tls_fails_before_writing_the_head() {
     let before = file_transfer_snapshot();
 
     owner.block_on(async move {
-        let (client, mut server) = tokio::io::duplex(1024);
+        let (client, server) = tokio::io::duplex(1024);
         let mut sender =
             Connection::new_with_tls_stream(client).with_file_region_io(blocking, FileTransferMode::Sendfile);
         let error = sender
@@ -208,15 +210,26 @@ fn explicit_sendfile_on_tls_fails_before_writing_the_head() {
             )
             .await
             .expect_err("sendfile must never bypass a TLS stream");
-        assert!(error.to_string().contains("sendfile"));
+        assert!(matches!(
+            error,
+            RocketMQError::Network(NetworkError::ConnectionFailed { addr, reason })
+                if addr == "transport-file-region-writer" && reason.contains("sendfile")
+        ));
+        assert_eq!(sender.state(), ConnectionState::Healthy);
 
-        let mut byte = [0_u8; 1];
-        let read = tokio::time::timeout(Duration::from_millis(50), server.read(&mut byte))
-            .await
-            .expect("closed sender should wake the peer")
-            .expect("peer read should succeed");
-        assert_eq!(read, 0, "unsupported sendfile must not emit a frame head");
-        assert_eq!(sender.state(), ConnectionState::Closed);
+        let mut receiver = Connection::new_with_plaintext_stream(server);
+        let (sent, received) = tokio::join!(
+            sender.send_command(RemotingCommand::create_remoting_command(325)),
+            receiver.receive_command()
+        );
+        sent.expect("preflight sendfile rejection must leave the writer usable");
+        assert_eq!(
+            received
+                .expect("peer response")
+                .expect("decoded follow-up command")
+                .code(),
+            325
+        );
     });
 
     assert!(file_transfer_snapshot().selection_failures > before.selection_failures);
