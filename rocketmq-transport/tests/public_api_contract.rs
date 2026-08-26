@@ -730,6 +730,14 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::dispatch::ResponseDisposition".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::ResponseErrorKind".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::dispatch::ResponsePlan".to_owned(),
         },
         PublicUse {
@@ -738,11 +746,51 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::dispatch::ResponseReceipt".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::WriteProgress".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::file_region::FileRegion".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
             use_tree: "crate::file_region::FileRegionSequence".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::request_ordering::RequestOrdering".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::request_ordering::RequestOrderingKey".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::LocalRequestProcessorV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::RejectRequestDecision".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::RequestProcessorV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseWriteObservationV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseWriteOutcomeV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseWritePath".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
@@ -767,7 +815,7 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
     Ok(())
 }
 
-const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::DeferredRegistration; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::HandlerOutcome; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::ProtocolNoResponse; pub use crate::dispatch::ProtocolNoResponseError; pub use crate::dispatch::ProtocolNoResponseReason; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
+const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::DeferredRegistration; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::HandlerOutcome; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::ProtocolNoResponse; pub use crate::dispatch::ProtocolNoResponseError; pub use crate::dispatch::ProtocolNoResponseReason; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponseDisposition; pub use crate::dispatch::ResponseErrorKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::dispatch::ResponseReceipt; pub use crate::dispatch::WriteProgress; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::request_ordering::RequestOrdering; pub use crate::request_ordering::RequestOrderingKey; pub use crate::runtime::processor_v2::LocalRequestProcessorV2; pub use crate::runtime::processor_v2::RejectRequestDecision; pub use crate::runtime::processor_v2::RequestProcessorV2; pub use crate::runtime::processor_v2::ResponseWriteObservationV2; pub use crate::runtime::processor_v2::ResponseWriteOutcomeV2; pub use crate::runtime::processor_v2::ResponseWritePath; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
 
 #[test]
 fn lib_rs_exposes_only_the_curated_versioned_boundary() {
@@ -788,6 +836,9 @@ fn public_api_v2_exposes_exactly_the_curated_request_session_and_response_types(
 fn public_api_v2_rejects_unapproved_public_surface() {
     for unapproved_use in [
         "pub use crate::net::channel::Channel;",
+        "pub use crate::dispatch::ResponseError;",
+        "pub use crate::dispatch::ResponseSink;",
+        "pub use crate::runtime::connection_handler_context::ConnectionHandlerContext;",
         "pub use rocketmq_runtime::OperationContext;",
         "pub use crate::deadline::{RequestDeadline,RequestId};",
         "pub use crate::deadline::*;",
