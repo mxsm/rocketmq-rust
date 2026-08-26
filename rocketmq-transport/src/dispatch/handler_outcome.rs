@@ -125,7 +125,7 @@ impl DeferredRegistration {
     }
 
     #[cfg(test)]
-    fn for_test(request_id: RequestId) -> Self {
+    pub(crate) fn for_test(request_id: RequestId) -> Self {
         Self {
             request_id,
             seal: DeferredRegistrationSeal { drop_probe: None },

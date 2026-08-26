@@ -451,9 +451,14 @@ struct PreparedScopeBudgets {
 pub(crate) struct AdmissionScopeHandle {
     budgets: Arc<PreparedScopeBudgets>,
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
+    session_id: Option<u64>,
 }
 
 impl AdmissionScopeHandle {
+    pub(crate) const fn session_id(&self) -> Option<u64> {
+        self.session_id
+    }
+
     fn budget(&self, resource: AdmissionResource) -> ResourceBudget {
         match resource {
             AdmissionResource::Connection => self.budgets.connection.clone(),
@@ -669,6 +674,7 @@ impl AdmissionController {
     }
 
     pub(crate) fn prepare_scope(&self, scope: AdmissionScope) -> Result<AdmissionScopeHandle, AdmissionError> {
+        let session_id = scope.session;
         Ok(AdmissionScopeHandle {
             budgets: Arc::new(PreparedScopeBudgets {
                 connection: self.scoped_budget(AdmissionResource::Connection, scope)?,
@@ -679,6 +685,7 @@ impl AdmissionController {
                 processor: self.scoped_budget(AdmissionResource::Processor, scope)?,
             }),
             observer: self.observer.clone(),
+            session_id,
         })
     }
 

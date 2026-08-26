@@ -65,6 +65,11 @@ use crate::session_executor::SessionExecutor;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
+mod v2;
+
+pub(crate) use v2::AuthorizedCommandDispatcherV2;
+pub(crate) use v2::AuthorizedDispatchV2Error;
+
 /// Result of submitting a command to the shared dispatch boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchOutcome {
@@ -127,6 +132,7 @@ impl AuthorizedDispatchBoundary {
     ) -> Result<AuthorizedDispatchSession, RuntimeError> {
         Ok(AuthorizedDispatchSession {
             boundary: Arc::clone(self),
+            session_id: scope.session_id(),
             executor: SessionExecutor::try_new(task_group, scope)?,
         })
     }
@@ -134,6 +140,11 @@ impl AuthorizedDispatchBoundary {
 
 pub(crate) struct AuthorizedDispatchSession {
     boundary: Arc<AuthorizedDispatchBoundary>,
+    #[allow(
+        dead_code,
+        reason = "DSP-03 validates the canonical session owner before later coexistence routing wires V2"
+    )]
+    session_id: Option<u64>,
     executor: SessionExecutor,
 }
 

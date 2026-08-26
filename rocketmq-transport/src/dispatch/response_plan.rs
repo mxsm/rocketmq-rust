@@ -283,6 +283,29 @@ impl ResponsePlan {
         Self::new(head, body, body_len, body_part_count)
     }
 
+    #[allow(
+        dead_code,
+        reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"
+    )]
+    pub(crate) fn with_body_free_hook_head<T>(
+        &mut self,
+        apply: impl FnOnce(&mut RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
+    ) -> rocketmq_error::RocketMQResult<T> {
+        debug_assert!(self.head.body().is_none());
+        let result = apply(&mut self.head);
+        if self.head.take_body().is_some() {
+            return Err(rocketmq_error::RocketMQError::invariant_violated(
+                "RPC hook attached a response body through the body-free V2 projection",
+            ));
+        }
+        if self.head.is_oneway_rpc() {
+            return Err(rocketmq_error::RocketMQError::invariant_violated(
+                "RPC hook marked a V2 response plan head as one-way",
+            ));
+        }
+        result
+    }
+
     fn into_materialization_parts(self) -> (RemotingCommand, ResponseBody, usize, usize) {
         (self.head, self.body, self.body_len, self.body_part_count)
     }
