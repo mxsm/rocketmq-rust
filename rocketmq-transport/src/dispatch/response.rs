@@ -1,0 +1,570 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Typed response completion contracts.
+
+use std::error::Error;
+use std::fmt;
+
+use rocketmq_error::RocketMQError;
+
+/// Opaque process-local identity for one response owner.
+///
+/// The owner identifier distinguishes independent allocators within a process, and the sequence
+/// distinguishes requests created by that owner. The values do not identify a peer, request body,
+/// or protocol message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RequestId {
+    owner_id: u64,
+    sequence: u64,
+}
+
+impl RequestId {
+    /// Returns the process-local response-owner identifier.
+    #[must_use]
+    pub const fn owner_id(self) -> u64 {
+        self.owner_id
+    }
+
+    /// Returns the sequence assigned by the process-local response owner.
+    #[must_use]
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+}
+
+/// Progress made by a response write before a terminal failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WriteProgress {
+    /// The canonical writer has not begun this response's socket-I/O attempt.
+    ///
+    /// Enqueueing or admission alone remains `NotStarted`; no frame bytes have been written.
+    NotStarted,
+    /// A socket-I/O attempt began, or zero output cannot be proven.
+    ///
+    /// The socket may have accepted none, some, or all frame bytes, and flush or full-frame
+    /// completion is ambiguous. Retrying is unsafe.
+    PossiblyPartial,
+}
+
+impl WriteProgress {
+    /// Returns the stable low-cardinality progress label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::PossiblyPartial => "possibly_partial",
+        }
+    }
+}
+
+/// Terminal lifecycle state of a single response owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResponseTerminalState {
+    /// The response completed successfully.
+    Completed,
+    /// The response failed after the indicated write progress.
+    Failed {
+        /// Progress made by the canonical writer before failure.
+        progress: WriteProgress,
+    },
+    /// The response owner was cancelled before completion.
+    Cancelled,
+    /// The response owner was closed before completion.
+    Closed,
+}
+
+impl ResponseTerminalState {
+    /// Returns the stable low-cardinality terminal-state label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed { .. } => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+/// Stable category for a response completion failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResponseErrorKind {
+    /// A single-response owner had already reached a terminal state.
+    AlreadyCompleted,
+    /// The immutable response deadline elapsed before completion.
+    DeadlineExceeded,
+    /// The request owner cancelled the response.
+    Cancelled,
+    /// The response session closed before completion.
+    SessionClosed,
+    /// The bounded response queue could not accept the response.
+    QueueSaturated,
+    /// Encoding the response failed before a write began.
+    Encode,
+    /// The canonical response transport failed.
+    Transport,
+}
+
+impl ResponseErrorKind {
+    /// Returns the stable low-cardinality error label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyCompleted => "already_completed",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::Cancelled => "cancelled",
+            Self::SessionClosed => "session_closed",
+            Self::QueueSaturated => "queue_saturated",
+            Self::Encode => "encode",
+            Self::Transport => "transport",
+        }
+    }
+}
+
+/// Typed response completion failure.
+///
+/// Formatting this error exposes only its stable category, terminal state or write progress, and
+/// any source error's stable code. It never formats the source error itself.
+pub enum ResponseError {
+    /// The response owner had already reached the supplied terminal state.
+    AlreadyCompleted {
+        /// Terminal state that prevented another response completion.
+        state: ResponseTerminalState,
+    },
+    /// The immutable response deadline elapsed before any write began.
+    DeadlineExceeded,
+    /// The response owner was cancelled before any write began.
+    Cancelled,
+    /// The response session closed before any write began.
+    SessionClosed,
+    /// The bounded response queue rejected the response before any write began.
+    QueueSaturated,
+    /// Encoding failed deterministically before any write began.
+    Encode {
+        /// Typed encoding failure preserved for programmatic inspection.
+        source: RocketMQError,
+    },
+    /// The canonical response transport failed after the supplied write progress.
+    Transport {
+        /// Progress made by the canonical writer before the failure.
+        progress: WriteProgress,
+        /// Typed transport failure preserved for programmatic inspection.
+        source: RocketMQError,
+    },
+}
+
+impl ResponseError {
+    /// Returns this error's stable low-cardinality category.
+    #[must_use]
+    pub const fn kind(&self) -> ResponseErrorKind {
+        match self {
+            Self::AlreadyCompleted { .. } => ResponseErrorKind::AlreadyCompleted,
+            Self::DeadlineExceeded => ResponseErrorKind::DeadlineExceeded,
+            Self::Cancelled => ResponseErrorKind::Cancelled,
+            Self::SessionClosed => ResponseErrorKind::SessionClosed,
+            Self::QueueSaturated => ResponseErrorKind::QueueSaturated,
+            Self::Encode { .. } => ResponseErrorKind::Encode,
+            Self::Transport { .. } => ResponseErrorKind::Transport,
+        }
+    }
+
+    /// Returns the write progress associated with this failure.
+    ///
+    /// `None` is reserved for [`Self::AlreadyCompleted`], because it reports a prior terminal
+    /// state rather than a new write attempt.
+    #[must_use]
+    pub const fn write_progress(&self) -> Option<WriteProgress> {
+        match self {
+            Self::AlreadyCompleted { .. } => None,
+            Self::DeadlineExceeded
+            | Self::Cancelled
+            | Self::SessionClosed
+            | Self::QueueSaturated
+            | Self::Encode { .. } => Some(WriteProgress::NotStarted),
+            Self::Transport { progress, .. } => Some(*progress),
+        }
+    }
+
+    /// Returns whether this failure is eligible for retry by response policy.
+    ///
+    /// Eligibility is not a retry decision. A retry also requires an idempotent operation, an
+    /// unexpired deadline, and remaining retry budget. Encoding failures are deterministic and
+    /// nonretryable; a possibly partial transport write is never retryable.
+    #[must_use]
+    pub const fn retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::QueueSaturated
+                | Self::Transport {
+                    progress: WriteProgress::NotStarted,
+                    ..
+                }
+        )
+    }
+}
+
+impl fmt::Debug for ResponseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("ResponseError");
+        debug.field("kind", &self.kind().as_str());
+        match self {
+            Self::AlreadyCompleted { state } => {
+                debug.field("state", &state.as_str());
+                if let ResponseTerminalState::Failed { progress } = state {
+                    debug.field("progress", &progress.as_str());
+                }
+            }
+            Self::DeadlineExceeded | Self::Cancelled | Self::SessionClosed | Self::QueueSaturated => {
+                debug.field("progress", &WriteProgress::NotStarted.as_str());
+            }
+            Self::Encode { source } => {
+                debug.field("progress", &WriteProgress::NotStarted.as_str());
+                debug.field("source_code", &source.kind().code().as_str());
+            }
+            Self::Transport { progress, source } => {
+                debug.field("progress", &progress.as_str());
+                debug.field("source_code", &source.kind().code().as_str());
+            }
+        }
+        debug.finish()
+    }
+}
+
+impl fmt::Display for ResponseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "response error: {}", self.kind().as_str())?;
+        match self {
+            Self::AlreadyCompleted { state } => {
+                write!(formatter, " (state={})", state.as_str())?;
+                if let ResponseTerminalState::Failed { progress } = state {
+                    write!(formatter, ", progress={}", progress.as_str())?;
+                }
+            }
+            Self::DeadlineExceeded | Self::Cancelled | Self::SessionClosed | Self::QueueSaturated => {
+                write!(formatter, " (progress={})", WriteProgress::NotStarted.as_str())?;
+            }
+            Self::Encode { source } => {
+                write!(
+                    formatter,
+                    " (progress={}, source_code={})",
+                    WriteProgress::NotStarted.as_str(),
+                    source.kind().code().as_str()
+                )?;
+            }
+            Self::Transport { progress, source } => {
+                write!(
+                    formatter,
+                    " (progress={}, source_code={})",
+                    progress.as_str(),
+                    source.kind().code().as_str()
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Error for ResponseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Encode { source } | Self::Transport { source, .. } => Some(source),
+            Self::AlreadyCompleted { .. }
+            | Self::DeadlineExceeded
+            | Self::Cancelled
+            | Self::SessionClosed
+            | Self::QueueSaturated => None,
+        }
+    }
+}
+
+/// Receipt returned after a response reaches a transport-specific disposition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ResponseReceipt {
+    request_id: RequestId,
+    disposition: ResponseDisposition,
+}
+
+impl ResponseReceipt {
+    /// Returns the response owner that produced this receipt.
+    #[must_use]
+    pub const fn request_id(&self) -> RequestId {
+        self.request_id
+    }
+
+    /// Returns the transport-specific disposition represented by this receipt.
+    #[must_use]
+    pub const fn disposition(&self) -> ResponseDisposition {
+        self.disposition
+    }
+}
+
+/// Transport-specific completion represented by a [`ResponseReceipt`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResponseDisposition {
+    /// The local canonical writer completed its socket write and flush.
+    ///
+    /// This confirms local socket write-and-flush only; it does not confirm peer receipt or
+    /// business completion.
+    TransportWritten,
+    /// The response was handed to the embedded single-response owner.
+    ///
+    /// This confirms that handoff only; it does not confirm receiver consumption or any socket
+    /// I/O.
+    InProcessAccepted,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::hash_map::DefaultHasher;
+    use std::error::Error;
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    use rocketmq_error::ErrorKind;
+
+    use super::*;
+
+    fn response_error_kind_label(kind: ResponseErrorKind) -> &'static str {
+        match kind {
+            ResponseErrorKind::AlreadyCompleted => "already_completed",
+            ResponseErrorKind::DeadlineExceeded => "deadline_exceeded",
+            ResponseErrorKind::Cancelled => "cancelled",
+            ResponseErrorKind::SessionClosed => "session_closed",
+            ResponseErrorKind::QueueSaturated => "queue_saturated",
+            ResponseErrorKind::Encode => "encode",
+            ResponseErrorKind::Transport => "transport",
+        }
+    }
+
+    fn write_progress_label(progress: WriteProgress) -> &'static str {
+        match progress {
+            WriteProgress::NotStarted => "not_started",
+            WriteProgress::PossiblyPartial => "possibly_partial",
+        }
+    }
+
+    fn terminal_state_label(state: ResponseTerminalState) -> &'static str {
+        match state {
+            ResponseTerminalState::Completed => "completed",
+            ResponseTerminalState::Failed { progress } => {
+                let _ = write_progress_label(progress);
+                "failed"
+            }
+            ResponseTerminalState::Cancelled => "cancelled",
+            ResponseTerminalState::Closed => "closed",
+        }
+    }
+
+    fn disposition_label(disposition: ResponseDisposition) -> &'static str {
+        match disposition {
+            ResponseDisposition::TransportWritten => "transport_written",
+            ResponseDisposition::InProcessAccepted => "in_process_accepted",
+        }
+    }
+
+    #[test]
+    fn response_error_variants_have_stable_kind_progress_and_retry_policy() {
+        let cases = [
+            (
+                ResponseError::AlreadyCompleted {
+                    state: ResponseTerminalState::Failed {
+                        progress: WriteProgress::PossiblyPartial,
+                    },
+                },
+                ResponseErrorKind::AlreadyCompleted,
+                None,
+                false,
+            ),
+            (
+                ResponseError::DeadlineExceeded,
+                ResponseErrorKind::DeadlineExceeded,
+                Some(WriteProgress::NotStarted),
+                false,
+            ),
+            (
+                ResponseError::Cancelled,
+                ResponseErrorKind::Cancelled,
+                Some(WriteProgress::NotStarted),
+                false,
+            ),
+            (
+                ResponseError::SessionClosed,
+                ResponseErrorKind::SessionClosed,
+                Some(WriteProgress::NotStarted),
+                false,
+            ),
+            (
+                ResponseError::QueueSaturated,
+                ResponseErrorKind::QueueSaturated,
+                Some(WriteProgress::NotStarted),
+                true,
+            ),
+            (
+                ResponseError::Encode {
+                    source: RocketMQError::InvalidProperty("encode-canary".to_owned()),
+                },
+                ResponseErrorKind::Encode,
+                Some(WriteProgress::NotStarted),
+                false,
+            ),
+            (
+                ResponseError::Transport {
+                    progress: WriteProgress::NotStarted,
+                    source: RocketMQError::InvalidProperty("transport-canary".to_owned()),
+                },
+                ResponseErrorKind::Transport,
+                Some(WriteProgress::NotStarted),
+                true,
+            ),
+            (
+                ResponseError::Transport {
+                    progress: WriteProgress::PossiblyPartial,
+                    source: RocketMQError::InvalidProperty("partial-canary".to_owned()),
+                },
+                ResponseErrorKind::Transport,
+                Some(WriteProgress::PossiblyPartial),
+                false,
+            ),
+        ];
+
+        for (error, kind, progress, retryable) in cases {
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.kind().as_str(), response_error_kind_label(kind));
+            assert_eq!(error.write_progress(), progress);
+            assert_eq!(error.retryable(), retryable);
+        }
+    }
+
+    #[test]
+    fn source_errors_retain_their_concrete_type_and_identity() {
+        let errors = [
+            ResponseError::Encode {
+                source: RocketMQError::InvalidProperty("encode-source-canary".to_owned()),
+            },
+            ResponseError::Transport {
+                progress: WriteProgress::NotStarted,
+                source: RocketMQError::InvalidProperty("transport-source-canary".to_owned()),
+            },
+        ];
+
+        for error in &errors {
+            let expected = match error {
+                ResponseError::Encode { source } | ResponseError::Transport { source, .. } => source,
+                _ => unreachable!("test constructed source-carrying response errors"),
+            };
+            let source = Error::source(error).expect("response error should preserve its source");
+            let typed = source
+                .downcast_ref::<RocketMQError>()
+                .expect("response source should remain a RocketMQError");
+
+            assert!(std::ptr::eq(typed, expected));
+            assert_eq!(typed.kind(), ErrorKind::InvalidProperty);
+        }
+        assert!(Error::source(&ResponseError::Cancelled).is_none());
+    }
+
+    #[test]
+    fn response_error_formatting_does_not_expose_sensitive_source_text() {
+        const CANARY: &str = "response-secret-canary";
+        let errors = [
+            ResponseError::Encode {
+                source: RocketMQError::InvalidProperty(CANARY.to_owned()),
+            },
+            ResponseError::Transport {
+                progress: WriteProgress::PossiblyPartial,
+                source: RocketMQError::InvalidProperty(CANARY.to_owned()),
+            },
+        ];
+
+        for error in errors {
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            assert!(
+                !display.contains(CANARY),
+                "display leaked sensitive source text: {display}"
+            );
+            assert!(!debug.contains(CANARY), "debug leaked sensitive source text: {debug}");
+            assert!(display.contains("source_code=INVALID_PROPERTY"));
+            assert!(debug.contains("source_code: \"INVALID_PROPERTY\""));
+        }
+    }
+
+    #[test]
+    fn response_contract_enums_remain_exhaustively_classified() {
+        assert_eq!(write_progress_label(WriteProgress::NotStarted), "not_started");
+        assert_eq!(write_progress_label(WriteProgress::PossiblyPartial), "possibly_partial");
+        assert_eq!(terminal_state_label(ResponseTerminalState::Completed), "completed");
+        assert_eq!(
+            terminal_state_label(ResponseTerminalState::Failed {
+                progress: WriteProgress::NotStarted,
+            }),
+            "failed"
+        );
+        assert_eq!(terminal_state_label(ResponseTerminalState::Cancelled), "cancelled");
+        assert_eq!(terminal_state_label(ResponseTerminalState::Closed), "closed");
+        assert_eq!(
+            disposition_label(ResponseDisposition::TransportWritten),
+            "transport_written"
+        );
+        assert_eq!(
+            disposition_label(ResponseDisposition::InProcessAccepted),
+            "in_process_accepted"
+        );
+    }
+
+    #[test]
+    fn request_ids_compare_hash_and_expose_only_their_components() {
+        let request_id = RequestId {
+            owner_id: 7,
+            sequence: 11,
+        };
+        let same_request_id = RequestId {
+            owner_id: 7,
+            sequence: 11,
+        };
+        let other_request_id = RequestId {
+            owner_id: 7,
+            sequence: 12,
+        };
+
+        assert_eq!(request_id, same_request_id);
+        assert_ne!(request_id, other_request_id);
+        assert_eq!(request_id.owner_id(), 7);
+        assert_eq!(request_id.sequence(), 11);
+
+        let hash = |id: RequestId| {
+            let mut hasher = DefaultHasher::new();
+            id.hash(&mut hasher);
+            hasher.finish()
+        };
+        assert_eq!(hash(request_id), hash(same_request_id));
+        assert_ne!(hash(request_id), hash(other_request_id));
+    }
+
+    #[test]
+    fn response_receipts_expose_their_request_and_disposition() {
+        let request_id = RequestId {
+            owner_id: 13,
+            sequence: 17,
+        };
+        let receipt = ResponseReceipt {
+            request_id,
+            disposition: ResponseDisposition::InProcessAccepted,
+        };
+
+        assert_eq!(receipt.request_id(), request_id);
+        assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
+    }
+}

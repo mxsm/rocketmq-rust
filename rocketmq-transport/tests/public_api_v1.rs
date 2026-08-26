@@ -25,13 +25,20 @@ use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::PendingUsage;
 use rocketmq_transport::api::v1::RemotingClient;
 use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::RequestId;
 use rocketmq_transport::api::v1::RequestTarget;
+use rocketmq_transport::api::v1::ResponseDisposition;
+use rocketmq_transport::api::v1::ResponseError;
+use rocketmq_transport::api::v1::ResponseErrorKind;
+use rocketmq_transport::api::v1::ResponseReceipt;
+use rocketmq_transport::api::v1::ResponseTerminalState;
 use rocketmq_transport::api::v1::SendReceipt;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::ServerStartError;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportServer;
+use rocketmq_transport::api::v1::WriteProgress;
 use rocketmq_transport::prelude::OneShotTransportClient as PreludeOneShotTransportClient;
 use rocketmq_transport::prelude::RemotingClient as PreludeRemotingClient;
 use rocketmq_transport::prelude::RequestDeadline as PreludeRequestDeadline;
@@ -86,6 +93,22 @@ fn assert_legacy_compatibility_methods(client: &TransportClient<DefaultRequestPr
 }
 
 fn assert_prelude_processor<T: PreludeRequestProcessor>() {}
+
+fn assert_versioned_response_contract(
+    request_id: Option<RequestId>,
+    receipt: Option<ResponseReceipt>,
+    error: ResponseError,
+) {
+    if let Some(request_id) = request_id {
+        let _ = (request_id.owner_id(), request_id.sequence());
+    }
+    if let Some(receipt) = receipt {
+        let _ = (receipt.request_id(), receipt.disposition());
+    }
+    let _: ResponseErrorKind = error.kind();
+    let _: Option<WriteProgress> = error.write_progress();
+    let _: bool = error.retryable();
+}
 
 async fn assert_checked_server_method_signatures() {
     let runtime = RuntimeContext::try_from_current("transport-public-api-v1-checked-signatures").unwrap();
@@ -144,6 +167,14 @@ fn prelude_reexports_the_curated_composition_root_surface() {
     let _: Option<PreludeRemotingClient<DefaultRequestProcessor>> = None;
     let _: Option<PreludeTransportServer<DefaultRequestProcessor>> = None;
     assert_prelude_processor::<DefaultRequestProcessor>();
+}
+
+#[test]
+fn versioned_api_exposes_response_contract_types_without_prelude_exports() {
+    assert_versioned_response_contract(None, None, ResponseError::DeadlineExceeded);
+    let _: Option<ResponseTerminalState> = Some(ResponseTerminalState::Completed);
+    let _: Option<ResponseDisposition> = Some(ResponseDisposition::TransportWritten);
+    let _: Option<WriteProgress> = Some(WriteProgress::NotStarted);
 }
 
 #[tokio::test]
