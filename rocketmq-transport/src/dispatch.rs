@@ -45,6 +45,21 @@ pub use response::ResponseErrorKind;
 pub use response::ResponseReceipt;
 pub use response::ResponseTerminalState;
 pub use response::WriteProgress;
+#[allow(
+    unused_imports,
+    reason = "later private response stages name the RSP-03 binding capability through dispatch"
+)]
+pub(crate) use response_plan::BoundResponsePlan;
+#[allow(
+    unused_imports,
+    reason = "later private response stages handle the RSP-03 binding failure through dispatch"
+)]
+pub(crate) use response_plan::ResponseBindingError;
+#[allow(
+    unused_imports,
+    reason = "later private response encoders recover the RSP-03 body owner through dispatch"
+)]
+pub(crate) use response_plan::ResponseBody;
 pub use response_plan::ResponseBodyKind;
 pub use response_plan::ResponsePlan;
 pub use response_plan::ResponsePlanError;

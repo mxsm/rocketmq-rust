@@ -99,6 +99,11 @@ impl FileRegionSequence {
     pub(crate) fn regions(&self) -> &[FileRegion] {
         &self.regions
     }
+
+    #[cfg(test)]
+    pub(crate) fn regions_capacity(&self) -> usize {
+        self.regions.capacity()
+    }
 }
 
 impl std::fmt::Debug for FileRegion {
