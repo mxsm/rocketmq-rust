@@ -175,11 +175,7 @@ impl FrameLimits {
 
     pub(crate) fn validate_frame_segments(self, segments: &[Bytes]) -> rocketmq_error::RocketMQResult<usize> {
         self.validate()?;
-        let frame_len = segments.iter().try_fold(0_usize, |total, segment| {
-            total
-                .checked_add(segment.len())
-                .ok_or_else(|| encoding_limit_error("frame", usize::MAX, self.max_frame_bytes))
-        })?;
+        let frame_len = checked_frame_segments_len(segments.iter().map(Bytes::len), self.max_frame_bytes)?;
         if frame_len < Self::MIN_FRAME_BYTES {
             return Err(encoding_limit_error("frame", frame_len, Self::MIN_FRAME_BYTES));
         }
@@ -369,6 +365,17 @@ fn encoding_limit_error(component: &str, actual: usize, limit: usize) -> rocketm
         format!("encoded {component} is {actual} bytes, exceeding configured limit {limit}"),
     )
     .into()
+}
+
+fn checked_frame_segments_len(
+    lengths: impl IntoIterator<Item = usize>,
+    max_frame_bytes: usize,
+) -> rocketmq_error::RocketMQResult<usize> {
+    lengths.into_iter().try_fold(0_usize, |total, length| {
+        total
+            .checked_add(length)
+            .ok_or_else(|| encoding_limit_error("frame", usize::MAX, max_frame_bytes))
+    })
 }
 
 impl Default for RemotingCommandCodec {
@@ -637,5 +644,10 @@ mod tests {
             .set_command_custom_header(GetRouteInfoRequestHeader::new("1111", Some(true)))
             .set_remark_option(Some("remark".to_string()));
         assert!(encoder.encode(command, &mut dst).is_ok());
+    }
+
+    #[test]
+    fn checked_frame_segments_len_rejects_aggregate_overflow() {
+        assert!(checked_frame_segments_len([usize::MAX, 1], usize::MAX).is_err());
     }
 }

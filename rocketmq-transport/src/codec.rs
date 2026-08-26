@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod remoting_command_codec;
+mod trusted_encoded_frame;
