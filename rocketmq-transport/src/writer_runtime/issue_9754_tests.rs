@@ -161,6 +161,44 @@ struct PendingTransport {
     entered: Arc<tokio::sync::Notify>,
 }
 
+struct SuccessfulTransport {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl AsyncRead for SuccessfulTransport {
+    fn poll_read(self: Pin<&mut Self>, _: &mut Context<'_>, _: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        Poll::Pending
+    }
+}
+
+impl AsyncWrite for SuccessfulTransport {
+    fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, buffer: &[u8]) -> Poll<io::Result<usize>> {
+        self.attempts.fetch_add(1, Ordering::AcqRel);
+        Poll::Ready(Ok(buffer.len()))
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buffers: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        self.attempts.fetch_add(1, Ordering::AcqRel);
+        Poll::Ready(Ok(buffers.iter().map(|buffer| buffer.len()).sum()))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
 impl AsyncRead for PendingTransport {
     fn poll_read(self: Pin<&mut Self>, _: &mut Context<'_>, _: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         Poll::Pending
@@ -414,6 +452,120 @@ async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
     assert_eq!(active_drops.load(Ordering::SeqCst), 1);
     assert_eq!(follower_drops.load(Ordering::SeqCst), 1);
     assert_eq!(controller.snapshot().queued.current_count, 0);
+}
+
+#[tokio::test]
+async fn successful_file_write_releases_its_lease_once_after_completion() {
+    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let blocking = owner
+        .root_context()
+        .component("writer-file-success-test")
+        .storage_io()
+        .clone();
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let connection = Connection::new_with_plaintext_stream(SuccessfulTransport {
+        attempts: Arc::clone(&attempts),
+    })
+    .with_file_region_io(blocking, FileTransferMode::Portable);
+    let (frame_writer, _reader) = connection.into_session_io(admission.clone());
+    let mut config = queue_config();
+    config.batch.max_items = NonZeroUsize::new(1).expect("non-zero");
+    config.data_max_bytes = NonZeroUsize::new(1024).expect("non-zero");
+    let (lanes, receivers) = writer_lanes(config);
+    let (write, completion, drops) = queued_file_write_with_completion(&admission, "successful-file");
+    lanes
+        .try_send(AdmissionClass::Data, write)
+        .expect("successful file queued");
+    drop(lanes);
+    let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
+    let (state, _) = watch::channel(ConnectionState::Healthy);
+    run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    )
+    .await;
+
+    completion.await.expect("file completion").expect("file write succeeds");
+    assert!(
+        attempts.load(Ordering::Acquire) >= 2,
+        "head and body must both be written"
+    );
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+}
+
+#[tokio::test]
+async fn queued_file_cancellation_releases_its_lease_before_socket_progress() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let connection = Connection::new_with_plaintext_stream(FailingTransport {
+        attempts: Arc::clone(&attempts),
+        flushes: Arc::new(AtomicUsize::new(0)),
+        phase: WriteFailurePhase::Flush,
+    });
+    let (frame_writer, _reader) = connection.into_session_io(admission.clone());
+    let mut config = queue_config();
+    config.data_max_bytes = NonZeroUsize::new(1024).expect("non-zero");
+    let (lanes, receivers) = writer_lanes(config);
+    let (write, completion, drops) = queued_file_write_with_completion(&admission, "cancelled-file");
+    let progress = Arc::clone(&write.progress);
+    lanes.try_send(AdmissionClass::Data, write).expect("file queued");
+    assert!(progress.cancel_before_start());
+    drop(lanes);
+    let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
+    let (state, _) = watch::channel(ConnectionState::Healthy);
+    run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    )
+    .await;
+
+    let failure = completion
+        .await
+        .expect("cancelled file completion")
+        .expect_err("cancelled file must fail");
+    assert_eq!(failure.progress(), WriteProgress::NotStarted);
+    assert_eq!(attempts.load(Ordering::Acquire), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn dropping_a_queued_file_envelope_releases_its_lease_once() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let mut config = queue_config();
+    config.data_max_bytes = NonZeroUsize::new(1024).expect("non-zero");
+    let (lanes, mut receivers) = writer_lanes(config);
+    let (write, completion, drops) = queued_file_write_with_completion(&admission, "dropped-file");
+    drop(completion);
+    lanes.try_send(AdmissionClass::Data, write).expect("file queued");
+    drop(lanes);
+
+    let WriterEvent::Write(envelope) = receivers.recv().await else {
+        panic!("queued file envelope")
+    };
+    drop(envelope);
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+    assert_eq!(controller.snapshot().queued.current_bytes, 0);
 }
 
 #[tokio::test]

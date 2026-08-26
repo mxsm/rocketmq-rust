@@ -13,4 +13,11 @@
 // limitations under the License.
 
 pub mod remoting_command_codec;
+mod response_preparation;
 mod trusted_encoded_frame;
+
+#[allow(
+    unused_imports,
+    reason = "the later private response sink consumes the RSP-04 preparation capability"
+)]
+pub(crate) use response_preparation::{prepare_response, PreparedResponse, PreparedResponseMetadata};

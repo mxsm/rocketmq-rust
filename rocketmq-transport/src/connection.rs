@@ -1196,7 +1196,7 @@ impl Connection {
         let body_len = usize::try_from(body.len()).map_err(|_| {
             rocketmq_error::RocketMQError::illegal_argument("file region sequence length exceeds this platform's usize")
         })?;
-        let head = self.limits.encode_file_frame_head(command_without_body, body_len)?;
+        let head = self.limits.encode_frame_head(command_without_body, body_len)?;
         if let Some(deadline) = deadline {
             deadline.ensure_before_send(target.clone())?;
         }

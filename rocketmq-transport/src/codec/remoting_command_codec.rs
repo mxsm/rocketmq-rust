@@ -245,7 +245,7 @@ impl FrameLimits {
         Ok(frame)
     }
 
-    pub(crate) fn encode_file_frame_head(
+    pub(crate) fn encode_frame_head(
         self,
         command: RemotingCommand,
         body_len: usize,
