@@ -14,6 +14,7 @@
 
 mod authorized_dispatcher;
 mod request_context;
+mod response;
 mod response_sink;
 
 pub use authorized_dispatcher::AuthorizedCommandDispatcher;
@@ -23,6 +24,13 @@ pub use authorized_dispatcher::DispatchOutcome;
 pub use request_context::RequestContext;
 pub use request_context::RequestContextError;
 pub use request_context::RequestTransport;
+pub use response::RequestId;
+pub use response::ResponseDisposition;
+pub use response::ResponseError;
+pub use response::ResponseErrorKind;
+pub use response::ResponseReceipt;
+pub use response::ResponseTerminalState;
+pub use response::WriteProgress;
 pub use response_sink::LocalResponseReceiver;
 pub use response_sink::ResponseSink;
 pub use response_sink::ResponseSinkError;
