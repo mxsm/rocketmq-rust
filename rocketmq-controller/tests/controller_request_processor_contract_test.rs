@@ -10,6 +10,7 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::ControllerRequestProcessor;
 use rocketmq_controller::Node;
+use rocketmq_controller::RaftPeer;
 use rocketmq_controller::StorageBackendType;
 use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQResult;
@@ -66,9 +67,10 @@ struct ReplicaSeed {
 
 impl ProcessorHarness {
     async fn new() -> Self {
-        let listen_addr = reserve_socket_addr();
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
         let config = ControllerConfig::default()
-            .with_node_info(1, listen_addr)
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_backend(StorageBackendType::Memory)
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
@@ -90,7 +92,7 @@ impl ProcessorHarness {
             1,
             Node {
                 node_id: 1,
-                rpc_addr: listen_addr.to_string(),
+                rpc_addr: raft_addr.to_string(),
             },
         );
         manager
@@ -288,11 +290,15 @@ impl ProcessorHarness {
     }
 }
 
-fn reserve_socket_addr() -> SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind random port");
-    let addr = listener.local_addr().expect("read listener addr");
-    drop(listener);
-    addr
+fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
+    let remoting = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve remoting address");
+    let raft = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve raft address");
+    let addresses = (
+        remoting.local_addr().expect("remoting address"),
+        raft.local_addr().expect("raft address"),
+    );
+    drop((remoting, raft));
+    addresses
 }
 
 async fn create_test_channel() -> Channel {
