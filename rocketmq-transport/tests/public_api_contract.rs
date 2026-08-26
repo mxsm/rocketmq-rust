@@ -576,6 +576,13 @@ fn inspect_public_boundary(source: &str) -> Result<PublicBoundary, SurfaceError>
                 cursor = declaration.end;
                 continue;
             }
+            let (visibility, _) = parse_visibility(&tokens, cursor)?;
+            if parent_is_externally_public(&scopes) && visibility == Visibility::Public {
+                return Err(surface_error(
+                    tokens[cursor].offset,
+                    "unsupported public item at an externally public module scope",
+                ));
+            }
         }
 
         match tokens[cursor].kind {
@@ -598,7 +605,14 @@ fn inspect_public_boundary(source: &str) -> Result<PublicBoundary, SurfaceError>
 }
 
 fn validate_public_boundary(boundary: &PublicBoundary) -> Result<(), String> {
-    let expected_modules = ["api", "api::v1", "benchmark_support", "prelude", "test_support"];
+    let expected_modules = [
+        "api",
+        "api::v1",
+        "api::v2",
+        "benchmark_support",
+        "prelude",
+        "test_support",
+    ];
     if boundary.modules != expected_modules {
         return Err(format!("unexpected public modules: {:?}", boundary.modules));
     }
@@ -620,12 +634,41 @@ fn validate_public_boundary(boundary: &PublicBoundary) -> Result<(), String> {
     if v1_modules != ["api::v1"] {
         return Err(format!("unexpected public v1 modules: {v1_modules:?}"));
     }
-    let expected_uses = [PublicUse {
-        module_path: "api::v1".to_owned(),
-        use_tree: "crate::public_api::*".to_owned(),
-    }];
+    let v2_modules = boundary
+        .modules
+        .iter()
+        .filter(|path| path.rsplit("::").next() == Some("v2"))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if v2_modules != ["api::v2"] {
+        return Err(format!("unexpected public v2 modules: {v2_modules:?}"));
+    }
+    let expected_uses = [
+        PublicUse {
+            module_path: "api::v1".to_owned(),
+            use_tree: "crate::public_api::*".to_owned(),
+        },
+        PublicUse {
+            module_path: "api::v2".to_owned(),
+            use_tree: "crate::public_api_v2::*".to_owned(),
+        },
+    ];
     if boundary.uses != expected_uses {
         return Err(format!("unexpected public uses: {:?}", boundary.uses));
+    }
+    Ok(())
+}
+
+fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), String> {
+    if !boundary.modules.is_empty() {
+        return Err(format!("unexpected public v2 modules: {:?}", boundary.modules));
+    }
+    let expected_uses = [PublicUse {
+        module_path: String::new(),
+        use_tree: "crate::deadline::RequestDeadline".to_owned(),
+    }];
+    if boundary.uses != expected_uses {
+        return Err(format!("unexpected public v2 uses: {:?}", boundary.uses));
     }
     Ok(())
 }
@@ -634,6 +677,56 @@ fn validate_public_boundary(boundary: &PublicBoundary) -> Result<(), String> {
 fn lib_rs_exposes_only_the_curated_versioned_boundary() {
     let boundary = inspect_public_boundary(include_str!("../src/lib.rs")).expect("lib.rs must tokenize and parse");
     validate_public_boundary(&boundary).expect("lib.rs must expose only the curated public boundary");
+}
+
+#[test]
+fn public_api_v2_exposes_only_the_curated_request_deadline() {
+    let boundary =
+        inspect_public_boundary(include_str!("../src/public_api_v2.rs")).expect("public_api_v2.rs must tokenize");
+
+    validate_public_api_v2_boundary(&boundary).expect("public_api_v2.rs must expose only RequestDeadline");
+}
+
+#[test]
+fn public_api_v2_rejects_unapproved_public_surface() {
+    for source in [
+        "pub use crate::deadline::RequestDeadline; pub use crate::net::channel::Channel;",
+        "pub use crate::deadline::RequestDeadline; pub use rocketmq_runtime::OperationContext;",
+        "pub use crate::deadline::{RequestDeadline,RequestId};",
+        "pub use crate::deadline::*;",
+        "pub mod request_model {} pub use crate::deadline::RequestDeadline;",
+    ] {
+        let boundary = inspect_public_boundary(source).expect("adversarial V2 fixture must parse");
+
+        assert!(validate_public_api_v2_boundary(&boundary).is_err());
+    }
+
+    let source = r#"
+macro_rules! expose_extra { () => { pub use crate::net::channel::Channel; }; }
+expose_extra!();
+pub use crate::deadline::RequestDeadline;
+"#;
+    let error = inspect_public_boundary(source).expect_err("public V2 macro invocation must be rejected");
+
+    assert_eq!(
+        error.message,
+        "macro invocation at an externally public module scope is unsupported"
+    );
+}
+
+#[test]
+fn public_api_v2_rejects_direct_public_items() {
+    for source in [
+        "pub use crate::deadline::RequestDeadline; pub type Channel = crate::net::channel::Channel;",
+        "pub use crate::deadline::RequestDeadline; pub struct Leaked;",
+    ] {
+        let error = inspect_public_boundary(source).expect_err("direct public V2 item must be rejected");
+
+        assert_eq!(
+            error.message,
+            "unsupported public item at an externally public module scope"
+        );
+    }
 }
 
 #[test]
@@ -715,7 +808,7 @@ const BYTE_CHARACTER: u8 = b'{';
 pub mod benchmark_support;
 pub mod prelude;
 pub mod test_support;
-pub mod api { pub mod v1 { pub use crate::public_api::*; } }
+pub mod api { pub mod v1 { pub use crate::public_api::*; } pub mod v2 { pub use crate::public_api_v2::*; } }
 "####;
     let boundary = inspect_public_boundary(source).expect("literal fixture must parse");
 
@@ -728,10 +821,11 @@ fn raw_c_literal_braces_do_not_hide_unexpected_public_module() {
 const _: &std::ffi::CStr = cr####"} pub mod fake {} {"####;
 const _: &std::ffi::CStr = cr#"" { ""#; pub mod leaked {} const _: &std::ffi::CStr = cr#"" } ""#;
 mod public_api {}
+mod public_api_v2 {}
 pub mod benchmark_support {}
 pub mod prelude {}
 pub mod test_support {}
-pub mod api { pub mod v1 { pub use crate::public_api::*; } }
+pub mod api { pub mod v1 { pub use crate::public_api::*; } pub mod v2 { pub use crate::public_api_v2::*; } }
 "#####;
     let boundary = inspect_public_boundary(source).expect("raw C string fixture must parse");
 
@@ -740,6 +834,7 @@ pub mod api { pub mod v1 { pub use crate::public_api::*; } }
         [
             "api",
             "api::v1",
+            "api::v2",
             "benchmark_support",
             "leaked",
             "prelude",
@@ -748,10 +843,16 @@ pub mod api { pub mod v1 { pub use crate::public_api::*; } }
     );
     assert_eq!(
         boundary.uses,
-        [PublicUse {
-            module_path: "api::v1".to_owned(),
-            use_tree: "crate::public_api::*".to_owned(),
-        }]
+        [
+            PublicUse {
+                module_path: "api::v1".to_owned(),
+                use_tree: "crate::public_api::*".to_owned(),
+            },
+            PublicUse {
+                module_path: "api::v2".to_owned(),
+                use_tree: "crate::public_api_v2::*".to_owned(),
+            },
+        ]
     );
     assert!(validate_public_boundary(&boundary).is_err());
 }
@@ -762,10 +863,11 @@ fn root_macro_invocation_that_expands_a_public_module_is_rejected() {
 macro_rules! expose_module { () => { pub mod leaked {} }; }
 expose_module!();
 mod public_api {}
+mod public_api_v2 {}
 pub mod benchmark_support {}
 pub mod prelude {}
 pub mod test_support {}
-pub mod api { pub mod v1 { pub use crate::public_api::*; } }
+pub mod api { pub mod v1 { pub use crate::public_api::*; } pub mod v2 { pub use crate::public_api_v2::*; } }
 "#;
     let error = inspect_public_boundary(source).expect_err("root macro invocation must be rejected");
 
@@ -787,10 +889,11 @@ fn public_api_macro_invocation_that_expands_a_public_use_is_rejected() {
 mod hidden { pub struct Hidden; }
 macro_rules! expose_hidden { () => { pub use crate::hidden::*; }; }
 mod public_api {}
+mod public_api_v2 {}
 pub mod benchmark_support {}
 pub mod prelude {}
 pub mod test_support {}
-pub mod api { pub mod v1 { expose_hidden!(); pub use crate::public_api::*; } }
+pub mod api { pub mod v1 { expose_hidden!(); pub use crate::public_api::*; } pub mod v2 { pub use crate::public_api_v2::*; } }
 "#;
     let error = inspect_public_boundary(source).expect_err("api::v1 macro invocation must be rejected");
 
@@ -812,10 +915,11 @@ fn macro_definition_and_isolated_private_invocation_do_not_corrupt_public_scope(
 macro_rules! private_items { ($($item:item)*) => {}; }
 mod isolated { private_items! { pub mod fake {} } }
 mod public_api {}
+mod public_api_v2 {}
 pub mod benchmark_support {}
 pub mod prelude {}
 pub mod test_support {}
-pub mod api { pub mod v1 { pub use crate::public_api::*; } }
+pub mod api { pub mod v1 { pub use crate::public_api::*; } pub mod v2 { pub use crate::public_api_v2::*; } }
 "#;
     let boundary = inspect_public_boundary(source).expect("private macro fixture must parse");
 
@@ -826,7 +930,7 @@ pub mod api { pub mod v1 { pub use crate::public_api::*; } }
 fn attributes_and_multiple_items_per_line_are_parsed_structurally() {
     let source = r#"
 #[cfg(feature = "test-support")] pub mod benchmark_support; #[doc = "pub mod fake_doc {}"] pub mod prelude;
-#[cfg(any(test, feature = "test-support"))] pub mod test_support; #[rustfmt::skip] pub mod api { #[allow(dead_code)] pub mod v1 { pub use crate /* path */ :: public_api /* glob */ :: * ; } }
+#[cfg(any(test, feature = "test-support"))] pub mod test_support; #[rustfmt::skip] pub mod api { #[allow(dead_code)] pub mod v1 { pub use crate /* path */ :: public_api /* glob */ :: * ; } pub mod v2 { pub use crate::public_api_v2::*; } }
 "#;
     let boundary = inspect_public_boundary(source).expect("attribute fixture must parse");
 
@@ -843,11 +947,11 @@ fn restricted_visibility_is_not_externally_public() {
 }
 
 #[test]
-fn valid_nested_api_v1_glob_is_accepted() {
-    let source = "pub mod benchmark_support; pub mod prelude; pub mod test_support; pub mod api { pub mod v1 { pub use crate::public_api::*; } }";
+fn valid_nested_versioned_api_globs_are_accepted() {
+    let source = "pub mod benchmark_support; pub mod prelude; pub mod test_support; pub mod api { pub mod v1 { pub use crate::public_api::*; } pub mod v2 { pub use crate::public_api_v2::*; } }";
     let boundary = inspect_public_boundary(source).expect("valid boundary fixture must parse");
 
-    validate_public_boundary(&boundary).expect("the expected api::v1 boundary must be accepted");
+    validate_public_boundary(&boundary).expect("the expected versioned API boundary must be accepted");
 }
 
 #[test]

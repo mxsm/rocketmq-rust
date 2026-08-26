@@ -55,6 +55,7 @@ mod net;
 pub mod prelude;
 mod proxy_protocol;
 mod public_api;
+mod public_api_v2;
 mod remoting;
 mod remoting_server;
 mod request_ordering;
@@ -79,5 +80,13 @@ pub mod api {
     /// Stable source API for the 1.x release line.
     pub mod v1 {
         pub use crate::public_api::*;
+    }
+
+    /// Curated source API boundary for the 2.x release line.
+    ///
+    /// `RequestDeadline` is the only currently shared type; the 2.x request
+    /// model is not yet publicly exposed.
+    pub mod v2 {
+        pub use crate::public_api_v2::*;
     }
 }
