@@ -962,7 +962,7 @@ impl ConnectionHandler for ProcessorSessionHandler {
                 }
             };
             let mut connection = session.connection();
-            let _ = connection.send_command(response).await;
+            let _ = connection.send_response(response).await;
         })
     }
 }

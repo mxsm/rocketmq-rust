@@ -652,7 +652,7 @@ async fn partial_failure_closes_session_and_fails_every_already_queued_frame() {
         first.1.expect_err("first queued frame should fail"),
         second.1.expect_err("second queued frame should fail"),
     ];
-    assert!(errors.iter().all(|error| error.contains("injected connection failure")));
+    assert!(errors.iter().all(|error| error.contains("canonical writer failure")));
     assert!(control.failure_poll.load(Ordering::Acquire) >= 2);
     assert_eq!(
         control.write_polls.load(Ordering::Acquire),

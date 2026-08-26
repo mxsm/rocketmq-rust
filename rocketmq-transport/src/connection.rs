@@ -41,10 +41,13 @@ use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::ResponseError;
+use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::file_region::FileTransferMode;
 use crate::telemetry::TransportTelemetry;
+use crate::write_result::WriterFailure;
 use crate::write_strategy::FrameWriteMode;
 use crate::write_strategy::FrameWriter;
 use crate::write_strategy::OutboundPayload;
@@ -137,6 +140,83 @@ pub(crate) type ConnectionFrameWriter = FrameWriter<WriteBackend>;
 enum ConnectionWriter {
     Direct(ConnectionFrameWriter),
     Queued(QueuedConnection),
+}
+
+/// Static legacy reason selected from the caller's operation rather than an
+/// I/O source. The writer completion remains source-preserving for typed
+/// response fan-out, while each legacy caller reconstructs its historic text.
+#[derive(Clone, Copy)]
+enum LegacyWriterReason {
+    CanonicalWriter,
+    ExplicitSendfile,
+    CompletionDropped,
+}
+
+impl LegacyWriterReason {
+    const fn for_direct_payload(payload: &OutboundPayload, file_transfer_mode: FileTransferMode) -> Self {
+        if matches!(payload, OutboundPayload::FileFrame { .. })
+            && matches!(file_transfer_mode, FileTransferMode::Sendfile)
+        {
+            Self::ExplicitSendfile
+        } else {
+            Self::CanonicalWriter
+        }
+    }
+
+    const fn as_static_reason(self) -> &'static str {
+        match self {
+            Self::CanonicalWriter => "canonical writer failure",
+            Self::ExplicitSendfile => "sendfile mode requires an eligible file and plaintext TCP connection",
+            Self::CompletionDropped => "writer completion dropped",
+        }
+    }
+}
+
+/// Private send mechanics shared by legacy `RocketMQResult` facades and the
+/// server's typed response completion path.
+enum SendFailure {
+    DeadlineExceeded {
+        target: String,
+    },
+    SessionClosed {
+        target: String,
+    },
+    QueueSaturated {
+        target: String,
+    },
+    Writer {
+        target: String,
+        failure: WriterFailure,
+        legacy_reason: LegacyWriterReason,
+    },
+}
+
+impl SendFailure {
+    fn into_legacy(self) -> rocketmq_error::RocketMQError {
+        match self {
+            Self::DeadlineExceeded { target } => {
+                rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target)
+            }
+            Self::SessionClosed { target } => {
+                rocketmq_error::RocketMQError::network_connection_failed(target, "connection is closed")
+            }
+            Self::QueueSaturated { target } => rocketmq_error::RocketMQError::network_queue_full(target),
+            Self::Writer {
+                target,
+                failure,
+                legacy_reason,
+            } => failure.into_legacy_for_target(target, legacy_reason.as_static_reason()),
+        }
+    }
+
+    fn into_response(self) -> ResponseError {
+        match self {
+            Self::DeadlineExceeded { .. } => ResponseError::DeadlineExceeded,
+            Self::SessionClosed { .. } => ResponseError::SessionClosed,
+            Self::QueueSaturated { .. } => ResponseError::QueueSaturated,
+            Self::Writer { failure, .. } => failure.into_response(),
+        }
+    }
 }
 
 static TRANSPORT_ENCODED_BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
@@ -245,7 +325,11 @@ impl SessionWriterDiagnostics {
     }
 
     pub(crate) fn finish_write(&self, started_at: Instant, succeeded: bool, deadline_expired: bool) {
-        let write_latency = duration_millis(started_at.elapsed());
+        self.finish_write_at(started_at, Instant::now(), succeeded, deadline_expired);
+    }
+
+    fn finish_write_at(&self, started_at: Instant, finished_at: Instant, succeeded: bool, deadline_expired: bool) {
+        let write_latency = duration_millis(finished_at.saturating_duration_since(started_at));
         self.last_write_latency_millis.store(write_latency, Ordering::Relaxed);
         self.max_write_latency_millis
             .fetch_max(write_latency, Ordering::Relaxed);
@@ -254,6 +338,22 @@ impl SessionWriterDiagnostics {
         } else {
             self.failed.fetch_add(1, Ordering::Relaxed);
         }
+        if deadline_expired {
+            self.deadline_expired.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Completes an accepted envelope that never reached a socket attempt.
+    ///
+    /// This deliberately does not call `start_write`: poisoned-drain and
+    /// deterministic preflight paths must not look like writer activity in the
+    /// queue diagnostics.
+    pub(crate) fn finish_not_started(&self, enqueued_at: Option<Instant>, bytes: usize, deadline_expired: bool) {
+        if enqueued_at.is_some() {
+            self.queued_items.fetch_sub(1, Ordering::AcqRel);
+            self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+        }
+        self.failed.fetch_add(1, Ordering::Relaxed);
         if deadline_expired {
             self.deadline_expired.fetch_add(1, Ordering::Relaxed);
         }
@@ -648,6 +748,13 @@ impl Connection {
         self.enqueue_gate = Some((checked, resume));
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_write_preflight_barrier(&mut self, barrier: crate::write_strategy::WritePreflightBarrier) {
+        if let ConnectionWriter::Direct(writer) = &mut self.outbound {
+            writer.set_write_preflight_barrier(barrier);
+        }
+    }
+
     pub(crate) fn into_session_io(
         self,
         admission: AdmissionScopeHandle,
@@ -720,36 +827,50 @@ impl Connection {
         deadline: Option<RequestDeadline>,
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
+        self.send_payload_inner(payload, class, reservation, deadline, target)
+            .await
+            .map_err(SendFailure::into_legacy)
+    }
+
+    async fn send_payload_inner(
+        &mut self,
+        payload: OutboundPayload,
+        class: AdmissionClass,
+        reservation: Option<ResourcePermit>,
+        deadline: Option<RequestDeadline>,
+        target: String,
+    ) -> Result<(), SendFailure> {
         let encoded_len = payload.encoded_len();
+        let legacy_reason = match &self.outbound {
+            ConnectionWriter::Direct(writer) => {
+                LegacyWriterReason::for_direct_payload(&payload, writer.file_transfer_mode())
+            }
+            ConnectionWriter::Queued(_) => LegacyWriterReason::CanonicalWriter,
+        };
         self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
-        if let Some(deadline) = deadline {
-            deadline.ensure_before_send(target.clone())?;
+        if deadline.is_some_and(RequestDeadline::is_expired) {
+            return Err(SendFailure::DeadlineExceeded { target });
         }
         if let Some(queued) = self.queued_writer() {
             let _send_lease = match queued.lifecycle.begin_send() {
                 Some(lease) => lease,
                 None => {
                     queued.writer_diagnostics.record_rejected(None);
-                    return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                        target,
-                        "connection writer is retiring",
-                    ));
+                    return Err(SendFailure::SessionClosed { target });
                 }
             };
             if self.state() == ConnectionState::Closed {
                 queued.writer_diagnostics.record_rejected(None);
-                return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                    target,
-                    "connection is closed",
-                ));
+                return Err(SendFailure::SessionClosed { target });
             }
             #[cfg(test)]
             if let Some((checked, resume)) = self.enqueue_gate.as_ref() {
                 checked.notify_one();
                 if let Some(deadline) = deadline {
-                    deadline.timeout(resume.notified()).await.map_err(|_| {
-                        rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target.clone())
-                    })?;
+                    deadline
+                        .timeout(resume.notified())
+                        .await
+                        .map_err(|_| SendFailure::DeadlineExceeded { target: target.clone() })?;
                 } else {
                     resume.notified().await;
                 }
@@ -762,13 +883,13 @@ impl Connection {
             }
             .map_err(|_| {
                 queued.writer_diagnostics.record_rejected(None);
-                rocketmq_error::RocketMQError::network_queue_full(target.clone())
+                SendFailure::QueueSaturated { target: target.clone() }
             })?;
-            if let Some(deadline) = deadline {
-                deadline.ensure_before_send(target.clone())?;
+            if deadline.is_some_and(RequestDeadline::is_expired) {
+                return Err(SendFailure::DeadlineExceeded { target });
             }
             let (completion, result) = oneshot::channel();
-            let progress = deadline.map(|_| Arc::new(QueuedWriteProgress::waiting()));
+            let progress = Arc::new(QueuedWriteProgress::waiting());
             let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
             match queued.writer.try_send(
                 class,
@@ -790,59 +911,91 @@ impl Connection {
                     queued.writer_diagnostics.record_rejected(Some(encoded_len));
                     return Err(match error {
                         crate::writer_runtime::WriterEnqueueError::Full => {
-                            rocketmq_error::RocketMQError::network_queue_full(target.clone())
+                            SendFailure::QueueSaturated { target: target.clone() }
                         }
                         crate::writer_runtime::WriterEnqueueError::Closed => {
-                            rocketmq_error::RocketMQError::network_connection_failed(
-                                target.clone(),
-                                "writer queue closed",
-                            )
+                            SendFailure::SessionClosed { target: target.clone() }
                         }
                     });
                 }
             }
+            let mut result = result;
             let outcome = if let Some(deadline) = deadline {
-                deadline.timeout(result).await.map_err(|_| {
-                    if progress.as_ref().is_some_and(|progress| !progress.write_started()) {
-                        rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target.clone())
-                    } else {
-                        rocketmq_error::RocketMQError::network_write_timeout(target.clone(), deadline.budget_millis())
+                match deadline.timeout(&mut result).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        if progress.cancel_before_start() {
+                            return Err(SendFailure::DeadlineExceeded { target });
+                        }
+                        result.await
                     }
-                })?
+                }
             } else {
                 result.await
             }
             .map_err(|_| {
-                rocketmq_error::RocketMQError::network_connection_failed(target.clone(), "writer completion dropped")
+                let progress = if progress.write_started() {
+                    WriteProgress::PossiblyPartial
+                } else {
+                    WriteProgress::NotStarted
+                };
+                SendFailure::Writer {
+                    failure: WriterFailure::completion_dropped(progress),
+                    target: target.clone(),
+                    legacy_reason: LegacyWriterReason::CompletionDropped,
+                }
             })?;
-            return outcome;
+            return outcome.map_err(|failure| SendFailure::Writer {
+                target,
+                failure,
+                legacy_reason,
+            });
         }
         if self.state() == ConnectionState::Closed {
-            return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                target,
-                "connection is closed",
-            ));
+            return Err(SendFailure::SessionClosed { target });
         }
         self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
         let writer = match &mut self.outbound {
             ConnectionWriter::Direct(writer) => writer,
             ConnectionWriter::Queued(_) => unreachable!("queued writer returned above"),
         };
+        let write_started = Arc::new(AtomicBool::new(false));
+        let write_started_marker = Arc::clone(&write_started);
+        let mut mark_write_started = move || write_started_marker.store(true, Ordering::Release);
         let send_result = if let Some(deadline) = deadline {
-            match deadline.timeout(payload.write_to(writer)).await {
-                Ok(result) => result,
-                Err(_) => {
-                    let _ = self.state_tx.send(ConnectionState::Degraded);
-                    let _ = writer.shutdown().await;
-                    let _ = self.state_tx.send(ConnectionState::Closed);
-                    return Err(rocketmq_error::RocketMQError::network_write_timeout(
-                        target,
-                        deadline.budget_millis(),
-                    ));
-                }
+            match deadline
+                .timeout(writer.write_transport_payloads_with_start(&[&payload], 64, &mut mark_write_started))
+                .await
+            {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(WriterFailure::from_io(
+                    if write_started.load(Ordering::Acquire) {
+                        WriteProgress::PossiblyPartial
+                    } else {
+                        WriteProgress::NotStarted
+                    },
+                    error,
+                )),
+                Err(_) => Err(if write_started.load(Ordering::Acquire) {
+                    WriterFailure::write_timeout(deadline.budget_millis())
+                } else {
+                    WriterFailure::deadline_exceeded_before_send()
+                }),
             }
         } else {
-            payload.write_to(writer).await
+            writer
+                .write_transport_payloads_with_start(&[&payload], 64, &mut mark_write_started)
+                .await
+                .map_err(|error| {
+                    WriterFailure::from_io(
+                        if write_started.load(Ordering::Acquire) {
+                            WriteProgress::PossiblyPartial
+                        } else {
+                            WriteProgress::NotStarted
+                        },
+                        error,
+                    )
+                })
         };
         match send_result {
             Ok(()) => {
@@ -850,16 +1003,41 @@ impl Connection {
                 self.telemetry.record_outbound_written_plaintext_bytes(encoded_len);
                 Ok(())
             }
-            Err(error) => {
-                let _ = self.state_tx.send(ConnectionState::Degraded);
-                let _ = writer.shutdown().await;
-                let _ = self.state_tx.send(ConnectionState::Closed);
-                Err(rocketmq_error::RocketMQError::network_connection_failed(
+            Err(failure) => {
+                if failure.progress() == WriteProgress::PossiblyPartial || writer.is_poisoned() {
+                    let _ = self.state_tx.send(ConnectionState::Degraded);
+                    let _ = writer.shutdown().await;
+                    let _ = self.state_tx.send(ConnectionState::Closed);
+                }
+                Err(SendFailure::Writer {
                     target,
-                    error.to_string(),
-                ))
+                    failure,
+                    legacy_reason,
+                })
             }
         }
+    }
+
+    /// Sends a server response through the canonical writer with a stage-aware
+    /// completion error. This is intentionally crate-private while the public
+    /// response receipt/context API is introduced separately.
+    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> Result<(), ResponseError> {
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        let frame = self
+            .limits
+            .encode_command(command)
+            .map_err(|source| ResponseError::Encode { source })?;
+        self.send_payload_inner(
+            OutboundPayload::Frame(frame),
+            class,
+            None,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
+        .map_err(SendFailure::into_response)
     }
 
     /// Sends a `RemotingCommand` to the peer (consumes command).
@@ -1377,7 +1555,11 @@ impl Connection {
 }
 
 #[cfg(test)]
-mod session_lifecycle_tests {
+#[path = "connection/issue_9754_tests.rs"]
+mod session_lifecycle_tests;
+
+#[cfg(test)]
+mod lifecycle_regression_tests {
     use std::sync::Arc;
 
     use super::SessionLifecycle;
@@ -1412,7 +1594,7 @@ mod session_lifecycle_tests {
     fn queued_send_path_does_not_restore_a_lock_guard_across_network_await() {
         let source = include_str!("connection.rs").replace("\r\n", "\n");
         let production = source
-            .split("#[cfg(test)]\nmod session_lifecycle_tests")
+            .split("#[cfg(test)]\n#[path = \"connection/issue_9754_tests.rs\"]")
             .next()
             .expect("production connection source");
 

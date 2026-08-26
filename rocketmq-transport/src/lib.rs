@@ -70,6 +70,7 @@ mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod tls;
+mod write_result;
 mod write_strategy;
 mod writer_runtime;
 

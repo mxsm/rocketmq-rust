@@ -45,8 +45,32 @@ use crate::file_region_writer::record_sendfile_bytes;
 use crate::file_region_writer::write_portable_file_region;
 
 const QUEUED_WRITE_WAITING: u8 = 0;
-const QUEUED_WRITE_STARTED: u8 = 1;
+const QUEUED_WRITE_CLAIMED: u8 = 1;
+const QUEUED_WRITE_STARTED: u8 = 2;
+const QUEUED_WRITE_CANCELLED_BEFORE_START: u8 = 3;
 const AUTO_SENDFILE_MIN_BYTES: u64 = 64 * 1024;
+
+/// Test-only one-shot barrier placed immediately before the first write-progress
+/// transition. It makes deadline/preflight races deterministic without adding a
+/// production field or branch.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct WritePreflightBarrier {
+    checked: Arc<tokio::sync::Notify>,
+    resume: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(test)]
+impl WritePreflightBarrier {
+    pub(crate) fn new(checked: Arc<tokio::sync::Notify>, resume: Arc<tokio::sync::Notify>) -> Self {
+        Self { checked, resume }
+    }
+
+    async fn wait(&self) {
+        self.checked.notify_one();
+        self.resume.notified().await;
+    }
+}
 
 pub(crate) struct QueuedWriteProgress(AtomicU8);
 
@@ -55,8 +79,40 @@ impl QueuedWriteProgress {
         Self(AtomicU8::new(QUEUED_WRITE_WAITING))
     }
 
+    /// Claims a queued envelope for the sole writer. A caller whose deadline
+    /// wins `cancel_before_start` prevents this transition and therefore any
+    /// later socket attempt for the envelope.
+    pub(crate) fn claim_for_writer(&self) -> bool {
+        self.0
+            .compare_exchange(
+                QUEUED_WRITE_WAITING,
+                QUEUED_WRITE_CLAIMED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Cancels a queued envelope before the writer owns it.
+    pub(crate) fn cancel_before_start(&self) -> bool {
+        self.0
+            .compare_exchange(
+                QUEUED_WRITE_WAITING,
+                QUEUED_WRITE_CANCELLED_BEFORE_START,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Marks the precise boundary immediately before the first socket attempt.
     pub(crate) fn start_write(&self) {
-        self.0.store(QUEUED_WRITE_STARTED, Ordering::Release);
+        let _ = self.0.compare_exchange(
+            QUEUED_WRITE_CLAIMED,
+            QUEUED_WRITE_STARTED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 
     pub(crate) fn write_started(&self) -> bool {
@@ -66,22 +122,23 @@ impl QueuedWriteProgress {
 
 pub(crate) struct QueuedWrite {
     pub(crate) operation: WriterOperation,
-    pub(crate) completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
+    pub(crate) completion: oneshot::Sender<crate::write_result::WriterResult>,
     pub(crate) permit: Option<AdmissionPermit>,
     pub(crate) deadline: Option<RequestDeadline>,
+    #[allow(dead_code, reason = "queue-policy tests retain this opaque fixture identifier")]
     pub(crate) target: String,
-    pub(crate) progress: Option<Arc<QueuedWriteProgress>>,
+    pub(crate) progress: Arc<QueuedWriteProgress>,
     pub(crate) enqueued_at: Option<Instant>,
 }
 
 impl QueuedWrite {
     pub(crate) fn data(
         payload: OutboundPayload,
-        completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
+        completion: oneshot::Sender<crate::write_result::WriterResult>,
         permit: AdmissionPermit,
         deadline: Option<RequestDeadline>,
         target: String,
-        progress: Option<Arc<QueuedWriteProgress>>,
+        progress: Arc<QueuedWriteProgress>,
         enqueued_at: Instant,
     ) -> Self {
         Self {
@@ -142,10 +199,6 @@ impl OutboundPayload {
             Self::Contiguous(bytes) => bytes.len(),
         }
     }
-
-    pub(crate) async fn write_to(&self, writer: &mut FrameWriter<WriteBackend>) -> io::Result<()> {
-        writer.write_transport_payloads(&[self], 64).await
-    }
 }
 
 /// Socket-write representation selected after TCP/TLS negotiation.
@@ -188,6 +241,8 @@ pub struct FrameWriter<W> {
     poisoned: bool,
     file_region_blocking: Option<BlockingExecutor>,
     file_transfer_mode: FileTransferMode,
+    #[cfg(test)]
+    preflight_barrier: Option<WritePreflightBarrier>,
 }
 
 struct WriteCancellationGuard<'a> {
@@ -234,6 +289,8 @@ where
             poisoned: false,
             file_region_blocking: None,
             file_transfer_mode: FileTransferMode::Auto,
+            #[cfg(test)]
+            preflight_barrier: None,
         })
     }
 
@@ -247,6 +304,8 @@ where
             poisoned: false,
             file_region_blocking: None,
             file_transfer_mode: FileTransferMode::Auto,
+            #[cfg(test)]
+            preflight_barrier: None,
         }
     }
 
@@ -262,6 +321,13 @@ where
     #[must_use]
     pub const fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+
+    /// Returns the configured external-file transfer policy without performing I/O.
+    #[inline]
+    #[must_use]
+    pub(crate) const fn file_transfer_mode(&self) -> FileTransferMode {
+        self.file_transfer_mode
     }
 
     /// Returns ownership of the underlying I/O object.
@@ -281,6 +347,18 @@ where
     pub(crate) fn configure_file_region_io(&mut self, blocking: BlockingExecutor, mode: FileTransferMode) {
         self.file_region_blocking = Some(blocking);
         self.file_transfer_mode = mode;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_write_preflight_barrier(&mut self, barrier: WritePreflightBarrier) {
+        self.preflight_barrier = Some(barrier);
+    }
+
+    #[cfg(test)]
+    async fn wait_write_preflight_barrier(&mut self) {
+        if let Some(barrier) = self.preflight_barrier.take() {
+            barrier.wait().await;
+        }
     }
 
     /// Writes and flushes one immutable RocketMQ frame.
@@ -326,7 +404,12 @@ where
     ///
     /// Returns the first validation, write, or flush error and poisons the writer
     /// when socket progress may have occurred.
-    pub(crate) async fn write_payloads(&mut self, payloads: &[&OutboundPayload], max_iov: usize) -> io::Result<()> {
+    async fn write_payloads_with_start(
+        &mut self,
+        payloads: &[&OutboundPayload],
+        max_iov: usize,
+        on_start: &mut (dyn FnMut() + Send),
+    ) -> io::Result<()> {
         self.ensure_healthy()?;
         if payloads.is_empty() {
             return Ok(());
@@ -338,17 +421,46 @@ where
         let payload_bytes = payloads
             .iter()
             .fold(0usize, |total, payload| total.saturating_add(payload.encoded_len()));
+
+        // Resolve every deterministic strategy error before the write-progress
+        // boundary. In particular, a file payload belongs to the file writer
+        // and must not poison a healthy generic frame writer.
+        let vectored_segments = match mode {
+            FrameWriteMode::PlainVectored | FrameWriteMode::TlsVectored { .. } => Some(payload_segments(payloads)?),
+            FrameWriteMode::TlsAuto {
+                coalesce_below_bytes, ..
+            } if payload_bytes > coalesce_below_bytes => Some(payload_segments(payloads)?),
+            FrameWriteMode::TlsCoalesced { .. } | FrameWriteMode::TlsAuto { .. } => {
+                if payloads
+                    .iter()
+                    .any(|payload| matches!(payload, OutboundPayload::FileFrame { .. }))
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "file-backed frames require the transport file writer",
+                    ));
+                }
+                None
+            }
+        };
+
+        // The callback is the canonical write-progress boundary. It runs after
+        // validation/coalescing selection but immediately before the first
+        // possible socket write or flush attempt.
+        #[cfg(test)]
+        self.wait_write_preflight_barrier().await;
+        on_start();
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
         match mode {
             FrameWriteMode::PlainVectored | FrameWriteMode::TlsVectored { .. } => {
-                let segments = payload_segments(payloads)?;
-                write_vectored_segments(&mut self.io, &segments, max_iov.max(1)).await?;
+                let segments = vectored_segments.as_deref().expect("vectored preflight segments");
+                write_vectored_segments(&mut self.io, segments, max_iov.max(1)).await?;
             }
             FrameWriteMode::TlsAuto {
                 coalesce_below_bytes, ..
             } if payload_bytes > coalesce_below_bytes => {
-                let segments = payload_segments(payloads)?;
-                write_vectored_segments(&mut self.io, &segments, max_iov.max(1)).await?;
+                let segments = vectored_segments.as_deref().expect("vectored preflight segments");
+                write_vectored_segments(&mut self.io, segments, max_iov.max(1)).await?;
             }
             FrameWriteMode::TlsCoalesced { .. } | FrameWriteMode::TlsAuto { .. } => {
                 for payload in payloads {
@@ -432,16 +544,19 @@ enum SelectedFileTransfer {
 }
 
 impl FrameWriter<WriteBackend> {
-    pub(crate) async fn write_transport_payloads(
+    /// Writes transport payloads and calls `on_start` immediately before the
+    /// first potentially observable socket operation.
+    pub(crate) async fn write_transport_payloads_with_start(
         &mut self,
         payloads: &[&OutboundPayload],
         max_iov: usize,
+        on_start: &mut (dyn FnMut() + Send),
     ) -> io::Result<()> {
         if !payloads
             .iter()
             .any(|payload| matches!(payload, OutboundPayload::FileFrame { .. }))
         {
-            return self.write_payloads(payloads, max_iov).await;
+            return self.write_payloads_with_start(payloads, max_iov, on_start).await;
         }
 
         let mut buffered = Vec::new();
@@ -449,25 +564,26 @@ impl FrameWriter<WriteBackend> {
             match payload {
                 OutboundPayload::FileFrame { head, body } => {
                     if !buffered.is_empty() {
-                        self.write_payloads(&buffered, max_iov).await?;
+                        self.write_payloads_with_start(&buffered, max_iov, on_start).await?;
                         buffered.clear();
                     }
-                    self.write_file_frame(head, body, max_iov).await?;
+                    self.write_file_frame_with_start(head, body, max_iov, on_start).await?;
                 }
                 _ => buffered.push(*payload),
             }
         }
         if !buffered.is_empty() {
-            self.write_payloads(&buffered, max_iov).await?;
+            self.write_payloads_with_start(&buffered, max_iov, on_start).await?;
         }
         Ok(())
     }
 
-    async fn write_file_frame(
+    async fn write_file_frame_with_start(
         &mut self,
         head: &EncodedFrameHead,
         body: &FileRegionSequence,
         max_iov: usize,
+        on_start: &mut (dyn FnMut() + Send),
     ) -> io::Result<()> {
         self.ensure_healthy()?;
         let body_len = usize::try_from(body.len())
@@ -508,6 +624,9 @@ impl FrameWriter<WriteBackend> {
                 }
             }
         }
+        #[cfg(test)]
+        self.wait_write_preflight_barrier().await;
+        on_start();
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
         if let Err(error) = write_vectored_segments(&mut self.io, &head.segments(), max_iov.max(1)).await {
             record_head_failure();
@@ -630,7 +749,12 @@ async fn probe_native_file_region(blocking: Option<BlockingExecutor>, body: &Fil
             crate::linux::sendfile::probe_file_region(&region)
         })
         .await
-        .map_err(|error| io::Error::other(error.to_string()))?
+        .map_err(preserve_preflight_task_error)?
+}
+
+#[cfg(any(all(target_os = "linux", feature = "linux-sendfile"), test))]
+fn preserve_preflight_task_error(error: impl std::error::Error + Send + Sync + 'static) -> io::Error {
+    io::Error::other(error)
 }
 
 fn native_file_region_eligible(body: &FileRegion) -> bool {
@@ -857,6 +981,8 @@ fn advance_segments(
 
 #[cfg(test)]
 mod file_frame_tests {
+    use std::error::Error;
+    use std::fmt;
     use std::io::Write;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -869,6 +995,17 @@ mod file_frame_tests {
     use crate::file_region::FileRegion;
     use crate::file_region::FileRegionLease;
     use crate::file_region::FileRegionSequence;
+
+    #[derive(Debug)]
+    struct PanicDisplay;
+
+    impl fmt::Display for PanicDisplay {
+        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+            panic!("preflight source must not be formatted")
+        }
+    }
+
+    impl Error for PanicDisplay {}
 
     struct DropLease {
         file: std::fs::File,
@@ -918,5 +1055,12 @@ mod file_frame_tests {
             1,
             "lease should release with the queue item"
         );
+    }
+
+    #[test]
+    fn preflight_task_error_preserves_the_typed_source_without_display() {
+        let error = super::preserve_preflight_task_error(PanicDisplay);
+
+        assert!(error.get_ref().is_some_and(|source| source.is::<PanicDisplay>()));
     }
 }
