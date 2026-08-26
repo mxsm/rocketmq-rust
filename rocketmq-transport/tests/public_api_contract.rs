@@ -674,7 +674,15 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredRegistration".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::dispatch::EmbeddedCaller".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::HandlerOutcome".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
@@ -683,6 +691,18 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         PublicUse {
             module_path: String::new(),
             use_tree: "crate::dispatch::OriginalRequestIdentity".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::ProtocolNoResponse".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::ProtocolNoResponseError".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::ProtocolNoResponseReason".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
@@ -747,7 +767,7 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
     Ok(())
 }
 
-const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
+const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::DeferredRegistration; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::HandlerOutcome; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::ProtocolNoResponse; pub use crate::dispatch::ProtocolNoResponseError; pub use crate::dispatch::ProtocolNoResponseReason; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
 
 #[test]
 fn lib_rs_exposes_only_the_curated_versioned_boundary() {

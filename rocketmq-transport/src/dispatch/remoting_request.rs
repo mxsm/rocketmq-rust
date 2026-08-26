@@ -21,7 +21,13 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::request_control::LazyExtensions;
 use super::AuthenticationState;
+use super::HandlerOutcome;
+use super::HandlerOutcomeContractError;
+use super::InlineResponseSlot;
 use super::OriginalRequestIdentity;
+use super::ProtocolNoResponse;
+use super::ProtocolNoResponseError;
+use super::ProtocolNoResponseReason;
 use super::RequestControlView;
 use super::RequestMeta;
 use super::RequestOrigin;
@@ -108,11 +114,7 @@ pub struct RemotingRequest {
     session: SessionView,
     control: RequestControlView,
     extensions: LazyExtensions,
-    #[allow(
-        dead_code,
-        reason = "REQ-06 reserves the inert deferred slot for later DEF lifecycle work"
-    )]
-    deferred: DeferredSlot,
+    inline_response: InlineResponseSlot,
     command: RemotingCommand,
 }
 
@@ -152,6 +154,35 @@ impl RemotingRequest {
     #[must_use]
     pub const fn control(&self) -> &RequestControlView {
         &self.control
+    }
+
+    /// Creates an affine no-response marker from immutable ingress identity.
+    ///
+    /// The mutable processor command is deliberately not consulted. Only the
+    /// audited original request code/reason pairs can create a marker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolNoResponseError::OneWayRequest`] for every original
+    /// one-way request. Returns [`ProtocolNoResponseError::Unsupported`] when
+    /// the original raw request code and supplied reason are not allowlisted.
+    ///
+    /// ```
+    /// use rocketmq_error::RocketMQResult;
+    /// use rocketmq_transport::api::v2::{
+    ///     HandlerOutcome, ProtocolNoResponseReason, RemotingRequest,
+    /// };
+    ///
+    /// fn callback_outcome(request: &RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    ///     let marker = request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?;
+    ///     Ok(HandlerOutcome::NoReply(marker))
+    /// }
+    /// ```
+    pub fn protocol_no_response(
+        &self,
+        reason: ProtocolNoResponseReason,
+    ) -> Result<ProtocolNoResponse, ProtocolNoResponseError> {
+        ProtocolNoResponse::from_original(self.original, reason)
     }
 
     /// Returns the owned command as it currently stands.
@@ -200,10 +231,29 @@ impl RemotingRequest {
 
     #[allow(
         dead_code,
-        reason = "REQ-06 tests the inert deferred slot before later DEF lifecycle work"
+        reason = "DSP-02 preserves the deferred-capability builder regression before dispatcher wiring"
     )]
     pub(crate) const fn has_reserved_deferred_response(&self) -> bool {
-        self.deferred.is_reserved()
+        self.inline_response.has_deferred_capability()
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-02 exposes inline deferred transition to later dispatcher wiring"
+    )]
+    pub(crate) fn mark_deferred_response_taken(&mut self) -> Result<(), HandlerOutcomeContractError> {
+        self.inline_response.mark_deferred_taken(self.original)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-02 exposes terminal outcome validation to later dispatcher wiring"
+    )]
+    pub(crate) fn resolve_handler_outcome(
+        &mut self,
+        outcome: HandlerOutcome,
+    ) -> Result<HandlerOutcome, HandlerOutcomeContractError> {
+        self.inline_response.resolve(self.original, outcome)
     }
 }
 
@@ -244,28 +294,8 @@ impl<'a> IngressRequestView<'a> {
     }
 }
 
-#[derive(Default)]
-#[allow(
-    dead_code,
-    reason = "REQ-06 reserves this crate-private placeholder before later DEF lifecycle work"
-)]
-pub(crate) struct DeferredSlot {
-    reserved: bool,
-}
-
-#[allow(
-    dead_code,
-    reason = "REQ-06 reserves inert deferred-state operations before later DEF lifecycle work"
-)]
-impl DeferredSlot {
-    pub(crate) const fn reserved() -> Self {
-        Self { reserved: true }
-    }
-
-    pub(crate) const fn is_reserved(&self) -> bool {
-        self.reserved
-    }
-}
+/// Compatibility name retained only for the private extension-type denylist.
+pub(crate) type DeferredSlot = InlineResponseSlot;
 
 #[cfg(test)]
 mod tests;

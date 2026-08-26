@@ -17,9 +17,9 @@ use std::time::Instant;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 
-use super::DeferredSlot;
 use super::IngressRequestView;
 use super::RemotingRequest;
+use crate::dispatch::InlineResponseSlot;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
@@ -129,7 +129,7 @@ pub(crate) struct RemotingRequestBuilder {
     received_at: Instant,
     context: RequestContext,
     lifecycle: RequestLifecycleProvenance,
-    deferred: DeferredSlot,
+    inline_response: InlineResponseSlot,
     command: RemotingCommand,
 }
 
@@ -150,13 +150,13 @@ impl RemotingRequestBuilder {
             received_at,
             context,
             lifecycle,
-            deferred: DeferredSlot::default(),
+            inline_response: InlineResponseSlot::disabled(),
             command,
         }
     }
 
     pub(crate) fn reserve_deferred_response(mut self) -> Self {
-        self.deferred = DeferredSlot::reserved();
+        self.inline_response = InlineResponseSlot::deferred_capable();
         self
     }
 
@@ -209,7 +209,7 @@ impl RemotingRequestBuilder {
             }
         }
 
-        if self.original.is_one_way() && self.deferred.is_reserved() {
+        if self.original.is_one_way() && self.inline_response.has_deferred_capability() {
             return Err(RemotingRequestBuildError::OneWayDeferredResponse);
         }
 
@@ -221,7 +221,7 @@ impl RemotingRequestBuilder {
             session: self.lifecycle.session,
             control,
             extensions: Default::default(),
-            deferred: self.deferred,
+            inline_response: self.inline_response,
             command: self.command,
         })
     }
