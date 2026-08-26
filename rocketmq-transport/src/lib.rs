@@ -65,6 +65,7 @@ mod runtime;
 mod security;
 mod server;
 mod session_executor;
+mod session_view;
 #[cfg(feature = "socks")]
 mod socks;
 mod telemetry;
@@ -84,9 +85,9 @@ pub mod api {
 
     /// Curated source API boundary for the 2.x release line.
     ///
-    /// Only immutable request timing, identity, origin, and authentication
-    /// facts approved for the 2.x request model are exposed here. This narrow
-    /// surface intentionally excludes legacy channels, session handles,
+    /// Only immutable request timing, identity, origin, authentication, and
+    /// session facts approved for the 2.x request model are exposed here. This
+    /// narrow surface intentionally excludes legacy channels, session handles,
     /// operation contexts, and cancellation capabilities.
     pub mod v2 {
         pub use crate::public_api_v2::*;

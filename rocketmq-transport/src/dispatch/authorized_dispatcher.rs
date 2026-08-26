@@ -62,6 +62,7 @@ use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
 use crate::session_executor::SessionExecutor;
+use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
 /// Result of submitting a command to the shared dispatch boundary.
@@ -320,6 +321,7 @@ where
             return Err(DispatchError::InvalidEmbeddedContext);
         }
         let (session_id, original_request_identity) = capture_embedded_request_identity(&command)?;
+        let _session_record = EmbeddedSessionRecord::new(session_id);
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
         let scope = AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST)).with_session(session_id);
         let scope = self

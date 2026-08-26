@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::time::Duration;
 
 use rocketmq_security_api::Principal;
@@ -20,9 +21,13 @@ use rocketmq_transport::api::v1::RequestId as V1RequestId;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
+use rocketmq_transport::api::v2::ProxyInfoSnapshot;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
 use rocketmq_transport::api::v2::RequestId as V2RequestId;
 use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::SessionStateView;
+use rocketmq_transport::api::v2::SessionView;
 
 fn assert_same_deadline_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
 
@@ -36,6 +41,42 @@ fn assert_original_identity_contract(identity: Option<OriginalRequestIdentity>) 
         let _: i32 = identity.original_code();
         let _: i32 = identity.original_opaque();
         let _: bool = identity.is_one_way();
+    }
+}
+
+fn closed<'a>(state: &'a SessionStateView) -> impl Future<Output = ()> + 'a {
+    state.closed()
+}
+
+fn assert_session_view_contract(view: SessionView) {
+    let _: SessionId = view.id();
+    let _: &SessionStateView = view.state();
+    match view {
+        SessionView::Network {
+            id,
+            local_addr,
+            remote_addr,
+            transport_peer_addr,
+            proxy,
+            state,
+            ..
+        } => {
+            let _: SessionId = id;
+            let _: std::net::SocketAddr = local_addr;
+            let _: std::net::SocketAddr = remote_addr;
+            let _: std::net::SocketAddr = transport_peer_addr;
+            let _: bool = state.is_healthy();
+            let _: bool = state.is_closed();
+            let _: Option<ProxyInfoSnapshot> = proxy;
+            std::mem::drop(closed(&state));
+        }
+        SessionView::Embedded { id, state, .. } => {
+            let _: SessionId = id;
+            let _: bool = state.is_healthy();
+            let _: bool = state.is_closed();
+            std::mem::drop(closed(&state));
+        }
+        _ => {}
     }
 }
 
@@ -82,4 +123,9 @@ fn v2_exposes_read_only_origin_and_authenticated_principal() {
     let _: fn(&AuthenticationState) -> Option<&Principal> = authenticated_principal;
     let _: fn(&AuthenticationState) -> bool = has_authenticated_principal;
     let _: fn(&RequestOrigin) -> Option<std::net::SocketAddr> = inspect_origin;
+}
+
+#[test]
+fn v2_exposes_read_only_network_and_embedded_session_views() {
+    let _: fn(SessionView) = assert_session_view_contract;
 }
