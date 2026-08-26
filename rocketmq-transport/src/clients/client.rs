@@ -156,7 +156,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
             else {
                 return;
             };
-            cmd_handler.process_message_received(&context, command).await;
+            cmd_handler
+                .process_message_received(&context, session.original_request_identity(), command)
+                .await;
         })
     }
 

@@ -12,6 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(any(test, feature = "observability", feature = "observability-traces"))]
+#[inline]
+fn request_identity_span(identity: crate::dispatch::OriginalRequestIdentity) -> tracing::Span {
+    tracing::info_span!(
+        "RocketMQ REMOTING REQUEST",
+        rocketmq.request.code = identity.original_code(),
+        rocketmq.request.owner_id = identity.request_id().owner_id(),
+        rocketmq.request.sequence = identity.request_id().sequence(),
+    )
+}
+
 /// Cloneable metrics and tracing capability for one transport composition.
 ///
 /// A no-op value is explicit and never consults process-global OpenTelemetry state.
@@ -46,21 +57,17 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    pub(crate) fn request_span(&self, request_code: i32, request_opaque: i32) -> tracing::Span {
+    pub(crate) fn request_span(&self, identity: crate::dispatch::OriginalRequestIdentity) -> tracing::Span {
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         if self
             .handle
             .as_ref()
             .is_some_and(|handle| handle.is_active() && handle.trace_policy().enabled)
         {
-            return tracing::info_span!(
-                "RocketMQ REMOTING REQUEST",
-                rocketmq.request.code = request_code,
-                rocketmq.request.opaque = request_opaque,
-            );
+            return request_identity_span(identity);
         }
 
-        let _ = (request_code, request_opaque);
+        let _ = identity;
         tracing::Span::none()
     }
 
@@ -246,9 +253,70 @@ impl TransportRequestMetricsGuard {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fmt;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use tracing::field::Field;
+    use tracing::field::Visit;
+    use tracing::span::Attributes;
+    use tracing::span::Id;
+    use tracing::span::Record;
+    use tracing::Event;
+    use tracing::Metadata;
+    use tracing::Subscriber;
+
+    use super::request_identity_span;
     use super::TransportGoAwayOutcome;
     use super::TransportNameServerFailoverReason;
     use super::TransportTelemetry;
+
+    struct FieldCapture<'a> {
+        fields: &'a mut BTreeMap<String, String>,
+    }
+
+    impl Visit for FieldCapture<'_> {
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields.insert(field.name().to_owned(), value.to_string());
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields.insert(field.name().to_owned(), value.to_string());
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+            self.fields.insert(field.name().to_owned(), format!("{value:?}"));
+        }
+    }
+
+    struct SpanCapture {
+        fields: Arc<Mutex<BTreeMap<String, String>>>,
+    }
+
+    impl Subscriber for SpanCapture {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, attributes: &Attributes<'_>) -> Id {
+            let mut fields = self.fields.lock().expect("span field capture lock");
+            attributes.record(&mut FieldCapture { fields: &mut fields });
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, _event: &Event<'_>) {}
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
 
     #[test]
     fn noop_transport_telemetry_covers_request_and_network_paths() {
@@ -260,9 +328,41 @@ mod tests {
         telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
         telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
         telemetry.record_go_away(TransportGoAwayOutcome::Received);
-        assert!(telemetry.request_span(10, 1).is_disabled());
+        let identity = crate::dispatch::OriginalRequestIdentity::capture(
+            1,
+            &AtomicU64::new(1),
+            &RemotingCommand::create_remoting_command(10).set_opaque(1),
+        )
+        .expect("test request identity should be allocated");
+        assert!(telemetry.request_span(identity).is_disabled());
         let mut guard = telemetry.request_guard(10, 64, false);
         guard.complete_response(0);
         guard.complete_legacy_ambiguous_none();
+    }
+
+    #[test]
+    fn request_span_records_only_original_low_cardinality_identity_fields() {
+        let identity = crate::dispatch::OriginalRequestIdentity::capture(
+            73,
+            &AtomicU64::new(41),
+            &RemotingCommand::create_remoting_command(-91_764).set_opaque(889),
+        )
+        .expect("test request identity should be allocated");
+        let fields = Arc::new(Mutex::new(BTreeMap::new()));
+        let subscriber = SpanCapture {
+            fields: Arc::clone(&fields),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = request_identity_span(identity);
+            assert!(!span.is_disabled());
+        });
+
+        let fields = fields.lock().expect("captured request span fields");
+        assert_eq!(fields.get("rocketmq.request.code").map(String::as_str), Some("-91764"));
+        assert_eq!(fields.get("rocketmq.request.owner_id").map(String::as_str), Some("73"));
+        assert_eq!(fields.get("rocketmq.request.sequence").map(String::as_str), Some("41"));
+        assert_eq!(fields.len(), 3, "request span fields: {fields:?}");
+        assert!(fields.keys().all(|field| !field.contains("opaque")));
     }
 }

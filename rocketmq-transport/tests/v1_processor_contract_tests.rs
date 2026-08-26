@@ -64,9 +64,14 @@ const NONE: i32 = 19_751;
 const DIRECT_WRITE: i32 = 19_752;
 const SENTINEL: i32 = 19_753;
 const ONEWAY_NONE: i32 = 19_754;
+const UNKNOWN_PROCESSOR_ERROR: i32 = -91_762;
 const ORIGINAL_OPAQUE: i32 = 74;
+const MUTATED_CODE: i32 = 29_749;
 const MUTATED_OPAQUE: i32 = 8_074;
+const PROCESSOR_MUTATED_CODE: i32 = 39_749;
+const PROCESSOR_MUTATED_OPAQUE: i32 = 18_074;
 const PROCESSOR_RESPONSE_OPAQUE: i32 = 9_074;
+const AFTER_HOOK_RESPONSE_OPAQUE: i32 = 10_074;
 const ORDERING_KEY: RequestOrderingKey = RequestOrderingKey::new(9748);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,8 +153,16 @@ impl RequestProcessor for ContractProcessor {
             code: request.code(),
             opaque: request.opaque(),
         });
+        if request.code() == MUTATED_CODE {
+            request.set_code_mut(PROCESSOR_MUTATED_CODE);
+            request.set_opaque_mut(PROCESSOR_MUTATED_OPAQUE);
+        }
         match request.code() {
             NONE | ONEWAY_NONE => Ok(None),
+            UNKNOWN_PROCESSOR_ERROR => Err(rocketmq_error::RocketMQError::response_process_failed(
+                "v1_processor_contract",
+                "unknown raw request code test failure",
+            )),
             DIRECT_WRITE => {
                 let receipt = ctx
                     .try_write_response(
@@ -223,7 +236,11 @@ impl RPCHook for ContractHook {
             opaque: request.opaque(),
         });
         if request.code() == STANDARD {
+            request.set_code_mut(MUTATED_CODE);
             request.set_opaque_mut(MUTATED_OPAQUE);
+            request.mark_oneway_rpc_ref();
+        } else if request.code() == ONEWAY {
+            *request = RemotingCommand::create_remoting_command(ONEWAY).set_opaque(request.opaque());
         }
         Ok(())
     }
@@ -239,6 +256,9 @@ impl RPCHook for ContractHook {
             request_opaque: request.opaque(),
             response_opaque: response.opaque(),
         });
+        if request.code() == PROCESSOR_MUTATED_CODE {
+            response.set_opaque_mut(AFTER_HOOK_RESPONSE_OPAQUE);
+        }
         Ok(())
     }
 }
@@ -406,17 +426,37 @@ async fn standard_dispatch_preserves_v1_ordering_and_opaque_for_embedded_and_net
     assert_eq!(embedded_response.opaque(), ORIGINAL_OPAQUE);
     assert_eq!(
         embedded.events.snapshot(),
-        successful_response_events(STANDARD, ORIGINAL_OPAQUE, MUTATED_OPAQUE)
+        vec![
+            Event::Ordering {
+                code: STANDARD,
+                opaque: ORIGINAL_OPAQUE,
+            },
+            Event::Before {
+                code: STANDARD,
+                opaque: ORIGINAL_OPAQUE,
+            },
+            Event::Process {
+                code: MUTATED_CODE,
+                opaque: MUTATED_OPAQUE,
+            },
+            Event::After {
+                code: PROCESSOR_MUTATED_CODE,
+                request_opaque: PROCESSOR_MUTATED_OPAQUE,
+                response_opaque: PROCESSOR_RESPONSE_OPAQUE,
+            },
+            Event::Observe {
+                request_code: STANDARD,
+                response_code: ResponseCode::Success.to_i32(),
+                outcome: ResponseWriteOutcome::Sent,
+            },
+        ]
     );
 
     let network = fixture(&runtime, "network");
     let responses = run_network(&network, vec![request(STANDARD, ORIGINAL_OPAQUE)], 1).await;
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].opaque(), ORIGINAL_OPAQUE);
-    assert_eq!(
-        network.events.snapshot(),
-        successful_response_events(STANDARD, ORIGINAL_OPAQUE, MUTATED_OPAQUE)
-    );
+    assert_eq!(network.events.snapshot(), embedded.events.snapshot());
 }
 
 #[tokio::test]
@@ -445,6 +485,32 @@ async fn reject_short_circuits_hooks_and_processor_for_embedded_and_network_adap
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].opaque(), ORIGINAL_OPAQUE);
     assert_eq!(network.events.snapshot(), expected);
+}
+
+#[tokio::test]
+async fn unknown_raw_code_is_preserved_for_processor_error_observation_and_response_binding() {
+    let runtime = RuntimeContext::from_current("v1-unknown-code-processor-error-contract");
+
+    let embedded = fixture(&runtime, "embedded");
+    let embedded_response = dispatch_embedded(&embedded, request(UNKNOWN_PROCESSOR_ERROR, ORIGINAL_OPAQUE)).await;
+    assert_eq!(embedded_response.code(), ResponseCode::SystemError.to_i32());
+    assert_eq!(embedded_response.opaque(), ORIGINAL_OPAQUE);
+    assert!(embedded.events.snapshot().contains(&Event::Observe {
+        request_code: UNKNOWN_PROCESSOR_ERROR,
+        response_code: ResponseCode::SystemError.to_i32(),
+        outcome: ResponseWriteOutcome::Sent,
+    }));
+
+    let network = fixture(&runtime, "network");
+    let responses = run_network(&network, vec![request(UNKNOWN_PROCESSOR_ERROR, ORIGINAL_OPAQUE)], 1).await;
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].code(), ResponseCode::SystemError.to_i32());
+    assert_eq!(responses[0].opaque(), ORIGINAL_OPAQUE);
+    assert!(network.events.snapshot().contains(&Event::Observe {
+        request_code: UNKNOWN_PROCESSOR_ERROR,
+        response_code: ResponseCode::SystemError.to_i32(),
+        outcome: ResponseWriteOutcome::Sent,
+    }));
 }
 
 #[tokio::test]
@@ -613,12 +679,14 @@ async fn network_v1_none_outcomes_record_their_distinct_terminal_telemetry() {
             request(NONE, 1),
             request(ONEWAY_NONE, 2).mark_oneway_rpc(),
             request(SENTINEL, 3),
+            request(STANDARD, 4),
         ],
-        1,
+        2,
     )
     .await;
-    assert_eq!(responses.len(), 1);
+    assert_eq!(responses.len(), 2);
     assert_eq!(responses[0].opaque(), 3);
+    assert_eq!(responses[1].opaque(), 4);
 
     let metrics = scrape_metrics(
         telemetry_runtime
@@ -629,6 +697,24 @@ async fn network_v1_none_outcomes_record_their_distinct_terminal_telemetry() {
     .await;
     assert_rpc_latency_count(&metrics, NONE, -1, "legacy_ambiguous_none");
     assert_rpc_latency_count(&metrics, ONEWAY_NONE, -1, "oneway");
+    assert_rpc_latency_count(&metrics, STANDARD, ResponseCode::Success.to_i32(), "success");
+    assert!(
+        !metrics.contains(&format!("request_code=\"{MUTATED_CODE}\"")),
+        "mutated request code must not become a metric label"
+    );
+    assert!(
+        !metrics.contains(&format!("request_code=\"{PROCESSOR_MUTATED_CODE}\"")),
+        "processor-mutated request code must not become a metric label"
+    );
+    for forbidden_identity_field in ["owner_id", "sequence", "request_id"] {
+        assert!(
+            metrics
+                .lines()
+                .filter(|line| line.starts_with("rocketmq_rpc_"))
+                .all(|line| !line.contains(forbidden_identity_field)),
+            "request identity must not become an RPC metric label or field: {forbidden_identity_field}"
+        );
+    }
 
     let report = telemetry_runtime
         .shutdown_with_service_context(&telemetry_service, Duration::from_secs(3))

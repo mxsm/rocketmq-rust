@@ -25,6 +25,7 @@ pub(crate) mod inner {
     use tracing::Instrument;
 
     use crate::base::pending_request_table::PendingRequestTable;
+    use crate::dispatch::OriginalRequestIdentity;
     use crate::hook_registry::HookRegistry;
     use crate::hook_registry::HookSnapshot;
     use crate::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -72,11 +73,24 @@ pub(crate) mod inner {
             }
         }
 
-        pub async fn process_message_received(&self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
+        pub async fn process_message_received(
+            &self,
+            ctx: &ConnectionHandlerContext,
+            original_request_identity: Option<OriginalRequestIdentity>,
+            cmd: RemotingCommand,
+        ) {
             match cmd.get_type() {
                 RemotingCommandType::REQUEST => {
-                    let span = self.telemetry.request_span(cmd.code(), cmd.opaque());
-                    match self.process_request_command(ctx, cmd).instrument(span).await {
+                    let Some(original_request_identity) = original_request_identity else {
+                        error!("request reached the remoting handler without an owned identity");
+                        return;
+                    };
+                    let span = self.telemetry.request_span(original_request_identity);
+                    match self
+                        .process_request_command(ctx, original_request_identity, cmd)
+                        .instrument(span)
+                        .await
+                    {
                         Ok(_) => {}
                         Err(e) => {
                             error!("process request command failed: {}", e);
@@ -92,18 +106,19 @@ pub(crate) mod inner {
         async fn process_request_command(
             &self,
             ctx: &ConnectionHandlerContext,
+            original_request_identity: OriginalRequestIdentity,
             mut cmd: RemotingCommand,
         ) -> RocketMQResult<()> {
             let request_started = Instant::now();
-            let opaque = cmd.opaque();
-            let request_code = cmd.code();
+            let opaque = original_request_identity.original_opaque();
+            let request_code = original_request_identity.original_code();
             let mut metrics_guard = self.telemetry.request_guard(
-                cmd.code(),
+                request_code,
                 cmd.body().map_or(0, |body| body.len() as u64),
-                is_long_polling_request(cmd.code()),
+                is_long_polling_request(request_code),
             );
             let mut request_processor = self.request_processor.clone();
-            let reject_request = request_processor.reject_request(cmd.code());
+            let reject_request = request_processor.reject_request(request_code);
             const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
             if reject_request.0 {
                 let response = if let Some(response) = reject_request.1 {
@@ -139,7 +154,7 @@ pub(crate) mod inner {
                 }
                 return Ok(());
             }
-            let oneway_rpc = cmd.is_oneway_rpc();
+            let oneway_rpc = original_request_identity.is_one_way();
             let hook_snapshot = self.rpc_hooks.snapshot();
             //before handle request hooks
             let exception = self
@@ -238,7 +253,6 @@ pub(crate) mod inner {
             };
             if !completed {
                 warn!(
-                    opaque,
                     code,
                     address = %ctx.channel().remote_address(),
                     channel_id = %ctx.channel().channel_id(),

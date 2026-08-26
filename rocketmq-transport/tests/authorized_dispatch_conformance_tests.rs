@@ -20,6 +20,7 @@ use std::net::Ipv4Addr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
@@ -128,6 +129,20 @@ impl RequestPolicy for AllowOnlyNamedPrincipal {
 
 struct CountingLegacyPolicy {
     calls: Arc<AtomicUsize>,
+}
+
+struct RecordingResourcePolicy {
+    requests: Arc<Mutex<Vec<(i32, String)>>>,
+}
+
+impl RequestPolicy for RecordingResourcePolicy {
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {
+        self.requests
+            .lock()
+            .expect("recording resource policy lock")
+            .push((context.request().code(), context.resource().name().to_owned()));
+        Decision::Allow
+    }
 }
 
 impl RequestPolicy for CountingLegacyPolicy {
@@ -291,6 +306,7 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
     );
     let network = network_round_trip(&valid, "allowed", request).await;
     assert_equivalent(&embedded, &network);
+    assert_eq!(embedded.opaque(), 41);
     assert_eq!(valid.processor.calls.load(Ordering::SeqCst), 2);
 
     assert_eq!(
@@ -303,6 +319,7 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
     let network_denied = network_round_trip(&denied, "denied", denied_request).await;
     assert_equivalent(&embedded_denied, &network_denied);
     assert_eq!(embedded_denied.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(embedded_denied.opaque(), 42);
     assert_eq!(denied.processor.calls.load(Ordering::SeqCst), 0);
 
     let malformed = dispatch_fixture(
@@ -316,6 +333,7 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
     let network_malformed = network_round_trip(&malformed, "allowed", malformed_request).await;
     assert_equivalent(&embedded_malformed, &network_malformed);
     assert_eq!(embedded_malformed.code(), ResponseCode::SystemError.to_i32());
+    assert_eq!(embedded_malformed.opaque(), 43);
 
     let handler_error = dispatch_fixture(
         &runtime,
@@ -328,6 +346,7 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
     let network_error = network_round_trip(&handler_error, "allowed", error_request).await;
     assert_equivalent(&embedded_error, &network_error);
     assert_eq!(embedded_error.code(), ResponseCode::SystemError.to_i32());
+    assert_eq!(embedded_error.opaque(), 44);
 
     let deadline = dispatch_fixture(
         &runtime,
@@ -343,6 +362,7 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
     )
     .await;
     assert_eq!(deadline_response.code(), ResponseCode::SystemError.to_i32());
+    assert_eq!(deadline_response.opaque(), 45);
     assert_eq!(deadline.processor.calls.load(Ordering::SeqCst), 0);
 
     let limits = AdmissionLimits {
@@ -368,6 +388,7 @@ async fn network_and_embedded_adapters_share_authorized_dispatch_semantics() {
     let network_overloaded = network_round_trip(&overloaded, "allowed", overloaded_request).await;
     assert_equivalent(&embedded_overloaded, &network_overloaded);
     assert_eq!(embedded_overloaded.code(), ResponseCode::SystemBusy.to_i32());
+    assert_eq!(embedded_overloaded.opaque(), 46);
     assert_eq!(overloaded.processor.calls.load(Ordering::SeqCst), 0);
 
     let cancelled = dispatch_fixture(
@@ -444,9 +465,67 @@ async fn configured_ingress_deny_short_circuits_legacy_policy_and_handler() {
         .expect("ingress denial should produce a response");
 
     assert_eq!(response.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(response.opaque(), 48);
     assert_eq!(ingress_calls.load(Ordering::SeqCst), 1);
     assert_eq!(legacy_calls.load(Ordering::SeqCst), 0);
     assert_eq!(processor.calls.load(Ordering::SeqCst), 0);
     let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    report.assert_no_task_leak().expect("test tasks should be owned");
+}
+
+#[tokio::test]
+async fn unknown_raw_code_is_preserved_in_the_authorization_resource() {
+    const UNKNOWN_RAW_CODE: i32 = -91_763;
+
+    let runtime = RuntimeContext::from_current("authorized-dispatch-unknown-resource");
+    let service = runtime.service_context("unknown-resource");
+    let process_budget = service.process_budget();
+    let admission = Arc::new(
+        AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+            .expect("test admission limits should be valid"),
+    );
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let security = Arc::new(TransportSecurity::secure_enforced(
+        Some(Arc::new(RecordingResourcePolicy {
+            requests: Arc::clone(&requests),
+        })),
+        None,
+    ));
+    let processor = ConformanceProcessor::new(ProcessorBehavior::Echo);
+    let dispatcher = Arc::new(
+        AuthorizedCommandDispatcher::try_new(
+            processor.clone(),
+            Vec::new(),
+            &process_budget,
+            TransportTelemetry::noop(),
+            Arc::clone(&security),
+            Arc::clone(&admission),
+        )
+        .expect("test dispatcher should fit the process budget"),
+    );
+    let fixture = DispatchFixture {
+        service,
+        processor,
+        dispatcher,
+        security,
+        admission,
+    };
+    let command = RemotingCommand::create_remoting_command(UNKNOWN_RAW_CODE).set_opaque(49);
+
+    let embedded = dispatch_embedded(&fixture, "allowed", None, command.clone()).await;
+    let network = network_round_trip(&fixture, "allowed", command).await;
+
+    assert_eq!(embedded.code(), ResponseCode::Success.to_i32());
+    assert_eq!(network.code(), embedded.code());
+    assert_eq!(network.opaque(), embedded.opaque());
+    assert_eq!(
+        requests.lock().expect("recorded authorization requests").as_slice(),
+        [
+            (UNKNOWN_RAW_CODE, UNKNOWN_RAW_CODE.to_string()),
+            (UNKNOWN_RAW_CODE, UNKNOWN_RAW_CODE.to_string()),
+        ]
+    );
+    assert_eq!(fixture.processor.calls.load(Ordering::SeqCst), 2);
+    let report = fixture.service.task_group().shutdown(Duration::from_secs(1)).await;
     report.assert_no_task_leak().expect("test tasks should be owned");
 }

@@ -139,7 +139,9 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                     }
                 }
                 let dispatcher = self.dispatcher.clone();
-                dispatcher.process_network(&remoting_session.context, command).await;
+                dispatcher
+                    .process_network(&remoting_session.context, session.original_request_identity(), command)
+                    .await;
             }
         }
     }

@@ -84,8 +84,8 @@ pub mod api {
 
     /// Curated source API boundary for the 2.x release line.
     ///
-    /// `RequestDeadline` is the only currently shared type; the 2.x request
-    /// model is not yet publicly exposed.
+    /// Only the immutable request timing and identity values approved for the
+    /// 2.x request model are exposed here.
     pub mod v2 {
         pub use crate::public_api_v2::*;
     }
