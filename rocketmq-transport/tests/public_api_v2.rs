@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::rc::Rc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -29,23 +30,35 @@ use rocketmq_transport::api::v2::FileRegion;
 use rocketmq_transport::api::v2::FileRegionSequence;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::IngressRequestView;
+use rocketmq_transport::api::v2::LocalRequestProcessorV2;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
 use rocketmq_transport::api::v2::ProtocolNoResponse;
 use rocketmq_transport::api::v2::ProtocolNoResponseError;
 use rocketmq_transport::api::v2::ProtocolNoResponseReason;
 use rocketmq_transport::api::v2::ProxyInfoSnapshot;
+use rocketmq_transport::api::v2::RejectRequestDecision;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestControlView;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
 use rocketmq_transport::api::v2::RequestId as V2RequestId;
 use rocketmq_transport::api::v2::RequestMeta;
+use rocketmq_transport::api::v2::RequestOrdering;
+use rocketmq_transport::api::v2::RequestOrderingKey;
 use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::ResponseBodyKind;
+use rocketmq_transport::api::v2::ResponseDisposition;
+use rocketmq_transport::api::v2::ResponseErrorKind;
 use rocketmq_transport::api::v2::ResponsePlan;
 use rocketmq_transport::api::v2::ResponsePlanError;
+use rocketmq_transport::api::v2::ResponseReceipt;
+use rocketmq_transport::api::v2::ResponseWriteObservationV2;
+use rocketmq_transport::api::v2::ResponseWriteOutcomeV2;
+use rocketmq_transport::api::v2::ResponseWritePath;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::SessionStateView;
 use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::v2::WriteProgress;
 
 fn assert_same_deadline_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
 
@@ -161,6 +174,62 @@ fn assert_handler_outcome_contract(registration: Option<DeferredRegistration>, m
         RemotingRequest::protocol_no_response;
     assert_error_contract::<ProtocolNoResponseError>();
     let _: RocketMQError = ProtocolNoResponseError::OneWayRequest.into();
+}
+
+struct LocalOnlyProcessor;
+
+impl LocalRequestProcessorV2 for LocalOnlyProcessor {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let local = Rc::new(());
+        std::future::ready(()).await;
+        drop(local);
+        Err(RocketMQError::illegal_argument("local processor contract"))
+    }
+}
+
+struct SendProcessor;
+
+impl RequestProcessorV2 for SendProcessor {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        Err(RocketMQError::illegal_argument("send processor contract"))
+    }
+}
+
+fn assert_local_processor<T: LocalRequestProcessorV2>() {}
+
+fn assert_send_processor<T: RequestProcessorV2 + Send>() {}
+
+fn consume_rejection_exhaustively(decision: RejectRequestDecision) -> Option<ResponsePlan> {
+    match decision {
+        RejectRequestDecision::Proceed => None,
+        RejectRequestDecision::Reject(plan) => Some(plan),
+    }
+}
+
+fn inspect_write_outcome(outcome: ResponseWriteOutcomeV2) -> Option<ResponseReceipt> {
+    match outcome {
+        ResponseWriteOutcomeV2::Written(receipt) => Some(receipt),
+        ResponseWriteOutcomeV2::Failed { kind, progress } => {
+            let _: ResponseErrorKind = kind;
+            let _: Option<WriteProgress> = progress;
+            None
+        }
+    }
+}
+
+fn assert_response_write_observation_contract(observation: &ResponseWriteObservationV2) {
+    let _: V2RequestId = observation.request_id();
+    let _: i32 = observation.original_code();
+    let _: i32 = observation.response_code();
+    let _: ResponseBodyKind = observation.body_kind();
+    let _: ResponseWritePath = observation.path();
+    let _: Duration = observation.write_elapsed();
+    let _: Duration = observation.end_to_end_elapsed();
+    let _: Option<ResponseReceipt> = inspect_write_outcome(observation.outcome());
+}
+
+fn order_from_ingress<P: LocalRequestProcessorV2>(processor: &P, ingress: IngressRequestView<'_>) -> RequestOrdering {
+    processor.request_ordering(ingress)
 }
 
 fn assert_session_view_contract(view: SessionView) {
@@ -280,4 +349,43 @@ fn v2_exposes_exactly_three_exhaustive_affine_handler_outcomes() {
         reason: ProtocolNoResponseReason::CallbackHandled,
     };
     assert!(unsupported.to_string().contains("-91"));
+}
+
+#[test]
+fn v2_processor_contract_preserves_local_and_send_future_boundaries() {
+    assert_local_processor::<LocalOnlyProcessor>();
+    assert_send_processor::<SendProcessor>();
+
+    let processor = LocalOnlyProcessor;
+    assert!(matches!(processor.reject_request(39), RejectRequestDecision::Proceed));
+    assert!(consume_rejection_exhaustively(RejectRequestDecision::default()).is_none());
+    let _: fn(&LocalOnlyProcessor, IngressRequestView<'_>) -> RequestOrdering =
+        order_from_ingress::<LocalOnlyProcessor>;
+}
+
+#[test]
+fn v2_processor_side_contracts_are_typed_and_body_free() {
+    let plan = ResponsePlan::bytes(
+        RemotingCommand::create_response_command_with_code(7),
+        Bytes::from_static(b"owned rejection"),
+    )
+    .expect("public rejection plan");
+    let plan = consume_rejection_exhaustively(RejectRequestDecision::Reject(plan))
+        .expect("rejection should own its response plan");
+    assert_eq!(plan.response_code(), 7);
+    assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
+    assert_eq!(plan.body_len(), 15);
+
+    let _ = ResponseWritePath::Inline;
+    let _ = ResponseWritePath::Deferred;
+    let failure = ResponseWriteOutcomeV2::Failed {
+        kind: ResponseErrorKind::Transport,
+        progress: Some(WriteProgress::PossiblyPartial),
+    };
+    assert!(inspect_write_outcome(failure).is_none());
+    let _ = ResponseDisposition::TransportWritten;
+    let _ = ResponseDisposition::InProcessAccepted;
+    let _ = RequestOrdering::Concurrent;
+    let _ = RequestOrdering::Ordered(RequestOrderingKey::new(9));
+    let _: fn(&ResponseWriteObservationV2) = assert_response_write_observation_contract;
 }
