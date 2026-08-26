@@ -12,15 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[path = "tests/boundary_identity.rs"]
-mod boundary_identity;
-#[path = "tests/delivery_hooks.rs"]
-mod delivery_hooks;
-#[path = "../../../../tests/support/event_log.rs"]
-mod event_log;
-#[path = "tests/harness.rs"]
-mod harness;
-#[path = "tests/outcomes_deadlines.rs"]
-mod outcomes_deadlines;
-#[path = "tests/v1_v2_side_contract.rs"]
-mod v1_v2_side_contract;
+pub mod event_log;

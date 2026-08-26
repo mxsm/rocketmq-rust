@@ -16,7 +16,6 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 #[cfg(feature = "observability")]
@@ -56,6 +55,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
+
+mod support;
+
+use support::event_log::EventLog;
 
 const REJECT: i32 = 19_748;
 const STANDARD: i32 = 19_749;
@@ -121,25 +124,9 @@ impl Event {
     }
 }
 
-#[derive(Clone, Default)]
-struct EventLog(Arc<Mutex<Vec<Event>>>);
-
-impl EventLog {
-    fn push(&self, event: Event) {
-        self.0
-            .lock()
-            .expect("event log lock should not be poisoned")
-            .push(event);
-    }
-
-    fn snapshot(&self) -> Vec<Event> {
-        self.0.lock().expect("event log lock should not be poisoned").clone()
-    }
-}
-
 #[derive(Clone)]
 struct ContractProcessor {
-    events: EventLog,
+    events: EventLog<Event>,
 }
 
 impl RequestProcessor for ContractProcessor {
@@ -222,7 +209,7 @@ impl RequestProcessor for ContractProcessor {
 }
 
 struct ContractHook {
-    events: EventLog,
+    events: EventLog<Event>,
 }
 
 impl RPCHook for ContractHook {
@@ -268,7 +255,7 @@ struct Fixture {
     processor: ContractProcessor,
     dispatcher: Arc<AuthorizedCommandDispatcher<ContractProcessor>>,
     security: Arc<TransportSecurity>,
-    events: EventLog,
+    events: EventLog<Event>,
 }
 
 fn fixture(runtime: &RuntimeContext, name: &'static str) -> Fixture {
@@ -278,7 +265,7 @@ fn fixture(runtime: &RuntimeContext, name: &'static str) -> Fixture {
 fn fixture_with_telemetry(runtime: &RuntimeContext, name: &'static str, telemetry: TransportTelemetry) -> Fixture {
     let service = runtime.service_context(name);
     let process_budget = service.process_budget();
-    let events = EventLog::default();
+    let events = EventLog::<Event>::default();
     let processor = ContractProcessor { events: events.clone() };
     let security = Arc::new(TransportSecurity::development_insecure_loopback(None, None));
     let admission = Arc::new(
@@ -676,17 +663,23 @@ async fn network_v1_none_outcomes_record_their_distinct_terminal_telemetry() {
     let responses = run_network(
         &fixture,
         vec![
+            request(DIRECT_WRITE, 0),
             request(NONE, 1),
             request(ONEWAY_NONE, 2).mark_oneway_rpc(),
             request(SENTINEL, 3),
             request(STANDARD, 4),
         ],
-        2,
+        3,
     )
     .await;
-    assert_eq!(responses.len(), 2);
-    assert_eq!(responses[0].opaque(), 3);
-    assert_eq!(responses[1].opaque(), 4);
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0].opaque(), 0);
+    assert_eq!(
+        responses[0].body().map(|body| body.as_ref()),
+        Some(b"direct".as_slice())
+    );
+    assert_eq!(responses[1].opaque(), 3);
+    assert_eq!(responses[2].opaque(), 4);
 
     let metrics = scrape_metrics(
         telemetry_runtime
@@ -695,6 +688,7 @@ async fn network_v1_none_outcomes_record_their_distinct_terminal_telemetry() {
         observability.prometheus.path.as_str(),
     )
     .await;
+    assert_rpc_latency_count(&metrics, DIRECT_WRITE, -1, "legacy_ambiguous_none");
     assert_rpc_latency_count(&metrics, NONE, -1, "legacy_ambiguous_none");
     assert_rpc_latency_count(&metrics, ONEWAY_NONE, -1, "oneway");
     assert_rpc_latency_count(&metrics, STANDARD, ResponseCode::Success.to_i32(), "success");

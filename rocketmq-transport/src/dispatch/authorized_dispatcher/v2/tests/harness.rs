@@ -336,6 +336,7 @@ impl ConnectionHandler for CaptureSession {
 pub(super) struct DispatchHarness {
     pub(super) runtime: RuntimeContext,
     pub(super) session: SessionHandle,
+    request_sequence: AtomicU64,
     pub(super) authorized: AuthorizedDispatchSession,
     pub(super) admission_scope: crate::admission::AdmissionScopeHandle,
     pub(super) peer: Connection,
@@ -422,6 +423,7 @@ impl DispatchHarness {
         Self {
             runtime,
             session,
+            request_sequence: AtomicU64::new(1),
             authorized,
             admission_scope,
             peer: Connection::new_with_plaintext_stream(peer),
@@ -431,7 +433,7 @@ impl DispatchHarness {
     }
 
     pub(super) fn request_session(&self, command: &RemotingCommand) -> (SessionHandle, OriginalRequestIdentity) {
-        let original = OriginalRequestIdentity::capture(self.session.session_id(), &AtomicU64::new(1), command)
+        let original = OriginalRequestIdentity::capture(self.session.session_id(), &self.request_sequence, command)
             .expect("capture request identity");
         (
             self.session.clone().with_original_request_identity(Some(original)),
@@ -470,6 +472,22 @@ impl DispatchHarness {
             .await
             .assert_no_task_leak()
             .expect("V2 requests should drain");
+    }
+
+    pub(super) async fn drain_close_and_assert_eof(&mut self) {
+        self.drain_requests().await;
+        self.peer.shutdown().await.expect("close V2 peer write half");
+        let eof = tokio::time::timeout(Duration::from_secs(2), self.peer.receive_command())
+            .await
+            .expect("V2 peer should observe EOF after the ordered sentinel drains");
+        match eof {
+            None => {}
+            Some(Ok(response)) => panic!(
+                "V2 peer received an unexpected frame before EOF: code={}",
+                response.code()
+            ),
+            Some(Err(error)) => panic!("V2 peer failed before EOF: {error}"),
+        }
     }
 
     pub(super) async fn shutdown(self) {
