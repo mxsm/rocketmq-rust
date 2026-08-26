@@ -70,6 +70,7 @@ use crate::proxy_protocol::ProxyProtocolConfig;
 use crate::proxy_protocol::ProxyProtocolMetadata;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
+use crate::session_view::SessionView;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::NegotiatedConnection;
 use crate::tls::TlsServerRuntime;
@@ -140,6 +141,8 @@ struct SessionSendHandle {
     admission: AdmissionScopeHandle,
     state_tx: tokio::sync::watch::Sender<ConnectionState>,
     state_rx: tokio::sync::watch::Receiver<ConnectionState>,
+    session_closed_tx: tokio::sync::watch::Sender<bool>,
+    session_view: SessionView,
     task_group: TaskGroup,
     reader_cancellation: CancellationToken,
     writer_operation: OperationContext,
@@ -209,11 +212,20 @@ impl SessionHandle {
         &self.request_operation
     }
 
+    #[allow(
+        dead_code,
+        reason = "REQ-04 retains the canonical session view for the REQ-06 request builder"
+    )]
+    pub(crate) fn session_view(&self) -> SessionView {
+        self.send.session_view.clone()
+    }
+
     pub(crate) fn original_request_identity(&self) -> Option<OriginalRequestIdentity> {
         self.original_request_identity
     }
 
     pub(crate) fn abort(&self) {
+        let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
         self.request_operation.cancel();
@@ -255,6 +267,7 @@ impl SessionHandle {
         match tokio::time::timeout(timeout, self.retire_inner(started)).await {
             Ok(result) => result,
             Err(_) => {
+                let _ = self.send.session_closed_tx.send(true);
                 let _ = self.send.state_tx.send(ConnectionState::Closed);
                 self.send.reader_cancellation.cancel();
                 self.request_operation.cancel();
@@ -279,6 +292,7 @@ impl SessionHandle {
         let (completion, result) = tokio::sync::oneshot::channel();
         let send_result = self.send.writer.close(completion).await;
         if send_result.is_err() {
+            let _ = self.send.session_closed_tx.send(true);
             let _ = self.send.state_tx.send(ConnectionState::Closed);
             self.send.reader_cancellation.cancel();
             self.request_operation.cancel();
@@ -295,6 +309,7 @@ impl SessionHandle {
                 "writer retirement completion dropped",
             ))
         });
+        let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
         self.request_operation.cancel();
@@ -715,6 +730,7 @@ async fn run_framed_session_with_request_sequence<H>(
         Err(_) => return,
     };
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let (session_closed_tx, session_closed_rx) = tokio::sync::watch::channel(false);
     let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, writes) = writer_lanes(io_policy.writer_queue);
     let writer_diagnostics = Arc::new(SessionWriterDiagnostics::new(io_policy.writer_queue.total_capacity()));
@@ -744,6 +760,15 @@ async fn run_framed_session_with_request_sequence<H>(
         Ok(writer_task_id) => writer_task_id,
         Err(_) => return,
     };
+    let session_view = SessionView::network(
+        session_id,
+        local_addr,
+        remote_addr,
+        transport_peer_addr,
+        proxy_protocol.as_deref(),
+        state_rx.clone(),
+        session_closed_rx,
+    );
     let session = SessionHandle {
         send: Arc::new(SessionSendHandle {
             session_id,
@@ -759,6 +784,8 @@ async fn run_framed_session_with_request_sequence<H>(
             admission: admission_scope,
             state_tx: state_tx.clone(),
             state_rx,
+            session_closed_tx,
+            session_view,
             task_group: task_group.clone(),
             reader_cancellation: reader_cancellation.clone(),
             writer_operation,
@@ -844,6 +871,10 @@ async fn run_framed_session_with_request_sequence<H>(
             break;
         }
     }
+    // Request dispatchers may still be draining accepted work, but the reader
+    // no longer accepts frames. Publish the session-close transition now so
+    // read-only views observe shutdown without closing the response writer.
+    let _ = session.send.session_closed_tx.send(true);
     let request_deadline = task_group
         .shutdown_deadline()
         .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
@@ -1388,7 +1419,10 @@ mod retirement_tests {
     use crate::config::TlsMode;
     use crate::connection::Connection;
     use crate::deadline::RequestDeadline;
+    use crate::proxy_protocol::ProxyProtocolConfig;
     use crate::security::TransportSecurity;
+    use crate::session_view::SessionId;
+    use crate::session_view::SessionView;
     use crate::tls::TlsServerRuntime;
 
     struct CaptureSession {
@@ -1411,6 +1445,12 @@ mod retirement_tests {
         entered: std::sync::Mutex<Option<oneshot::Sender<crate::dispatch::OriginalRequestIdentity>>>,
         release: Arc<Notify>,
         disconnected: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
+    }
+
+    struct ReaderExitObserver {
+        connected: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
+        entered: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+        release: Arc<Notify>,
     }
 
     impl ConnectionHandler for CaptureSession {
@@ -1510,6 +1550,34 @@ mod retirement_tests {
                 if let Some(sender) = self.disconnected.lock().expect("sequence disconnect lock").take() {
                     let _ = sender.send(session);
                 }
+            })
+        }
+    }
+
+    impl ConnectionHandler for ReaderExitObserver {
+        fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.connected.lock().expect("reader exit connected lock").take() {
+                    let _ = sender.send(session);
+                }
+            })
+        }
+
+        fn command(
+            &self,
+            session: SessionHandle,
+            command: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.entered.lock().expect("reader exit entered lock").take() {
+                    let _ = sender.send(());
+                }
+                self.release.notified().await;
+                let mut connection = session.connection();
+                connection
+                    .send_response(RemotingCommand::create_response_command_with_code(0).set_opaque(command.opaque()))
+                    .await
+                    .expect("accepted response should still reach the canonical writer");
             })
         }
     }
@@ -1724,6 +1792,182 @@ mod retirement_tests {
         drop(second_peer);
         first_runner.await.expect("first session runner should finish");
         second_runner.await.expect("second session runner should finish");
+    }
+
+    #[tokio::test]
+    async fn canonical_network_session_view_keeps_addresses_and_shared_close_state() {
+        let runtime = RuntimeContext::from_current("transport-canonical-session-view-test");
+        let service = runtime.service_context("transport-canonical-session-view");
+        let (transport, peer) = tokio::io::duplex(1024);
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let local_addr: SocketAddr = "127.0.0.1:19501".parse().expect("local address");
+        let remote_addr: SocketAddr = "127.0.0.1:19502".parse().expect("remote address");
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_plaintext_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            Arc::new(CaptureSession {
+                sender: std::sync::Mutex::new(Some(connected_tx)),
+            }),
+        ));
+        let session = connected_rx.await.expect("network session should connect");
+        let mut first = session.session_view();
+        let mut second = first.clone();
+
+        let SessionView::Network {
+            id,
+            local_addr: actual_local,
+            remote_addr: actual_remote,
+            transport_peer_addr,
+            proxy,
+            state,
+        } = &first
+        else {
+            panic!("network session must retain a network view");
+        };
+        assert_eq!(*id, SessionId::from_session_owner(session.session_id()));
+        assert_eq!(*actual_local, local_addr);
+        assert_eq!(*actual_remote, remote_addr);
+        assert_eq!(*transport_peer_addr, remote_addr);
+        assert!(proxy.is_none());
+        assert!(state.is_healthy());
+
+        drop(peer);
+        runner.await.expect("session runner should finish");
+
+        let SessionView::Network { state, .. } = &mut first else {
+            panic!("network session view must retain its variant");
+        };
+        state.closed().await;
+        assert!(state.is_closed());
+        let SessionView::Network { state, .. } = &mut second else {
+            panic!("network session view must retain its variant");
+        };
+        state.closed().await;
+        assert!(state.is_closed());
+    }
+
+    #[tokio::test]
+    async fn listener_network_session_view_retains_trusted_proxy_and_transport_peer_addresses() {
+        let runtime = RuntimeContext::from_current("transport-session-view-proxy-listener-test");
+        let service = runtime.service_context("transport-session-view-proxy-listener");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let listener_addr = listener.local_addr().expect("listener address");
+        let tls = TlsServerRuntime::initialize_with_service_context(TlsConfig::default(), &service)
+            .await
+            .expect("initialize TLS runtime");
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let proxy_config = ProxyProtocolConfig {
+            enabled: true,
+            trusted_proxies: vec!["127.0.0.0/8".parse().expect("trusted loopback CIDR")],
+            ..ProxyProtocolConfig::default()
+        };
+        let transport = TransportListener::new(
+            listener,
+            service.task_group().clone(),
+            tls,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Duration::from_secs(1),
+        )
+        .try_with_proxy_protocol(proxy_config)
+        .expect("trusted proxy configuration should be valid");
+        let server = tokio::spawn(transport.run(Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(connected_tx)),
+        })));
+        let mut client = TcpStream::connect(listener_addr).await.expect("connect proxy peer");
+        let transport_peer = client.local_addr().expect("client local address");
+        client
+            .write_all(b"PROXY TCP4 198.51.100.44 192.0.2.10 43123 10911\r\n\0")
+            .await
+            .expect("write trusted PROXY header and plaintext discriminator");
+        let session = tokio::time::timeout(Duration::from_secs(1), connected_rx)
+            .await
+            .expect("trusted proxy session should connect")
+            .expect("connected session capture");
+        let view = session.session_view();
+
+        let SessionView::Network {
+            local_addr,
+            remote_addr,
+            transport_peer_addr,
+            proxy,
+            ..
+        } = view
+        else {
+            panic!("listener session must retain a network view");
+        };
+        let proxy = proxy.expect("trusted PROXY header must create a snapshot");
+        let source: SocketAddr = "198.51.100.44:43123".parse().expect("PROXY source address");
+        let destination: SocketAddr = "192.0.2.10:10911".parse().expect("PROXY destination address");
+
+        assert_eq!(local_addr, destination);
+        assert_eq!(remote_addr, source);
+        assert_eq!(transport_peer_addr, transport_peer);
+        assert_eq!(proxy.source(), source);
+        assert_eq!(proxy.destination(), destination);
+        assert_ne!(transport_peer_addr, source);
+        assert_ne!(transport_peer_addr, destination);
+
+        service.task_group().cancel();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("listener should stop after owner cancellation")
+            .expect("listener task")
+            .expect("listener result");
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn canonical_session_view_closes_when_the_reader_stops_before_dispatch_drains() {
+        let runtime = RuntimeContext::from_current("transport-session-view-reader-exit-test");
+        let service = runtime.service_context("transport-session-view-reader-exit");
+        let (transport, peer_stream) = tokio::io::duplex(1024);
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let release = Arc::new(Notify::new());
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_plaintext_stream(transport),
+            "127.0.0.1:19601".parse().expect("local address"),
+            "127.0.0.1:19602".parse().expect("remote address"),
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            Arc::new(ReaderExitObserver {
+                connected: std::sync::Mutex::new(Some(connected_tx)),
+                entered: std::sync::Mutex::new(Some(entered_tx)),
+                release: Arc::clone(&release),
+            }),
+        ));
+        let session = connected_rx.await.expect("network session should connect");
+        let view = session.session_view();
+        let mut peer = Connection::new_with_plaintext_stream(peer_stream);
+        peer.send_command(RemotingCommand::create_remoting_command(710).set_opaque(12))
+            .await
+            .expect("request should enter the session");
+        entered_rx.await.expect("request handler should begin draining work");
+
+        peer.shutdown().await.expect("client write half should close");
+        tokio::time::timeout(Duration::from_secs(1), view.state().closed())
+            .await
+            .expect("reader exit must close the view before accepted work drains");
+        assert!(view.state().is_closed());
+
+        release.notify_one();
+        let response = tokio::time::timeout(Duration::from_secs(1), peer.receive_command())
+            .await
+            .expect("accepted response should arrive after the reader exits")
+            .expect("accepted response read should succeed")
+            .expect("accepted response should be present");
+        assert_eq!(response.opaque(), 12);
+        runner.await.expect("session runner should finish");
     }
 
     #[tokio::test]

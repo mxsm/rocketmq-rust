@@ -14,10 +14,10 @@
 
 //! Explicitly approved source API for the 2.x release line.
 //!
-//! This surface exposes only immutable request timing, identity, origin, and
-//! authentication facts approved for the 2.x request model. These facts are
-//! read-only DTOs: they do not expose legacy channels, session handles,
-//! operation contexts, or cancellation capabilities.
+//! This surface exposes only immutable request timing, identity, origin,
+//! authentication, and session facts approved for the 2.x request model.
+//! These facts are read-only DTOs: they do not expose legacy channels, session
+//! handles, operation contexts, or cancellation capabilities.
 
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
@@ -25,3 +25,7 @@ pub use crate::dispatch::EmbeddedCaller;
 pub use crate::dispatch::OriginalRequestIdentity;
 pub use crate::dispatch::RequestId;
 pub use crate::dispatch::RequestOrigin;
+pub use crate::session_view::ProxyInfoSnapshot;
+pub use crate::session_view::SessionId;
+pub use crate::session_view::SessionStateView;
+pub use crate::session_view::SessionView;

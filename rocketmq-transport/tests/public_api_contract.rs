@@ -688,6 +688,22 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
             module_path: String::new(),
             use_tree: "crate::dispatch::RequestOrigin".to_owned(),
         },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::session_view::ProxyInfoSnapshot".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::session_view::SessionId".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::session_view::SessionStateView".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::session_view::SessionView".to_owned(),
+        },
     ];
     if boundary.uses != expected_uses {
         return Err(format!("unexpected public v2 uses: {:?}", boundary.uses));
@@ -702,22 +718,22 @@ fn lib_rs_exposes_only_the_curated_versioned_boundary() {
 }
 
 #[test]
-fn public_api_v2_exposes_exactly_the_curated_request_identity_and_ingress_fact_types() {
+fn public_api_v2_exposes_exactly_the_curated_request_and_session_fact_types() {
     let boundary =
         inspect_public_boundary(include_str!("../src/public_api_v2.rs")).expect("public_api_v2.rs must tokenize");
 
     validate_public_api_v2_boundary(&boundary)
-        .expect("public_api_v2.rs must expose only approved request identity and ingress fact types");
+        .expect("public_api_v2.rs must expose only approved request, ingress, and session fact types");
 }
 
 #[test]
 fn public_api_v2_rejects_unapproved_public_surface() {
     for source in [
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::net::channel::Channel;",
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use rocketmq_runtime::OperationContext;",
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::deadline::{RequestDeadline,RequestId};",
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::deadline::*;",
-        "pub mod request_model {} pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView; pub use crate::net::channel::Channel;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView; pub use rocketmq_runtime::OperationContext;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView; pub use crate::deadline::{RequestDeadline,RequestId};",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView; pub use crate::deadline::*;",
+        "pub mod request_model {} pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;",
     ] {
         let boundary = inspect_public_boundary(source).expect("adversarial V2 fixture must parse");
 
@@ -733,6 +749,10 @@ pub use crate::dispatch::EmbeddedCaller;
 pub use crate::dispatch::RequestId;
 pub use crate::dispatch::OriginalRequestIdentity;
 pub use crate::dispatch::RequestOrigin;
+pub use crate::session_view::ProxyInfoSnapshot;
+pub use crate::session_view::SessionId;
+pub use crate::session_view::SessionStateView;
+pub use crate::session_view::SessionView;
 "#;
     let error = inspect_public_boundary(source).expect_err("public V2 macro invocation must be rejected");
 
@@ -745,8 +765,8 @@ pub use crate::dispatch::RequestOrigin;
 #[test]
 fn public_api_v2_rejects_direct_public_items() {
     for source in [
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub type Channel = crate::net::channel::Channel;",
-        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub struct Leaked;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView; pub type Channel = crate::net::channel::Channel;",
+        "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestOrigin; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView; pub struct Leaked;",
     ] {
         let error = inspect_public_boundary(source).expect_err("direct public V2 item must be rejected");
 
