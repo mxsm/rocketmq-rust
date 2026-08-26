@@ -15,6 +15,7 @@
 mod authorized_dispatcher;
 mod request_context;
 mod request_identity;
+mod request_origin;
 mod response;
 mod response_sink;
 
@@ -27,6 +28,9 @@ pub use request_context::RequestContextError;
 pub use request_context::RequestTransport;
 pub(crate) use request_identity::reserve_session_owner;
 pub use request_identity::OriginalRequestIdentity;
+pub use request_origin::AuthenticationState;
+pub use request_origin::EmbeddedCaller;
+pub use request_origin::RequestOrigin;
 pub use response::RequestId;
 pub use response::ResponseDisposition;
 pub use response::ResponseError;

@@ -810,7 +810,12 @@ async fn run_framed_session_with_request_sequence<H>(
             original_request_identity.map_or_else(|| command.code(), OriginalRequestIdentity::original_code),
         );
         let bytes = decoded.retained_frame_bytes;
-        let context = RequestContext::network(PeerInfo::new(remote_addr, peer_is_tls), principal.clone(), None);
+        let context = RequestContext::network_with_security_profile(
+            PeerInfo::new(remote_addr, peer_is_tls),
+            principal.clone(),
+            None,
+            dispatch.security_profile(),
+        );
         let ordering = handler.request_ordering(&command);
         let request_handler = handler.clone();
         let request_session = session

@@ -17,6 +17,7 @@
 use std::future;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -166,6 +167,23 @@ impl IngressPolicy for DenyIngressPolicy {
     }
 }
 
+struct RecordingNetworkPeerIngressPolicy {
+    peers: Arc<Mutex<Vec<Option<SocketAddr>>>>,
+}
+
+impl IngressPolicy for RecordingNetworkPeerIngressPolicy {
+    fn evaluate_ingress(
+        &self,
+        request: rocketmq_security_api::SecurityRequestView<'_>,
+    ) -> LayerEvaluation<IngressDecision> {
+        self.peers
+            .lock()
+            .expect("recording network peer ingress policy lock")
+            .push(request.peer().map(|peer| peer.address()));
+        Ok(IngressDecision::Deny)
+    }
+}
+
 struct DispatchFixture {
     service: ChildServiceContext,
     processor: ConformanceProcessor,
@@ -234,13 +252,31 @@ async fn dispatch_embedded(
 }
 
 async fn network_round_trip(fixture: &DispatchFixture, principal: &str, command: RemotingCommand) -> RemotingCommand {
+    network_round_trip_with_principal(fixture, Some(principal), command).await
+}
+
+async fn network_round_trip_with_principal(
+    fixture: &DispatchFixture,
+    principal: Option<&str>,
+    command: RemotingCommand,
+) -> RemotingCommand {
+    network_round_trip_with_principal_and_peer(fixture, principal, command)
+        .await
+        .0
+}
+
+async fn network_round_trip_with_principal_and_peer(
+    fixture: &DispatchFixture,
+    principal: Option<&str>,
+    command: RemotingCommand,
+) -> (RemotingCommand, SocketAddr) {
     let config = Arc::new(ServerConfig {
         bind_address: "127.0.0.1".to_owned(),
         listen_port: 0,
         ..ServerConfig::default()
     });
     let mut server = TransportServer::new(config, fixture.service.component("network"))
-        .with_transport_security(Arc::clone(&fixture.security), Some(Principal::new(principal)))
+        .with_transport_security(Arc::clone(&fixture.security), principal.map(Principal::new))
         .with_authorized_dispatcher(Arc::clone(&fixture.dispatcher));
     let (startup_tx, startup_rx) = oneshot::channel();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -261,7 +297,11 @@ async fn network_round_trip(fixture: &DispatchFixture, principal: &str, command:
         .await
         .expect("server should report startup")
         .expect("server should bind");
-    let mut connection = Connection::new(TcpStream::connect(address).await.expect("client should connect"));
+    let stream = TcpStream::connect(address).await.expect("client should connect");
+    let peer_seen_by_server = stream
+        .local_addr()
+        .expect("connected client stream should expose its local address");
+    let mut connection = Connection::new(stream);
     connection
         .send_command(command)
         .await
@@ -278,7 +318,84 @@ async fn network_round_trip(fixture: &DispatchFixture, principal: &str, command:
         .expect("server task should not panic")
         .expect("server should report shutdown");
     assert!(report.is_healthy(), "{}", report.to_json());
-    response
+    (response, peer_seen_by_server)
+}
+
+#[tokio::test]
+async fn secure_network_dispatch_rejects_command_claimed_authentication_and_origin() {
+    let runtime = RuntimeContext::from_current("authorized-dispatch-forged-ingress-facts");
+    let fixture = dispatch_fixture(
+        &runtime,
+        "forged-ingress-facts",
+        ProcessorBehavior::Echo,
+        AdmissionLimits::default(),
+    );
+    let mut command = RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(50);
+    command.add_ext_field("principal", "allowed");
+    command.add_ext_field("origin", "embedded");
+
+    let response = network_round_trip_with_principal(&fixture, None, command).await;
+
+    assert_eq!(response.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(response.opaque(), 50);
+    assert_eq!(fixture.processor.calls.load(Ordering::SeqCst), 0);
+    let report = fixture.service.task_group().shutdown(Duration::from_secs(1)).await;
+    report.assert_no_task_leak().expect("test tasks should be owned");
+}
+
+#[tokio::test]
+async fn network_ingress_policy_receives_actual_peer_despite_forged_origin_extension() {
+    let runtime = RuntimeContext::from_current("authorized-dispatch-forged-network-origin");
+    let service = runtime.service_context("forged-network-origin");
+    let process_budget = service.process_budget();
+    let admission = Arc::new(
+        AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+            .expect("test admission limits should be valid"),
+    );
+    let peers = Arc::new(Mutex::new(Vec::new()));
+    let security = Arc::new(
+        TransportSecurity::secure_enforced(Some(Arc::new(AllowOnlyNamedPrincipal)), None).with_ingress_policy(
+            Arc::new(RecordingNetworkPeerIngressPolicy {
+                peers: Arc::clone(&peers),
+            }),
+        ),
+    );
+    let processor = ConformanceProcessor::new(ProcessorBehavior::Echo);
+    let dispatcher = Arc::new(
+        AuthorizedCommandDispatcher::try_new(
+            processor.clone(),
+            Vec::new(),
+            &process_budget,
+            TransportTelemetry::noop(),
+            Arc::clone(&security),
+            Arc::clone(&admission),
+        )
+        .expect("test dispatcher should fit the process budget"),
+    );
+    let fixture = DispatchFixture {
+        service,
+        processor,
+        dispatcher,
+        security,
+        admission,
+    };
+    let mut command = RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(51);
+    command.add_ext_field("origin", "embedded");
+
+    let (response, actual_peer) = network_round_trip_with_principal_and_peer(&fixture, None, command).await;
+
+    assert_eq!(response.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(response.opaque(), 51);
+    assert_eq!(fixture.processor.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        peers
+            .lock()
+            .expect("recording network peer ingress policy lock")
+            .as_slice(),
+        [Some(actual_peer)],
+    );
+    let report = fixture.service.task_group().shutdown(Duration::from_secs(1)).await;
+    report.assert_no_task_leak().expect("test tasks should be owned");
 }
 
 fn assert_equivalent(actual: &RemotingCommand, expected: &RemotingCommand) {

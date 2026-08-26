@@ -18,6 +18,8 @@ use std::time::Duration;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_security_api::PeerInfo;
+use rocketmq_security_api::Principal;
 use rocketmq_transport::api::v1::CachedConnectionState;
 use rocketmq_transport::api::v1::ClientShutdownReport;
 use rocketmq_transport::api::v1::ClientSnapshot;
@@ -25,9 +27,12 @@ use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::PendingUsage;
 use rocketmq_transport::api::v1::RemotingClient;
+use rocketmq_transport::api::v1::RequestContext;
+use rocketmq_transport::api::v1::RequestContextError;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::RequestId;
 use rocketmq_transport::api::v1::RequestTarget;
+use rocketmq_transport::api::v1::RequestTransport;
 use rocketmq_transport::api::v1::ResponseDisposition;
 use rocketmq_transport::api::v1::ResponseError;
 use rocketmq_transport::api::v1::ResponseErrorKind;
@@ -109,6 +114,17 @@ fn assert_versioned_response_contract(
     let _: ResponseErrorKind = error.kind();
     let _: Option<WriteProgress> = error.write_progress();
     let _: bool = error.retryable();
+}
+
+fn assert_v1_request_context_method_signatures(context: &RequestContext) {
+    let _: fn(PeerInfo, Option<Principal>, Option<RequestDeadline>) -> RequestContext = RequestContext::network;
+    let _: fn(Option<Principal>, Option<RequestDeadline>) -> Result<RequestContext, RequestContextError> =
+        RequestContext::try_embedded;
+    let _: fn(&RequestContext) -> RequestTransport = RequestContext::transport;
+    let _: for<'a> fn(&'a RequestContext) -> Option<&'a PeerInfo> = RequestContext::peer;
+    let _: for<'a> fn(&'a RequestContext) -> Option<&'a Principal> = RequestContext::principal;
+    let _: fn(&RequestContext) -> Option<RequestDeadline> = RequestContext::deadline;
+    let _ = context;
 }
 
 fn assert_v1_response_context_method_signatures(context: &ConnectionHandlerContext) {
@@ -214,6 +230,7 @@ fn prelude_reexports_the_curated_composition_root_surface() {
 fn versioned_api_exposes_response_contract_types_without_prelude_exports() {
     assert_versioned_response_contract(None, None, ResponseError::DeadlineExceeded);
     let _ = assert_v1_response_context_method_signatures as fn(&ConnectionHandlerContext);
+    let _ = assert_v1_request_context_method_signatures as fn(&RequestContext);
     let _: Option<ResponseTerminalState> = Some(ResponseTerminalState::Completed);
     let _: Option<ResponseDisposition> = Some(ResponseDisposition::TransportWritten);
     let _: Option<WriteProgress> = Some(WriteProgress::NotStarted);
