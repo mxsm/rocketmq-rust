@@ -85,10 +85,11 @@ pub mod api {
 
     /// Curated source API boundary for the 2.x release line.
     ///
-    /// Only immutable request timing, identity, origin, authentication, and
-    /// session facts approved for the 2.x request model are exposed here. This
-    /// narrow surface intentionally excludes legacy channels, session handles,
-    /// operation contexts, and cancellation capabilities.
+    /// The trusted mutable request aggregate and its immutable supporting
+    /// timing, identity, origin, authentication, and session views approved for
+    /// the 2.x request model are exposed here. This narrow surface intentionally
+    /// excludes legacy channels, session handles, operation contexts, and raw
+    /// cancellation authority.
     pub mod v2 {
         pub use crate::public_api_v2::*;
     }

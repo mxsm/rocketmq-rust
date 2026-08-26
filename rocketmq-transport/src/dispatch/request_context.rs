@@ -50,6 +50,17 @@ pub struct RequestContext {
     authentication: AuthenticationState,
 }
 
+/// Trusted request facts transferred from ingress into the request builder.
+#[allow(
+    dead_code,
+    reason = "REQ-06 keeps this crate-private transfer object ready for later dispatcher wiring"
+)]
+pub(crate) struct RequestContextParts {
+    pub(crate) deadline: Option<RequestDeadline>,
+    pub(crate) origin: RequestOrigin,
+    pub(crate) authentication: AuthenticationState,
+}
+
 impl RequestContext {
     /// Creates a context for a decoded network command.
     #[must_use]
@@ -154,6 +165,29 @@ impl RequestContext {
     )]
     pub(crate) const fn authentication(&self) -> &AuthenticationState {
         &self.authentication
+    }
+
+    /// Consumes the staging context after trusted ingress has finished
+    /// materializing its request facts.
+    #[allow(
+        dead_code,
+        reason = "REQ-06 consumes staging facts from later dispatcher wiring; current coverage is builder-local"
+    )]
+    pub(crate) fn into_parts(self) -> RequestContextParts {
+        RequestContextParts {
+            deadline: self.deadline,
+            origin: self.origin,
+            authentication: self.authentication,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts(parts: RequestContextParts) -> Self {
+        Self {
+            deadline: parts.deadline,
+            origin: parts.origin,
+            authentication: parts.authentication,
+        }
     }
 }
 

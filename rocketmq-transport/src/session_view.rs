@@ -33,6 +33,14 @@ impl SessionId {
     pub(crate) const fn from_session_owner(owner_id: u64) -> Self {
         Self(owner_id)
     }
+
+    #[allow(
+        dead_code,
+        reason = "REQ-06 validates request/session ownership before dispatcher integration"
+    )]
+    pub(crate) const fn owner_id(self) -> u64 {
+        self.0
+    }
 }
 
 /// Read-only source and destination facts supplied by a trusted PROXY header.

@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::LanguageCode;
 
 use super::RequestId;
 
@@ -46,8 +47,9 @@ pub(crate) fn reserve_session_owner() -> Option<u64> {
 /// Immutable wire identity captured for one inbound request.
 ///
 /// This value preserves the raw request code, protocol opaque, and one-way flag
-/// as they arrived at the trusted transport boundary. Later hook or processor
-/// mutations of the command cannot change these facts.
+/// as they arrived at the trusted transport boundary, together with the wire
+/// language and version used to decode it. Later hook or processor mutations
+/// of the command cannot change these facts.
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::v2::OriginalRequestIdentity;
@@ -62,6 +64,8 @@ pub struct OriginalRequestIdentity {
     original_code: i32,
     original_opaque: i32,
     one_way: bool,
+    original_language: LanguageCode,
+    original_version: i32,
 }
 
 impl OriginalRequestIdentity {
@@ -75,6 +79,8 @@ impl OriginalRequestIdentity {
             original_code: command.code(),
             original_opaque: command.opaque(),
             one_way: command.is_oneway_rpc(),
+            original_language: command.language(),
+            original_version: command.version(),
         })
     }
 
@@ -100,6 +106,34 @@ impl OriginalRequestIdentity {
     #[must_use]
     pub const fn is_one_way(self) -> bool {
         self.one_way
+    }
+
+    #[allow(
+        dead_code,
+        reason = "REQ-06 validates the private ingress language before dispatcher integration"
+    )]
+    pub(crate) const fn original_language(self) -> LanguageCode {
+        self.original_language
+    }
+
+    #[allow(
+        dead_code,
+        reason = "REQ-06 validates the private ingress version before dispatcher integration"
+    )]
+    pub(crate) const fn original_version(self) -> i32 {
+        self.original_version
+    }
+
+    #[allow(
+        dead_code,
+        reason = "REQ-06 validates captured command facts before dispatcher integration"
+    )]
+    pub(crate) fn matches_command(self, command: &RemotingCommand) -> bool {
+        self.original_code == command.code()
+            && self.original_opaque == command.opaque()
+            && self.one_way == command.is_oneway_rpc()
+            && self.original_language == command.language()
+            && self.original_version == command.version()
     }
 }
 
@@ -173,10 +207,15 @@ mod tests {
     #[test]
     fn capture_preserves_raw_ingress_facts_and_increases_sequence() {
         let sequence = AtomicU64::new(1);
-        let first = OriginalRequestIdentity::capture(17, &sequence, &request(-123_456, 91).mark_oneway_rpc())
-            .expect("identity should be allocated");
-        let second = OriginalRequestIdentity::capture(17, &sequence, &request(-123_456, 91))
-            .expect("identity should be allocated");
+        let first_command = request(-123_456, 91)
+            .set_language(LanguageCode::JAVA)
+            .set_version(123)
+            .mark_oneway_rpc();
+        let second_command = request(-123_456, 91);
+        let first =
+            OriginalRequestIdentity::capture(17, &sequence, &first_command).expect("identity should be allocated");
+        let second =
+            OriginalRequestIdentity::capture(17, &sequence, &second_command).expect("identity should be allocated");
 
         assert_eq!(first.request_id().owner_id(), 17);
         assert_eq!(first.request_id().sequence(), 1);
@@ -186,6 +225,8 @@ mod tests {
         assert_eq!(first.original_opaque(), 91);
         assert!(first.is_one_way());
         assert!(!second.is_one_way());
+        assert_eq!(first.original_language(), LanguageCode::JAVA);
+        assert_eq!(first.original_version(), 123);
     }
 
     #[test]
