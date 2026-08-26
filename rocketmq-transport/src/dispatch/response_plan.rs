@@ -109,6 +109,23 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 ///     let _ = plan.into_bytes();
 /// }
 /// ```
+///
+/// ```compile_fail
+/// use bytes::Bytes;
+/// use rocketmq_transport::api::v2::ResponsePlan;
+///
+/// fn cannot_accept_a_pre_encoded_frame(frame: Bytes) {
+///     let _ = ResponsePlan::encoded(frame);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use rocketmq_transport::api::v2::ResponseBodyKind;
+///
+/// fn encoded_is_not_a_public_body_kind(kind: ResponseBodyKind) {
+///     assert_eq!(kind, ResponseBodyKind::Encoded);
+/// }
+/// ```
 pub struct ResponsePlan {
     head: RemotingCommand,
     body: ResponseBody,
