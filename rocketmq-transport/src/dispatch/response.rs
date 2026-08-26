@@ -341,6 +341,17 @@ pub struct ResponseReceipt {
 }
 
 impl ResponseReceipt {
+    #[allow(
+        dead_code,
+        reason = "RSP-05 exact request receipts are created by later private dispatcher wiring"
+    )]
+    pub(crate) const fn new(request_id: RequestId, disposition: ResponseDisposition) -> Self {
+        Self {
+            request_id,
+            disposition,
+        }
+    }
+
     /// Reserves a synthetic V1 receipt before local completion starts.
     ///
     /// The fixed V1 namespace is process-local and intentionally has no request ownership. Its

@@ -259,6 +259,20 @@ impl ResponsePlan {
         self.body_part_count
     }
 
+    #[allow(
+        dead_code,
+        reason = "RSP-05 local delivery rebuilds this trusted wrapper before later dispatcher wiring"
+    )]
+    pub(crate) fn from_bound_parts(head: RemotingCommand, body: ResponseBody) -> Self {
+        let (body_len, body_part_count) = body.metadata();
+        Self::new(head, body, body_len, body_part_count)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn test_body(&self) -> &ResponseBody {
+        &self.body
+    }
+
     fn new(head: RemotingCommand, body: ResponseBody, body_len: usize, body_part_count: usize) -> Self {
         Self {
             head,
@@ -320,6 +334,16 @@ pub(crate) enum ResponseBody {
 }
 
 impl ResponseBody {
+    #[allow(dead_code, reason = "RSP-05 trusted local rewrapping preserves cached plan metadata")]
+    fn metadata(&self) -> (usize, usize) {
+        match self {
+            Self::Empty => (0, 0),
+            Self::Bytes(bytes) => (bytes.len(), 1),
+            Self::Segments(segments) => (segments.iter().map(Bytes::len).sum(), segments.len()),
+            Self::FileRegions(regions) => (regions.len() as usize, regions.regions().len()),
+        }
+    }
+
     const fn kind(&self) -> ResponseBodyKind {
         match self {
             Self::Empty => ResponseBodyKind::Empty,

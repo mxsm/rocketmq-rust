@@ -61,6 +61,7 @@ use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
 use crate::dispatch::reserve_session_owner;
 use crate::dispatch::AuthorizedDispatchBoundary;
+use crate::dispatch::NetworkResponsePlanContext;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
@@ -157,6 +158,7 @@ pub struct SessionHandle {
     request_operation: OperationContext,
     response_class: Option<AdmissionClass>,
     original_request_identity: Option<OriginalRequestIdentity>,
+    response_plan_context: Option<NetworkResponsePlanContext>,
 }
 
 impl SessionHandle {
@@ -194,6 +196,11 @@ impl SessionHandle {
             self.response_class,
             self.send.lifecycle.clone(),
             self.send.telemetry.clone(),
+        )
+        .with_response_plan_drop(
+            self.response_plan_context
+                .as_ref()
+                .map(NetworkResponsePlanContext::transport_drop_handle),
         )
     }
 
@@ -246,6 +253,23 @@ impl SessionHandle {
     pub(crate) fn with_original_request_identity(mut self, identity: Option<OriginalRequestIdentity>) -> Self {
         self.original_request_identity = identity;
         self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "RSP-05 private response plan context is installed by later dispatcher wiring"
+    )]
+    pub(crate) fn with_response_plan_context(mut self, context: NetworkResponsePlanContext) -> Self {
+        self.response_plan_context = Some(context);
+        self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "RSP-05 private response plan context is consumed by later dispatcher wiring"
+    )]
+    pub(crate) fn response_plan_context(&self) -> Option<&NetworkResponsePlanContext> {
+        self.response_plan_context.as_ref()
     }
 
     /// Closes the session writer after all sends that already entered the lifecycle gate finish.
@@ -796,6 +820,7 @@ async fn run_framed_session_with_request_sequence<H>(
         request_operation: request_operation.clone(),
         response_class: None,
         original_request_identity: None,
+        response_plan_context: None,
     };
 
     handler.connected(session.clone()).await;
