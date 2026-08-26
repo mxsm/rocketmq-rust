@@ -15,6 +15,11 @@
 //! Owned V2 response heads and body storage.
 
 mod binding;
+#[allow(
+    dead_code,
+    reason = "RSP-06 defines the private terminal compatibility seam wired by a later embedded adapter stage"
+)]
+mod materializer;
 
 use std::fmt;
 
@@ -25,6 +30,8 @@ use crate::file_region::FileRegionSequence;
 
 pub(crate) use binding::BoundResponsePlan;
 pub(crate) use binding::ResponseBindingError;
+pub(crate) use materializer::LegacyLocalMaterializationError;
+pub(crate) use materializer::LegacyMaterializationLimits;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -143,6 +150,14 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::v2::BoundResponsePlan;
+/// ```
+///
+/// ```compile_fail
+/// use rocketmq_transport::api::v2::LegacyMaterializationLimits;
+/// ```
+///
+/// ```compile_fail
+/// use rocketmq_transport::prelude::LegacyLocalMaterializationError;
 /// ```
 pub struct ResponsePlan {
     head: RemotingCommand,
@@ -266,6 +281,10 @@ impl ResponsePlan {
     pub(crate) fn from_bound_parts(head: RemotingCommand, body: ResponseBody) -> Self {
         let (body_len, body_part_count) = body.metadata();
         Self::new(head, body, body_len, body_part_count)
+    }
+
+    fn into_materialization_parts(self) -> (RemotingCommand, ResponseBody, usize, usize) {
+        (self.head, self.body, self.body_len, self.body_part_count)
     }
 
     #[cfg(test)]

@@ -154,6 +154,10 @@ pub(crate) struct LocalResponsePlanReceiver {
 }
 
 impl LocalResponsePlanReceiver {
+    pub(crate) const fn control(&self) -> &RequestControlView {
+        &self.control
+    }
+
     pub(crate) async fn receive(mut self) -> Result<ResponsePlan, ResponseError> {
         if let Some(stop) = current_stop(&self.control) {
             self.slot.finish_external(stop);

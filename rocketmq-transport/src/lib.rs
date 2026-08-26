@@ -45,6 +45,7 @@ mod dispatch;
 mod error_helpers;
 mod error_response;
 mod file_region;
+mod file_region_io;
 mod file_region_writer;
 mod hook_registry;
 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
