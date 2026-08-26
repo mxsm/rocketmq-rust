@@ -15,13 +15,17 @@
 use std::future::Future;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Principal;
 use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
 use rocketmq_transport::api::v1::RequestId as V1RequestId;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::EmbeddedCaller;
+use rocketmq_transport::api::v2::IngressRequestView;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
 use rocketmq_transport::api::v2::ProxyInfoSnapshot;
+use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestControlView;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
 use rocketmq_transport::api::v2::RequestId as V2RequestId;
@@ -66,6 +70,26 @@ fn assert_request_control_contract(control: Option<RequestControlView>) {
         let _: Option<V2RequestDeadline> = control.deadline();
         let _: bool = control.is_cancelled();
         std::mem::drop(cancelled(&control));
+    }
+}
+
+fn assert_ingress_view_contract(view: IngressRequestView<'_>) {
+    let _: V2RequestId = view.original_identity().request_id();
+    let _: Option<&std::collections::HashMap<CheetahString, CheetahString>> = view.ext_fields();
+}
+
+fn assert_remoting_request_contract(request: Option<RemotingRequest>) {
+    if let Some(mut request) = request {
+        let _: OriginalRequestIdentity = request.original_identity();
+        let _: &RequestMeta = request.meta();
+        let _: &RequestOrigin = request.origin();
+        let _: &AuthenticationState = request.authentication();
+        let _: &SessionView = request.session();
+        let _: &RequestControlView = request.control();
+        let _: &RemotingCommand = request.command();
+        let _: &mut RemotingCommand = request.command_mut();
+        let _: Option<&String> = request.extension::<String>();
+        let _: Result<Option<String>, String> = request.try_insert_extension("v2-extension".to_owned());
     }
 }
 
@@ -155,4 +179,10 @@ fn v2_exposes_read_only_network_and_embedded_session_views() {
 fn v2_exposes_read_only_request_metadata_and_control() {
     assert_request_meta_contract(None);
     assert_request_control_contract(None);
+}
+
+#[test]
+fn v2_exposes_the_request_aggregate_and_ingress_view_without_legacy_reexports() {
+    let _: fn(IngressRequestView<'_>) = assert_ingress_view_contract;
+    assert_remoting_request_contract(None);
 }

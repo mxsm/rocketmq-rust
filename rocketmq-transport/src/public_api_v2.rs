@@ -14,15 +14,17 @@
 
 //! Explicitly approved source API for the 2.x release line.
 //!
-//! This surface exposes only immutable request timing, identity, origin,
-//! authentication, and session facts approved for the 2.x request model.
-//! These facts are read-only DTOs: they do not expose legacy channels, session
-//! handles, operation contexts, or cancellation capabilities.
+//! This surface exposes the trusted mutable request aggregate and its immutable
+//! supporting timing, identity, origin, authentication, and session views
+//! approved for the 2.x request model. It does not expose legacy channels,
+//! session handles, operation contexts, or raw cancellation authority.
 
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
 pub use crate::dispatch::EmbeddedCaller;
+pub use crate::dispatch::IngressRequestView;
 pub use crate::dispatch::OriginalRequestIdentity;
+pub use crate::dispatch::RemotingRequest;
 pub use crate::dispatch::RequestControlView;
 pub use crate::dispatch::RequestId;
 pub use crate::dispatch::RequestMeta;

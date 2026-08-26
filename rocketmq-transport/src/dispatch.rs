@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod authorized_dispatcher;
+mod remoting_request;
 mod request_context;
 mod request_control;
 mod request_identity;
@@ -24,6 +25,8 @@ pub use authorized_dispatcher::AuthorizedCommandDispatcher;
 pub use authorized_dispatcher::AuthorizedDispatchBoundary;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
+pub use remoting_request::IngressRequestView;
+pub use remoting_request::RemotingRequest;
 pub use request_context::RequestContext;
 pub use request_context::RequestContextError;
 pub use request_context::RequestTransport;

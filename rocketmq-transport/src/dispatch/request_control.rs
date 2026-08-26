@@ -28,9 +28,14 @@ use tokio_util::sync::CancellationToken;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::remoting_request::DeferredSlot;
+use crate::dispatch::remoting_request::RequestLifecycleProvenance;
+use crate::dispatch::request_context::RequestContextParts;
 use crate::dispatch::AuthenticationState;
 use crate::dispatch::EmbeddedCaller;
+use crate::dispatch::IngressRequestView;
 use crate::dispatch::OriginalRequestIdentity;
+use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestId;
 use crate::dispatch::RequestOrigin;
@@ -211,30 +216,18 @@ impl RequestControlView {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "REQ-05 establishes the crate-private extension storage before REQ-06 owns it in RemotingRequest"
-)]
 type ExtensionValue = Box<dyn Any + Send + Sync>;
 
 /// Request-local type map that remains unallocated until its first successful insertion.
 ///
 /// Trusted ingress facts and lifecycle capabilities never belong in this map:
 /// they have dedicated read-only request fields and views instead.
-#[allow(
-    dead_code,
-    reason = "REQ-05 establishes the crate-private lazy map before REQ-06 owns it in RemotingRequest"
-)]
 #[derive(Default)]
 pub(crate) struct LazyExtensions {
     values: Option<HashMap<TypeId, ExtensionValue>>,
 }
 
 impl LazyExtensions {
-    #[allow(
-        dead_code,
-        reason = "REQ-05 establishes the crate-private accessor before REQ-06 exposes request extensions"
-    )]
     pub(crate) fn get<T>(&self) -> Option<&T>
     where
         T: Send + Sync + 'static,
@@ -247,10 +240,6 @@ impl LazyExtensions {
     /// Rejected types return their original value and leave the map absent,
     /// preserving the allocation-free request path when no eligible extension
     /// has been inserted.
-    #[allow(
-        dead_code,
-        reason = "REQ-05 establishes the crate-private insertion path before REQ-06 exposes request extensions"
-    )]
     pub(crate) fn try_insert<T>(&mut self, value: T) -> Result<Option<T>, T>
     where
         T: Send + Sync + 'static,
@@ -286,19 +275,24 @@ fn is_reserved_extension_type_id(type_id: TypeId) -> bool {
         TypeId::of::<ConnectionHandlerContextWrapper>(),
         TypeId::of::<ConnectionStateHandle>(),
         TypeId::of::<EmbeddedCaller>(),
+        TypeId::of::<IngressRequestView<'static>>(),
         TypeId::of::<OperationContext>(),
         TypeId::of::<OriginalRequestIdentity>(),
         TypeId::of::<PeerInfo>(),
         TypeId::of::<Principal>(),
         TypeId::of::<ProxyInfoSnapshot>(),
         TypeId::of::<RequestContext>(),
+        TypeId::of::<RequestContextParts>(),
         TypeId::of::<RequestControlView>(),
         TypeId::of::<RequestDeadline>(),
         TypeId::of::<RequestId>(),
         TypeId::of::<RequestMeta>(),
+        TypeId::of::<RequestLifecycleProvenance>(),
+        TypeId::of::<RemotingRequest>(),
         TypeId::of::<RequestOrigin>(),
         TypeId::of::<RequestTransport>(),
         TypeId::of::<ResponseSink>(),
+        TypeId::of::<DeferredSlot>(),
         TypeId::of::<SessionExecutor>(),
         TypeId::of::<SessionHandle>(),
         TypeId::of::<SessionId>(),
@@ -565,5 +559,12 @@ mod tests {
         assert!(is_reserved_extension_type_id(TypeId::of::<SessionExecutor>()));
         assert!(is_reserved_extension_type_id(TypeId::of::<SessionHandle>()));
         assert!(is_reserved_extension_type_id(TypeId::of::<TaskGroup>()));
+        assert!(is_reserved_extension_type_id(
+            TypeId::of::<IngressRequestView<'static>>()
+        ));
+        assert!(is_reserved_extension_type_id(TypeId::of::<RemotingRequest>()));
+        assert!(is_reserved_extension_type_id(TypeId::of::<DeferredSlot>()));
+        assert!(is_reserved_extension_type_id(TypeId::of::<RequestContextParts>()));
+        assert!(is_reserved_extension_type_id(TypeId::of::<RequestLifecycleProvenance>()));
     }
 }
