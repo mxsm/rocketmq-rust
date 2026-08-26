@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod authorized_dispatcher;
+mod handler_outcome;
 mod remoting_request;
 mod request_context;
 mod request_control;
@@ -26,6 +27,17 @@ pub use authorized_dispatcher::AuthorizedCommandDispatcher;
 pub use authorized_dispatcher::AuthorizedDispatchBoundary;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
+pub use handler_outcome::DeferredRegistration;
+pub use handler_outcome::HandlerOutcome;
+#[allow(
+    unused_imports,
+    reason = "DSP-02 exposes the private inline handler contract to later dispatcher wiring"
+)]
+pub(crate) use handler_outcome::HandlerOutcomeContractError;
+pub(crate) use handler_outcome::InlineResponseSlot;
+pub use handler_outcome::ProtocolNoResponse;
+pub use handler_outcome::ProtocolNoResponseError;
+pub use handler_outcome::ProtocolNoResponseReason;
 pub use remoting_request::IngressRequestView;
 pub use remoting_request::RemotingRequest;
 pub use request_context::RequestContext;

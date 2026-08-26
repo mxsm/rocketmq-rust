@@ -21,9 +21,14 @@
 
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
+pub use crate::dispatch::DeferredRegistration;
 pub use crate::dispatch::EmbeddedCaller;
+pub use crate::dispatch::HandlerOutcome;
 pub use crate::dispatch::IngressRequestView;
 pub use crate::dispatch::OriginalRequestIdentity;
+pub use crate::dispatch::ProtocolNoResponse;
+pub use crate::dispatch::ProtocolNoResponseError;
+pub use crate::dispatch::ProtocolNoResponseReason;
 pub use crate::dispatch::RemotingRequest;
 pub use crate::dispatch::RequestControlView;
 pub use crate::dispatch::RequestId;

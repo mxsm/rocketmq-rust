@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::RuntimeContext;
@@ -95,8 +96,18 @@ fn network_fixture(
     deadline: Option<crate::deadline::RequestDeadline>,
     one_way: bool,
 ) -> (Fixture, NetworkSessionHarness) {
+    network_fixture_with_code(parent_task_group, owner, deadline, one_way, 17)
+}
+
+fn network_fixture_with_code(
+    parent_task_group: &TaskGroup,
+    owner: u64,
+    deadline: Option<crate::deadline::RequestDeadline>,
+    one_way: bool,
+    request_code: i32,
+) -> (Fixture, NetworkSessionHarness) {
     let peer_address = address("198.51.100.44:43123");
-    let mut command = RemotingCommand::create_remoting_command(17)
+    let mut command = RemotingCommand::create_remoting_command(request_code)
         .set_opaque(91)
         .set_language(LanguageCode::JAVA)
         .set_version(123)
@@ -525,7 +536,7 @@ async fn request_extensions_reject_reserved_request_model_types() {
         Err(value) => value,
         Ok(_) => panic!("deferred slots must remain reserved extension types"),
     };
-    assert!(!returned.is_reserved());
+    assert!(!returned.has_deferred_capability());
     assert!(request.extension::<DeferredSlot>().is_none());
 
     shutdown(runtime).await;
@@ -546,6 +557,109 @@ async fn one_way_requests_cannot_reserve_deferred_response_state() {
         .build()
         .expect("non-one-way request may retain the inert deferred slot");
     assert!(request.has_reserved_deferred_response());
+
+    shutdown(runtime).await;
+}
+
+#[tokio::test]
+async fn protocol_no_response_factory_accepts_only_the_four_frozen_raw_code_reason_pairs() {
+    let runtime = RuntimeContext::from_current("remoting-request-protocol-no-response-allowlist");
+    let legal = [
+        (
+            RequestCode::CheckTransactionState.to_i32(),
+            ProtocolNoResponseReason::CallbackHandled,
+        ),
+        (
+            RequestCode::ResetConsumerClientOffset.to_i32(),
+            ProtocolNoResponseReason::CallbackHandled,
+        ),
+        (
+            RequestCode::NotifyConsumerIdsChanged.to_i32(),
+            ProtocolNoResponseReason::NotificationHandled,
+        ),
+        (
+            RequestCode::NotifyUnsubscribeLite.to_i32(),
+            ProtocolNoResponseReason::NotificationHandled,
+        ),
+    ];
+
+    for (index, (request_code, reason)) in legal.into_iter().enumerate() {
+        let owner = 121 + index as u64;
+        let (fixture, _session) = network_fixture_with_code(runtime.root_group(), owner, None, false, request_code);
+        let request = build(fixture).expect("legal no-response request should build");
+        let marker = request
+            .protocol_no_response(reason)
+            .expect("frozen code/reason pair should be accepted");
+
+        assert_eq!(marker.request_id(), request.original_identity().request_id());
+        assert_eq!(marker.original_code(), request_code);
+        assert_eq!(marker.reason(), reason);
+    }
+
+    shutdown(runtime).await;
+}
+
+#[tokio::test]
+async fn protocol_no_response_factory_rejects_known_mismatches_unknown_codes_and_one_way_first() {
+    let runtime = RuntimeContext::from_current("remoting-request-protocol-no-response-rejections");
+    let rejected = [
+        (
+            RequestCode::CheckTransactionState.to_i32(),
+            ProtocolNoResponseReason::NotificationHandled,
+        ),
+        (
+            RequestCode::NotifyConsumerIdsChanged.to_i32(),
+            ProtocolNoResponseReason::CallbackHandled,
+        ),
+        (-91_337, ProtocolNoResponseReason::CallbackHandled),
+        (-91_337, ProtocolNoResponseReason::NotificationHandled),
+    ];
+
+    for (index, (request_code, reason)) in rejected.into_iter().enumerate() {
+        let (fixture, _session) =
+            network_fixture_with_code(runtime.root_group(), 131 + index as u64, None, false, request_code);
+        let request = build(fixture).expect("ordinary request should build");
+        assert!(matches!(
+            request.protocol_no_response(reason),
+            Err(ProtocolNoResponseError::Unsupported {
+                request_code: actual_code,
+                reason: actual_reason,
+            }) if actual_code == request_code && actual_reason == reason
+        ));
+    }
+
+    let one_way_code = RequestCode::CheckTransactionState.to_i32();
+    let (fixture, _session) = network_fixture_with_code(runtime.root_group(), 139, None, true, one_way_code);
+    let request = build(fixture).expect("one-way request without deferred capability should build");
+    assert!(matches!(
+        request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled),
+        Err(ProtocolNoResponseError::OneWayRequest)
+    ));
+    assert!(matches!(
+        request.protocol_no_response(ProtocolNoResponseReason::NotificationHandled),
+        Err(ProtocolNoResponseError::OneWayRequest)
+    ));
+
+    shutdown(runtime).await;
+}
+
+#[tokio::test]
+async fn protocol_no_response_factory_uses_immutable_original_code_and_one_way_flag() {
+    let runtime = RuntimeContext::from_current("remoting-request-protocol-no-response-original-identity");
+    let original_code = RequestCode::ResetConsumerClientOffset.to_i32();
+    let (fixture, _session) = network_fixture_with_code(runtime.root_group(), 141, None, false, original_code);
+    let mut request = build(fixture).expect("ordinary request should build");
+    let original = request.original_identity();
+
+    request.command_mut().set_code_ref(-77_777);
+    request.command_mut().mark_oneway_rpc_ref();
+    let marker = request
+        .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
+        .expect("mutable command changes cannot alter ingress policy");
+
+    assert_eq!(marker.request_id(), original.request_id());
+    assert_eq!(marker.original_code(), original_code);
+    assert_eq!(marker.reason(), ProtocolNoResponseReason::CallbackHandled);
 
     shutdown(runtime).await;
 }

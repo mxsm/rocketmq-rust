@@ -17,16 +17,22 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Principal;
 use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
 use rocketmq_transport::api::v1::RequestId as V1RequestId;
 use rocketmq_transport::api::v2::AuthenticationState;
+use rocketmq_transport::api::v2::DeferredRegistration;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::FileRegion;
 use rocketmq_transport::api::v2::FileRegionSequence;
+use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::IngressRequestView;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
+use rocketmq_transport::api::v2::ProtocolNoResponse;
+use rocketmq_transport::api::v2::ProtocolNoResponseError;
+use rocketmq_transport::api::v2::ProtocolNoResponseReason;
 use rocketmq_transport::api::v2::ProxyInfoSnapshot;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestControlView;
@@ -103,6 +109,8 @@ fn assert_file_region_dto_contract(_: Option<FileRegion>, _: Option<FileRegionSe
 
 fn assert_error_contract<T: std::error::Error>() {}
 
+fn assert_debug_contract<T: std::fmt::Debug>() {}
+
 fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
     if let Some(plan) = plan {
         let _: i32 = plan.response_code();
@@ -121,6 +129,38 @@ fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
     let _ = ResponseBodyKind::Segments;
     let _ = ResponseBodyKind::FileRegions;
     assert_error_contract::<ResponsePlanError>();
+}
+
+fn consume_handler_outcome_exhaustively(outcome: HandlerOutcome) -> Option<V2RequestId> {
+    match outcome {
+        HandlerOutcome::Reply(plan) => {
+            let _: i32 = plan.response_code();
+            None
+        }
+        HandlerOutcome::Deferred(registration) => Some(registration.request_id()),
+        HandlerOutcome::NoReply(marker) => {
+            let _: i32 = marker.original_code();
+            let _: ProtocolNoResponseReason = marker.reason();
+            Some(marker.request_id())
+        }
+    }
+}
+
+fn assert_handler_outcome_contract(registration: Option<DeferredRegistration>, marker: Option<ProtocolNoResponse>) {
+    if let Some(registration) = registration {
+        let _: V2RequestId = registration.request_id();
+        let _: String = format!("{registration:?}");
+    }
+    if let Some(marker) = marker {
+        let _: V2RequestId = marker.request_id();
+        let _: i32 = marker.original_code();
+        let _: ProtocolNoResponseReason = marker.reason();
+    }
+
+    let _: fn(&RemotingRequest, ProtocolNoResponseReason) -> Result<ProtocolNoResponse, ProtocolNoResponseError> =
+        RemotingRequest::protocol_no_response;
+    assert_error_contract::<ProtocolNoResponseError>();
+    let _: RocketMQError = ProtocolNoResponseError::OneWayRequest.into();
 }
 
 fn assert_session_view_contract(view: SessionView) {
@@ -221,4 +261,23 @@ fn v2_exposes_the_request_aggregate_and_ingress_view_without_legacy_reexports() 
 fn v2_exposes_only_response_plan_metadata_and_file_region_construction_dtos() {
     assert_response_plan_contract(None);
     assert_file_region_dto_contract(None, None);
+}
+
+#[test]
+fn v2_exposes_exactly_three_exhaustive_affine_handler_outcomes() {
+    assert_debug_contract::<HandlerOutcome>();
+    assert_debug_contract::<DeferredRegistration>();
+    assert_debug_contract::<ProtocolNoResponse>();
+    let plan = ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+        .expect("public reply plan should construct");
+    assert_eq!(consume_handler_outcome_exhaustively(HandlerOutcome::Reply(plan)), None);
+    assert_handler_outcome_contract(None, None);
+
+    let _ = ProtocolNoResponseReason::CallbackHandled;
+    let _ = ProtocolNoResponseReason::NotificationHandled;
+    let unsupported = ProtocolNoResponseError::Unsupported {
+        request_code: -91,
+        reason: ProtocolNoResponseReason::CallbackHandled,
+    };
+    assert!(unsupported.to_string().contains("-91"));
 }
