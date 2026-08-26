@@ -35,10 +35,16 @@ use crate::admission::PartialFramePermit;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
 use crate::dispatch::remoting_request::RemotingRequestBuilder;
 use crate::dispatch::remoting_request::RequestLifecycleProvenance;
-use crate::dispatch::HandlerOutcome;
+use crate::dispatch::DispatchProcessor;
+use crate::dispatch::DispatchProcessorError;
+use crate::dispatch::ExplicitV2Processor;
 use crate::dispatch::HandlerOutcomeContractError;
+use crate::dispatch::InternalProcessorCandidate;
+use crate::dispatch::InternalProcessorOutcome;
+use crate::dispatch::LegacyProcessorAdapter;
+use crate::dispatch::LegacyProcessorAdapterError;
+use crate::dispatch::LegacyReplyCandidate;
 use crate::dispatch::OriginalRequestIdentity;
-use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestTransport;
 use crate::dispatch::ResponseBindingError;
@@ -48,13 +54,8 @@ use crate::dispatch::ResponsePlanError;
 use crate::dispatch::ResponseSink;
 use crate::dispatch::WriteProgress;
 use crate::hook_registry::HookRegistry;
-use crate::hook_registry::HookSnapshot;
-use crate::remoting::inner::run_after_rpc_hooks;
-use crate::remoting::inner::run_before_rpc_hooks;
-use crate::runtime::processor_v2::RejectRequestDecision;
+use crate::runtime::processor::RequestProcessor;
 use crate::runtime::processor_v2::RequestProcessorV2;
-use crate::runtime::processor_v2::ResponseWriteObservationV2;
-use crate::runtime::processor_v2::ResponseWritePath;
 use crate::runtime::RPCHook;
 use crate::server::SessionHandle;
 use crate::session_executor::SessionDispatchError;
@@ -88,6 +89,8 @@ pub(crate) enum AuthorizedDispatchV2Error {
     ResponseBinding(#[from] ResponseBindingError),
     #[error(transparent)]
     HandlerContract(#[from] HandlerOutcomeContractError),
+    #[error(transparent)]
+    ProcessorAdapter(#[from] LegacyProcessorAdapterError),
     #[error("one-way requests cannot complete with {outcome}")]
     OneWayOutcome { outcome: &'static str },
     #[error("V2 response delivery failed: {kind:?}, progress={progress:?}")]
@@ -111,6 +114,7 @@ impl AuthorizedDispatchV2Error {
             Self::ResponsePlan(_) => "response_plan",
             Self::ResponseBinding(_) => "response_binding",
             Self::HandlerContract(_) => "handler_contract",
+            Self::ProcessorAdapter(_) => "processor_adapter",
             Self::OneWayOutcome { .. } => "one_way_outcome",
             Self::Response { .. } => "response",
         }
@@ -122,60 +126,14 @@ impl AuthorizedDispatchV2Error {
     dead_code,
     reason = "DSP-03 defines the private dispatcher core wired by the later coexistence stage"
 )]
-pub(crate) struct AuthorizedCommandDispatcherV2<P> {
-    processor: P,
+pub(crate) struct AuthorizedCommandDispatcherV2<D> {
+    processor: D,
     rpc_hooks: HookRegistry,
     #[cfg(test)]
     reported_failures: std::sync::Mutex<Vec<&'static str>>,
 }
 
-struct HandlerCandidate {
-    outcome: HandlerOutcome,
-    failure: Option<HandlerFailureOrigin>,
-}
-
-impl HandlerCandidate {
-    const fn success(outcome: HandlerOutcome) -> Self {
-        Self { outcome, failure: None }
-    }
-
-    const fn failure(outcome: HandlerOutcome, failure: HandlerFailureOrigin) -> Self {
-        Self {
-            outcome,
-            failure: Some(failure),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum HandlerFailureOrigin {
-    BeforeHook,
-    ProcessorError,
-    Deadline,
-    AfterHook,
-    ProcessorErrorAfterHookError,
-}
-
-impl HandlerFailureOrigin {
-    const fn category(self) -> &'static str {
-        match self {
-            Self::BeforeHook => "before_hook",
-            Self::ProcessorError => "processor_error",
-            Self::Deadline => "deadline",
-            Self::AfterHook => "after_hook",
-            Self::ProcessorErrorAfterHookError => "processor_error_after_hook_error",
-        }
-    }
-
-    const fn after_hook_error(self) -> Self {
-        match self {
-            Self::ProcessorError => Self::ProcessorErrorAfterHookError,
-            Self::BeforeHook | Self::Deadline | Self::AfterHook | Self::ProcessorErrorAfterHookError => Self::AfterHook,
-        }
-    }
-}
-
-impl<P> AuthorizedCommandDispatcherV2<P>
+impl<P> AuthorizedCommandDispatcherV2<ExplicitV2Processor<P>>
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
@@ -184,6 +142,38 @@ where
         reason = "DSP-03 construction remains private until later coexistence routing"
     )]
     pub(crate) fn new(processor: P, rpc_hooks: Vec<Arc<dyn RPCHook>>) -> Self {
+        Self::from_dispatch_processor(ExplicitV2Processor::new(processor), rpc_hooks)
+    }
+}
+
+impl From<DispatchProcessorError> for AuthorizedDispatchV2Error {
+    fn from(error: DispatchProcessorError) -> Self {
+        match error {
+            DispatchProcessorError::Legacy(error) => Self::ProcessorAdapter(error),
+            DispatchProcessorError::ResponsePlan(error) => Self::ResponsePlan(error),
+            DispatchProcessorError::HandlerContract(error) => Self::HandlerContract(error),
+        }
+    }
+}
+
+impl<P> AuthorizedCommandDispatcherV2<LegacyProcessorAdapter<P>>
+where
+    P: RequestProcessor + Clone + Sync + 'static,
+{
+    #[allow(
+        dead_code,
+        reason = "DSP-05 keeps legacy construction private until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn new_legacy(processor: LegacyProcessorAdapter<P>, rpc_hooks: Vec<Arc<dyn RPCHook>>) -> Self {
+        Self::from_dispatch_processor(processor, rpc_hooks)
+    }
+}
+
+impl<D> AuthorizedCommandDispatcherV2<D>
+where
+    D: DispatchProcessor,
+{
+    fn from_dispatch_processor(processor: D, rpc_hooks: Vec<Arc<dyn RPCHook>>) -> Self {
         Self {
             processor,
             rpc_hooks: HookRegistry::new(rpc_hooks),
@@ -226,7 +216,7 @@ where
         let class = AdmissionClass::for_request_code(original.original_code());
         let lifecycle = RequestLifecycleProvenance::from_network_session(&session);
         let builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
-        let ordering = self.processor.request_ordering(builder.ingress_view());
+        let ordering = self.processor.request_ordering(&builder);
 
         if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
             send_boundary_response(&session, original, deadline_response(original.original_opaque())).await?;
@@ -314,7 +304,7 @@ where
     )]
     async fn execute_admitted(
         &self,
-        mut processor: P,
+        mut processor: D,
         session: SessionHandle,
         class: AdmissionClass,
         original: OriginalRequestIdentity,
@@ -322,102 +312,152 @@ where
         request_started: Instant,
         builder: RemotingRequestBuilder,
     ) -> Result<(), AuthorizedDispatchV2Error> {
-        let response = ResponseSink::network_plan(session, class, builder.control().clone());
+        let request_bytes = builder.command().body().map_or(0, |body| body.len() as u64);
+        let mut metrics = processor.begin_admitted(original, request_bytes);
+        let response = ResponseSink::network_plan(session.clone(), class, builder.control().clone());
 
         if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
             let plan = ResponsePlan::command(deadline_response(original.original_opaque()))?;
-            if original.is_one_way() {
-                drop(plan);
-                self.report_failure_category(HandlerFailureOrigin::Deadline.category());
-                return Ok(());
-            }
-            return deliver_and_observe(&processor, response, original, request_started, plan).await;
+            let candidate = processor.deadline_candidate(plan);
+            return self
+                .finish_candidate(&processor, response, original, request_started, candidate, &mut metrics)
+                .await;
         }
 
-        match processor.reject_request(original.original_code()) {
-            RejectRequestDecision::Proceed => {}
-            RejectRequestDecision::Reject(plan) => {
-                if original.is_one_way() {
-                    drop(plan);
-                    return Ok(());
-                }
-                return deliver_and_observe(&processor, response, original, request_started, plan).await;
-            }
+        if let Some(candidate) = processor.reject_request(original.original_code())? {
+            return self
+                .finish_candidate(&processor, response, original, request_started, candidate, &mut metrics)
+                .await;
         }
 
         let mut request = builder.build()?;
         let hook_snapshot = self.rpc_hooks.snapshot();
-        let before_result = request.with_body_free_hook_command(|request_head| {
-            run_before_rpc_hooks(hook_snapshot.as_deref(), remote_address, request_head)
-        });
-        let candidate = match before_result {
-            Ok(()) => {
-                let processed = match request.meta().deadline() {
-                    Some(deadline) => deadline.timeout(processor.process(&mut request)).await,
-                    None => Ok(processor.process(&mut request).await),
-                };
-                match processed {
-                    Ok(Ok(outcome)) => apply_after_hook(
-                        &mut request,
-                        HandlerCandidate::success(outcome),
-                        hook_snapshot.as_deref(),
-                        remote_address,
-                    )?,
-                    Ok(Err(error)) => {
-                        let plan = crate::error_response::response_plan_from_error(&error)?;
-                        apply_after_hook(
-                            &mut request,
-                            HandlerCandidate::failure(
-                                HandlerOutcome::Reply(plan),
-                                HandlerFailureOrigin::ProcessorError,
-                            ),
-                            hook_snapshot.as_deref(),
-                            remote_address,
-                        )?
-                    }
-                    Err(_) => HandlerCandidate::failure(
-                        HandlerOutcome::Reply(ResponsePlan::command(deadline_response(original.original_opaque()))?),
-                        HandlerFailureOrigin::Deadline,
-                    ),
-                }
-            }
-            Err(error) => HandlerCandidate::failure(
-                HandlerOutcome::Reply(crate::error_response::response_plan_from_error(&error)?),
-                HandlerFailureOrigin::BeforeHook,
-            ),
-        };
+        let candidate = processor
+            .process(
+                &mut request,
+                hook_snapshot.as_deref(),
+                remote_address,
+                &session,
+                &response,
+            )
+            .await?;
+        let InternalProcessorCandidate {
+            outcome,
+            failure,
+            observe_write,
+        } = candidate;
+        let outcome = processor.resolve_outcome(&mut request, outcome)?;
+        self.finish_candidate(
+            &processor,
+            response,
+            original,
+            request_started,
+            InternalProcessorCandidate {
+                outcome,
+                failure,
+                observe_write,
+            },
+            &mut metrics,
+        )
+        .await
+    }
 
-        let outcome = request.resolve_handler_outcome(candidate.outcome)?;
-        if original.is_one_way() {
-            return match outcome {
-                HandlerOutcome::Reply(plan) => {
+    async fn finish_candidate(
+        &self,
+        processor: &D,
+        response: ResponseSink,
+        original: OriginalRequestIdentity,
+        request_started: Instant,
+        candidate: InternalProcessorCandidate,
+        metrics: &mut crate::dispatch::DispatchMetricsGuard,
+    ) -> Result<(), AuthorizedDispatchV2Error> {
+        let InternalProcessorCandidate {
+            outcome,
+            failure,
+            observe_write,
+        } = candidate;
+        match outcome {
+            InternalProcessorOutcome::V2(crate::dispatch::HandlerOutcome::Reply(plan)) => {
+                let response_code = plan.response_code();
+                if failure.is_some() {
+                    metrics.complete_process_request_failed(response_code);
+                }
+                if original.is_one_way() {
                     drop(plan);
-                    if let Some(failure) = candidate.failure {
+                    if failure.is_none() {
+                        metrics.complete_oneway();
+                    }
+                    if let Some(failure) = failure {
                         self.report_failure_category(failure.category());
                     }
-                    Ok(())
+                    return Ok(());
                 }
-                HandlerOutcome::Deferred(registration) => {
-                    drop(registration);
-                    Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "deferred" })
-                }
-                HandlerOutcome::NoReply(marker) => {
-                    drop(marker);
-                    Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "no_reply" })
-                }
-            };
-        }
-
-        match outcome {
-            HandlerOutcome::Reply(plan) => {
-                deliver_and_observe(&processor, response, original, request_started, plan).await
+                deliver_and_observe(
+                    processor,
+                    response,
+                    original,
+                    request_started,
+                    plan,
+                    observe_write,
+                    failure.is_some(),
+                    metrics,
+                )
+                .await
             }
-            HandlerOutcome::Deferred(registration) => {
+            InternalProcessorOutcome::LegacyReply(reply) => {
+                let response_code = reply.response_code();
+                if failure.is_some() {
+                    metrics.complete_process_request_failed(response_code);
+                }
+                if original.is_one_way() {
+                    drop(reply);
+                    if failure.is_none() {
+                        metrics.complete_oneway();
+                    }
+                    if let Some(failure) = failure {
+                        self.report_failure_category(failure.category());
+                    }
+                    return Ok(());
+                }
+                let plan = match reply {
+                    LegacyReplyCandidate::OwnedCommand(command) => ResponsePlan::from_legacy_command(command)
+                        .map_err(LegacyProcessorAdapterError::MalformedLegacyResponse)?,
+                    LegacyReplyCandidate::ValidatedPlan(plan) => plan,
+                };
+                deliver_and_observe(
+                    processor,
+                    response,
+                    original,
+                    request_started,
+                    plan,
+                    observe_write,
+                    failure.is_some(),
+                    metrics,
+                )
+                .await
+            }
+            InternalProcessorOutcome::V2(crate::dispatch::HandlerOutcome::Deferred(registration)) => {
+                if original.is_one_way() {
+                    drop(registration);
+                    return Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "deferred" });
+                }
                 drop(registration);
                 Ok(())
             }
-            HandlerOutcome::NoReply(marker) => {
+            InternalProcessorOutcome::V2(crate::dispatch::HandlerOutcome::NoReply(marker)) => {
+                if original.is_one_way() {
+                    drop(marker);
+                    return Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "no_reply" });
+                }
                 drop(marker);
+                Ok(())
+            }
+            InternalProcessorOutcome::LegacyAmbiguousNone => {
+                if original.is_one_way() {
+                    metrics.complete_oneway();
+                } else {
+                    metrics.complete_legacy_ambiguous_none();
+                }
                 Ok(())
             }
         }
@@ -455,55 +495,20 @@ where
 
 #[allow(
     dead_code,
-    reason = "DSP-03 hook application is reached through the not-yet-wired private dispatcher"
-)]
-fn apply_after_hook(
-    request: &mut RemotingRequest,
-    candidate: HandlerCandidate,
-    hook_snapshot: Option<&HookSnapshot>,
-    remote_address: std::net::SocketAddr,
-) -> Result<HandlerCandidate, AuthorizedDispatchV2Error> {
-    let HandlerCandidate { outcome, failure } = candidate;
-    let HandlerOutcome::Reply(mut plan) = outcome else {
-        return Ok(HandlerCandidate { outcome, failure });
-    };
-
-    let result = request.with_body_free_hook_request(|request_head| {
-        plan.with_body_free_hook_head(|response_head| {
-            run_after_rpc_hooks(hook_snapshot, remote_address, request_head, response_head)
-        })
-    });
-    match result {
-        Ok(()) => Ok(HandlerCandidate {
-            outcome: HandlerOutcome::Reply(plan),
-            failure,
-        }),
-        Err(error) => {
-            drop(plan);
-            let failure = failure
-                .map(HandlerFailureOrigin::after_hook_error)
-                .unwrap_or(HandlerFailureOrigin::AfterHook);
-            Ok(HandlerCandidate::failure(
-                HandlerOutcome::Reply(crate::error_response::response_plan_from_error(&error)?),
-                failure,
-            ))
-        }
-    }
-}
-
-#[allow(
-    dead_code,
     reason = "DSP-03 delivery is reached through the not-yet-wired private dispatcher"
 )]
-async fn deliver_and_observe<P>(
-    processor: &P,
+async fn deliver_and_observe<D>(
+    processor: &D,
     response: ResponseSink,
     original: OriginalRequestIdentity,
     request_started: Instant,
     plan: ResponsePlan,
+    observe_write: bool,
+    failure_recorded: bool,
+    metrics: &mut crate::dispatch::DispatchMetricsGuard,
 ) -> Result<(), AuthorizedDispatchV2Error>
 where
-    P: RequestProcessorV2,
+    D: DispatchProcessor,
 {
     let response_code = plan.response_code();
     let body_kind = plan.body_kind();
@@ -512,36 +517,30 @@ where
     let result = response.send_plan(bound).await;
     let write_elapsed = write_started.elapsed();
     let end_to_end_elapsed = request_started.elapsed();
-
-    match result {
-        Ok(receipt) => {
-            processor.observe_response_write(ResponseWriteObservationV2::from_result(
-                original.request_id(),
-                original.original_code(),
-                response_code,
-                body_kind,
-                ResponseWritePath::Inline,
-                write_elapsed,
-                end_to_end_elapsed,
-                Ok(receipt),
-            ));
-            Ok(())
+    let failure = result
+        .as_ref()
+        .err()
+        .map(|error| (error.kind(), error.write_progress()));
+    if !failure_recorded {
+        if failure.is_some() {
+            metrics.complete_write_channel_failed(response_code);
+        } else {
+            metrics.complete_response(response_code);
         }
-        Err(error) => {
-            let kind = error.kind();
-            let progress = error.write_progress();
-            processor.observe_response_write(ResponseWriteObservationV2::from_result(
-                original.request_id(),
-                original.original_code(),
-                response_code,
-                body_kind,
-                ResponseWritePath::Inline,
-                write_elapsed,
-                end_to_end_elapsed,
-                Err(error),
-            ));
-            Err(AuthorizedDispatchV2Error::Response { kind, progress })
-        }
+    }
+    if observe_write {
+        processor.observe_response_write(
+            original,
+            response_code,
+            body_kind,
+            write_elapsed,
+            end_to_end_elapsed,
+            result,
+        );
+    }
+    match failure {
+        Some((kind, progress)) => Err(AuthorizedDispatchV2Error::Response { kind, progress }),
+        None => Ok(()),
     }
 }
 

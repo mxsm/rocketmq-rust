@@ -413,7 +413,7 @@ fn admission_response(opaque: i32, error: &AdmissionError) -> RemotingCommand {
         .set_opaque(opaque)
 }
 
-fn deadline_response(opaque: i32) -> RemotingCommand {
+pub(super) fn deadline_response(opaque: i32) -> RemotingCommand {
     RemotingCommand::create_response_command_with_code_remark(
         ResponseCode::SystemError,
         "request deadline exceeded".to_owned(),

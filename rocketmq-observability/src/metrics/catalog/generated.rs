@@ -374,6 +374,11 @@ const METRIC_LABELS_59: &[&str] = &[
     labels::STATE,
 ];
 
+const METRIC_LABELS_60: &[&str] = &[
+    labels::PROCESSOR,
+    labels::REQUEST_CODE,
+];
+
 pub const JAVA_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: metrics::PROCESSOR_WATERMARK,
@@ -1882,5 +1887,12 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         unit: "",
         labels: METRIC_LABELS_59,
         source: MetricSource::Observability,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: METRIC_LABELS_60,
+        source: MetricSource::Remoting,
     },
 ];

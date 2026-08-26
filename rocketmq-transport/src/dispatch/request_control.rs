@@ -172,6 +172,15 @@ impl RequestControlView {
         }
     }
 
+    /// Proves that this control observes the supplied session and task-group
+    /// owners rather than merely matching their diagnostic identifiers.
+    pub(crate) fn same_lifecycle_owner(&self, session: &SessionStateView, parent_task_group: &TaskGroup) -> bool {
+        self.session.same_canonical_owner(session)
+            // tokio-util 0.7.19 implements token equality with Arc::ptr_eq;
+            // child tokens and independently allocated owners compare unequal.
+            && self.parent_cancellation == parent_task_group.cancellation_token()
+    }
+
     /// Returns the canonical ingress deadline, when one was supplied.
     #[must_use]
     pub const fn deadline(&self) -> Option<RequestDeadline> {

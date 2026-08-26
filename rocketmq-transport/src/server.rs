@@ -49,6 +49,7 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
+use crate::base::pending_request_table::PendingRequestTable;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SocketOptions;
 use crate::config::TlsConfig;
@@ -66,6 +67,8 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
 use crate::file_region::FileTransferMode;
+use crate::net::channel::Channel;
+use crate::net::channel::ChannelInner;
 use crate::proxy_protocol::read_proxy_protocol;
 use crate::proxy_protocol::ProxyProtocolConfig;
 use crate::proxy_protocol::ProxyProtocolMetadata;
@@ -164,6 +167,32 @@ pub struct SessionHandle {
 impl SessionHandle {
     pub fn session_id(&self) -> u64 {
         self.send.session_id
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge ownership remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn same_canonical_owner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.send, &other.send)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge construction remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn legacy_processor_channel(
+        &self,
+        response: ResponseSink,
+        response_table: PendingRequestTable,
+    ) -> RocketMQResult<Channel> {
+        let inner = ChannelInner::new_legacy_network_bridge(
+            self.connection(),
+            response,
+            response_table,
+            self.task_group().clone(),
+        )?;
+        Ok(Channel::new_canonical_network(Arc::new(inner), self.clone()))
     }
 
     pub fn local_addr(&self) -> SocketAddr {

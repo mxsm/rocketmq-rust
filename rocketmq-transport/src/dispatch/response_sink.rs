@@ -35,6 +35,8 @@ use crate::dispatch::ResponseError;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseTerminalState;
 use crate::server::SessionHandle;
+use crate::session_view::SessionStateView;
+use rocketmq_runtime::TaskGroup;
 
 use plan::LocalPlanSenderState;
 pub(crate) use plan::LocalResponsePlanReceiver;
@@ -118,7 +120,7 @@ impl LocalResponseSink {
         }
     }
 
-    fn complete_legacy_v1(
+    fn complete_legacy_v1_legacy_mode(
         &self,
         command: RemotingCommand,
         receipt: ResponseReceipt,
@@ -144,6 +146,17 @@ impl LocalResponseSink {
                 state.terminal_state = Some(ResponseTerminalState::Closed);
                 Err(ResponseError::SessionClosed)
             }
+        }
+    }
+
+    async fn complete_legacy_v1(
+        &self,
+        command: RemotingCommand,
+        receipt: ResponseReceipt,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        match &self.mode {
+            LocalResponseMode::Legacy(_) => self.complete_legacy_v1_legacy_mode(command, receipt),
+            LocalResponseMode::Plan(_) => plan::complete_local_legacy(self.clone(), command, receipt).await,
         }
     }
 
@@ -218,6 +231,74 @@ impl ResponseSink {
         matches!(self, Self::Local(_))
     }
 
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge provenance remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) const fn is_network_transport(&self) -> bool {
+        matches!(self, Self::Network(_))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge provenance remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn same_completion_owner(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Network(left), Self::Network(right)) => left.same_canonical_owner(right),
+            (Self::Local(left), Self::Local(right)) => match (&left.mode, &right.mode) {
+                (LocalResponseMode::Legacy(left), LocalResponseMode::Legacy(right)) => Arc::ptr_eq(left, right),
+                (LocalResponseMode::Plan(left), LocalResponseMode::Plan(right)) => Arc::ptr_eq(left, right),
+                (LocalResponseMode::Legacy(_), LocalResponseMode::Plan(_))
+                | (LocalResponseMode::Plan(_), LocalResponseMode::Legacy(_)) => false,
+            },
+            (Self::Network(_), Self::Local(_)) | (Self::Local(_), Self::Network(_)) => false,
+        }
+    }
+
+    /// Proves that this is the local plan capability whose control observes
+    /// the supplied embedded lifecycle owners.
+    pub(crate) fn is_local_plan_owner(&self, session: &SessionStateView, task_group: &TaskGroup) -> bool {
+        matches!(
+            self,
+            Self::Local(LocalResponseSink {
+                mode: LocalResponseMode::Plan(state),
+            }) if state.control().same_lifecycle_owner(session, task_group)
+        )
+    }
+
+    #[allow(
+        dead_code,
+        reason = "DSP-05 bridge provenance remains dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn is_network_owner(&self, session: &SessionHandle) -> bool {
+        matches!(self, Self::Network(owner) if owner.same_canonical_owner(session))
+    }
+
+    /// Proves this is the plan-bound view of a canonical network session. A bare
+    /// compatibility sink is not sufficient for the legacy adapter because it
+    /// has no shared completion slot.
+    pub(crate) fn is_canonical_network_plan_owner(&self, session: &SessionHandle) -> bool {
+        matches!(
+            self,
+            Self::Network(owner)
+                if owner.same_canonical_owner(session) && owner.response_plan_context().is_some()
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn terminal_state(&self) -> Option<ResponseTerminalState> {
+        match self {
+            Self::Network(session) => session.response_plan_context()?.terminal_state(),
+            Self::Local(LocalResponseSink {
+                mode: LocalResponseMode::Plan(state),
+            }) => state.terminal_state(),
+            Self::Local(LocalResponseSink {
+                mode: LocalResponseMode::Legacy(state),
+            }) => state.lock().terminal_state,
+        }
+    }
+
     pub(crate) fn reserve_legacy_v1_receipt(&self) -> Result<ResponseReceipt, ResponseError> {
         let disposition = match self {
             Self::Network(_) => ResponseDisposition::TransportWritten,
@@ -232,8 +313,11 @@ impl ResponseSink {
         receipt: ResponseReceipt,
     ) -> Result<ResponseReceipt, ResponseError> {
         match self {
+            Self::Network(session) if session.response_plan_context().is_some() => {
+                plan::complete_network_legacy(Arc::clone(session), command, receipt).await
+            }
             Self::Network(session) => session.connection().send_response(command).await.map(|()| receipt),
-            Self::Local(sink) => sink.complete_legacy_v1(command, receipt),
+            Self::Local(sink) => sink.complete_legacy_v1(command, receipt).await,
         }
     }
 

@@ -173,7 +173,7 @@ async fn direct_expired_oneway_admission_completes_without_reaching_binding() {
 
     dispatcher
         .execute_admitted(
-            processor,
+            ExplicitV2Processor::new(processor),
             session.clone(),
             AdmissionClass::Data,
             original,
@@ -215,7 +215,7 @@ async fn one_way_deferred_outcome_is_a_policy_error_without_inline_write_or_obse
 
     let result = dispatcher
         .execute_admitted(
-            processor,
+            ExplicitV2Processor::new(processor),
             session.clone(),
             AdmissionClass::Data,
             one_way_original,
@@ -253,7 +253,7 @@ async fn one_way_no_reply_marker_failure_maps_resolves_and_drops_without_write()
 
     dispatcher
         .execute_admitted(
-            processor,
+            ExplicitV2Processor::new(processor),
             session.clone(),
             AdmissionClass::Control,
             original,
@@ -380,7 +380,7 @@ async fn deferred_transfer_and_reply_after_defer_resolve_once_without_inline_wri
 
         let result = dispatcher
             .execute_admitted(
-                processor,
+                ExplicitV2Processor::new(processor),
                 session.clone(),
                 AdmissionClass::Data,
                 original,

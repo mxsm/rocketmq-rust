@@ -23,6 +23,9 @@ fn request_identity_span(identity: crate::dispatch::OriginalRequestIdentity) -> 
     )
 }
 
+#[cfg(test)]
+type LegacyProcessorRequestCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, i32)>>>;
+
 /// Cloneable metrics and tracing capability for one transport composition.
 ///
 /// A no-op value is explicit and never consults process-global OpenTelemetry state.
@@ -34,6 +37,8 @@ pub struct TransportTelemetry {
     client: rocketmq_observability::metrics::client::ClientMetrics,
     #[cfg(any(feature = "observability", feature = "observability-traces"))]
     handle: Option<rocketmq_observability::TelemetryHandle>,
+    #[cfg(test)]
+    legacy_processor_requests: Option<LegacyProcessorRequestCapture>,
 }
 
 impl TransportTelemetry {
@@ -53,7 +58,24 @@ impl TransportTelemetry {
             #[cfg(feature = "observability")]
             client: rocketmq_observability::metrics::client::ClientMetrics::from_handle(telemetry),
             handle: Some(telemetry.clone()),
+            #[cfg(test)]
+            legacy_processor_requests: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_legacy_processor_request_capture() -> (Self, LegacyProcessorRequestCapture) {
+        let capture = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let telemetry = Self {
+            #[cfg(feature = "observability")]
+            remoting: Default::default(),
+            #[cfg(feature = "observability")]
+            client: Default::default(),
+            #[cfg(any(feature = "observability", feature = "observability-traces"))]
+            handle: None,
+            legacy_processor_requests: Some(std::sync::Arc::clone(&capture)),
+        };
+        (telemetry, capture)
     }
 
     #[inline]
@@ -124,6 +146,24 @@ impl TransportTelemetry {
 
         #[cfg(not(feature = "observability"))]
         let _ = (latency, event);
+    }
+
+    #[inline]
+    #[allow(
+        dead_code,
+        reason = "DSP-05 adapter metrics remain dormant until DSP-06 coexistence routing"
+    )]
+    pub(crate) fn record_legacy_processor_request(&self, processor: &'static str, request_code: i32) {
+        #[cfg(test)]
+        if let Some(capture) = &self.legacy_processor_requests {
+            capture.lock().push((processor, request_code));
+        }
+
+        #[cfg(feature = "observability")]
+        self.remoting.record_legacy_processor_request(processor, request_code);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = (processor, request_code);
     }
 
     #[inline]
@@ -326,6 +366,7 @@ mod tests {
         telemetry.record_outbound_written_plaintext_bytes(128);
         telemetry.record_lifecycle_event("connected", "queued");
         telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
+        telemetry.record_legacy_processor_request("noop-legacy", 10);
         telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
         telemetry.record_go_away(TransportGoAwayOutcome::Received);
         let identity = crate::dispatch::OriginalRequestIdentity::capture(
