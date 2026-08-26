@@ -44,11 +44,20 @@ fn reserve_legacy_v1_request_id(sequence: &AtomicU64) -> Result<RequestId, Respo
     })
 }
 
-/// Opaque process-local identity for one response owner.
+/// Opaque process-local identity for one request allocation.
 ///
-/// The owner identifier distinguishes independent allocators within a process, and the sequence
-/// distinguishes requests created by that owner. The values do not identify a peer, request body,
-/// or protocol message.
+/// Real inbound requests use a process-local session owner and a sequence assigned within that
+/// session. Legacy V1 direct-write receipts use the same type with a reserved synthetic owner. The
+/// values are internal correlation data, not wire identifiers, peer identities, request bodies, or
+/// other protocol content.
+///
+/// ```compile_fail
+/// use rocketmq_transport::api::v2::RequestId;
+///
+/// fn fields_are_private(request_id: RequestId) {
+///     let _ = request_id.owner_id;
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId {
     owner_id: u64,
@@ -56,13 +65,23 @@ pub struct RequestId {
 }
 
 impl RequestId {
-    /// Returns the process-local response-owner identifier.
+    /// Creates an identity in the namespace reserved for real request sessions.
+    pub(crate) const fn real(owner_id: u64, sequence: u64) -> Option<Self> {
+        if owner_id == 0 || owner_id == LEGACY_V1_RESPONSE_OWNER_ID || sequence == 0 || sequence == u64::MAX {
+            None
+        } else {
+            Some(Self { owner_id, sequence })
+        }
+    }
+
+    /// Returns the process-local request owner, including the reserved owner used by synthetic V1
+    /// direct-write receipts.
     #[must_use]
     pub const fn owner_id(self) -> u64 {
         self.owner_id
     }
 
-    /// Returns the sequence assigned by the process-local response owner.
+    /// Returns the sequence assigned within the process-local owner namespace.
     #[must_use]
     pub const fn sequence(self) -> u64 {
         self.sequence

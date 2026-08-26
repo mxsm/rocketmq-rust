@@ -15,13 +15,37 @@
 use std::time::Duration;
 
 use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
+use rocketmq_transport::api::v1::RequestId as V1RequestId;
+use rocketmq_transport::api::v2::OriginalRequestIdentity;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
+use rocketmq_transport::api::v2::RequestId as V2RequestId;
 
-fn assert_same_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
+fn assert_same_deadline_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
+
+fn assert_same_request_id_type(value: Option<V1RequestId>) -> Option<V2RequestId> {
+    value
+}
+
+fn assert_original_identity_contract(identity: Option<OriginalRequestIdentity>) {
+    if let Some(identity) = identity {
+        let _: V2RequestId = identity.request_id();
+        let _: i32 = identity.original_code();
+        let _: i32 = identity.original_opaque();
+        let _: bool = identity.is_one_way();
+    }
+}
 
 #[test]
 fn v2_exposes_the_v1_request_deadline_type() {
     let deadline = V2RequestDeadline::after(Duration::from_secs(1));
 
-    assert_same_type(&deadline, &deadline);
+    assert_same_deadline_type(&deadline, &deadline);
+}
+
+#[test]
+fn v2_reuses_v1_request_id_and_exposes_read_only_original_identity() {
+    let v1_value: Option<V1RequestId> = None;
+    let v2_value: Option<V2RequestId> = assert_same_request_id_type(v1_value);
+    assert!(v2_value.is_none());
+    assert_original_identity_contract(None);
 }

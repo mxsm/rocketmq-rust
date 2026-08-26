@@ -458,7 +458,7 @@ async fn hung_processor_and_send_failure_complete_without_leaking_pending_or_tas
 }
 
 #[tokio::test]
-async fn wrong_response_opaque_is_rejected_and_cannot_complete_the_request() {
+async fn low_level_processor_response_is_rebound_to_the_original_opaque() {
     let runtime = RuntimeContext::from_current("transport-wrong-opaque-test");
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let server = SessionTransportServer::bind(
@@ -481,10 +481,8 @@ async fn wrong_response_opaque_is_rejected_and_cannot_complete_the_request() {
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "a mismatched response opaque must not complete the request"
-    );
+    let response = result.expect("transport must bind the processor response to the request opaque");
+    assert_eq!(response.code(), ResponseCode::Success.to_i32());
     assert_eq!(client.pending_usage().count, 0);
     let _ = server
         .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))

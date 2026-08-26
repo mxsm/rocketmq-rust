@@ -14,7 +14,9 @@
 
 //! Explicitly approved source API for the 2.x release line.
 //!
-//! [`RequestDeadline`] is currently the only shared type. The 2.x request
-//! model is not yet publicly exposed.
+//! This surface exposes only the immutable request timing and identity values
+//! approved for the 2.x request model.
 
 pub use crate::deadline::RequestDeadline;
+pub use crate::dispatch::OriginalRequestIdentity;
+pub use crate::dispatch::RequestId;

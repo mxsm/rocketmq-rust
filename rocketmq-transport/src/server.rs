@@ -29,6 +29,7 @@ use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingCommandType;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
@@ -58,7 +59,9 @@ use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
+use crate::dispatch::reserve_session_owner;
 use crate::dispatch::AuthorizedDispatchBoundary;
+use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
 use crate::file_region::FileTransferMode;
@@ -125,6 +128,7 @@ pub trait SessionProcessor: Send + Sync + 'static {
 
 struct SessionSendHandle {
     session_id: u64,
+    request_sequence: AtomicU64,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     transport_peer_addr: SocketAddr,
@@ -149,6 +153,7 @@ pub struct SessionHandle {
     send: Arc<SessionSendHandle>,
     request_operation: OperationContext,
     response_class: Option<AdmissionClass>,
+    original_request_identity: Option<OriginalRequestIdentity>,
 }
 
 impl SessionHandle {
@@ -204,6 +209,10 @@ impl SessionHandle {
         &self.request_operation
     }
 
+    pub(crate) fn original_request_identity(&self) -> Option<OriginalRequestIdentity> {
+        self.original_request_identity
+    }
+
     pub(crate) fn abort(&self) {
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -219,6 +228,11 @@ impl SessionHandle {
 
     pub(crate) fn with_operation_context(mut self, operation: OperationContext) -> Self {
         self.request_operation = operation;
+        self
+    }
+
+    pub(crate) fn with_original_request_identity(mut self, identity: Option<OriginalRequestIdentity>) -> Self {
+        self.original_request_identity = identity;
         self
     }
 
@@ -390,7 +404,6 @@ pub struct TransportListener {
     handshake_timeout: Duration,
     io_policy: SessionIoPolicy,
     principal: Option<Principal>,
-    next_session: AtomicU64,
     telemetry: TransportTelemetry,
     socket_options: SocketOptions,
     file_region_blocking: Option<BlockingExecutor>,
@@ -419,7 +432,6 @@ impl TransportListener {
             handshake_timeout,
             io_policy: SessionIoPolicy::default(),
             principal: None,
-            next_session: AtomicU64::new(1),
             telemetry: TransportTelemetry::noop(),
             socket_options: SocketOptions::default(),
             file_region_blocking: None,
@@ -523,7 +535,13 @@ impl TransportListener {
                 continue;
             }
             let local_addr = stream.local_addr()?;
-            let session_id = self.next_session.fetch_add(1, Ordering::Relaxed);
+            let Some(session_id) = reserve_session_owner() else {
+                drop(stream);
+                return Err(RocketMQError::network_connection_failed(
+                    "transport-session-owner",
+                    "process-local session owner namespace exhausted",
+                ));
+            };
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
             let Ok(connection_permit) = admission.try_acquire(
                 AdmissionResource::Connection,
@@ -642,6 +660,47 @@ async fn run_framed_session<H>(
 ) where
     H: ConnectionHandler,
 {
+    run_framed_session_with_request_sequence(
+        connection,
+        local_addr,
+        remote_addr,
+        transport_peer_addr,
+        proxy_protocol,
+        session_id,
+        scope,
+        task_group,
+        dispatch,
+        principal,
+        peer_is_tls,
+        io_policy,
+        AtomicU64::new(1),
+        #[cfg(test)]
+        None,
+        handler,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_framed_session_with_request_sequence<H>(
+    connection: Connection,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    transport_peer_addr: SocketAddr,
+    proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
+    session_id: u64,
+    scope: AdmissionScope,
+    task_group: TaskGroup,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
+    principal: Option<Principal>,
+    peer_is_tls: bool,
+    io_policy: SessionIoPolicy,
+    request_sequence: AtomicU64,
+    #[cfg(test)] mut request_identity_exhausted: Option<tokio::sync::oneshot::Sender<()>>,
+    handler: Arc<H>,
+) where
+    H: ConnectionHandler,
+{
     let connection_id = connection.connection_id().clone();
     let frame_limits = connection.frame_limits();
     let telemetry = connection.telemetry();
@@ -688,6 +747,7 @@ async fn run_framed_session<H>(
     let session = SessionHandle {
         send: Arc::new(SessionSendHandle {
             session_id,
+            request_sequence,
             local_addr,
             remote_addr,
             transport_peer_addr,
@@ -708,6 +768,7 @@ async fn run_framed_session<H>(
         }),
         request_operation: request_operation.clone(),
         response_class: None,
+        original_request_identity: None,
     };
 
     handler.connected(session.clone()).await;
@@ -722,22 +783,45 @@ async fn run_framed_session<H>(
             Ok(Some(Ok(decoded))) => decoded,
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         };
+        let command = decoded.command;
+        let original_request_identity = if command.get_type() == RemotingCommandType::REQUEST {
+            let Some(identity) = OriginalRequestIdentity::capture(session_id, &session.send.request_sequence, &command)
+            else {
+                #[cfg(test)]
+                if let Some(signal) = request_identity_exhausted.take() {
+                    let _ = signal.send(());
+                }
+                tracing::error!(
+                    reason = "sequence_exhausted",
+                    "transport session stopped accepting because request identity allocation is exhausted"
+                );
+                break;
+            };
+            Some(identity)
+        } else {
+            None
+        };
         session
             .send
             .telemetry
             .record_inbound_decoded_plaintext_bytes(decoded.retained_frame_bytes);
-        let command = decoded.command;
         let partial_frame_permit = decoded.partial_frame_permit;
-        let class = AdmissionClass::for_request_code(command.code());
+        let class = AdmissionClass::for_request_code(
+            original_request_identity.map_or_else(|| command.code(), OriginalRequestIdentity::original_code),
+        );
         let bytes = decoded.retained_frame_bytes;
         let context = RequestContext::network(PeerInfo::new(remote_addr, peer_is_tls), principal.clone(), None);
         let ordering = handler.request_ordering(&command);
         let request_handler = handler.clone();
-        let request_session = session.clone().with_response_class(class);
+        let request_session = session
+            .clone()
+            .with_response_class(class)
+            .with_original_request_identity(original_request_identity);
         let response = ResponseSink::Network(Arc::new(session.clone().with_response_class(class)));
         if executor
             .dispatch(
                 context,
+                original_request_identity,
                 command,
                 bytes,
                 partial_frame_permit,
@@ -813,7 +897,13 @@ pub async fn run_connected_session_with_io_policy<H>(
     let Ok(io_policy) = io_policy.validate() else {
         return;
     };
-    let session_id = u64::from(remote_addr.port());
+    let Some(session_id) = reserve_session_owner() else {
+        tracing::error!(
+            reason = "owner_exhausted",
+            "connected transport session rejected because request owner allocation is exhausted"
+        );
+        return;
+    };
     let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
     let Ok(session_group) = task_group.try_child(format!("rocketmq.transport.session.{session_id}")) else {
         return;
@@ -890,7 +980,6 @@ pub struct SessionTransportServer {
     dispatch: Arc<AuthorizedDispatchBoundary>,
     tls: TlsServerRuntime,
     started: AtomicBool,
-    next_session: AtomicU64,
     active_sessions: AtomicUsize,
     principal: Option<Principal>,
     telemetry: TransportTelemetry,
@@ -939,6 +1028,9 @@ impl ConnectionHandler for ProcessorSessionHandler {
         let processor = self.processor.clone();
         let request_timeout = self.request_timeout;
         Box::pin(async move {
+            let original_opaque = session
+                .original_request_identity()
+                .map(OriginalRequestIdentity::original_opaque);
             let response = match tokio::time::timeout(request_timeout, processor.process(request)).await {
                 Ok(Ok(response)) => response,
                 Ok(Err(error)) => {
@@ -960,6 +1052,11 @@ impl ConnectionHandler for ProcessorSessionHandler {
                     session.abort();
                     return;
                 }
+            };
+            let response = if let Some(original_opaque) = original_opaque {
+                response.set_opaque(original_opaque)
+            } else {
+                response
             };
             let mut connection = session.connection();
             let _ = connection.send_response(response).await;
@@ -1090,7 +1187,6 @@ impl SessionTransportServer {
             dispatch: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
             tls,
             started: AtomicBool::new(false),
-            next_session: AtomicU64::new(1),
             active_sessions: AtomicUsize::new(0),
             principal,
             telemetry,
@@ -1130,7 +1226,14 @@ impl SessionTransportServer {
                     tracing::warn!(%remote_addr, %error, "rejected transport socket with invalid required options");
                     continue;
                 }
-                let session_id = server.next_session.fetch_add(1, Ordering::Relaxed);
+                let Some(session_id) = reserve_session_owner() else {
+                    drop(stream);
+                    tracing::error!(
+                        reason = "owner_exhausted",
+                        "transport server stopped accepting because request owner allocation is exhausted"
+                    );
+                    break;
+                };
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
                 let Ok(connection_permit) = server.dispatch.admission_controller().try_acquire(
                     AdmissionResource::Connection,
@@ -1252,12 +1355,16 @@ mod retirement_tests {
     use std::future::Future;
     use std::net::SocketAddr;
     use std::pin::Pin;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
     use rocketmq_error::NetworkError;
     use rocketmq_error::RocketMQError;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::RemotingCommandType;
     use rocketmq_runtime::RuntimeContext;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
@@ -1286,6 +1393,19 @@ mod retirement_tests {
     struct ObserveSessionRetirement {
         connected: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
         disconnected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    struct CaptureRequestIdentities {
+        connected: std::sync::Mutex<Option<oneshot::Sender<u64>>>,
+        commands:
+            tokio::sync::mpsc::UnboundedSender<(RemotingCommandType, Option<crate::dispatch::OriginalRequestIdentity>)>,
+    }
+
+    struct SequenceExhaustionLifecycle {
+        calls: AtomicUsize,
+        entered: std::sync::Mutex<Option<oneshot::Sender<crate::dispatch::OriginalRequestIdentity>>>,
+        release: Arc<Notify>,
+        disconnected: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
     }
 
     impl ConnectionHandler for CaptureSession {
@@ -1330,6 +1450,275 @@ mod retirement_tests {
                 }
             })
         }
+    }
+
+    impl ConnectionHandler for CaptureRequestIdentities {
+        fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.connected.lock().expect("connected identity lock").take() {
+                    let _ = sender.send(session.session_id());
+                }
+            })
+        }
+
+        fn command(
+            &self,
+            session: SessionHandle,
+            command: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                let _ = self
+                    .commands
+                    .send((command.get_type(), session.original_request_identity()));
+            })
+        }
+    }
+
+    impl ConnectionHandler for SequenceExhaustionLifecycle {
+        fn connected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async {})
+        }
+
+        fn command(
+            &self,
+            session: SessionHandle,
+            command: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let identity = session
+                    .original_request_identity()
+                    .expect("accepted request must carry its identity");
+                if let Some(sender) = self.entered.lock().expect("sequence entry lock").take() {
+                    let _ = sender.send(identity);
+                }
+                self.release.notified().await;
+                let mut connection = session.connection();
+                let _ = connection
+                    .send_response(RemotingCommand::create_response_command_with_code(0).set_opaque(command.opaque()))
+                    .await;
+            })
+        }
+
+        fn disconnected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.disconnected.lock().expect("sequence disconnect lock").take() {
+                    let _ = sender.send(session);
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn request_frames_share_session_owner_and_response_frames_do_not_consume_sequence() {
+        let runtime = RuntimeContext::from_current("transport-request-identity-sequence-test");
+        let service = runtime.service_context("transport-request-identity-sequence");
+        let (transport, peer_stream) = tokio::io::duplex(4096);
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let (commands_tx, mut commands_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handler = Arc::new(CaptureRequestIdentities {
+            connected: std::sync::Mutex::new(Some(connected_tx)),
+            commands: commands_tx,
+        });
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_plaintext_stream(transport),
+            "127.0.0.1:19101".parse().expect("local address"),
+            "127.0.0.1:19102".parse().expect("remote address"),
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            handler,
+        ));
+        let owner_id = connected_rx.await.expect("connected session owner");
+        let mut peer = Connection::new_with_plaintext_stream(peer_stream);
+        peer.send_command(RemotingCommand::create_response_command_with_code(0).set_opaque(33))
+            .await
+            .expect("response frame should be sent");
+        peer.send_command(RemotingCommand::create_remoting_command(991).set_opaque(44))
+            .await
+            .expect("first request frame should be sent");
+        peer.send_command(RemotingCommand::create_remoting_command(992).set_opaque(44))
+            .await
+            .expect("second request frame should be sent");
+
+        let mut response_identity = None;
+        let mut request_identities = Vec::new();
+        for _ in 0..3 {
+            let (command_type, identity) = tokio::time::timeout(Duration::from_secs(1), commands_rx.recv())
+                .await
+                .expect("command should be dispatched")
+                .expect("identity observer should remain open");
+            match command_type {
+                RemotingCommandType::REQUEST => {
+                    request_identities.push(identity.expect("request frame must carry identity"));
+                }
+                RemotingCommandType::RESPONSE => response_identity = Some(identity),
+            }
+        }
+        request_identities.sort_unstable_by_key(|identity| identity.request_id().sequence());
+
+        assert_eq!(response_identity, Some(None));
+        assert_eq!(request_identities.len(), 2);
+        assert!(request_identities
+            .iter()
+            .all(|identity| identity.request_id().owner_id() == owner_id));
+        assert_eq!(request_identities[0].request_id().sequence(), 1);
+        assert_eq!(request_identities[1].request_id().sequence(), 2);
+        assert_eq!(request_identities[0].original_opaque(), 44);
+        assert_eq!(request_identities[1].original_opaque(), 44);
+
+        drop(peer);
+        runner.await.expect("session runner should finish");
+    }
+
+    #[tokio::test]
+    async fn sequence_exhaustion_drains_accepted_work_and_retires_without_dispatching_the_exhausted_request() {
+        let runtime = RuntimeContext::from_current("transport-request-sequence-exhaustion-test");
+        let service = runtime.service_context("transport-request-sequence-exhaustion");
+        let (transport, peer_stream) = tokio::io::duplex(4096);
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (exhausted_tx, exhausted_rx) = oneshot::channel();
+        let (disconnected_tx, disconnected_rx) = oneshot::channel();
+        let release = Arc::new(Notify::new());
+        let handler = Arc::new(SequenceExhaustionLifecycle {
+            calls: AtomicUsize::new(0),
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: Arc::clone(&release),
+            disconnected: std::sync::Mutex::new(Some(disconnected_tx)),
+        });
+        let session_id = crate::dispatch::reserve_session_owner().expect("test process owner should be available");
+        let local_addr: SocketAddr = "127.0.0.1:19401".parse().expect("local address");
+        let remote_addr: SocketAddr = "127.0.0.1:19402".parse().expect("remote address");
+        let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+        let security = Arc::new(TransportSecurity::development_insecure_loopback(None, None));
+        let dispatch = Arc::new(crate::dispatch::AuthorizedDispatchBoundary::new(
+            Arc::clone(&security),
+            Arc::clone(&admission),
+        ));
+        let scope = crate::admission::AdmissionScope::new(remote_addr.ip()).with_session(session_id);
+        let session_group = service
+            .task_group()
+            .try_child("transport-request-sequence-exhaustion-session")
+            .expect("test session group should be created");
+        let runner_handler = Arc::clone(&handler);
+        let mut runner = tokio::spawn(super::run_framed_session_with_request_sequence(
+            Connection::new_with_plaintext_stream(transport),
+            local_addr,
+            remote_addr,
+            remote_addr,
+            None,
+            session_id,
+            scope,
+            session_group,
+            dispatch,
+            None,
+            false,
+            super::SessionIoPolicy {
+                idle_timeout: Duration::from_secs(30),
+                ..super::SessionIoPolicy::default()
+            },
+            AtomicU64::new(u64::MAX - 1),
+            Some(exhausted_tx),
+            runner_handler,
+        ));
+        let mut peer = Connection::new_with_plaintext_stream(peer_stream);
+        peer.send_command(RemotingCommand::create_remoting_command(701).set_opaque(11))
+            .await
+            .expect("last allocatable request should be sent");
+        let identity = tokio::time::timeout(Duration::from_secs(1), entered_rx)
+            .await
+            .expect("last allocatable request should enter the handler")
+            .expect("handler should report the accepted identity");
+        assert_eq!(identity.request_id().sequence(), u64::MAX - 1);
+
+        peer.send_command(RemotingCommand::create_remoting_command(702).set_opaque(22))
+            .await
+            .expect("exhausted request frame should reach the session");
+        tokio::time::timeout(Duration::from_secs(1), exhausted_rx)
+            .await
+            .expect("session should detect request sequence exhaustion")
+            .expect("exhaustion signal should remain open");
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+        assert!(!runner.is_finished(), "accepted work must drain before retirement");
+
+        release.notify_one();
+        let response = tokio::time::timeout(Duration::from_secs(1), peer.receive_command())
+            .await
+            .expect("accepted request should complete while the session drains")
+            .expect("accepted response read should succeed")
+            .expect("accepted request should emit one response");
+        assert_eq!(response.opaque(), 11);
+        let disconnected_session = tokio::time::timeout(Duration::from_secs(1), disconnected_rx)
+            .await
+            .expect("sequence exhaustion should run disconnected")
+            .expect("disconnected signal should remain open");
+        tokio::time::timeout(Duration::from_secs(1), &mut runner)
+            .await
+            .expect("sequence-exhausted session should retire")
+            .expect("session runner should not panic");
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            disconnected_session.connection().state(),
+            crate::connection::ConnectionState::Closed
+        );
+        assert!(
+            peer.receive_command().await.is_none(),
+            "exhausted request must not receive a response"
+        );
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn independently_connected_sessions_receive_distinct_process_owners() {
+        let runtime = RuntimeContext::from_current("transport-distinct-session-owner-test");
+        let service = runtime.service_context("transport-distinct-session-owner");
+        let (first_transport, first_peer) = tokio::io::duplex(1024);
+        let (second_transport, second_peer) = tokio::io::duplex(1024);
+        let (first_tx, first_rx) = oneshot::channel();
+        let (second_tx, second_rx) = oneshot::channel();
+        let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+        let security = Arc::new(TransportSecurity::development_insecure_loopback(None, None));
+        let first_runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_plaintext_stream(first_transport),
+            "127.0.0.1:19201".parse().expect("first local address"),
+            "127.0.0.1:19202".parse().expect("first remote address"),
+            service.task_group().clone(),
+            Arc::clone(&admission),
+            Arc::clone(&security),
+            None,
+            Duration::from_secs(30),
+            Arc::new(CaptureSession {
+                sender: std::sync::Mutex::new(Some(first_tx)),
+            }),
+        ));
+        let second_runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_plaintext_stream(second_transport),
+            "127.0.0.1:19301".parse().expect("second local address"),
+            "127.0.0.1:19302".parse().expect("second remote address"),
+            service.task_group().clone(),
+            admission,
+            security,
+            None,
+            Duration::from_secs(30),
+            Arc::new(CaptureSession {
+                sender: std::sync::Mutex::new(Some(second_tx)),
+            }),
+        ));
+        let first_session = first_rx.await.expect("first session should connect");
+        let second_session = second_rx.await.expect("second session should connect");
+
+        assert_ne!(first_session.session_id(), second_session.session_id());
+        assert!(!matches!(first_session.session_id(), 0 | u64::MAX));
+        assert!(!matches!(second_session.session_id(), 0 | u64::MAX));
+
+        drop(first_peer);
+        drop(second_peer);
+        first_runner.await.expect("first session runner should finish");
+        second_runner.await.expect("second session runner should finish");
     }
 
     #[tokio::test]
