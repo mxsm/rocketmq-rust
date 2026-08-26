@@ -52,6 +52,16 @@ pub use response::WriteProgress;
 pub(crate) use response_plan::BoundResponsePlan;
 #[allow(
     unused_imports,
+    reason = "RSP-06 exposes the private legacy materialization failure to later embedded wiring"
+)]
+pub(crate) use response_plan::LegacyLocalMaterializationError;
+#[allow(
+    unused_imports,
+    reason = "RSP-06 exposes the private bounded legacy materialization profile to later embedded wiring"
+)]
+pub(crate) use response_plan::LegacyMaterializationLimits;
+#[allow(
+    unused_imports,
     reason = "later private response stages handle the RSP-03 binding failure through dispatch"
 )]
 pub(crate) use response_plan::ResponseBindingError;

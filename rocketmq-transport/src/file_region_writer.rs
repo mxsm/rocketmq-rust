@@ -21,8 +21,8 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 use crate::file_region::FileRegion;
-
-const PORTABLE_CHUNK_BYTES: usize = 64 * 1024;
+use crate::file_region_io::read_file_region_chunk;
+use crate::file_region_io::FILE_REGION_READ_CHUNK_BYTES;
 
 static PORTABLE_BYTES: AtomicU64 = AtomicU64::new(0);
 static SENDFILE_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -95,21 +95,18 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut sent = 0_u64;
-    let initial_len = usize::try_from(region.len().min(PORTABLE_CHUNK_BYTES as u64))
+    let initial_len = usize::try_from(region.len().min(FILE_REGION_READ_CHUNK_BYTES as u64))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file-region chunk length exceeds usize"))?;
     let mut buffer = vec![0_u8; initial_len];
     while sent < region.len() {
-        let chunk_len = usize::try_from((region.len() - sent).min(PORTABLE_CHUNK_BYTES as u64))
+        let chunk_len = usize::try_from((region.len() - sent).min(FILE_REGION_READ_CHUNK_BYTES as u64))
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file-region chunk length exceeds usize"))?;
         buffer.resize(chunk_len, 0);
-        let offset = region
-            .offset()
-            .checked_add(sent)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file-region read offset overflow"))?;
+        let region_offset = region.offset();
         let lease = region.lease().clone();
         let (returned_buffer, read) = blocking
             .spawn_io("transport.file-region.read", move || {
-                let read = read_at(lease.file(), &mut buffer, offset)?;
+                let read = read_file_region_chunk(lease.file(), &mut buffer, region_offset, sent)?;
                 Ok::<_, io::Error>((buffer, read))
             })
             .await
@@ -127,26 +124,4 @@ where
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "file-region progress overflow"))?;
     }
     Ok(sent)
-}
-
-#[cfg(unix)]
-fn read_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
-    use std::os::unix::fs::FileExt;
-
-    file.read_at(buffer, offset)
-}
-
-#[cfg(windows)]
-fn read_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
-    use std::os::windows::fs::FileExt;
-
-    file.seek_read(buffer, offset)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn read_at(_file: &std::fs::File, _buffer: &mut [u8], _offset: u64) -> io::Result<usize> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "portable positional file reads are not implemented for this platform",
-    ))
 }
