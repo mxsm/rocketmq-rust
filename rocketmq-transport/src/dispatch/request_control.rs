@@ -189,6 +189,14 @@ impl RequestControlView {
             || self.parent_cancellation.is_cancelled()
     }
 
+    pub(crate) fn session_is_closed(&self) -> bool {
+        self.session.is_closed()
+    }
+
+    pub(crate) fn parent_is_cancelled(&self) -> bool {
+        self.parent_cancellation.is_cancelled()
+    }
+
     /// Waits until the deadline expires, the session closes, or the parent
     /// task group is cancelled.
     ///

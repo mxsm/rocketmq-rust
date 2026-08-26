@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(
+    dead_code,
+    reason = "RSP-05 defines the private plan delivery seam wired by the later dispatcher stage"
+)]
+mod plan;
+
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -29,6 +35,11 @@ use crate::dispatch::ResponseError;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseTerminalState;
 use crate::server::SessionHandle;
+
+use plan::LocalPlanSenderState;
+pub(crate) use plan::LocalResponsePlanReceiver;
+pub(crate) use plan::NetworkResponsePlanContext;
+pub(crate) use plan::ResponseTransportDropHandle;
 
 /// Typed failure produced by a response output capability.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -53,10 +64,20 @@ pub enum ResponseSinkError {
     Decode(String),
 }
 
-struct LocalResponseState {
+struct LegacyLocalResponseState {
     sender: Option<oneshot::Sender<Result<RemotingCommand, ResponseSinkError>>>,
     encoded: BytesMut,
     terminal_state: Option<ResponseTerminalState>,
+}
+
+#[derive(Clone)]
+enum LocalResponseMode {
+    Legacy(Arc<parking_lot::Mutex<LegacyLocalResponseState>>),
+    #[allow(
+        dead_code,
+        reason = "RSP-05 plan mode is constructed by the private seam wired by the later dispatcher stage"
+    )]
+    Plan(Arc<LocalPlanSenderState>),
 }
 
 #[derive(Clone)]
@@ -64,12 +85,19 @@ struct LocalResponseState {
 ///
 /// Construction remains private to [`ResponseSink::local`].
 pub struct LocalResponseSink {
-    state: Arc<parking_lot::Mutex<LocalResponseState>>,
+    mode: LocalResponseMode,
 }
 
 impl LocalResponseSink {
+    fn legacy_state(&self) -> Result<&parking_lot::Mutex<LegacyLocalResponseState>, ResponseSinkError> {
+        match &self.mode {
+            LocalResponseMode::Legacy(state) => Ok(state),
+            LocalResponseMode::Plan(_) => Err(ResponseSinkError::AlreadyCompleted),
+        }
+    }
+
     fn complete(&self, result: Result<RemotingCommand, ResponseSinkError>) -> Result<(), ResponseSinkError> {
-        let mut state = self.state.lock();
+        let mut state = self.legacy_state()?.lock();
         let sender = state.sender.take().ok_or(ResponseSinkError::AlreadyCompleted)?;
         let terminal_state = if result.is_ok() {
             ResponseTerminalState::Completed
@@ -95,7 +123,12 @@ impl LocalResponseSink {
         command: RemotingCommand,
         receipt: ResponseReceipt,
     ) -> Result<ResponseReceipt, ResponseError> {
-        let mut state = self.state.lock();
+        let mut state = self
+            .legacy_state()
+            .map_err(|_| ResponseError::AlreadyCompleted {
+                state: ResponseTerminalState::Closed,
+            })?
+            .lock();
         let Some(sender) = state.sender.take() else {
             return Err(ResponseError::AlreadyCompleted {
                 state: state.terminal_state.unwrap_or(ResponseTerminalState::Closed),
@@ -115,7 +148,7 @@ impl LocalResponseSink {
     }
 
     fn send_bytes(&self, bytes: Bytes) -> Result<(), ResponseSinkError> {
-        let mut state = self.state.lock();
+        let mut state = self.legacy_state()?.lock();
         if state.sender.is_none() {
             return Err(ResponseSinkError::AlreadyCompleted);
         }
@@ -145,6 +178,16 @@ impl LocalResponseSink {
     }
 }
 
+impl Drop for LocalResponseSink {
+    fn drop(&mut self) {
+        if let LocalResponseMode::Plan(state) = &self.mode {
+            if Arc::strong_count(state) == 1 {
+                state.close_last_sender();
+            }
+        }
+    }
+}
+
 /// Closed response output variants for network and in-process dispatch.
 #[derive(Clone)]
 pub enum ResponseSink {
@@ -160,11 +203,11 @@ impl ResponseSink {
     pub fn local() -> (Self, LocalResponseReceiver) {
         let (sender, receiver) = oneshot::channel();
         let sink = LocalResponseSink {
-            state: Arc::new(parking_lot::Mutex::new(LocalResponseState {
+            mode: LocalResponseMode::Legacy(Arc::new(parking_lot::Mutex::new(LegacyLocalResponseState {
                 sender: Some(sender),
                 encoded: BytesMut::new(),
                 terminal_state: None,
-            })),
+            }))),
         };
         (Self::Local(sink), LocalResponseReceiver { receiver })
     }

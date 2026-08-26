@@ -63,6 +63,13 @@ pub(crate) use response_plan::ResponseBody;
 pub use response_plan::ResponseBodyKind;
 pub use response_plan::ResponsePlan;
 pub use response_plan::ResponsePlanError;
+#[allow(
+    unused_imports,
+    reason = "RSP-05 exposes the private local handoff seam consumed by RSP-06"
+)]
+pub(crate) use response_sink::LocalResponsePlanReceiver;
 pub use response_sink::LocalResponseReceiver;
+pub(crate) use response_sink::NetworkResponsePlanContext;
 pub use response_sink::ResponseSink;
 pub use response_sink::ResponseSinkError;
+pub(crate) use response_sink::ResponseTransportDropHandle;

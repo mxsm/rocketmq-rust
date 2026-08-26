@@ -47,7 +47,9 @@ use crate::file_region_writer::write_portable_file_region;
 const QUEUED_WRITE_WAITING: u8 = 0;
 const QUEUED_WRITE_CLAIMED: u8 = 1;
 const QUEUED_WRITE_STARTED: u8 = 2;
-const QUEUED_WRITE_CANCELLED_BEFORE_START: u8 = 3;
+const QUEUED_WRITE_CANCELLED_BY_DEADLINE: u8 = 3;
+const QUEUED_WRITE_CANCELLED_BY_REQUEST: u8 = 4;
+const QUEUED_WRITE_CANCELLED_BY_SESSION: u8 = 5;
 const AUTO_SENDFILE_MIN_BYTES: u64 = 64 * 1024;
 
 /// Test-only one-shot barrier placed immediately before the first write-progress
@@ -74,6 +76,32 @@ impl WritePreflightBarrier {
 
 pub(crate) struct QueuedWriteProgress(AtomicU8);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QueuedWriteCancellation {
+    Deadline,
+    Request,
+    SessionClosed,
+}
+
+impl QueuedWriteCancellation {
+    const fn state(self) -> u8 {
+        match self {
+            Self::Deadline => QUEUED_WRITE_CANCELLED_BY_DEADLINE,
+            Self::Request => QUEUED_WRITE_CANCELLED_BY_REQUEST,
+            Self::SessionClosed => QUEUED_WRITE_CANCELLED_BY_SESSION,
+        }
+    }
+
+    const fn from_state(state: u8) -> Option<Self> {
+        match state {
+            QUEUED_WRITE_CANCELLED_BY_DEADLINE => Some(Self::Deadline),
+            QUEUED_WRITE_CANCELLED_BY_REQUEST => Some(Self::Request),
+            QUEUED_WRITE_CANCELLED_BY_SESSION => Some(Self::SessionClosed),
+            _ => None,
+        }
+    }
+}
+
 impl QueuedWriteProgress {
     pub(crate) fn waiting() -> Self {
         Self(AtomicU8::new(QUEUED_WRITE_WAITING))
@@ -95,14 +123,22 @@ impl QueuedWriteProgress {
 
     /// Cancels a queued envelope before the writer owns it.
     pub(crate) fn cancel_before_start(&self) -> bool {
+        self.cancel_before_start_with(QueuedWriteCancellation::Deadline)
+    }
+
+    pub(crate) fn cancel_before_start_with(&self, reason: QueuedWriteCancellation) -> bool {
         self.0
             .compare_exchange(
                 QUEUED_WRITE_WAITING,
-                QUEUED_WRITE_CANCELLED_BEFORE_START,
+                reason.state(),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
             .is_ok()
+    }
+
+    pub(crate) fn cancellation_reason(&self) -> Option<QueuedWriteCancellation> {
+        QueuedWriteCancellation::from_state(self.0.load(Ordering::Acquire))
     }
 
     /// Marks the precise boundary immediately before the first socket attempt.

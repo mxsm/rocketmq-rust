@@ -40,8 +40,11 @@ use crate::backend::WriteBackend;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
+use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseError;
+use crate::dispatch::ResponseTransportDropHandle;
 use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
@@ -52,6 +55,7 @@ use crate::write_strategy::FrameWriteMode;
 use crate::write_strategy::FrameWriter;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
+use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::writer_runtime::WriterLanes;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -181,6 +185,9 @@ enum SendFailure {
     SessionClosed {
         target: String,
     },
+    Cancelled {
+        target: String,
+    },
     QueueSaturated {
         target: String,
     },
@@ -200,6 +207,9 @@ impl SendFailure {
             Self::SessionClosed { target } => {
                 rocketmq_error::RocketMQError::network_connection_failed(target, "connection is closed")
             }
+            Self::Cancelled { target } => {
+                rocketmq_error::RocketMQError::network_connection_failed(target, "request was cancelled before send")
+            }
             Self::QueueSaturated { target } => rocketmq_error::RocketMQError::network_queue_full(target),
             Self::Writer {
                 target,
@@ -213,9 +223,66 @@ impl SendFailure {
         match self {
             Self::DeadlineExceeded { .. } => ResponseError::DeadlineExceeded,
             Self::SessionClosed { .. } => ResponseError::SessionClosed,
+            Self::Cancelled { .. } => ResponseError::Cancelled,
             Self::QueueSaturated { .. } => ResponseError::QueueSaturated,
             Self::Writer { failure, .. } => failure.into_response(),
         }
+    }
+}
+
+fn current_request_stop(control: &RequestControlView) -> Option<QueuedWriteCancellation> {
+    if control.parent_is_cancelled() {
+        Some(QueuedWriteCancellation::Request)
+    } else if control.session_is_closed() {
+        Some(QueuedWriteCancellation::SessionClosed)
+    } else if control.deadline().is_some_and(RequestDeadline::is_expired) {
+        Some(QueuedWriteCancellation::Deadline)
+    } else {
+        None
+    }
+}
+
+fn stop_failure(reason: QueuedWriteCancellation, target: String) -> SendFailure {
+    match reason {
+        QueuedWriteCancellation::Deadline => SendFailure::DeadlineExceeded { target },
+        QueuedWriteCancellation::Request => SendFailure::Cancelled { target },
+        QueuedWriteCancellation::SessionClosed => SendFailure::SessionClosed { target },
+    }
+}
+
+struct InFlightQueuedSendDrop {
+    handle: ResponseTransportDropHandle,
+    progress: Arc<QueuedWriteProgress>,
+    armed: bool,
+}
+
+impl InFlightQueuedSendDrop {
+    fn new(handle: ResponseTransportDropHandle, progress: Arc<QueuedWriteProgress>) -> Self {
+        handle.delegate();
+        Self {
+            handle,
+            progress,
+            armed: true,
+        }
+    }
+
+    fn complete(mut self) {
+        self.handle.resume_outer();
+        self.armed = false;
+    }
+}
+
+impl Drop for InFlightQueuedSendDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let progress = if self.progress.cancel_before_start_with(QueuedWriteCancellation::Request) {
+            WriteProgress::NotStarted
+        } else {
+            WriteProgress::PossiblyPartial
+        };
+        self.handle.finish_dropped(progress);
     }
 }
 
@@ -543,8 +610,13 @@ pub struct Connection {
 
     telemetry: TransportTelemetry,
 
+    response_plan_drop: Option<ResponseTransportDropHandle>,
+
     #[cfg(test)]
     enqueue_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+
+    #[cfg(test)]
+    enqueue_complete_signal: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Hash for Connection {
@@ -688,8 +760,11 @@ impl Connection {
             state_rx,
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
             telemetry: TransportTelemetry::noop(),
+            response_plan_drop: None,
             #[cfg(test)]
             enqueue_gate: None,
+            #[cfg(test)]
+            enqueue_complete_signal: None,
         }
     }
 
@@ -738,14 +813,27 @@ impl Connection {
             state_rx,
             connection_id,
             telemetry,
+            response_plan_drop: None,
             #[cfg(test)]
             enqueue_gate: None,
+            #[cfg(test)]
+            enqueue_complete_signal: None,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn set_enqueue_gate(&mut self, checked: Arc<tokio::sync::Notify>, resume: Arc<tokio::sync::Notify>) {
         self.enqueue_gate = Some((checked, resume));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_enqueue_complete_signal(&mut self, signal: Arc<tokio::sync::Notify>) {
+        self.enqueue_complete_signal = Some(signal);
+    }
+
+    pub(crate) fn with_response_plan_drop(mut self, drop_handle: Option<ResponseTransportDropHandle>) -> Self {
+        self.response_plan_drop = drop_handle;
+        self
     }
 
     #[cfg(test)]
@@ -827,7 +915,7 @@ impl Connection {
         deadline: Option<RequestDeadline>,
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.send_payload_inner(payload, class, reservation, deadline, target)
+        self.send_payload_inner(payload, class, reservation, deadline, None, target)
             .await
             .map_err(SendFailure::into_legacy)
     }
@@ -838,8 +926,10 @@ impl Connection {
         class: AdmissionClass,
         reservation: Option<ResourcePermit>,
         deadline: Option<RequestDeadline>,
+        control: Option<&RequestControlView>,
         target: String,
     ) -> Result<(), SendFailure> {
+        let response_plan_drop = self.response_plan_drop.clone();
         let encoded_len = payload.encoded_len();
         let legacy_reason = match &self.outbound {
             ConnectionWriter::Direct(writer) => {
@@ -848,6 +938,9 @@ impl Connection {
             ConnectionWriter::Queued(_) => LegacyWriterReason::CanonicalWriter,
         };
         self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
+        if let Some(reason) = control.and_then(current_request_stop) {
+            return Err(stop_failure(reason, target));
+        }
         if deadline.is_some_and(RequestDeadline::is_expired) {
             return Err(SendFailure::DeadlineExceeded { target });
         }
@@ -866,7 +959,16 @@ impl Connection {
             #[cfg(test)]
             if let Some((checked, resume)) = self.enqueue_gate.as_ref() {
                 checked.notify_one();
-                if let Some(deadline) = deadline {
+                if let Some(control) = control {
+                    tokio::select! {
+                        biased;
+                        () = control.cancelled() => {
+                            let reason = current_request_stop(control).unwrap_or(QueuedWriteCancellation::Request);
+                            return Err(stop_failure(reason, target));
+                        }
+                        () = resume.notified() => {}
+                    }
+                } else if let Some(deadline) = deadline {
                     deadline
                         .timeout(resume.notified())
                         .await
@@ -885,6 +987,9 @@ impl Connection {
                 queued.writer_diagnostics.record_rejected(None);
                 SendFailure::QueueSaturated { target: target.clone() }
             })?;
+            if let Some(reason) = control.and_then(current_request_stop) {
+                return Err(stop_failure(reason, target));
+            }
             if deadline.is_some_and(RequestDeadline::is_expired) {
                 return Err(SendFailure::DeadlineExceeded { target });
             }
@@ -919,8 +1024,29 @@ impl Connection {
                     });
                 }
             }
+            let mut in_flight_drop =
+                response_plan_drop.map(|handle| InFlightQueuedSendDrop::new(handle, Arc::clone(&progress)));
+            #[cfg(test)]
+            if let Some(signal) = &self.enqueue_complete_signal {
+                signal.notify_one();
+            }
             let mut result = result;
-            let outcome = if let Some(deadline) = deadline {
+            let outcome = if let Some(control) = control {
+                tokio::select! {
+                    biased;
+                    outcome = &mut result => outcome,
+                    () = control.cancelled() => {
+                        let reason = current_request_stop(control).unwrap_or(QueuedWriteCancellation::Request);
+                        if progress.cancel_before_start_with(reason) {
+                            if let Some(drop_guard) = in_flight_drop.take() {
+                                drop_guard.complete();
+                            }
+                            return Err(stop_failure(reason, target));
+                        }
+                        result.await
+                    }
+                }
+            } else if let Some(deadline) = deadline {
                 match deadline.timeout(&mut result).await {
                     Ok(outcome) => outcome,
                     Err(_) => {
@@ -932,8 +1058,13 @@ impl Connection {
                 }
             } else {
                 result.await
-            }
-            .map_err(|_| {
+            };
+            let outcome = outcome.map_err(|_| {
+                if !progress.write_started() {
+                    if let Some(reason) = control.and_then(current_request_stop) {
+                        return stop_failure(reason, target.clone());
+                    }
+                }
                 let progress = if progress.write_started() {
                     WriteProgress::PossiblyPartial
                 } else {
@@ -944,11 +1075,22 @@ impl Connection {
                     target: target.clone(),
                     legacy_reason: LegacyWriterReason::CompletionDropped,
                 }
-            })?;
-            return outcome.map_err(|failure| SendFailure::Writer {
-                target,
-                failure,
-                legacy_reason,
+            });
+            if let Some(drop_guard) = in_flight_drop.take() {
+                drop_guard.complete();
+            }
+            let outcome = outcome?;
+            return outcome.map_err(|failure| {
+                if failure.progress() == WriteProgress::NotStarted {
+                    if let Some(reason) = control.and_then(current_request_stop) {
+                        return stop_failure(reason, target.clone());
+                    }
+                }
+                SendFailure::Writer {
+                    target,
+                    failure,
+                    legacy_reason,
+                }
             });
         }
         if self.state() == ConnectionState::Closed {
@@ -1021,6 +1163,37 @@ impl Connection {
     /// Sends a server response through the canonical writer with a stage-aware
     /// completion error. This is intentionally crate-private while the public
     /// response receipt/context API is introduced separately.
+    #[allow(
+        dead_code,
+        reason = "RSP-05 canonical prepared-response seam is invoked by later dispatcher wiring"
+    )]
+    pub(crate) async fn send_prepared_response(
+        &mut self,
+        prepared: PreparedResponse,
+        control: &RequestControlView,
+    ) -> Result<(), ResponseError> {
+        if self.queued_writer().is_none() {
+            return Err(ResponseError::SessionClosed);
+        }
+        let Some(class) = self.response_class() else {
+            return Err(ResponseError::SessionClosed);
+        };
+        let (_, payload) = prepared.into_parts();
+        self.send_payload_inner(
+            payload,
+            class,
+            None,
+            control.deadline(),
+            Some(control),
+            "transport-session-writer".to_string(),
+        )
+        .await
+        .map_err(SendFailure::into_response)
+    }
+
+    /// Sends a server response through the canonical writer with a stage-aware
+    /// completion error. This is intentionally crate-private while the public
+    /// response receipt/context API is introduced separately.
     pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> Result<(), ResponseError> {
         let class = self
             .response_class()
@@ -1032,6 +1205,7 @@ impl Connection {
         self.send_payload_inner(
             OutboundPayload::Frame(frame),
             class,
+            None,
             None,
             None,
             "transport-session-writer".to_string(),
@@ -1054,6 +1228,7 @@ impl Connection {
         self.send_payload_inner(
             OutboundPayload::Frame(frame),
             class,
+            None,
             None,
             None,
             "transport-session-writer".to_string(),

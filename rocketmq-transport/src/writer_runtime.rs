@@ -34,6 +34,7 @@ use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
+use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::WriterOperation;
 
 /// Hard bounds for one writer micro-batch.
@@ -547,10 +548,27 @@ async fn write_batch(
     for envelope in batch {
         let write = envelope.into_write();
         if !write.progress.claim_for_writer() {
-            diagnostics.finish_not_started(write.enqueued_at, write.encoded_len(), true);
-            let _ = write
-                .completion
-                .send(Err(WriterFailure::deadline_exceeded_before_send()));
+            let cancellation = write
+                .progress
+                .cancellation_reason()
+                .unwrap_or(QueuedWriteCancellation::Deadline);
+            diagnostics.finish_not_started(
+                write.enqueued_at,
+                write.encoded_len(),
+                cancellation == QueuedWriteCancellation::Deadline,
+            );
+            let failure = match cancellation {
+                QueuedWriteCancellation::Deadline => WriterFailure::deadline_exceeded_before_send(),
+                QueuedWriteCancellation::Request => WriterFailure::connection_failed(
+                    crate::dispatch::WriteProgress::NotStarted,
+                    "request was cancelled before writer start",
+                ),
+                QueuedWriteCancellation::SessionClosed => WriterFailure::connection_failed(
+                    crate::dispatch::WriteProgress::NotStarted,
+                    "session closed before writer start",
+                ),
+            };
+            let _ = write.completion.send(Err(failure));
             continue;
         }
         if write.deadline.is_some_and(RequestDeadline::is_expired) {
