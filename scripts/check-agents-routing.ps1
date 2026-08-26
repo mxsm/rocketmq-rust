@@ -108,6 +108,7 @@ function Assert-SameDirectoryAgents {
 }
 
 $rootAgentsText = Read-RepositoryText -RelativePath "AGENTS.md"
+$mcpAgentsText = Read-RepositoryText -RelativePath "rocketmq-tools/rocketmq-mcp/AGENTS.md"
 
 $requiredRoutePaths = @(
     "fuzz/",
@@ -140,8 +141,6 @@ $requiredRootTerms = @(
     "cargo fmt --all -- --check",
     "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings",
     "cargo clippy --all-targets --all-features -- -D warnings",
-    "npm ci",
-    "npm run build",
     ".\scripts\check-agents-routing.ps1",
     "./scripts/check-agents-routing.sh",
     ".\scripts\runtime-audit.ps1 -SkipBaseline",
@@ -151,13 +150,16 @@ $requiredRootTerms = @(
     "rocksdb_store",
     "otlp-metrics",
     "Validation routes are cumulative",
-    "rocketmq-tools/rocketmq-mcp/"
-) + $requiredMcpCommands + @(
+    "rocketmq-tools/rocketmq-mcp/",
     "rocketmq-doc/en/agents-routing-validation-adr.md"
 )
 
 foreach ($term in $requiredRootTerms) {
     Assert-TextContains -Text $rootAgentsText -Needle $term -Context "Root AGENTS.md"
+}
+
+foreach ($command in $requiredMcpCommands) {
+    Assert-TextContains -Text $mcpAgentsText -Needle $command -Context "rocketmq-mcp AGENTS.md validation"
 }
 
 $requiredSharedPaths = @(

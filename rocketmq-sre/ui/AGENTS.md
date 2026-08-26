@@ -26,6 +26,8 @@ Run from this directory:
 
 ```bash
 npm ci
+npm run check:api
+npm run lint
 npm run test -- --run
 npm run build
 ```

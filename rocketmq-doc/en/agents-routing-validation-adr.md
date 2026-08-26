@@ -30,7 +30,7 @@ The root file must:
 - Route standalone Cargo, Node/Vite, Web Dashboard, Tauri, and Docusaurus work to the nearest project `AGENTS.md`.
 - Treat validation routes as cumulative: a manifest, shared crate, or cross-boundary change may require the root profile, a project-local profile, and one or more specialized gates.
 - List one canonical, non-mutating final format/Clippy profile for root workspace changes and a fallback profile for standalone Cargo projects.
-- Define when to run specialized guards such as `scripts/runtime-audit.ps1`, `scripts/check-error-hygiene.ps1`, `scripts/error_architecture_guard.py`, observability feature checks, RocksDB feature checks, and the CI-equivalent `rocketmq-mcp` check/test/Clippy/Rustdoc commands.
+- Define when to run specialized guards and route `rocketmq-mcp` changes to its local CI-equivalent validation profile.
 - Require `scripts/check-agents-routing.ps1` on Windows or `scripts/check-agents-routing.sh` on Unix when project boundaries, validation commands, workflow routes, package manifests, either routing script, this ADR, or any `AGENTS.md` changes.
 
 Add `rocketmq-website/AGENTS.md` so the Docusaurus website has a local validation contract.
@@ -42,7 +42,7 @@ Add `scripts/check-agents-routing.ps1` and `scripts/check-agents-routing.sh` as 
 - Every discovered `package.json` project has a same-directory `AGENTS.md`.
 - Required workflow files exist and their project routes are represented in root `AGENTS.md`.
 - The shared-code list, cumulative validation policy, and specialized guard commands remain discoverable.
-- The `rocketmq-mcp` path and its exact CI-equivalent commands remain present in root guidance and its standalone CI workflow.
+- The `rocketmq-mcp` path remains present in root guidance, while its exact CI-equivalent commands remain in its local `AGENTS.md` and standalone CI workflow.
 
 ## Alternatives
 ### Only Expand Root AGENTS.md
