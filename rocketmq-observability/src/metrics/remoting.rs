@@ -29,6 +29,7 @@ const NO_RESPONSE_CODE: i32 = -1;
 const RESULT_ONEWAY: &str = "oneway";
 const RESULT_SUCCESS: &str = "success";
 const RESULT_CANCELED: &str = "cancelled";
+const RESULT_LEGACY_AMBIGUOUS_NONE: &str = "legacy_ambiguous_none";
 const RESULT_PROCESS_REQUEST_FAILED: &str = "process_request_failed";
 const RESULT_WRITE_CHANNEL_FAILED: &str = "write_channel_failed";
 
@@ -77,6 +78,11 @@ impl RequestMetricsGuard {
     #[inline]
     pub fn complete_cancelled(&mut self) {
         self.record_rpc_latency(NO_RESPONSE_CODE, RESULT_CANCELED);
+    }
+
+    #[inline]
+    pub fn complete_legacy_ambiguous_none(&mut self) {
+        self.record_rpc_latency(NO_RESPONSE_CODE, RESULT_LEGACY_AMBIGUOUS_NONE);
     }
 
     #[inline]
@@ -417,15 +423,19 @@ mod tests {
         success.complete_response(0);
         success.complete_cancelled();
 
-        let mut process_failure = RequestMetricsGuard::start(metrics.clone(), 11, 64, true);
+        let mut legacy_ambiguous_none = RequestMetricsGuard::start(metrics.clone(), 11, 64, true);
+        legacy_ambiguous_none.complete_legacy_ambiguous_none();
+        legacy_ambiguous_none.complete_cancelled();
+
+        let mut process_failure = RequestMetricsGuard::start(metrics.clone(), 12, 32, true);
         process_failure.complete_process_request_failed(1);
         process_failure.complete_response(0);
 
-        let mut write_failure = RequestMetricsGuard::start(metrics.clone(), 12, 32, false);
+        let mut write_failure = RequestMetricsGuard::start(metrics.clone(), 13, 16, false);
         write_failure.complete_write_channel_failed(2);
         write_failure.complete_oneway();
 
-        drop(RequestMetricsGuard::start(metrics, 13, 16, false));
+        drop(RequestMetricsGuard::start(metrics, 14, 8, false));
     }
 
     #[cfg(feature = "otel-metrics")]

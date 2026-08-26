@@ -220,9 +220,9 @@ impl TransportRequestMetricsGuard {
     }
 
     #[inline]
-    pub(crate) fn complete_cancelled(&mut self) {
+    pub(crate) fn complete_legacy_ambiguous_none(&mut self) {
         #[cfg(feature = "observability")]
-        self.inner.complete_cancelled();
+        self.inner.complete_legacy_ambiguous_none();
     }
 
     #[inline]
@@ -263,6 +263,6 @@ mod tests {
         assert!(telemetry.request_span(10, 1).is_disabled());
         let mut guard = telemetry.request_guard(10, 64, false);
         guard.complete_response(0);
-        guard.complete_cancelled();
+        guard.complete_legacy_ambiguous_none();
     }
 }

@@ -157,7 +157,12 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
 
     drop(RequestMetricsGuard::start(first.clone(), 11, 7, true));
 
-    let mut failure = RequestMetricsGuard::start(first, 12, 9, false);
+    let mut legacy_ambiguous_none = RequestMetricsGuard::start(first.clone(), 12, 9, false);
+    legacy_ambiguous_none.complete_legacy_ambiguous_none();
+    legacy_ambiguous_none.complete_cancelled();
+    drop(legacy_ambiguous_none);
+
+    let mut failure = RequestMetricsGuard::start(first, 13, 11, false);
     failure.complete_process_request_failed(1);
     failure.complete_response(0);
     drop(failure);
@@ -171,13 +176,13 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
 
     let first_points = first_exporter.points();
     let second_points = second_exporter.points();
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 3);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 4);
     assert_eq!(
         metric_value(&first_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
         21
     );
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 3);
-    assert_eq!(metric_value(&first_points, RPC_LATENCY), 3);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 4);
+    assert_eq!(metric_value(&first_points, RPC_LATENCY), 4);
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUESTS_TOTAL), 1);
     assert_eq!(
         metric_value(&second_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
@@ -190,16 +195,28 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
         .iter()
         .filter(|point| point.metric == RPC_LATENCY)
         .collect::<Vec<_>>();
-    assert_eq!(first_rpc.len(), 3);
+    assert_eq!(first_rpc.len(), 4);
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("request_code") == Some(&CapturedValue::I64(10))
             && point.attributes.get("response_code") == Some(&CapturedValue::I64(0))
             && point.attributes.get("is_long_polling") == Some(&CapturedValue::Bool(false))
             && point.attributes.get("result") == Some(&CapturedValue::String("success".to_owned()))
     }));
-    assert!(first_rpc
+    assert!(first_rpc.iter().any(|point| {
+        point.attributes.get("request_code") == Some(&CapturedValue::I64(11))
+            && point.attributes.get("response_code") == Some(&CapturedValue::I64(-1))
+            && point.attributes.get("result") == Some(&CapturedValue::String("cancelled".to_owned()))
+    }));
+    let legacy_ambiguous_none = first_rpc
         .iter()
-        .any(|point| point.attributes.get("result") == Some(&CapturedValue::String("cancelled".to_owned()))));
+        .filter(|point| {
+            point.attributes.get("request_code") == Some(&CapturedValue::I64(12))
+                && point.attributes.get("response_code") == Some(&CapturedValue::I64(-1))
+                && point.attributes.get("result") == Some(&CapturedValue::String("legacy_ambiguous_none".to_owned()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(legacy_ambiguous_none.len(), 1);
+    assert_eq!(legacy_ambiguous_none[0].value, 1);
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("result") == Some(&CapturedValue::String("process_request_failed".to_owned()))
     }));
