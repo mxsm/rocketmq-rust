@@ -52,8 +52,8 @@
 - Treat `rust-version` as the MSRV and `rust-toolchain.toml` as the repository toolchain selection. Changes
   to either must keep root and standalone manifests, `.clippy.toml`, and CI aligned.
 - Do not normalize editions across projects. The root workspace defaults to Rust 2021;
-  `rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/` explicitly uses Rust 2024. Follow each of the five
-  standalone Cargo projects' local edition and toolchain rules; `fuzz/` intentionally remains Rust 2021.
+  `rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/` explicitly uses Rust 2024. Follow each standalone Cargo
+  project's local edition and toolchain rules; `fuzz/` intentionally remains Rust 2021.
 - Keep Cargo features additive and explicit. Preserve documented default behavior, gate optional dependencies
   with their owning feature, and validate the exact changed feature combinations.
 - Treat public crate APIs, request/response codes and headers, Serde field names/defaults, and persisted record
