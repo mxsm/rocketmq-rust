@@ -15,6 +15,7 @@
 use std::future::Future;
 use std::time::Duration;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Principal;
@@ -22,6 +23,8 @@ use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
 use rocketmq_transport::api::v1::RequestId as V1RequestId;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::EmbeddedCaller;
+use rocketmq_transport::api::v2::FileRegion;
+use rocketmq_transport::api::v2::FileRegionSequence;
 use rocketmq_transport::api::v2::IngressRequestView;
 use rocketmq_transport::api::v2::OriginalRequestIdentity;
 use rocketmq_transport::api::v2::ProxyInfoSnapshot;
@@ -31,6 +34,9 @@ use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
 use rocketmq_transport::api::v2::RequestId as V2RequestId;
 use rocketmq_transport::api::v2::RequestMeta;
 use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::ResponseBodyKind;
+use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::v2::ResponsePlanError;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::SessionStateView;
 use rocketmq_transport::api::v2::SessionView;
@@ -91,6 +97,30 @@ fn assert_remoting_request_contract(request: Option<RemotingRequest>) {
         let _: Option<&String> = request.extension::<String>();
         let _: Result<Option<String>, String> = request.try_insert_extension("v2-extension".to_owned());
     }
+}
+
+fn assert_file_region_dto_contract(_: Option<FileRegion>, _: Option<FileRegionSequence>) {}
+
+fn assert_error_contract<T: std::error::Error>() {}
+
+fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
+    if let Some(plan) = plan {
+        let _: i32 = plan.response_code();
+        let _: ResponseBodyKind = plan.body_kind();
+        let _: usize = plan.body_len();
+        let _: usize = plan.body_part_count();
+    }
+
+    let _: fn(RemotingCommand) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::command;
+    let _: fn(RemotingCommand, Bytes) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::bytes;
+    let _: fn(RemotingCommand, Vec<Bytes>) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::segments;
+    let _: fn(RemotingCommand, FileRegionSequence) -> Result<ResponsePlan, ResponsePlanError> =
+        ResponsePlan::file_regions;
+    let _ = ResponseBodyKind::Empty;
+    let _ = ResponseBodyKind::Bytes;
+    let _ = ResponseBodyKind::Segments;
+    let _ = ResponseBodyKind::FileRegions;
+    assert_error_contract::<ResponsePlanError>();
 }
 
 fn assert_session_view_contract(view: SessionView) {
@@ -185,4 +215,10 @@ fn v2_exposes_read_only_request_metadata_and_control() {
 fn v2_exposes_the_request_aggregate_and_ingress_view_without_legacy_reexports() {
     let _: fn(IngressRequestView<'_>) = assert_ingress_view_contract;
     assert_remoting_request_contract(None);
+}
+
+#[test]
+fn v2_exposes_only_response_plan_metadata_and_file_region_construction_dtos() {
+    assert_response_plan_contract(None);
+    assert_file_region_dto_contract(None, None);
 }

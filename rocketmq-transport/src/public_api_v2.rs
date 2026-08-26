@@ -14,10 +14,10 @@
 
 //! Explicitly approved source API for the 2.x release line.
 //!
-//! This surface exposes the trusted mutable request aggregate and its immutable
-//! supporting timing, identity, origin, authentication, and session views
-//! approved for the 2.x request model. It does not expose legacy channels,
-//! session handles, operation contexts, or raw cancellation authority.
+//! This surface exposes the trusted mutable request aggregate, immutable
+//! ingress facts, and owned V2 response plan approved for the 2.x request
+//! model. It does not expose legacy channels, session handles, operation
+//! contexts, raw cancellation authority, response bodies, or encoded frames.
 
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
@@ -29,6 +29,11 @@ pub use crate::dispatch::RequestControlView;
 pub use crate::dispatch::RequestId;
 pub use crate::dispatch::RequestMeta;
 pub use crate::dispatch::RequestOrigin;
+pub use crate::dispatch::ResponseBodyKind;
+pub use crate::dispatch::ResponsePlan;
+pub use crate::dispatch::ResponsePlanError;
+pub use crate::file_region::FileRegion;
+pub use crate::file_region::FileRegionSequence;
 pub use crate::session_view::ProxyInfoSnapshot;
 pub use crate::session_view::SessionId;
 pub use crate::session_view::SessionStateView;
