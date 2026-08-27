@@ -1,0 +1,455 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::error::Error;
+use std::io::Write;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Instant;
+
+use bytes::Bytes;
+use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
+use tokio::io::ReadBuf;
+
+use super::*;
+use crate::admission::AdmissionClass;
+use crate::admission::AdmissionController;
+use crate::admission::AdmissionLimits;
+use crate::admission::AdmissionScope;
+use crate::connection::ConnectionState;
+use crate::connection::SessionLifecycle;
+use crate::connection::SessionWriterDiagnostics;
+use crate::dispatch::InlineResponseSlot;
+use crate::dispatch::RequestMeta;
+use crate::dispatch::ResponseBody;
+use crate::file_region::FileRegion;
+use crate::file_region::FileRegionSequence;
+use crate::session_view::EmbeddedSessionRecord;
+use crate::session_view::SessionId;
+use crate::writer_runtime::writer_lanes;
+use crate::writer_runtime::WriterQueueConfig;
+
+fn identity(owner: u64, opaque: i32, one_way: bool) -> OriginalRequestIdentity {
+    let mut command = RemotingCommand::create_remoting_command(39).set_opaque(opaque);
+    if one_way {
+        command.mark_oneway_rpc_ref();
+    }
+    OriginalRequestIdentity::capture(owner, &AtomicU64::new(1), &command).expect("test identity should allocate")
+}
+
+fn response_plan(opaque: i32) -> ResponsePlan {
+    ResponsePlan::command(RemotingCommand::create_response_command_with_code(0).set_opaque(opaque))
+        .expect("response plan")
+}
+
+struct ControlHarness {
+    runtime: RuntimeOwner,
+    parent: rocketmq_runtime::TaskGroup,
+    session: EmbeddedSessionRecord,
+}
+
+struct PanicOnWrite;
+
+impl AsyncRead for PanicOnWrite {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        _buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Pending
+    }
+}
+
+impl AsyncWrite for PanicOnWrite {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        _buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        panic!("a direct deferred response must fail before socket I/O")
+    }
+
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        panic!("a direct deferred response must fail before socket I/O")
+    }
+
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl ControlHarness {
+    fn new(name: &'static str, owner: u64) -> (Self, crate::dispatch::RequestControlView) {
+        let runtime = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("deferred responder runtime owner");
+        let parent = runtime.root_context().component(name).task_group().clone();
+        let session = EmbeddedSessionRecord::new(owner);
+        let control = crate::dispatch::RequestControlView::from_meta(
+            &RequestMeta::new(Instant::now(), None),
+            session.view().state().clone(),
+            &parent,
+        );
+        (
+            Self {
+                runtime,
+                parent,
+                session,
+            },
+            control,
+        )
+    }
+
+    fn session_id(&self) -> SessionId {
+        self.session.view().id()
+    }
+
+    async fn shutdown(self) {
+        let report = self.runtime.shutdown_tasks().await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+}
+
+#[tokio::test]
+async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
+    let (harness, control) = ControlHarness::new("deferred-take-errors", 71);
+    let before = deferred_state_allocations();
+    let ordinary = identity(71, 17, false);
+    let one_way = identity(72, 18, true);
+    let mut unavailable = InlineResponseSlot::disabled();
+    assert!(matches!(
+        unavailable.take_deferred_responder(ordinary),
+        Err(TakeDeferredResponderError::Unavailable)
+    ));
+    assert_eq!(deferred_state_allocations(), before);
+
+    let (sink, _receiver) = ResponseSink::local();
+    let seed = sink.deferred_seed_for_test(TransportTelemetry::noop(), harness.session_id(), control);
+    let mut slot = InlineResponseSlot::with_deferred_seed(seed);
+    assert!(matches!(
+        slot.take_deferred_responder(one_way),
+        Err(TakeDeferredResponderError::OneWayRequest)
+    ));
+    assert_eq!(deferred_state_allocations(), before);
+
+    let responder = slot
+        .take_deferred_responder(ordinary)
+        .expect("failed one-way take must retain the seed");
+    assert_eq!(deferred_state_allocations(), before + 1);
+    assert!(matches!(
+        slot.take_deferred_responder(ordinary),
+        Err(TakeDeferredResponderError::AlreadyTaken)
+    ));
+    assert_eq!(deferred_state_allocations(), before + 1);
+    drop(responder);
+
+    let mut completed = InlineResponseSlot::disabled();
+    let _ = completed
+        .resolve(
+            ordinary,
+            crate::dispatch::HandlerOutcome::Reply(response_plan(ordinary.original_opaque())),
+        )
+        .expect("inline reply completes the slot");
+    assert!(matches!(
+        completed.take_deferred_responder(ordinary),
+        Err(TakeDeferredResponderError::OutcomeCompleted)
+    ));
+    assert_eq!(deferred_state_allocations(), before + 1);
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
+    let (harness, control) = ControlHarness::new("deferred-cancel-drop", 73);
+    let original = identity(73, 19, false);
+    let (telemetry, events) = TransportTelemetry::with_lifecycle_event_capture();
+    let (sink, _receiver) = ResponseSink::local();
+    let explicit = DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
+        .into_responder(original);
+    let explicit_state = Arc::clone(&explicit.state);
+    assert_eq!(explicit.request_id(), original.request_id());
+    assert_eq!(explicit.session_id(), harness.session_id());
+    assert!(explicit
+        .control()
+        .same_lifecycle_owner(harness.session.view().state(), &harness.parent));
+    explicit.register().expect("registry transition");
+    explicit.claim().expect("resume claim transition");
+    explicit.cancel().expect("open responder cancels");
+    assert_eq!(explicit_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+
+    let abandoned = DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
+        .into_responder(original);
+    let abandoned_state = Arc::clone(&abandoned.state);
+    drop(abandoned);
+    assert_eq!(abandoned_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+
+    let already_closed =
+        DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
+            .into_responder(original);
+    already_closed.state.close().expect("close wins before explicit cancel");
+    assert!(already_closed.cancel().is_err());
+
+    let sending = DeferredResponseSeed::new(sink, telemetry, harness.session_id(), control).into_responder(original);
+    let send_claim = sending.state.begin_sending().expect("begin sending");
+    drop(sending);
+    drop(send_claim);
+    assert_eq!(
+        events.lock().as_slice(),
+        [("deferred_response", "explicit"), ("deferred_response", "abandoned")]
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
+    let (harness, control) = ControlHarness::new("deferred-responder-local-plan", 74);
+    let (sink, receiver) = ResponseSink::local_plan(control.clone());
+    let original = identity(74, -712, false);
+    let bytes = Bytes::from_static(b"deferred-body");
+    let pointer = bytes.as_ptr();
+    let responder = DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control.clone())
+        .into_responder(original);
+    let state = Arc::clone(&responder.state);
+    let receipt = responder
+        .respond(
+            ResponsePlan::bytes(
+                RemotingCommand::create_response_command_with_code(71).set_opaque(999),
+                bytes,
+            )
+            .expect("bytes plan"),
+        )
+        .await
+        .expect("local trusted owner accepts deferred plan");
+    assert_eq!(receipt.request_id(), original.request_id());
+    assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Completed));
+
+    let received = receiver.receive().await.expect("trusted local owner receives the plan");
+    assert_eq!(received.test_head().opaque(), original.original_opaque());
+    let ResponseBody::Bytes(received_bytes) = received.test_body() else {
+        panic!("bytes body must retain its representation");
+    };
+    assert_eq!(received_bytes.as_ptr(), pointer);
+    assert_eq!(received_bytes.as_ref(), b"deferred-body");
+
+    let first = Bytes::from_static(b"first");
+    let second = Bytes::from_static(b"second");
+    let first_pointer = first.as_ptr();
+    let second_pointer = second.as_ptr();
+    let segments_plan = ResponsePlan::segments(
+        RemotingCommand::create_response_command_with_code(72).set_opaque(1),
+        vec![first, second],
+    )
+    .expect("segments plan");
+    let (vector_pointer, vector_capacity) = match segments_plan.test_body() {
+        ResponseBody::Segments(segments) => (segments.as_ptr(), segments.capacity()),
+        _ => panic!("segments plan must retain its representation"),
+    };
+    let (sink, receiver) = ResponseSink::local_plan(control.clone());
+    DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control.clone())
+        .into_responder(original)
+        .respond(segments_plan)
+        .await
+        .expect("segments plan handoff");
+    let received = receiver.receive().await.expect("receive segments plan");
+    let ResponseBody::Segments(segments) = received.test_body() else {
+        panic!("deferred segments must retain their representation");
+    };
+    assert_eq!(segments.as_ptr(), vector_pointer);
+    assert_eq!(segments.capacity(), vector_capacity);
+    assert_eq!(segments[0].as_ptr(), first_pointer);
+    assert_eq!(segments[1].as_ptr(), second_pointer);
+
+    let mut file = tempfile::tempfile().expect("temporary file");
+    file.write_all(b"file-body").expect("write file body");
+    let file = Arc::new(file);
+    let region = FileRegion::try_new(file.clone(), 0, 9).expect("file region");
+    let plan = ResponsePlan::file_regions(
+        RemotingCommand::create_response_command_with_code(73).set_opaque(2),
+        FileRegionSequence::try_new(vec![region]).expect("file region sequence"),
+    )
+    .expect("file response plan");
+    let (sink, receiver) = ResponseSink::local_plan(control.clone());
+    DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
+        .into_responder(original)
+        .respond(plan)
+        .await
+        .expect("file plan handoff");
+    assert_eq!(Arc::strong_count(&file), 2);
+    let received = receiver.receive().await.expect("receive file plan");
+    let ResponseBody::FileRegions(regions) = received.test_body() else {
+        panic!("deferred file plan must retain its representation");
+    };
+    assert_eq!(regions.len(), 9);
+    assert_eq!(Arc::strong_count(&file), 2);
+    drop(received);
+    assert_eq!(Arc::strong_count(&file), 1);
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn non_plan_sink_fails_closed_before_io_with_exact_progress() {
+    let (harness, control) = ControlHarness::new("deferred-non-plan", 75);
+    let original = identity(75, 21, false);
+    let (sink, _receiver) = ResponseSink::local();
+    let responder = DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
+        .into_responder(original);
+    let state = Arc::clone(&responder.state);
+    let error = responder
+        .respond(response_plan(99))
+        .await
+        .expect_err("legacy local sink is not a canonical plan owner");
+    assert_eq!(error.kind(), DeferredResponseErrorKind::SessionClosed);
+    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    assert_eq!(
+        state.terminal_state(),
+        Some(ResponseTerminalState::Failed {
+            progress: WriteProgress::NotStarted
+        })
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn direct_response_plan_fails_closed_before_io_and_finishes_not_started() {
+    let (harness, control) = ControlHarness::new("deferred-direct-fail-closed", 78);
+    let original = identity(78, 23, false);
+    let bound = response_plan(999).bind(original).expect("bound response plan");
+    let prepared = crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
+        .expect("prepared response");
+    let state = Arc::new(ResponseState::open());
+    let mut claim = state.begin_sending().expect("deferred send claim");
+    let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let transport_drop = claim.observe_transport_drop(delegated);
+    let mut connection = crate::connection::Connection::new_with_plaintext_stream(PanicOnWrite);
+
+    let error = connection
+        .send_prepared_deferred_response(prepared, &control, transport_drop)
+        .await
+        .expect_err("direct response-plan writer must fail closed");
+    assert!(matches!(&error, ResponseError::SessionClosed));
+    claim
+        .fail(error.write_progress().unwrap_or(WriteProgress::NotStarted))
+        .expect("outer claim owns the pre-I/O failure");
+    assert_eq!(
+        state.terminal_state(),
+        Some(ResponseTerminalState::Failed {
+            progress: WriteProgress::NotStarted
+        })
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
+    let (harness, control) = ControlHarness::new("deferred-queued-missing-context", 79);
+    let original = identity(79, 24, false);
+    let bound = response_plan(1000).bind(original).expect("bound response plan");
+    let prepared = crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
+        .expect("prepared response");
+    let state = Arc::new(ResponseState::open());
+    let mut claim = state.begin_sending().expect("deferred send claim");
+    let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let transport_drop = claim.observe_transport_drop(delegated);
+
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare admission scope");
+    let config = WriterQueueConfig::default();
+    let (lanes, receivers) = writer_lanes(config);
+    let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let mut connection = crate::connection::Connection::new_queued(
+        lanes,
+        Arc::clone(&diagnostics),
+        admission,
+        state_tx,
+        state_rx,
+        CheetahString::from_static_str("deferred-missing-plan-context"),
+        crate::codec::remoting_command_codec::FrameLimits::default(),
+        Some(AdmissionClass::Data),
+        Arc::new(SessionLifecycle::new()),
+        TransportTelemetry::noop(),
+    );
+
+    let error = connection
+        .send_prepared_deferred_response(prepared, &control, transport_drop)
+        .await
+        .expect_err("a response class without the canonical plan context must fail closed");
+    assert!(matches!(&error, ResponseError::SessionClosed));
+    assert_eq!(diagnostics.snapshot().accepted, 0);
+    claim
+        .fail(error.write_progress().unwrap_or(WriteProgress::NotStarted))
+        .expect("outer claim owns the pre-enqueue failure");
+    assert_eq!(
+        state.terminal_state(),
+        Some(ResponseTerminalState::Failed {
+            progress: WriteProgress::NotStarted
+        })
+    );
+
+    drop(connection);
+    drop(receivers);
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn immutable_binding_failure_terminates_not_started_and_preserves_its_source() {
+    let (harness, control) = ControlHarness::new("deferred-binding-failure", 76);
+    let original = identity(76, 22, true);
+    let (sink, _receiver) = ResponseSink::local();
+    let responder = DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
+        .into_responder(original);
+    let state = Arc::clone(&responder.state);
+    let error = responder
+        .respond(response_plan(1))
+        .await
+        .expect_err("immutable one-way identity must fail binding");
+    assert_eq!(error.kind(), DeferredResponseErrorKind::Binding);
+    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    assert!(error.source().is_some());
+    assert_eq!(
+        state.terminal_state(),
+        Some(ResponseTerminalState::Failed {
+            progress: WriteProgress::NotStarted
+        })
+    );
+    harness.shutdown().await;
+}
+
+#[test]
+fn deferred_errors_preserve_typed_sources_but_redact_source_text() {
+    let secret = "opaque=991 principal=alice token=secret body=payload session=77";
+    let error = DeferredResponseError::from_response(ResponseError::Transport {
+        progress: WriteProgress::PossiblyPartial,
+        source: RocketMQError::network_connection_failed("deferred_test", secret),
+    });
+    assert_eq!(error.kind(), DeferredResponseErrorKind::Transport);
+    assert_eq!(error.write_progress(), Some(WriteProgress::PossiblyPartial));
+    assert!(!error.retryable());
+    assert!(error.source().is_some());
+    for rendered in [format!("{error}"), format!("{error:?}")] {
+        assert!(!rendered.contains("991"));
+        assert!(!rendered.contains("alice"));
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("payload"));
+        assert!(!rendered.contains("77"));
+    }
+}

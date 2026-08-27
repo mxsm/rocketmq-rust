@@ -42,6 +42,7 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseError;
 use crate::dispatch::ResponseTransportDropHandle;
@@ -252,15 +253,21 @@ fn stop_failure(reason: QueuedWriteCancellation, target: String) -> SendFailure 
 
 struct InFlightQueuedSendDrop {
     handle: ResponseTransportDropHandle,
+    deferred: Option<DeferredTransportDropHandle>,
     progress: Arc<QueuedWriteProgress>,
     armed: bool,
 }
 
 impl InFlightQueuedSendDrop {
-    fn new(handle: ResponseTransportDropHandle, progress: Arc<QueuedWriteProgress>) -> Self {
+    fn new(
+        handle: ResponseTransportDropHandle,
+        deferred: Option<DeferredTransportDropHandle>,
+        progress: Arc<QueuedWriteProgress>,
+    ) -> Self {
         handle.delegate();
         Self {
             handle,
+            deferred,
             progress,
             armed: true,
         }
@@ -283,6 +290,9 @@ impl Drop for InFlightQueuedSendDrop {
             WriteProgress::PossiblyPartial
         };
         self.handle.finish_dropped(progress);
+        if let Some(deferred) = &self.deferred {
+            deferred.finish_dropped(progress);
+        }
     }
 }
 
@@ -915,7 +925,7 @@ impl Connection {
         deadline: Option<RequestDeadline>,
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.send_payload_inner(payload, class, reservation, deadline, None, target)
+        self.send_payload_inner(payload, class, reservation, deadline, None, None, target)
             .await
             .map_err(SendFailure::into_legacy)
     }
@@ -927,6 +937,7 @@ impl Connection {
         reservation: Option<ResourcePermit>,
         deadline: Option<RequestDeadline>,
         control: Option<&RequestControlView>,
+        deferred_drop: Option<DeferredTransportDropHandle>,
         target: String,
     ) -> Result<(), SendFailure> {
         let response_plan_drop = self.response_plan_drop.clone();
@@ -1024,8 +1035,8 @@ impl Connection {
                     });
                 }
             }
-            let mut in_flight_drop =
-                response_plan_drop.map(|handle| InFlightQueuedSendDrop::new(handle, Arc::clone(&progress)));
+            let mut in_flight_drop = response_plan_drop
+                .map(|handle| InFlightQueuedSendDrop::new(handle, deferred_drop, Arc::clone(&progress)));
             #[cfg(test)]
             if let Some(signal) = &self.enqueue_complete_signal {
                 signal.notify_one();
@@ -1051,6 +1062,9 @@ impl Connection {
                     Ok(outcome) => outcome,
                     Err(_) => {
                         if progress.cancel_before_start() {
+                            if let Some(drop_guard) = in_flight_drop.take() {
+                                drop_guard.complete();
+                            }
                             return Err(SendFailure::DeadlineExceeded { target });
                         }
                         result.await
@@ -1185,6 +1199,36 @@ impl Connection {
             None,
             control.deadline(),
             Some(control),
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
+        .map_err(SendFailure::into_response)
+    }
+
+    pub(crate) async fn send_prepared_deferred_response(
+        &mut self,
+        prepared: PreparedResponse,
+        control: &RequestControlView,
+        deferred_drop: DeferredTransportDropHandle,
+    ) -> Result<(), ResponseError> {
+        if self.queued_writer().is_none() {
+            return Err(ResponseError::SessionClosed);
+        }
+        if self.response_plan_drop.is_none() {
+            return Err(ResponseError::SessionClosed);
+        }
+        let Some(class) = self.response_class() else {
+            return Err(ResponseError::SessionClosed);
+        };
+        let (_, payload) = prepared.into_parts();
+        self.send_payload_inner(
+            payload,
+            class,
+            None,
+            control.deadline(),
+            Some(control),
+            Some(deferred_drop),
             "transport-session-writer".to_string(),
         )
         .await
@@ -1208,6 +1252,7 @@ impl Connection {
             None,
             None,
             None,
+            None,
             "transport-session-writer".to_string(),
         )
         .await
@@ -1228,6 +1273,7 @@ impl Connection {
         self.send_payload_inner(
             OutboundPayload::Frame(frame),
             class,
+            None,
             None,
             None,
             None,

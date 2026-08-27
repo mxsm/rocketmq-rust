@@ -25,6 +25,8 @@ fn request_identity_span(identity: crate::dispatch::OriginalRequestIdentity) -> 
 
 #[cfg(test)]
 type LegacyProcessorRequestCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, i32)>>>;
+#[cfg(test)]
+type LifecycleEventCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, &'static str)>>>;
 
 /// Cloneable metrics and tracing capability for one transport composition.
 ///
@@ -39,6 +41,8 @@ pub struct TransportTelemetry {
     handle: Option<rocketmq_observability::TelemetryHandle>,
     #[cfg(test)]
     legacy_processor_requests: Option<LegacyProcessorRequestCapture>,
+    #[cfg(test)]
+    lifecycle_events: Option<LifecycleEventCapture>,
 }
 
 impl TransportTelemetry {
@@ -60,6 +64,8 @@ impl TransportTelemetry {
             handle: Some(telemetry.clone()),
             #[cfg(test)]
             legacy_processor_requests: None,
+            #[cfg(test)]
+            lifecycle_events: None,
         }
     }
 
@@ -74,6 +80,23 @@ impl TransportTelemetry {
             #[cfg(any(feature = "observability", feature = "observability-traces"))]
             handle: None,
             legacy_processor_requests: Some(std::sync::Arc::clone(&capture)),
+            lifecycle_events: None,
+        };
+        (telemetry, capture)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_lifecycle_event_capture() -> (Self, LifecycleEventCapture) {
+        let capture = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let telemetry = Self {
+            #[cfg(feature = "observability")]
+            remoting: Default::default(),
+            #[cfg(feature = "observability")]
+            client: Default::default(),
+            #[cfg(any(feature = "observability", feature = "observability-traces"))]
+            handle: None,
+            legacy_processor_requests: None,
+            lifecycle_events: Some(std::sync::Arc::clone(&capture)),
         };
         (telemetry, capture)
     }
@@ -131,6 +154,11 @@ impl TransportTelemetry {
 
     #[inline]
     pub(crate) fn record_lifecycle_event(&self, event: &'static str, result: &'static str) {
+        #[cfg(test)]
+        if let Some(capture) = &self.lifecycle_events {
+            capture.lock().push((event, result));
+        }
+
         #[cfg(feature = "observability")]
         self.remoting.record_lifecycle_event(event, result);
 

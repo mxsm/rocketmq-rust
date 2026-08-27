@@ -14,6 +14,9 @@
 
 use super::*;
 
+#[path = "network/deferred.rs"]
+mod deferred;
+
 #[tokio::test]
 async fn network_plan_prepares_and_writes_all_four_bodies_before_issuing_receipts() {
     let mut harness = NetworkHarness::new(

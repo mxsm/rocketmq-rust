@@ -393,6 +393,7 @@ async fn actual_dropped_queued_completion_before_start_maps_to_typed_not_started
                 None,
                 None,
                 None,
+                None,
                 "dropped-before-start-target".to_string(),
             )
             .await;
@@ -459,6 +460,7 @@ async fn actual_dropped_active_completion_maps_to_typed_possibly_partial() {
             .send_payload_inner(
                 OutboundPayload::Contiguous(Bytes::from_static(b"dropped-active")),
                 AdmissionClass::Data,
+                None,
                 None,
                 None,
                 None,
@@ -570,6 +572,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
             None,
             None,
             None,
+            None,
             "typed-sendfile-target".to_string(),
         )
         .await
@@ -594,6 +597,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
         .send_payload_inner(
             explicit_sendfile_payload(),
             AdmissionClass::Data,
+            None,
             None,
             None,
             None,
@@ -633,6 +637,7 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
                 Some(crate::deadline::RequestDeadline::after(
                     std::time::Duration::from_millis(10),
                 )),
+                None,
                 None,
                 "typed-direct-target".to_string(),
             )
@@ -756,6 +761,7 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
                     std::time::Duration::from_millis(10),
                 )),
                 None,
+                None,
                 "typed-queued-target".to_string(),
             )
             .await;
@@ -854,6 +860,7 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
         .send_payload_inner(
             OutboundPayload::Contiguous(Bytes::from_static(b"queued-typed")),
             AdmissionClass::Data,
+            None,
             None,
             None,
             None,

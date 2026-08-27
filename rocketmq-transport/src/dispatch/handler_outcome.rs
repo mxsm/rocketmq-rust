@@ -18,9 +18,12 @@ use std::fmt;
 
 use rocketmq_error::RocketMQError;
 
+use super::DeferredResponder;
+use super::DeferredResponseSeed;
 use super::OriginalRequestIdentity;
 use super::RequestId;
 use super::ResponsePlan;
+use super::TakeDeferredResponderError;
 
 mod oneway;
 
@@ -314,6 +317,7 @@ enum InlineResponseState {
 /// Allocation-free handler-contract state owned by one request stack frame.
 pub(crate) struct InlineResponseSlot {
     state: InlineResponseState,
+    deferred_seed: Option<DeferredResponseSeed>,
 }
 
 impl Default for InlineResponseSlot {
@@ -326,12 +330,22 @@ impl InlineResponseSlot {
     pub(crate) const fn disabled() -> Self {
         Self {
             state: InlineResponseState::Open,
+            deferred_seed: None,
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn deferred_capable() -> Self {
         Self {
             state: InlineResponseState::OpenWithDeferred,
+            deferred_seed: None,
+        }
+    }
+
+    pub(crate) const fn with_deferred_seed(seed: DeferredResponseSeed) -> Self {
+        Self {
+            state: InlineResponseState::OpenWithDeferred,
+            deferred_seed: Some(seed),
         }
     }
 
@@ -349,11 +363,33 @@ impl InlineResponseSlot {
         match self.state {
             InlineResponseState::Open => Err(HandlerOutcomeContractError::DeferredUnavailable),
             InlineResponseState::OpenWithDeferred => {
+                drop(self.deferred_seed.take());
                 self.state = InlineResponseState::DeferredTaken;
                 Ok(())
             }
             InlineResponseState::DeferredTaken => Err(HandlerOutcomeContractError::DeferredAlreadyTaken),
             InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
+        }
+    }
+
+    pub(crate) fn take_deferred_responder(
+        &mut self,
+        original: OriginalRequestIdentity,
+    ) -> Result<DeferredResponder, TakeDeferredResponderError> {
+        if original.is_one_way() {
+            return Err(TakeDeferredResponderError::OneWayRequest);
+        }
+        match self.state {
+            InlineResponseState::Open => Err(TakeDeferredResponderError::Unavailable),
+            InlineResponseState::OpenWithDeferred => {
+                let Some(seed) = self.deferred_seed.take() else {
+                    return Err(TakeDeferredResponderError::Unavailable);
+                };
+                self.state = InlineResponseState::DeferredTaken;
+                Ok(seed.into_responder(original))
+            }
+            InlineResponseState::DeferredTaken => Err(TakeDeferredResponderError::AlreadyTaken),
+            InlineResponseState::Completed => Err(TakeDeferredResponderError::OutcomeCompleted),
         }
     }
 
@@ -363,6 +399,7 @@ impl InlineResponseSlot {
         outcome: HandlerOutcome,
     ) -> Result<HandlerOutcome, HandlerOutcomeContractError> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
+        drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open | InlineResponseState::OpenWithDeferred => match outcome {
                 outcome @ HandlerOutcome::Reply(_) => Ok(outcome),
@@ -393,6 +430,7 @@ impl InlineResponseSlot {
     /// discards an owned legacy response before plan validation.
     pub(crate) fn resolve_legacy_oneway_reply(&mut self) -> Result<(), HandlerOutcomeContractError> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
+        drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open | InlineResponseState::OpenWithDeferred => Ok(()),
             InlineResponseState::DeferredTaken => Err(HandlerOutcomeContractError::ReplyAfterDeferredTaken),
@@ -513,12 +551,8 @@ mod tests {
     }
 
     #[test]
-    fn inline_slot_is_stack_only_and_tracks_the_four_closed_states() {
-        assert_eq!(
-            std::mem::size_of::<InlineResponseSlot>(),
-            std::mem::size_of::<InlineResponseState>()
-        );
-        assert!(!std::mem::needs_drop::<InlineResponseSlot>());
+    fn inline_slot_tracks_the_four_states_without_allocating_deferred_state() {
+        let allocations_before = crate::dispatch::deferred_responder::deferred_state_allocations();
 
         let original = identity(11, RequestCode::CheckTransactionState);
         let mut disabled = InlineResponseSlot::disabled();
@@ -536,6 +570,10 @@ mod tests {
             capable.mark_deferred_taken(original),
             Err(HandlerOutcomeContractError::DeferredAlreadyTaken)
         );
+        assert_eq!(
+            crate::dispatch::deferred_responder::deferred_state_allocations(),
+            allocations_before
+        );
         let registration = DeferredRegistration::for_test(original.request_id());
         assert!(matches!(
             capable.resolve(original, HandlerOutcome::Deferred(registration)),
@@ -544,6 +582,10 @@ mod tests {
         assert_eq!(
             capable.mark_deferred_taken(original),
             Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+        );
+        assert_eq!(
+            crate::dispatch::deferred_responder::deferred_state_allocations(),
+            allocations_before
         );
     }
 

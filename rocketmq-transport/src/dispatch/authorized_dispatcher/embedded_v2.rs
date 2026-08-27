@@ -107,10 +107,7 @@ where
             };
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
         let lifecycle = RequestLifecycleProvenance::from_embedded_session(&session_record, task_group);
-        let mut builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
-        if !original.is_one_way() {
-            builder = builder.reserve_deferred_response();
-        }
+        let builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
         let ordering = self
             .core
             .explicit_processor()

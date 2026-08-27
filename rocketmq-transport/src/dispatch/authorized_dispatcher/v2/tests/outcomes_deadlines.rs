@@ -13,6 +13,63 @@
 // limitations under the License.
 
 use super::harness::*;
+
+#[derive(Clone, Default)]
+struct PublicDeferredProcessor {
+    completed: Arc<AtomicBool>,
+}
+
+impl RequestProcessorV2 for PublicDeferredProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let request_id = request.original_identity().request_id();
+        let original_opaque = request.original_identity().original_opaque();
+        let session_id = request.session().id();
+        let responder = request
+            .take_deferred_responder()
+            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        assert_eq!(responder.request_id(), request_id);
+        assert_eq!(responder.session_id(), session_id);
+        assert!(responder.control().same_lifecycle_view(request.control()));
+        let receipt = responder
+            .respond(
+                ResponsePlan::bytes(
+                    RemotingCommand::create_response_command_with_code(0).set_opaque(original_opaque + 1),
+                    Bytes::from_static(b"public-deferred"),
+                )
+                .expect("deferred response plan"),
+            )
+            .await
+            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        assert_eq!(receipt.request_id(), request_id);
+        self.completed.store(true, Ordering::SeqCst);
+        Ok(HandlerOutcome::Deferred(
+            crate::dispatch::DeferredRegistration::for_test(request_id),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn public_deferred_responder_uses_the_requests_canonical_network_sink_and_identity() {
+    let mut harness = DispatchHarness::new("dispatch-v2-public-deferred").await;
+    let processor = PublicDeferredProcessor::default();
+    let completed = Arc::clone(&processor.completed);
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(processor, Vec::new()));
+    let mut command = request(false);
+    command.set_opaque_mut(-704);
+    let (session, original) = harness.request_session(&command);
+
+    dispatcher
+        .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
+        .await
+        .expect("dispatch public deferred response");
+    let response = harness.receive().await;
+    harness.drain_requests().await;
+    assert_eq!(response.opaque(), original.original_opaque());
+    assert_eq!(response.body().map(Bytes::as_ref), Some(&b"public-deferred"[..]));
+    assert!(completed.load(Ordering::SeqCst));
+    harness.assert_no_response().await;
+    harness.shutdown().await;
+}
 #[tokio::test]
 async fn one_way_reply_and_structured_rejection_are_consumed_without_write_or_observation() {
     for (name, behavior, expected_processes) in [

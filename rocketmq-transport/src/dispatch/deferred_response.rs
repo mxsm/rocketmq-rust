@@ -14,6 +14,7 @@
 
 //! Atomic lifecycle state for responses retained beyond the handler call.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -78,14 +79,30 @@ pub(crate) enum ResponseStateError {
 /// Affine ownership of the right to terminate `Sending`.
 ///
 /// A newly created claim proves that canonical socket I/O has not started.
-/// Before entering any seam that might begin socket I/O, the owner must call
-/// [`Self::mark_possibly_partial`]. Dropping an unfinished claim records the
-/// most conservative progress reached by the owner.
+/// Before entering any seam that might begin socket I/O, the owner must either
+/// call [`Self::mark_possibly_partial`] or delegate terminal ownership to the
+/// canonical transport guard. Dropping an unfinished, non-delegated claim
+/// records the most conservative progress reached by the owner.
 #[must_use]
 pub(crate) struct ResponseSendClaim {
     state: Arc<ResponseState>,
     drop_progress: WriteProgress,
+    delegated: Option<Arc<AtomicBool>>,
     active: bool,
+}
+
+/// Deferred-state half of the canonical queued-write Drop completion.
+pub(crate) struct DeferredTransportDropHandle {
+    state: Arc<ResponseState>,
+    delegated: Arc<AtomicBool>,
+}
+
+impl DeferredTransportDropHandle {
+    pub(crate) fn finish_dropped(&self, progress: WriteProgress) {
+        if self.delegated.load(Ordering::Acquire) {
+            let _ = self.state.finish_sending(ResponseTerminalState::Failed { progress });
+        }
+    }
 }
 
 impl ResponseState {
@@ -136,6 +153,7 @@ impl ResponseState {
                             return Ok(ResponseSendClaim {
                                 state: Arc::clone(self),
                                 drop_progress: WriteProgress::NotStarted,
+                                delegated: None,
                                 active: true,
                             });
                         }
@@ -213,6 +231,14 @@ impl ResponseSendClaim {
         self.drop_progress = WriteProgress::PossiblyPartial;
     }
 
+    pub(crate) fn observe_transport_drop(&mut self, delegated: Arc<AtomicBool>) -> DeferredTransportDropHandle {
+        self.delegated = Some(Arc::clone(&delegated));
+        DeferredTransportDropHandle {
+            state: Arc::clone(&self.state),
+            delegated,
+        }
+    }
+
     /// Records successful canonical response delivery.
     pub(crate) fn complete(mut self) -> Result<(), ResponseStateError> {
         let result = self.state.finish_sending(ResponseTerminalState::Completed);
@@ -234,6 +260,14 @@ impl ResponseSendClaim {
 
 impl Drop for ResponseSendClaim {
     fn drop(&mut self) {
+        if self
+            .delegated
+            .as_ref()
+            .is_some_and(|delegated| delegated.load(Ordering::Acquire))
+        {
+            self.active = false;
+            return;
+        }
         if self.active {
             let _ = self.state.finish_sending(ResponseTerminalState::Failed {
                 progress: self.drop_progress,

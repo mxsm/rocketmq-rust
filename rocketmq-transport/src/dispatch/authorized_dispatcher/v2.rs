@@ -361,6 +361,11 @@ where
                 .await;
         }
 
+        let builder = if original.is_one_way() {
+            builder
+        } else {
+            processor.install_deferred_response(builder, &response, &session)?
+        };
         let mut request = builder.build()?;
         let hook_snapshot = self.rpc_hooks.snapshot();
         let candidate = processor

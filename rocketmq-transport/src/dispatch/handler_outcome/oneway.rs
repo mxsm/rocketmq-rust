@@ -31,6 +31,7 @@ impl InlineResponseSlot {
         registration: DeferredRegistration,
     ) -> Result<(), HandlerOutcomeContractError> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
+        drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open => {
                 if registration.request_id() != original.request_id() {
@@ -55,6 +56,7 @@ impl InlineResponseSlot {
         marker: ProtocolNoResponse,
     ) -> Result<(), HandlerOutcomeContractError> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
+        drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open => validate_oneway_marker(&marker, original),
             InlineResponseState::OpenWithDeferred => Err(HandlerOutcomeContractError::DeferredUnavailable),

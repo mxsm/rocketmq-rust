@@ -19,6 +19,7 @@ use rocketmq_runtime::TaskGroup;
 
 use super::IngressRequestView;
 use super::RemotingRequest;
+use crate::dispatch::DeferredResponseSeed;
 use crate::dispatch::InlineResponseSlot;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
@@ -52,6 +53,8 @@ pub(crate) enum RemotingRequestBuildError {
     MissingEmbeddedAuthentication,
     #[error("one-way requests cannot reserve a deferred response")]
     OneWayDeferredResponse,
+    #[error("deferred response seed does not match the canonical network response owner")]
+    DeferredResponseOwnerMismatch,
 }
 
 /// Sealed lifecycle facts that bind a request to its real session and owner.
@@ -163,6 +166,12 @@ impl RemotingRequestBuilder {
         }
     }
 
+    pub(crate) fn with_deferred_response_seed(mut self, seed: DeferredResponseSeed) -> Self {
+        self.inline_response = InlineResponseSlot::with_deferred_seed(seed);
+        self
+    }
+
+    #[cfg(test)]
     pub(crate) fn reserve_deferred_response(mut self) -> Self {
         self.inline_response = InlineResponseSlot::deferred_capable();
         self

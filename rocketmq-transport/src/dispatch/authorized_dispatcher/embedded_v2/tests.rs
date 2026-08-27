@@ -163,11 +163,16 @@ impl RequestProcessorV2 for TestProcessor {
                 request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?,
             )),
             Behavior::Deferred => {
-                request
-                    .mark_deferred_response_taken()
-                    .expect("embedded builder reserves the sealed deferred capability");
-                Ok(HandlerOutcome::Deferred(
-                    crate::dispatch::DeferredRegistration::for_test(request.original_identity().request_id()),
+                assert!(matches!(
+                    request.take_deferred_responder(),
+                    Err(crate::dispatch::TakeDeferredResponderError::Unavailable)
+                ));
+                Ok(HandlerOutcome::Reply(
+                    ResponsePlan::bytes(
+                        RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
+                        self.response.clone(),
+                    )
+                    .expect("response plan"),
                 ))
             }
             Behavior::UnclaimedDeferred | Behavior::ForgedDeferred => Ok(HandlerOutcome::Deferred(
@@ -508,7 +513,7 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation_and_typ
 }
 
 #[tokio::test]
-async fn sealed_deferred_and_protocol_no_reply_survive_inline_validation_without_response_observation() {
+async fn embedded_deferred_take_is_unavailable_while_protocol_no_reply_stays_observation_free() {
     for (behavior, code) in [(Behavior::Deferred, 39), (Behavior::NoReply, 39)] {
         let fixture = EmbeddedFixture::new("embedded-v2-affine-outcomes");
         let (processor, state, _) = TestProcessor::new(behavior);
@@ -522,7 +527,7 @@ async fn sealed_deferred_and_protocol_no_reply_survive_inline_validation_without
             .await
             .expect("affine embedded outcome");
         match behavior {
-            Behavior::Deferred => assert!(matches!(outcome, EmbeddedDispatchOutcome::Deferred { .. })),
+            Behavior::Deferred => assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_))),
             Behavior::NoReply => assert!(matches!(
                 outcome,
                 EmbeddedDispatchOutcome::NoReply {
@@ -540,7 +545,10 @@ async fn sealed_deferred_and_protocol_no_reply_survive_inline_validation_without
             | Behavior::CrossRequestDeferred
             | Behavior::CrossRequestNoReply => unreachable!(),
         }
-        assert!(state.observations.lock().expect("observation lock").is_empty());
+        {
+            let observations = state.observations.lock().expect("observation lock");
+            assert_eq!(observations.len(), usize::from(matches!(behavior, Behavior::Deferred)));
+        }
         fixture.shutdown().await;
     }
 }
