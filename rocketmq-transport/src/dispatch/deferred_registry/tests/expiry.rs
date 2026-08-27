@@ -14,6 +14,20 @@
 
 use super::*;
 
+fn assert_expiry_registry_released<R>(registry: &DeferredRegistry<R>, harness: &Harness)
+where
+    R: Send + 'static,
+{
+    assert_registry_released(registry, &harness.admission);
+    let future = tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60);
+    let batch = registry.sweep_expired_at_for_test(future, NonZeroUsize::new(usize::MAX).expect("non-zero limit"));
+    assert_eq!(
+        batch.stats().examined(),
+        0,
+        "expiry index must not retain a stale entry"
+    );
+}
+
 fn parts_with_telemetry<R>(
     harness: &Harness,
     original: OriginalRequestIdentity,
@@ -88,8 +102,7 @@ fn parent_cancellation_is_frozen_before_successful_resume_drop_panics() {
     assert_eq!(terminals.len(), 1, "only the system terminal winner records a metric");
     assert_eq!(terminals[0].1, "parent_cancelled");
     drop(terminals);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[test]
@@ -116,8 +129,7 @@ fn session_close_is_frozen_before_builder_error_drop_panics() {
     assert_eq!(terminals.len(), 1, "only the system terminal winner records a metric");
     assert_eq!(terminals[0].1, "session_closed");
     drop(terminals);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -131,6 +143,7 @@ async fn deferred_expiry_long_poll_uses_the_unified_timeout_claim() {
             DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
         )
         .expect("attach protocol expiry");
+    let state = parts.response_state();
     let registration = registry
         .register(DeferredRequest::new(41, parts))
         .expect("register protocol expiry");
@@ -144,8 +157,98 @@ async fn deferred_expiry_long_poll_uses_the_unified_timeout_claim() {
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].reason(), DeferredWakeReason::Timeout);
     drop(claims.pop());
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ClaimDropped)
+    );
+    assert_expiry_registry_released(&registry, &harness);
+}
+
+#[tokio::test(start_paused = true)]
+async fn message_claim_before_expiry_sweep_keeps_message_as_the_immutable_winner() {
+    let harness = Harness::new("deferred-expiry-message-before-sweep", 98206);
+    let registry = DeferredRegistry::<u64>::new();
+    let protocol_at = tokio::time::Instant::now() + Duration::from_secs(10);
+    let parts = expiring_parts::<u64>(&harness, harness.identity(312), None, None)
+        .try_with_expiry(
+            protocol_at,
+            DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
+        )
+        .expect("attach message-first expiry");
+    let state = parts.response_state();
+    let registration = registry
+        .register(DeferredRequest::new(51, parts))
+        .expect("register message-first expiry");
+    let id = registration.deferred_id();
+    registration.commit().expect("publish message-first expiry");
+
+    let claimed = registry
+        .claim(id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("message claim wins before sweep");
+    assert_eq!(claimed.reason(), DeferredWakeReason::MessageArrived);
+    let batch = registry.sweep_expired_at_for_test(protocol_at, NonZeroUsize::new(1).expect("non-zero limit"));
+    assert_eq!(batch.stats().examined(), 0);
+    assert!(batch.into_claims().is_empty());
+    let loser = registry
+        .claim(id, DeferredWakeReason::Timeout)
+        .await
+        .expect_err("timeout observes the message claim marker");
+    assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
+    assert_eq!(loser.request_id(), Some(claimed.request_id()));
+    assert_eq!(loser.prior_terminal_reason(), None);
+    assert_eq!(registry.test_claim_marker_count(), 1);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
+
+    drop(claimed);
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ClaimDropped)
+    );
+    assert_expiry_registry_released(&registry, &harness);
+}
+
+#[tokio::test(start_paused = true)]
+async fn expiry_sweep_before_message_claim_keeps_timeout_as_the_immutable_winner() {
+    let harness = Harness::new("deferred-expiry-sweep-before-message", 98207);
+    let registry = DeferredRegistry::<u64>::new();
+    let protocol_at = tokio::time::Instant::now() + Duration::from_secs(10);
+    let parts = expiring_parts::<u64>(&harness, harness.identity(313), None, None)
+        .try_with_expiry(
+            protocol_at,
+            DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
+        )
+        .expect("attach sweep-first expiry");
+    let state = parts.response_state();
+    let registration = registry
+        .register(DeferredRequest::new(52, parts))
+        .expect("register sweep-first expiry");
+    let id = registration.deferred_id();
+    registration.commit().expect("publish sweep-first expiry");
+
+    let batch = registry.sweep_expired_at_for_test(protocol_at, NonZeroUsize::new(1).expect("non-zero limit"));
+    assert_eq!(batch.stats().examined(), 1);
+    assert_eq!(batch.stats().long_poll_claims(), 1);
+    let mut claims = batch.into_claims();
+    assert_eq!(claims.len(), 1);
+    let claimed = claims.pop().expect("sweep returns timeout owner");
+    assert_eq!(claimed.reason(), DeferredWakeReason::Timeout);
+    let loser = registry
+        .claim(id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect_err("message observes the timeout claim marker");
+    assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
+    assert_eq!(loser.request_id(), Some(claimed.request_id()));
+    assert_eq!(loser.prior_terminal_reason(), None);
+    assert_eq!(registry.test_claim_marker_count(), 1);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
+
+    drop(claimed);
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ClaimDropped)
+    );
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -180,8 +283,7 @@ async fn deferred_expiry_owner_cutoff_wins_without_a_timeout_claim() {
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -216,8 +318,7 @@ async fn deferred_expiry_cursor_does_not_let_provisional_entry_starve_active_ent
     let wrapped = registry.sweep_expired(NonZeroUsize::new(1).expect("non-zero limit"));
     assert_eq!(wrapped.stats().long_poll_claims(), 1);
     drop(wrapped);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -257,8 +358,7 @@ async fn deferred_expiry_session_close_between_scan_and_claim_wins_deterministic
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::SessionClosed)
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test]
@@ -299,8 +399,9 @@ async fn shutdown_freezes_parent_over_session_for_ticket_state_and_one_metric() 
     let terminals = terminals.lock();
     assert_eq!(terminals.len(), 1, "only the terminal CAS winner records a metric");
     assert_eq!(terminals[0].1, "parent_cancelled");
+    drop(terminals);
     drop(registration);
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 async fn assert_owner_sweep_priority(parent: bool, expected: crate::dispatch::DeferredTerminalReason) {
@@ -330,8 +431,7 @@ async fn assert_owner_sweep_priority(parent: bool, expected: crate::dispatch::De
     assert_eq!(batch.stats().owner_expired(), 0);
     assert!(batch.into_claims().is_empty());
     assert_eq!(state.terminal_reason(), Some(expected));
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -395,7 +495,8 @@ async fn assert_owner_sweep_from_phase(phase: ProvisionalPhase, owner: u64) {
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
     let externally_owned = matches!(phase, ProvisionalPhase::Building | ProvisionalPhase::Activating);
     assert_eq!(
         harness.admission.snapshot().waiting_count(),
@@ -403,7 +504,7 @@ async fn assert_owner_sweep_from_phase(phase: ProvisionalPhase, owner: u64) {
     );
     drop(activating);
     drop(parts);
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -446,8 +547,7 @@ async fn delayed_sweep_crossing_long_poll_and_owner_cutoff_chooses_owner() {
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }
 
 #[tokio::test(start_paused = true)]
@@ -473,6 +573,5 @@ async fn owner_only_claim_marker_uses_canonical_deadline_before_claim_drop() {
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_expiry_registry_released(&registry, &harness);
 }

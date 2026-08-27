@@ -29,6 +29,8 @@ type LegacyProcessorRequestCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'st
 type LifecycleEventCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, &'static str)>>>;
 #[cfg(test)]
 type DeferredTerminalCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, &'static str)>>>;
+#[cfg(test)]
+type DeferredStateConstructionCapture = std::sync::Arc<std::sync::atomic::AtomicUsize>;
 
 /// Cloneable metrics and tracing capability for one transport composition.
 ///
@@ -47,6 +49,8 @@ pub struct TransportTelemetry {
     lifecycle_events: Option<LifecycleEventCapture>,
     #[cfg(test)]
     deferred_terminals: Option<DeferredTerminalCapture>,
+    #[cfg(test)]
+    deferred_state_constructions: Option<DeferredStateConstructionCapture>,
 }
 
 impl TransportTelemetry {
@@ -72,6 +76,8 @@ impl TransportTelemetry {
             lifecycle_events: None,
             #[cfg(test)]
             deferred_terminals: None,
+            #[cfg(test)]
+            deferred_state_constructions: None,
         }
     }
 
@@ -88,6 +94,7 @@ impl TransportTelemetry {
             legacy_processor_requests: Some(std::sync::Arc::clone(&capture)),
             lifecycle_events: None,
             deferred_terminals: None,
+            deferred_state_constructions: None,
         };
         (telemetry, capture)
     }
@@ -105,6 +112,7 @@ impl TransportTelemetry {
             legacy_processor_requests: None,
             lifecycle_events: Some(std::sync::Arc::clone(&capture)),
             deferred_terminals: None,
+            deferred_state_constructions: None,
         };
         (telemetry, capture)
     }
@@ -122,8 +130,35 @@ impl TransportTelemetry {
             legacy_processor_requests: None,
             lifecycle_events: None,
             deferred_terminals: Some(std::sync::Arc::clone(&capture)),
+            deferred_state_constructions: None,
         };
         (telemetry, capture)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_deferred_state_construction_capture() -> (Self, DeferredStateConstructionCapture) {
+        let capture = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let telemetry = Self {
+            #[cfg(feature = "observability")]
+            remoting: Default::default(),
+            #[cfg(feature = "observability")]
+            client: Default::default(),
+            #[cfg(any(feature = "observability", feature = "observability-traces"))]
+            handle: None,
+            legacy_processor_requests: None,
+            lifecycle_events: None,
+            deferred_terminals: None,
+            deferred_state_constructions: Some(std::sync::Arc::clone(&capture)),
+        };
+        (telemetry, capture)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn record_deferred_state_construction(&self) {
+        if let Some(capture) = &self.deferred_state_constructions {
+            capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     #[inline]

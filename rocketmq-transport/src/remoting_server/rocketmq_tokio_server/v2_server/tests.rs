@@ -19,7 +19,6 @@ use std::sync::Mutex;
 use bytes::Bytes;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RuntimeContext;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::IngressPolicy;
 use rocketmq_security_api::LayerEvaluation;
@@ -47,6 +46,16 @@ use crate::runtime::RPCHook;
 
 #[path = "tests/deferred_expiry.rs"]
 mod deferred_expiry;
+#[path = "tests/harness.rs"]
+mod harness;
+#[path = "tests/inline_deferred_state.rs"]
+mod inline_deferred_state;
+
+use harness::expect_start_error;
+use harness::loopback_server_config;
+use harness::start_server;
+use harness::start_server_with_shutdown_observer;
+use harness::V2TestRuntime;
 
 #[derive(Default)]
 struct ProcessorState {
@@ -238,50 +247,8 @@ impl RPCHook for OrderedHook {
     }
 }
 
-fn service_context(name: &'static str) -> ChildServiceContext {
-    RuntimeContext::from_current(name).service_context("transport-v2-test")
-}
-
 fn loopback_security() -> Arc<TransportSecurity> {
     Arc::new(TransportSecurity::development_insecure_loopback(None, None))
-}
-
-async fn start_server<P>(
-    server: TransportServerV2<P>,
-) -> (
-    crate::connection::Connection,
-    SocketAddr,
-    oneshot::Sender<()>,
-    tokio::task::JoinHandle<Result<ShutdownReport, ServerStartError>>,
-)
-where
-    P: RequestProcessorV2 + Clone + Sync + 'static,
-{
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind V2 test listener");
-    let address = listener.local_addr().expect("V2 test listener address");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let (startup_tx, startup_rx) = oneshot::channel();
-    let server_task = tokio::spawn(async move {
-        server
-            .try_serve_bound_listener_until_with_startup(
-                listener,
-                None,
-                async {
-                    let _ = shutdown_rx.await;
-                },
-                startup_tx,
-            )
-            .await
-    });
-    assert_eq!(
-        startup_rx
-            .await
-            .expect("V2 startup result channel")
-            .expect("V2 startup succeeds"),
-        address
-    );
-    let client = crate::connection::Connection::new(TcpStream::connect(address).await.expect("connect V2 client"));
-    (client, address, shutdown_tx, server_task)
 }
 
 async fn receive_deferred_registration(
@@ -357,6 +324,7 @@ impl RequestProcessorV2 for NetworkDeferredCleanupProcessor {
 
 #[tokio::test]
 async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without_legacy_state() {
+    let runtime = V2TestRuntime::new("transport-v2-tcp");
     let state = Arc::new(ProcessorState::default());
     let security_calls = Arc::new(AtomicUsize::new(0));
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
@@ -364,23 +332,19 @@ async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without
         state: Arc::clone(&state),
         admission: Some(Arc::clone(&admission)),
     };
-    let server = TransportServerV2::new(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-tcp"),
-        processor,
-    )
-    .with_transport_security(
-        Arc::new(
-            TransportSecurity::development_insecure_loopback(None, None).with_ingress_policy(Arc::new(
-                CountingPolicy {
-                    calls: Arc::clone(&security_calls),
-                },
-            )),
-        ),
-        None,
-    )
-    .with_admission_controller(admission);
-    let (mut client, _address, shutdown_tx, server_task) = start_server(server).await;
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_transport_security(
+            Arc::new(
+                TransportSecurity::development_insecure_loopback(None, None).with_ingress_policy(Arc::new(
+                    CountingPolicy {
+                        calls: Arc::clone(&security_calls),
+                    },
+                )),
+            ),
+            None,
+        )
+        .with_admission_controller(admission);
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
     state.clones.store(0, Ordering::SeqCst);
 
     client
@@ -481,9 +445,8 @@ async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without
     );
     assert_eq!(oneway_sentinel.body(), Some(&Bytes::from_static(b"v2-tcp")));
 
-    let _ = shutdown_tx.send(());
-    let report = server_task.await.expect("join V2 server").expect("V2 shutdown report");
-    assert!(report.is_healthy(), "{}", report.to_json());
+    running.begin_shutdown();
+    running.finish().await;
     let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
         .await
         .expect("V2 shutdown should publish EOF");
@@ -506,23 +469,21 @@ async fn injected_boundary_conflicts_fail_before_hooks_are_merged() {
         before: Arc::clone(&before),
         after: Arc::clone(&after),
     });
+    let security_runtime = V2TestRuntime::new("transport-v2-conflict");
     let mut server = TransportServerV2::new_with_authorized_dispatcher(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-conflict"),
+        loopback_server_config(),
+        security_runtime.service_context(),
         Arc::clone(&dispatcher),
     )
     .with_transport_security(loopback_security(), None);
     server.register_rpc_hook(hook);
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind conflict listener");
-    let error = server
-        .try_serve_bound_listener_until(listener, None, std::future::pending::<()>())
-        .await
-        .expect_err("foreign security owner must fail");
+    let error = expect_start_error(security_runtime, server).await;
     assert!(matches!(error, ServerStartError::Configuration { .. }));
 
+    let admission_runtime = V2TestRuntime::new("transport-v2-admission-conflict");
     let mut admission_conflict = TransportServerV2::new_with_authorized_dispatcher(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-admission-conflict"),
+        loopback_server_config(),
+        admission_runtime.service_context(),
         Arc::clone(&dispatcher),
     )
     .with_admission_controller(Arc::new(AdmissionController::new(AdmissionLimits::default())));
@@ -530,21 +491,16 @@ async fn injected_boundary_conflicts_fail_before_hooks_are_merged() {
         before: Arc::clone(&before),
         after: Arc::clone(&after),
     }));
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind admission conflict listener");
-    let error = admission_conflict
-        .try_serve_bound_listener_until(listener, None, std::future::pending::<()>())
-        .await
-        .expect_err("foreign admission owner must fail");
+    let error = expect_start_error(admission_runtime, admission_conflict).await;
     assert!(matches!(error, ServerStartError::Configuration { .. }));
 
+    let matching_runtime = V2TestRuntime::new("transport-v2-unpolluted");
     let matching_server = TransportServerV2::new_with_authorized_dispatcher(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-unpolluted"),
+        loopback_server_config(),
+        matching_runtime.service_context(),
         dispatcher,
     );
-    let (mut client, _address, shutdown_tx, server_task) = start_server(matching_server).await;
+    let (mut client, _address, mut running) = start_server(matching_runtime, matching_server).await;
     client
         .send_command(RemotingCommand::create_remoting_command(701).set_opaque(4_003))
         .await
@@ -556,15 +512,13 @@ async fn injected_boundary_conflicts_fail_before_hooks_are_merged() {
         .expect("unpolluted response");
     assert_eq!(before.load(Ordering::SeqCst), 0);
     assert_eq!(after.load(Ordering::SeqCst), 0);
-    let _ = shutdown_tx.send(());
-    let _ = server_task
-        .await
-        .expect("join unpolluted server")
-        .expect("shutdown report");
+    running.begin_shutdown();
+    running.finish().await;
 }
 
 #[tokio::test]
 async fn dispatcher_injection_immediately_drops_the_automatic_processor_source() {
+    let runtime = V2TestRuntime::new("transport-v2-processor-replacement");
     let automatic_drops = Arc::new(AtomicUsize::new(0));
     let injected_drops = Arc::new(AtomicUsize::new(0));
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
@@ -577,8 +531,8 @@ async fn dispatcher_injection_immediately_drops_the_automatic_processor_source()
         admission,
     ));
     let server = TransportServerV2::new(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-processor-replacement"),
+        loopback_server_config(),
+        runtime.service_context(),
         DropTrackedProcessor {
             drops: Arc::clone(&automatic_drops),
         },
@@ -589,21 +543,19 @@ async fn dispatcher_injection_immediately_drops_the_automatic_processor_source()
     assert_eq!(injected_drops.load(Ordering::SeqCst), 0);
     drop(server);
     assert_eq!(injected_drops.load(Ordering::SeqCst), 1);
+    runtime.finish().await;
 }
 
 #[tokio::test]
 async fn shutdown_drains_accepted_work_and_flushes_its_writer_before_retirement() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind draining V2 listener");
-    let address = listener.local_addr().expect("draining V2 listener address");
+    let runtime = V2TestRuntime::new("transport-v2-drain");
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let write_checked = Arc::new(tokio::sync::Notify::new());
     let resume_write = Arc::new(tokio::sync::Notify::new());
     let server = TransportServerV2::new(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-drain"),
+        loopback_server_config(),
+        runtime.service_context(),
         DrainingProcessor {
             started: Arc::clone(&started),
             release: Arc::clone(&release),
@@ -613,31 +565,8 @@ async fn shutdown_drains_accepted_work_and_flushes_its_writer_before_retirement(
         Arc::clone(&write_checked),
         Arc::clone(&resume_write),
     ));
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let (shutdown_seen_tx, shutdown_seen_rx) = oneshot::channel::<()>();
-    let (startup_tx, startup_rx) = oneshot::channel();
-    let server_task = tokio::spawn(async move {
-        server
-            .try_serve_bound_listener_until_with_startup(
-                listener,
-                None,
-                async {
-                    let _ = shutdown_rx.await;
-                    let _ = shutdown_seen_tx.send(());
-                },
-                startup_tx,
-            )
-            .await
-    });
-    assert_eq!(
-        startup_rx
-            .await
-            .expect("draining startup channel")
-            .expect("draining startup succeeds"),
-        address
-    );
-    let mut client =
-        crate::connection::Connection::new(TcpStream::connect(address).await.expect("connect draining V2 client"));
+    let (mut client, _address, mut running, shutdown_seen_rx) =
+        start_server_with_shutdown_observer(runtime, server).await;
     client
         .send_command(RemotingCommand::create_remoting_command(704).set_opaque(4_006))
         .await
@@ -653,7 +582,7 @@ async fn shutdown_drains_accepted_work_and_flushes_its_writer_before_retirement(
         .await
         .expect("second processor starts before shutdown");
 
-    let _ = shutdown_tx.send(());
+    running.begin_shutdown();
     shutdown_seen_rx.await.expect("shutdown future completed");
     release.notify_one();
     resume_write.notify_one();
@@ -665,12 +594,99 @@ async fn shutdown_drains_accepted_work_and_flushes_its_writer_before_retirement(
         .expect("accepted response is flushed");
     assert_eq!(response.opaque(), 4_006);
     assert_eq!(response.body(), Some(&Bytes::from_static(b"drained-before-retire")));
-    let report = tokio::time::timeout(Duration::from_secs(2), server_task)
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_frame() {
+    const OPAQUE: i32 = 4_108;
+
+    let runtime = V2TestRuntime::new("transport-v2-deferred-writer-drain");
+    let registry = DeferredRegistry::<usize>::new();
+    let admission_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+    let deferred_admission =
+        DeferredAdmission::try_configure(&admission_controller, DeferredWaitLimits::new(4, 4 * 1024 * 1024))
+            .expect("writer-drain deferred admission");
+    let (registered_tx, mut registered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let processor = NetworkDeferredCleanupProcessor {
+        registry: registry.clone(),
+        admission: deferred_admission.clone(),
+        registered: registered_tx,
+        precommit_opaque: -1,
+        release_precommit: Arc::new(tokio::sync::Notify::new()),
+    };
+    let write_checked = Arc::new(tokio::sync::Notify::new());
+    let resume_write = Arc::new(tokio::sync::Notify::new());
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_admission_controller(Arc::clone(&admission_controller))
+        .with_write_preflight_barrier(crate::write_strategy::WritePreflightBarrier::new(
+            Arc::clone(&write_checked),
+            Arc::clone(&resume_write),
+        ));
+    let (mut client, _address, mut running, shutdown_seen) = start_server_with_shutdown_observer(runtime, server).await;
+
+    client
+        .send_command(RemotingCommand::create_remoting_command(705).set_opaque(OPAQUE))
         .await
-        .expect("V2 shutdown awaits drain and writer")
-        .expect("join draining V2 server")
-        .expect("draining V2 shutdown report");
-    assert!(report.is_healthy(), "{}", report.to_json());
+        .expect("send writer-drain deferred request");
+    let registered = receive_deferred_registration(&mut registered_rx, OPAQUE).await;
+    let claim = registry
+        .claim(registered.id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("claim writer-drain deferred request");
+    let resume = claim.resume(
+        DeferredResumeRetainedSize::default(),
+        move |opaque, reason| async move {
+            assert_eq!(opaque, OPAQUE as usize);
+            assert_eq!(reason, DeferredWakeReason::MessageArrived);
+            Ok(ResponsePlan::bytes(
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+                Bytes::from_static(b"deferred-writer-drained"),
+            )
+            .expect("writer-drain deferred response plan"))
+        },
+    );
+    tokio::pin!(resume);
+    tokio::select! {
+        biased;
+        result = &mut resume => panic!("deferred resume completed before writer barrier: {result:?}"),
+        () = write_checked.notified() => {}
+    }
+
+    running.begin_shutdown();
+    shutdown_seen.await.expect("writer-drain shutdown observed");
+    tokio::select! {
+        biased;
+        result = &mut resume => panic!("deferred resume completed while writer remained blocked: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    resume_write.notify_one();
+    resume.await.expect("writer-drain deferred response receipt");
+
+    let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("writer-drain response deadline")
+        .expect("writer-drain connection remains until flush")
+        .expect("writer-drain response frame");
+    assert_eq!(response.opaque(), OPAQUE);
+    assert_eq!(response.body(), Some(&Bytes::from_static(b"deferred-writer-drained")));
+    running.finish().await;
+    assert!(
+        client.receive_command().await.is_none(),
+        "shutdown emits no retry frame"
+    );
+
+    let snapshot = admission_controller.snapshot();
+    assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.queued.current_bytes, 0);
+    assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.inflight.current_bytes, 0);
+    assert_eq!(snapshot.processors.current_count, 0);
+    assert_eq!(snapshot.processors.current_bytes, 0);
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    assert_eq!(deferred_admission.snapshot().waiting_count(), 0);
+    assert_eq!(deferred_admission.snapshot().retained_bytes(), 0);
 }
 
 #[tokio::test]
@@ -680,6 +696,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
     const HELD_OPAQUE: i32 = 5_102;
     const PRECOMMIT_OPAQUE: i32 = 5_103;
 
+    let runtime = V2TestRuntime::new("transport-v2-deferred-disconnect");
     let registry = DeferredRegistry::<usize>::new();
     let admission_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let deferred_admission =
@@ -694,13 +711,9 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         precommit_opaque: PRECOMMIT_OPAQUE,
         release_precommit: Arc::clone(&release_precommit),
     };
-    let server = TransportServerV2::new(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-deferred-disconnect"),
-        processor,
-    )
-    .with_admission_controller(Arc::clone(&admission_controller));
-    let (mut first_client, address, shutdown_tx, server_task) = start_server(server).await;
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_admission_controller(Arc::clone(&admission_controller));
+    let (mut first_client, address, mut server_handle) = start_server(runtime, server).await;
     let mut second_client =
         crate::connection::Connection::new(TcpStream::connect(address).await.expect("connect second V2 client"));
 
@@ -842,19 +855,24 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .expect("other-session response frame");
     assert_eq!(response.body(), Some(&Bytes::from_static(b"other-session-live")));
 
-    let _ = shutdown_tx.send(());
-    let report = tokio::time::timeout(Duration::from_secs(2), server_task)
-        .await
-        .expect("V2 server shutdown deadline")
-        .expect("join V2 deferred cleanup server")
-        .expect("V2 deferred cleanup shutdown report");
-    assert!(report.is_healthy(), "{}", report.to_json());
+    server_handle.begin_shutdown();
+    server_handle.finish().await;
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
     assert_eq!(deferred_admission.snapshot().waiting_count(), 0);
+    assert_eq!(deferred_admission.snapshot().retained_bytes(), 0);
+    let snapshot = admission_controller.snapshot();
+    assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.queued.current_bytes, 0);
+    assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.inflight.current_bytes, 0);
+    assert_eq!(snapshot.processors.current_count, 0);
+    assert_eq!(snapshot.processors.current_bytes, 0);
 }
 
 #[tokio::test]
 async fn hooks_registered_before_and_after_injection_append_once_to_existing_registry() {
+    let runtime = V2TestRuntime::new("transport-v2-hook-merge");
     let state = Arc::new(ProcessorState::default());
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let security = loopback_security();
@@ -875,8 +893,8 @@ async fn hooks_registered_before_and_after_injection_append_once_to_existing_reg
         Arc::clone(&admission),
     ));
     let mut server = TransportServerV2::new(
-        Arc::new(ServerConfig::default()),
-        service_context("transport-v2-hook-merge"),
+        loopback_server_config(),
+        runtime.service_context(),
         TcpV2Processor { state, admission: None },
     );
     server.register_rpc_hook(new_hook("pre-injection"));
@@ -885,7 +903,7 @@ async fn hooks_registered_before_and_after_injection_append_once_to_existing_reg
         .with_transport_security(Arc::clone(&security), None)
         .with_admission_controller(Arc::clone(&admission));
     server.register_rpc_hook(new_hook("post-injection"));
-    let (mut client, _address, shutdown_tx, server_task) = start_server(server).await;
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
 
     client
         .send_command(RemotingCommand::create_remoting_command(701).set_opaque(4_004))
@@ -908,9 +926,6 @@ async fn hooks_registered_before_and_after_injection_append_once_to_existing_reg
         ]
     );
 
-    let _ = shutdown_tx.send(());
-    let _ = server_task
-        .await
-        .expect("join hook server")
-        .expect("hook shutdown report");
+    running.begin_shutdown();
+    running.finish().await;
 }

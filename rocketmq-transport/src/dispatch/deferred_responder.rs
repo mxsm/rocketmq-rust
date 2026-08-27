@@ -311,7 +311,10 @@ impl DeferredResponseSeed {
 
     pub(crate) fn into_responder(self, original: OriginalRequestIdentity) -> DeferredResponder {
         #[cfg(test)]
-        DEFERRED_STATE_ALLOCATIONS.with(|count| count.set(count.get() + 1));
+        {
+            DEFERRED_STATE_ALLOCATIONS.with(|count| count.set(count.get() + 1));
+            self.telemetry.record_deferred_state_construction();
+        }
         let state = Arc::new(ResponseState::observed(self.telemetry, original.original_code()));
         DeferredResponder {
             original,

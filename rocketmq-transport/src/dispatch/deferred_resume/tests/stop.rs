@@ -78,6 +78,9 @@ async fn owner_cutoff_cancels_an_ordered_waiter_before_processor_execution() {
     assert_eq!(report.aborted, 0);
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.queued.current_bytes, 0);
     assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.inflight.current_bytes, 0);
     assert_eq!(snapshot.processors.current_count, 0);
+    assert_eq!(snapshot.processors.current_bytes, 0);
 }

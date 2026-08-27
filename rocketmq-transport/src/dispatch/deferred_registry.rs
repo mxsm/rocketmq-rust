@@ -764,6 +764,15 @@ where
         self.inner.sweep_expired(tokio::time::Instant::now(), limit)
     }
 
+    #[cfg(test)]
+    pub(crate) fn sweep_expired_at_for_test(
+        &self,
+        now: tokio::time::Instant,
+        limit: NonZeroUsize,
+    ) -> DeferredExpiryBatch<R> {
+        self.inner.sweep_expired(now, limit)
+    }
+
     /// Seals this registry and releases all state still owned by it.
     ///
     /// The winning call detaches registry indexes while holding the registry

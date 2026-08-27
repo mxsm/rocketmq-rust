@@ -24,9 +24,10 @@ use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
+use super::harness::loopback_server_config;
+use super::harness::start_server;
+use super::harness::V2TestRuntime;
 use super::loopback_security;
-use super::service_context;
-use super::start_server;
 use super::AdmissionController;
 use super::AdmissionLimits;
 use super::DeferredAdmission;
@@ -41,7 +42,6 @@ use super::HandlerOutcome;
 use super::RemotingRequest;
 use super::RequestProcessorV2;
 use super::ResponsePlan;
-use super::ServerConfig;
 use super::TransportServerV2;
 use crate::dispatch::DeferredExpiryMargins;
 use crate::dispatch::DeferredTerminalReason;
@@ -142,6 +142,8 @@ impl RequestProcessorV2 for TcpDeferredExpiryProcessor {
 }
 
 struct TcpExpiryHarness {
+    runtime: V2TestRuntime,
+    admission_controller: Arc<AdmissionController>,
     registry: DeferredRegistry<i32>,
     admission: DeferredAdmission,
     state: Arc<ExpiryProcessorState>,
@@ -151,6 +153,7 @@ struct TcpExpiryHarness {
 }
 
 fn expiry_harness(name: &'static str, policy: ExpiryPolicy) -> TcpExpiryHarness {
+    let runtime = V2TestRuntime::new(name);
     let registry = DeferredRegistry::<i32>::new();
     let admission_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let admission = DeferredAdmission::try_configure(
@@ -168,11 +171,13 @@ fn expiry_harness(name: &'static str, policy: ExpiryPolicy) -> TcpExpiryHarness 
         registrations: registered_tx,
     };
     let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
-    let server = TransportServerV2::new(Arc::new(ServerConfig::default()), service_context(name), processor)
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
         .with_transport_security(loopback_security(), None)
-        .with_admission_controller(admission_controller)
+        .with_admission_controller(Arc::clone(&admission_controller))
         .with_telemetry(telemetry);
     TcpExpiryHarness {
+        runtime,
+        admission_controller,
         registry,
         admission,
         state,
@@ -206,11 +211,7 @@ async fn await_commit_barrier(client: &mut crate::connection::Connection, state:
     state.committed.notified().await;
 }
 
-async fn advance_to(instant: tokio::time::Instant) {
-    tokio::time::advance(instant.saturating_duration_since(tokio::time::Instant::now())).await;
-}
-
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     let mut harness = expiry_harness(
         "transport-v2-protocol-expiry",
@@ -220,15 +221,16 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
         },
     );
     let registry = harness.registry.clone();
+    let admission_controller = Arc::clone(&harness.admission_controller);
     let admission = harness.admission.clone();
     let state = Arc::clone(&harness.state);
     let terminals = Arc::clone(&harness.terminals);
-    let (mut client, _address, shutdown_tx, server_task) = start_server(harness.server).await;
+    let (mut client, _address, mut running) = start_server(harness.runtime, harness.server).await;
     let observed = send_deferred_request(&mut client, &mut harness.registrations, 9_001).await;
     await_commit_barrier(&mut client, &state, 9_011).await;
-    advance_to(observed.scheduled_at).await;
 
-    let batch = registry.sweep_expired(NonZeroUsize::new(8).expect("non-zero sweep"));
+    let batch =
+        registry.sweep_expired_at_for_test(observed.scheduled_at, NonZeroUsize::new(8).expect("non-zero sweep"));
     assert_eq!(batch.stats().long_poll_claims(), 1);
     assert_eq!(batch.stats().owner_expired(), 0);
     let mut claims = batch.into_claims();
@@ -265,25 +267,29 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     assert_eq!(state.resumes.load(Ordering::SeqCst), 1);
     assert!(!state.saw_owner_deadline.load(Ordering::SeqCst));
     assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(admission.snapshot().retained_bytes(), 0);
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    let snapshot = admission_controller.snapshot();
+    assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.queued.current_bytes, 0);
+    assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.inflight.current_bytes, 0);
+    assert_eq!(snapshot.processors.current_count, 0);
+    assert_eq!(snapshot.processors.current_bytes, 0);
     assert!(
         terminals.lock().is_empty(),
         "successful delivery has no terminal reason"
     );
+    running.begin_shutdown();
+    running.finish().await;
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), client.receive_command())
-            .await
-            .is_err(),
+        client.receive_command().await.is_none(),
         "one timeout claim must produce exactly one response frame"
     );
-
-    let _ = shutdown_tx.send(());
-    server_task
-        .await
-        .expect("join protocol timeout server")
-        .expect("protocol timeout shutdown report");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn real_tcp_owner_cutoff_removes_without_resuming_or_writing() {
     let mut harness = expiry_harness(
         "transport-v2-owner-expiry",
@@ -294,15 +300,16 @@ async fn real_tcp_owner_cutoff_removes_without_resuming_or_writing() {
     );
     harness.server = harness.server.with_test_request_deadline(Duration::from_millis(350));
     let registry = harness.registry.clone();
+    let admission_controller = Arc::clone(&harness.admission_controller);
     let admission = harness.admission.clone();
     let state = Arc::clone(&harness.state);
     let terminals = Arc::clone(&harness.terminals);
-    let (mut client, _address, shutdown_tx, server_task) = start_server(harness.server).await;
+    let (mut client, _address, mut running) = start_server(harness.runtime, harness.server).await;
     let observed = send_deferred_request(&mut client, &mut harness.registrations, 9_002).await;
     await_commit_barrier(&mut client, &state, 9_012).await;
-    advance_to(observed.scheduled_at).await;
 
-    let batch = registry.sweep_expired(NonZeroUsize::new(8).expect("non-zero sweep"));
+    let batch =
+        registry.sweep_expired_at_for_test(observed.scheduled_at, NonZeroUsize::new(8).expect("non-zero sweep"));
     assert_eq!(batch.stats().long_poll_claims(), 0);
     assert_eq!(batch.stats().owner_expired(), 1);
     assert!(batch.into_claims().is_empty());
@@ -310,22 +317,26 @@ async fn real_tcp_owner_cutoff_removes_without_resuming_or_writing() {
     assert_eq!(state.resumes.load(Ordering::SeqCst), 0);
     assert!(state.saw_owner_deadline.load(Ordering::SeqCst));
     assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(admission.snapshot().retained_bytes(), 0);
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    let snapshot = admission_controller.snapshot();
+    assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.queued.current_bytes, 0);
+    assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.inflight.current_bytes, 0);
+    assert_eq!(snapshot.processors.current_count, 0);
+    assert_eq!(snapshot.processors.current_bytes, 0);
     assert_eq!(terminals.lock().as_slice(), [("pull_message", "owner_deadline")]);
+    running.begin_shutdown();
+    running.finish().await;
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), client.receive_command())
-            .await
-            .is_err(),
+        client.receive_command().await.is_none(),
         "owner expiry must not synthesize a response frame"
     );
-
-    let _ = shutdown_tx.send(());
-    server_task
-        .await
-        .expect("join owner timeout server")
-        .expect("owner timeout shutdown report");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a_frame() {
     let mut harness = expiry_harness(
         "transport-v2-service-stop-expiry",
@@ -335,10 +346,11 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
         },
     );
     let registry = harness.registry.clone();
+    let admission_controller = Arc::clone(&harness.admission_controller);
     let admission = harness.admission.clone();
     let state = Arc::clone(&harness.state);
     let terminals = Arc::clone(&harness.terminals);
-    let (mut client, _address, shutdown_tx, server_task) = start_server(harness.server).await;
+    let (mut client, _address, mut running) = start_server(harness.runtime, harness.server).await;
     let observed = send_deferred_request(&mut client, &mut harness.registrations, 9_003).await;
     let claim = registry
         .claim(observed.id, DeferredWakeReason::ForcedRefresh)
@@ -363,7 +375,7 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
         () = entered.notified() => {}
     }
 
-    let _ = shutdown_tx.send(());
+    running.begin_shutdown();
     let error = (&mut resume)
         .await
         .expect_err("service stop cannot write a deferred response");
@@ -372,16 +384,22 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
         Some(DeferredTerminalReason::ParentCancelled),
         "the server task-group cancellation precedes session retirement"
     );
-    let report = server_task
-        .await
-        .expect("join service stop server")
-        .expect("service stop shutdown report");
-    assert!(report.is_healthy(), "{}", report.to_json());
+    running.finish().await;
     let frame = client.receive_command().await;
     assert!(frame.is_none(), "service stop must not emit a response frame");
     assert_eq!(state.processes.load(Ordering::SeqCst), 1);
     assert_eq!(state.resumes.load(Ordering::SeqCst), 0);
     assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(admission.snapshot().retained_bytes(), 0);
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    let snapshot = admission_controller.snapshot();
+    assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.queued.current_bytes, 0);
+    assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.inflight.current_bytes, 0);
+    assert_eq!(snapshot.processors.current_count, 0);
+    assert_eq!(snapshot.processors.current_bytes, 0);
     assert_eq!(
         terminals.lock().as_slice(),
         [("pull_message", "parent_cancelled")],

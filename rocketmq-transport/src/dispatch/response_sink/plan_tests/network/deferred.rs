@@ -132,24 +132,43 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
             progress: WriteProgress::NotStarted
         })
     );
+    assert_eq!(state_for_assert.terminal_reason(), None);
+    let before_duplicate = harness.session.writer_snapshot();
+    let duplicate_error = duplicate
+        .send_plan(bind(
+            ResponsePlan::command(response_head(123, 1_123)).expect("duplicate plan"),
+            832,
+            1_123,
+        ))
+        .await;
     assert!(matches!(
-        duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(123, 1_123)).expect("duplicate plan"),
-                832,
-                1_123,
-            ))
-            .await,
+        duplicate_error,
         Err(ResponseError::AlreadyCompleted {
             state: ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
         })
     ));
+    let after_duplicate = harness.session.writer_snapshot();
+    assert_eq!(after_duplicate.accepted, before_duplicate.accepted);
+    assert_eq!(after_duplicate.queued_items, before_duplicate.queued_items);
 
     resume.notify_one();
     blocker.await.expect("blocker task");
     assert_eq!(harness.receive().await.opaque(), 1_121);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while harness.session.writer_snapshot().queued_items != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled deferred envelope should leave the writer queue");
+    let writer = harness.session.writer_snapshot();
+    assert_eq!(writer.accepted, 2);
+    assert_eq!(writer.queued_items, 0);
+    assert_eq!(writer.queued_bytes, 0);
+    assert_eq!(writer.completed, 1);
+    assert_eq!(writer.failed, 1);
     harness.shutdown().await;
 }
 
@@ -199,23 +218,34 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
             progress: WriteProgress::PossiblyPartial
         })
     );
+    assert_eq!(state_for_assert.terminal_reason(), None);
+    let before_duplicate = harness.session.writer_snapshot();
+    let duplicate_error = duplicate
+        .send_plan(bind(
+            ResponsePlan::command(response_head(125, 1_125)).expect("duplicate plan"),
+            834,
+            1_125,
+        ))
+        .await;
     assert!(matches!(
-        duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(125, 1_125)).expect("duplicate plan"),
-                834,
-                1_125,
-            ))
-            .await,
+        duplicate_error,
         Err(ResponseError::AlreadyCompleted {
             state: ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
         })
     ));
+    let after_duplicate = harness.session.writer_snapshot();
+    assert_eq!(after_duplicate.accepted, before_duplicate.accepted);
+    assert_eq!(after_duplicate.queued_items, before_duplicate.queued_items);
 
     resume.notify_one();
     assert_eq!(harness.receive().await.opaque(), 1_124);
+    let writer = harness.session.writer_snapshot();
+    assert_eq!(writer.accepted, 1);
+    assert_eq!(writer.queued_items, 0);
+    assert_eq!(writer.queued_bytes, 0);
+    assert_eq!(writer.completed, 1);
     harness.shutdown().await;
 }
 
@@ -277,23 +307,43 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
             progress: WriteProgress::NotStarted
         })
     );
+    assert_eq!(state_for_assert.terminal_reason(), None);
+    let before_duplicate = harness.session.writer_snapshot();
+    let duplicate_error = duplicate
+        .send_plan(bind(
+            ResponsePlan::command(response_head(128, 1_128)).expect("duplicate plan"),
+            836,
+            1_128,
+        ))
+        .await;
     assert!(matches!(
-        duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(128, 1_128)).expect("duplicate plan"),
-                836,
-                1_128,
-            ))
-            .await,
+        duplicate_error,
         Err(ResponseError::AlreadyCompleted {
             state: ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
         })
     ));
+    let after_duplicate = harness.session.writer_snapshot();
+    assert_eq!(after_duplicate.accepted, before_duplicate.accepted);
+    assert_eq!(after_duplicate.queued_items, before_duplicate.queued_items);
 
     resume.notify_one();
     blocker.await.expect("blocker task");
     assert_eq!(harness.receive().await.opaque(), 1_126);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while harness.session.writer_snapshot().queued_items != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expired deferred envelope should leave the writer queue");
+    let writer = harness.session.writer_snapshot();
+    assert_eq!(writer.accepted, 2);
+    assert_eq!(writer.queued_items, 0);
+    assert_eq!(writer.queued_bytes, 0);
+    assert_eq!(writer.completed, 1);
+    assert_eq!(writer.failed, 1);
+    assert_eq!(writer.deadline_expired, 1);
     harness.shutdown().await;
 }
