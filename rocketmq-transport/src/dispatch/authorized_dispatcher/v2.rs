@@ -35,6 +35,7 @@ use crate::admission::PartialFramePermit;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
 use crate::dispatch::remoting_request::RemotingRequestBuilder;
 use crate::dispatch::remoting_request::RequestLifecycleProvenance;
+use crate::dispatch::DeferredCommitError;
 use crate::dispatch::DispatchProcessor;
 use crate::dispatch::DispatchProcessorError;
 use crate::dispatch::ExplicitV2Processor;
@@ -91,6 +92,8 @@ pub(crate) enum AuthorizedDispatchV2Error {
     HandlerContract(#[from] HandlerOutcomeContractError),
     #[error(transparent)]
     ProcessorAdapter(#[from] LegacyProcessorAdapterError),
+    #[error(transparent)]
+    DeferredCommit(#[from] DeferredCommitError),
     #[error("one-way requests cannot complete with {outcome}")]
     OneWayOutcome { outcome: &'static str },
     #[error("V2 response delivery failed: {kind:?}, progress={progress:?}")]
@@ -115,6 +118,7 @@ impl AuthorizedDispatchV2Error {
             Self::ResponseBinding(_) => "response_binding",
             Self::HandlerContract(_) => "handler_contract",
             Self::ProcessorAdapter(_) => "processor_adapter",
+            Self::DeferredCommit(error) => error.category(),
             Self::OneWayOutcome { .. } => "one_way_outcome",
             Self::Response { .. } => "response",
         }
@@ -478,7 +482,7 @@ where
                     drop(registration);
                     return Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "deferred" });
                 }
-                drop(registration);
+                registration.commit()?;
                 Ok(())
             }
             InternalProcessorOutcome::V2(crate::dispatch::HandlerOutcome::NoReply(marker)) => {

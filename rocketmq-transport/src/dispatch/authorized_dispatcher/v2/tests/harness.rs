@@ -45,6 +45,11 @@ pub(super) use crate::admission::AdmissionResource;
 pub(super) use crate::admission::AdmissionScope;
 pub(super) use crate::connection::Connection;
 pub(super) use crate::deadline::RequestDeadline;
+pub(super) use crate::dispatch::DeferredId;
+pub(super) use crate::dispatch::DeferredParts;
+pub(super) use crate::dispatch::DeferredRegistry;
+pub(super) use crate::dispatch::DeferredRequest;
+pub(super) use crate::dispatch::DeferredRetainedSizeParts;
 pub(super) use crate::dispatch::HandlerOutcome;
 pub(super) use crate::dispatch::ProtocolNoResponseReason;
 pub(super) use crate::dispatch::RemotingRequest;
@@ -400,6 +405,7 @@ pub(super) struct DispatchHarness {
     request_sequence: AtomicU64,
     pub(super) authorized: AuthorizedDispatchSession,
     pub(super) admission_scope: crate::admission::AdmissionScopeHandle,
+    pub(super) admission_controller: Arc<AdmissionController>,
     pub(super) peer: Connection,
     pub(super) runner: tokio::task::JoinHandle<()>,
     pub(super) security_profile: rocketmq_security_api::SecurityBootstrapProfile,
@@ -500,7 +506,8 @@ impl DispatchHarness {
         let scope = AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST)).with_session(session.session_id());
         let admission_scope = admission.prepare_scope(scope).expect("prepare dispatch scope");
         let boundary = Arc::new(super::super::super::AuthorizedDispatchBoundary::new(
-            security, admission,
+            security,
+            Arc::clone(&admission),
         ));
         let authorized = boundary
             .session(service.task_group(), admission_scope.clone())
@@ -511,6 +518,7 @@ impl DispatchHarness {
             request_sequence: AtomicU64::new(1),
             authorized,
             admission_scope,
+            admission_controller: admission,
             peer: Connection::new_with_plaintext_stream(peer),
             runner,
             security_profile,

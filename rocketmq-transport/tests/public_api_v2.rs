@@ -29,7 +29,17 @@ use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+use rocketmq_transport::api::v2::DeferredId;
+use rocketmq_transport::api::v2::DeferredParts;
 use rocketmq_transport::api::v2::DeferredRegistration;
+use rocketmq_transport::api::v2::DeferredRegistry;
+use rocketmq_transport::api::v2::DeferredRegistryError;
+use rocketmq_transport::api::v2::DeferredRegistryErrorKind;
+use rocketmq_transport::api::v2::DeferredRequest;
+use rocketmq_transport::api::v2::DeferredResponder;
+use rocketmq_transport::api::v2::DeferredRetainedSize;
+use rocketmq_transport::api::v2::DeferredRetainedSizeParts;
+use rocketmq_transport::api::v2::DeferredWaitPermit;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::EmbeddedDispatchError;
 use rocketmq_transport::api::v2::EmbeddedDispatchErrorKind;
@@ -190,6 +200,7 @@ fn consume_handler_outcome_exhaustively(outcome: HandlerOutcome) -> Option<V2Req
 
 fn assert_handler_outcome_contract(registration: Option<DeferredRegistration>, marker: Option<ProtocolNoResponse>) {
     if let Some(registration) = registration {
+        let _: DeferredId = registration.deferred_id();
         let _: V2RequestId = registration.request_id();
         let _: String = format!("{registration:?}");
     }
@@ -203,6 +214,50 @@ fn assert_handler_outcome_contract(registration: Option<DeferredRegistration>, m
         RemotingRequest::protocol_no_response;
     assert_error_contract::<ProtocolNoResponseError>();
     let _: RocketMQError = ProtocolNoResponseError::OneWayRequest.into();
+}
+
+fn assert_deferred_registry_contract<R, E>(
+    registry: DeferredRegistry<R>,
+    id: Option<DeferredId>,
+    parts: Option<DeferredParts>,
+    request: Option<DeferredRequest<R>>,
+    error: Option<DeferredRegistryError<R, E>>,
+) where
+    R: Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let _: DeferredRegistry<R> = registry.clone();
+    let _: fn() -> DeferredRegistry<R> = DeferredRegistry::<R>::new;
+    let _ = id;
+    if let Some(parts) = parts {
+        let _: V2RequestId = parts.request_id();
+        let _: SessionId = parts.session_id();
+        let _: usize = parts.retained_bytes();
+        let _: DeferredResponder = parts.into_responder();
+    }
+    if let Some(mut request) = request {
+        let _: V2RequestId = request.request_id();
+        let _: SessionId = request.session_id();
+        let _: usize = request.retained_bytes();
+        let _: &R = request.resume();
+        let _: &mut R = request.resume_mut();
+        let _: (R, DeferredParts) = request.into_resume_and_parts();
+    }
+    if let Some(error) = error {
+        let _: DeferredRegistryErrorKind = error.kind();
+        let _: V2RequestId = error.request_id();
+    }
+
+    let _: fn(DeferredResponder, DeferredWaitPermit) -> DeferredParts = DeferredParts::new;
+    let _: fn(R, DeferredParts) -> DeferredRequest<R> = DeferredRequest::new;
+    let _: fn(DeferredRetainedSizeParts) -> Result<DeferredRetainedSize, _> = DeferredRegistry::<R>::try_retained_size;
+}
+
+fn assert_deferred_registry_recovery_contract() {
+    type Error = DeferredRegistryError<String, std::io::Error>;
+    let _: fn(Error) -> Option<DeferredRequest<String>> = Error::into_request;
+    let _: fn(Error) -> Option<DeferredParts> = Error::into_parts;
+    let _: fn(Error) -> Option<(std::io::Error, DeferredParts)> = Error::into_builder_failure;
 }
 
 struct LocalOnlyProcessor;
@@ -387,6 +442,19 @@ fn v2_exposes_exactly_three_exhaustive_affine_handler_outcomes() {
         reason: ProtocolNoResponseReason::CallbackHandled,
     };
     assert!(unsupported.to_string().contains("-91"));
+}
+
+#[test]
+fn v2_exposes_the_affine_transactional_deferred_registry_contract() {
+    let contract = assert_deferred_registry_contract::<String, std::io::Error>;
+    let _ = contract;
+    assert_deferred_registry_recovery_contract();
+    assert_debug_contract::<DeferredId>();
+    assert_debug_contract::<DeferredParts>();
+    assert_debug_contract::<DeferredRequest<String>>();
+    assert_debug_contract::<DeferredRegistry<String>>();
+    assert_error_contract::<DeferredRegistryError<String, std::io::Error>>();
+    assert_eq!(DeferredRegistryErrorKind::Builder.as_str(), "builder");
 }
 
 #[test]
