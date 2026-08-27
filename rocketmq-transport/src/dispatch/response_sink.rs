@@ -290,6 +290,32 @@ impl ResponseSink {
         )
     }
 
+    pub(crate) fn network_deferred_seed_with_resume(
+        &self,
+        session: &SessionHandle,
+        ordering: crate::request_ordering::RequestOrdering,
+        class: crate::admission::AdmissionClass,
+        executor: crate::session_executor::DeferredResumeExecutor,
+    ) -> Option<DeferredResponseSeed> {
+        if !self.is_canonical_network_plan_owner(session) {
+            return None;
+        }
+        let Self::Network(owner) = self else {
+            return None;
+        };
+        let context = owner.response_plan_context()?;
+        Some(
+            DeferredResponseSeed::new(
+                self.clone(),
+                session.connection().telemetry(),
+                session.session_view().id(),
+                context.control().clone(),
+            )
+            .with_resume_context(ordering, class, executor),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn network_deferred_seed(&self, session: &SessionHandle) -> Option<DeferredResponseSeed> {
         if !self.is_canonical_network_plan_owner(session) {
             return None;

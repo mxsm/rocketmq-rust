@@ -15,7 +15,9 @@
 use super::harness::*;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredRegistration;
+use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredWaitLimits;
+use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
@@ -202,27 +204,122 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         Vec::new(),
     ));
     let command = request(false);
-    let (session, _) = harness.request_session(&command);
+    let (session, original) = harness.request_session(&command);
 
-    dispatcher
+    let outcome = dispatcher
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("dispatch real deferred registration");
-    harness.drain_requests().await;
+    let DispatchOutcome::Accepted(_) = outcome else {
+        panic!("deferred request must enter session execution");
+    };
+    while harness.authorized.operation_context().active_task_count() > 0 {
+        tokio::task::yield_now().await;
+    }
 
     let id = registered_id
         .lock()
         .expect("registered deferred id lock")
         .expect("processor should publish deferred id");
-    let _ = registry.wake(id);
-    assert!(registry.take_ready(id), "commit should publish the entry Active");
-    assert!(!registry.take_ready(id), "durable readiness is consumed once");
+    let claimed = registry
+        .claim(id, crate::dispatch::DeferredWakeReason::MessageArrived)
+        .await
+        .expect("commit should publish an active claim");
+    assert_eq!(claimed.resume_data(), "dispatcher-owned deferred resume");
     assert_eq!(admission.snapshot().waiting_count(), 1);
     harness.assert_no_response().await;
 
+    let handler_admission = admission.clone();
+    let receipt = claimed
+        .resume(
+            DeferredResumeRetainedSize::default(),
+            move |resume, reason| async move {
+                assert_eq!(handler_admission.snapshot().waiting_count(), 0);
+                assert_eq!(handler_admission.snapshot().retained_bytes(), 0);
+                assert_eq!(resume, "dispatcher-owned deferred resume");
+                assert_eq!(reason, DeferredWakeReason::MessageArrived);
+                ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+            },
+        )
+        .await
+        .expect("resume should use the same session executor and writer");
+    assert_eq!(receipt.request_id(), original.request_id());
+    assert_eq!(admission.snapshot().waiting_count(), 0);
+    let response = harness.receive().await;
+    assert_eq!(response.opaque(), original.original_opaque());
     drop(dispatcher);
     drop(registry);
     assert_eq!(admission.snapshot().waiting_count(), 0);
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn expired_resume_uses_the_canonical_deadline_plan_without_polling_the_handler() {
+    let mut harness = DispatchHarness::new("dispatch-v2-deferred-resume-deadline").await;
+    let admission = DeferredAdmission::try_configure(
+        harness.admission_controller.as_ref(),
+        DeferredWaitLimits::new(4, 1024 * 1024),
+    )
+    .expect("configure deferred registry admission");
+    let registry = DeferredRegistry::<String>::new();
+    let registered_id = Arc::new(Mutex::new(None));
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        RegistryDeferredProcessor {
+            registry: registry.clone(),
+            admission: admission.clone(),
+            registered_id: Arc::clone(&registered_id),
+        },
+        Vec::new(),
+    ));
+    let command = request(false);
+    let (session, original) = harness.request_session(&command);
+    dispatcher
+        .dispatch(
+            &harness.authorized,
+            session,
+            harness.context(Some(crate::deadline::RequestDeadline::after(Duration::from_secs(5)))),
+            command,
+            256,
+            None,
+        )
+        .await
+        .expect("dispatch deferred deadline request");
+    while harness.authorized.operation_context().active_task_count() > 0 {
+        tokio::task::yield_now().await;
+    }
+    let id = registered_id
+        .lock()
+        .expect("registered deferred id lock")
+        .expect("processor should publish deferred id");
+    let claimed = registry
+        .claim(id, DeferredWakeReason::Timeout)
+        .await
+        .expect("claim before deadline");
+    let handler_called = Arc::new(AtomicBool::new(false));
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let called = Arc::clone(&handler_called);
+    let receipt = claimed
+        .resume(DeferredResumeRetainedSize::default(), move |_, _| {
+            called.store(true, Ordering::SeqCst);
+            async move {
+                ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+            }
+        })
+        .await
+        .expect("deadline plan must bypass only the expired request deadline");
+    assert_eq!(receipt.request_id(), original.request_id());
+    assert!(!handler_called.load(Ordering::SeqCst));
+    assert_eq!(admission.snapshot().waiting_count(), 0);
+    let response = harness.receive().await;
+    assert_eq!(response.opaque(), original.original_opaque());
+    assert_eq!(
+        rocketmq_protocol::code::response_code::ResponseCode::from(response.code()),
+        rocketmq_protocol::code::response_code::ResponseCode::SystemError
+    );
+    drop(dispatcher);
+    drop(registry);
     harness.shutdown().await;
 }
 

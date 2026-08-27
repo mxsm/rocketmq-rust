@@ -544,7 +544,7 @@ fn capture_embedded_request_identity_with_owner(
     Ok((session_id, identity))
 }
 
-fn admission_response(opaque: i32, error: &AdmissionError) -> RemotingCommand {
+pub(super) fn admission_response(opaque: i32, error: &AdmissionError) -> RemotingCommand {
     RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemBusy, error.to_string())
         .set_opaque(opaque)
 }

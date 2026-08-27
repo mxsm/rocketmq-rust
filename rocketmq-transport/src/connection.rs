@@ -42,6 +42,7 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::CanonicalDeferredDeadlineResponse;
 use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseError;
@@ -231,15 +232,28 @@ impl SendFailure {
     }
 }
 
-fn current_request_stop(control: &RequestControlView) -> Option<QueuedWriteCancellation> {
+#[derive(Clone, Copy)]
+enum RequestStopPolicy {
+    All,
+    ParentOrSession,
+}
+
+fn current_request_stop(control: &RequestControlView, policy: RequestStopPolicy) -> Option<QueuedWriteCancellation> {
     if control.parent_is_cancelled() {
         Some(QueuedWriteCancellation::Request)
     } else if control.session_is_closed() {
         Some(QueuedWriteCancellation::SessionClosed)
-    } else if control.deadline().is_some_and(RequestDeadline::is_expired) {
+    } else if matches!(policy, RequestStopPolicy::All) && control.deadline().is_some_and(RequestDeadline::is_expired) {
         Some(QueuedWriteCancellation::Deadline)
     } else {
         None
+    }
+}
+
+async fn wait_for_control_stop(control: &RequestControlView, policy: RequestStopPolicy) {
+    match policy {
+        RequestStopPolicy::All => control.cancelled().await,
+        RequestStopPolicy::ParentOrSession => control.parent_or_session_cancelled().await,
     }
 }
 
@@ -925,9 +939,18 @@ impl Connection {
         deadline: Option<RequestDeadline>,
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.send_payload_inner(payload, class, reservation, deadline, None, None, target)
-            .await
-            .map_err(SendFailure::into_legacy)
+        self.send_payload_inner(
+            payload,
+            class,
+            reservation,
+            deadline,
+            None,
+            RequestStopPolicy::All,
+            None,
+            target,
+        )
+        .await
+        .map_err(SendFailure::into_legacy)
     }
 
     async fn send_payload_inner(
@@ -937,6 +960,7 @@ impl Connection {
         reservation: Option<ResourcePermit>,
         deadline: Option<RequestDeadline>,
         control: Option<&RequestControlView>,
+        stop_policy: RequestStopPolicy,
         deferred_drop: Option<DeferredTransportDropHandle>,
         target: String,
     ) -> Result<(), SendFailure> {
@@ -949,7 +973,7 @@ impl Connection {
             ConnectionWriter::Queued(_) => LegacyWriterReason::CanonicalWriter,
         };
         self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
-        if let Some(reason) = control.and_then(current_request_stop) {
+        if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
             return Err(stop_failure(reason, target));
         }
         if deadline.is_some_and(RequestDeadline::is_expired) {
@@ -973,8 +997,9 @@ impl Connection {
                 if let Some(control) = control {
                     tokio::select! {
                         biased;
-                        () = control.cancelled() => {
-                            let reason = current_request_stop(control).unwrap_or(QueuedWriteCancellation::Request);
+                        () = wait_for_control_stop(control, stop_policy) => {
+                            let reason = current_request_stop(control, stop_policy)
+                                .unwrap_or(QueuedWriteCancellation::Request);
                             return Err(stop_failure(reason, target));
                         }
                         () = resume.notified() => {}
@@ -998,7 +1023,7 @@ impl Connection {
                 queued.writer_diagnostics.record_rejected(None);
                 SendFailure::QueueSaturated { target: target.clone() }
             })?;
-            if let Some(reason) = control.and_then(current_request_stop) {
+            if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
                 return Err(stop_failure(reason, target));
             }
             if deadline.is_some_and(RequestDeadline::is_expired) {
@@ -1046,8 +1071,9 @@ impl Connection {
                 tokio::select! {
                     biased;
                     outcome = &mut result => outcome,
-                    () = control.cancelled() => {
-                        let reason = current_request_stop(control).unwrap_or(QueuedWriteCancellation::Request);
+                    () = wait_for_control_stop(control, stop_policy) => {
+                        let reason = current_request_stop(control, stop_policy)
+                            .unwrap_or(QueuedWriteCancellation::Request);
                         if progress.cancel_before_start_with(reason) {
                             if let Some(drop_guard) = in_flight_drop.take() {
                                 drop_guard.complete();
@@ -1075,7 +1101,7 @@ impl Connection {
             };
             let outcome = outcome.map_err(|_| {
                 if !progress.write_started() {
-                    if let Some(reason) = control.and_then(current_request_stop) {
+                    if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
                         return stop_failure(reason, target.clone());
                     }
                 }
@@ -1096,7 +1122,7 @@ impl Connection {
             let outcome = outcome?;
             return outcome.map_err(|failure| {
                 if failure.progress() == WriteProgress::NotStarted {
-                    if let Some(reason) = control.and_then(current_request_stop) {
+                    if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
                         return stop_failure(reason, target.clone());
                     }
                 }
@@ -1199,6 +1225,7 @@ impl Connection {
             None,
             control.deadline(),
             Some(control),
+            RequestStopPolicy::All,
             None,
             "transport-session-writer".to_string(),
         )
@@ -1228,6 +1255,34 @@ impl Connection {
             None,
             control.deadline(),
             Some(control),
+            RequestStopPolicy::All,
+            Some(deferred_drop),
+            "transport-session-writer".to_string(),
+        )
+        .await
+        .map_err(SendFailure::into_response)
+    }
+
+    pub(crate) async fn send_prepared_deferred_deadline_response(
+        &mut self,
+        prepared: CanonicalDeferredDeadlineResponse<PreparedResponse>,
+        control: &RequestControlView,
+        deferred_drop: DeferredTransportDropHandle,
+    ) -> Result<(), ResponseError> {
+        if self.queued_writer().is_none() || self.response_plan_drop.is_none() {
+            return Err(ResponseError::SessionClosed);
+        }
+        let Some(class) = self.response_class() else {
+            return Err(ResponseError::SessionClosed);
+        };
+        let (_, payload) = prepared.into_inner().into_parts();
+        self.send_payload_inner(
+            payload,
+            class,
+            None,
+            None,
+            Some(control),
+            RequestStopPolicy::ParentOrSession,
             Some(deferred_drop),
             "transport-session-writer".to_string(),
         )
@@ -1252,6 +1307,7 @@ impl Connection {
             None,
             None,
             None,
+            RequestStopPolicy::All,
             None,
             "transport-session-writer".to_string(),
         )
@@ -1276,6 +1332,7 @@ impl Connection {
             None,
             None,
             None,
+            RequestStopPolicy::All,
             None,
             "transport-session-writer".to_string(),
         )

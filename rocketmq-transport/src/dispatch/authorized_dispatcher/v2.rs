@@ -250,6 +250,7 @@ where
         let lifecycle = RequestLifecycleProvenance::from_network_session(&session);
         let builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
         let ordering = self.processor.request_ordering(&builder);
+        let resume_executor = authorized_session.executor.deferred_resume_executor();
 
         if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
             send_boundary_response(&session, original, deadline_response(original.original_opaque())).await?;
@@ -292,6 +293,8 @@ where
                         remote_address,
                         request_started,
                         builder,
+                        ordering,
+                        resume_executor,
                     )
                     .await
                 {
@@ -346,6 +349,8 @@ where
         remote_address: std::net::SocketAddr,
         request_started: Instant,
         builder: RemotingRequestBuilder,
+        ordering: crate::request_ordering::RequestOrdering,
+        resume_executor: crate::session_executor::DeferredResumeExecutor,
     ) -> Result<(), AuthorizedDispatchV2Error> {
         let request_bytes = builder.command().body().map_or(0, |body| body.len() as u64);
         let mut metrics = processor.begin_admitted(original, request_bytes);
@@ -368,7 +373,7 @@ where
         let builder = if original.is_one_way() {
             builder
         } else {
-            processor.install_deferred_response(builder, &response, &session)?
+            processor.install_deferred_response(builder, &response, &session, ordering, class, resume_executor)?
         };
         let mut request = builder.build()?;
         let hook_snapshot = self.rpc_hooks.snapshot();
@@ -528,6 +533,8 @@ where
             remote_address,
             request_started,
             builder,
+            crate::request_ordering::RequestOrdering::Concurrent,
+            crate::session_executor::DeferredResumeExecutor::retired(),
         )
         .await
     }

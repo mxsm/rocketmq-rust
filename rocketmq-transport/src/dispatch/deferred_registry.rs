@@ -18,6 +18,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use super::deferred_responder::DeferredResumeContext;
 use super::DeferredAdmissionAcquireError;
 use super::DeferredResponder;
 use super::DeferredResponseError;
@@ -28,9 +29,23 @@ use super::RequestControlView;
 use super::RequestId;
 use crate::session_view::SessionId;
 
+mod claim;
 mod errors;
 mod internal;
 
+pub(in crate::dispatch) use claim::ClaimExecutionParts;
+pub(in crate::dispatch) use claim::ClaimMarker;
+use claim::ClaimStart;
+use claim::ClaimTicket;
+use claim::ClaimWaiter;
+pub use claim::ClaimedDeferred;
+pub use claim::DeferredClaimError;
+pub use claim::DeferredClaimErrorKind;
+pub use claim::DeferredResumeError;
+pub use claim::DeferredResumeErrorKind;
+pub use claim::DeferredResumeRetainedSize;
+pub use claim::DeferredWakeReason;
+use claim::TicketResolution;
 pub use errors::DeferredRegistryError;
 pub use errors::DeferredRegistryErrorKind;
 use errors::RegistryRecovery;
@@ -39,7 +54,6 @@ use internal::registry_additional_bytes;
 use internal::validate_retained_floor;
 use internal::BuildTransaction;
 pub(crate) use internal::DeferredCommitError;
-use internal::DeferredWakeResult;
 use internal::RegistrationOwner;
 use internal::RegistrationOwnerImpl;
 use internal::RegistryInner;
@@ -61,7 +75,7 @@ pub struct DeferredId(u64);
 
 impl DeferredId {
     #[cfg(test)]
-    const fn for_test(value: u64) -> Self {
+    pub(crate) const fn for_test(value: u64) -> Self {
         Self(value)
     }
 }
@@ -118,6 +132,10 @@ impl DeferredParts {
 
     const fn control(&self) -> &RequestControlView {
         self.responder.control()
+    }
+
+    pub(crate) fn into_resume_parts(self) -> (DeferredResponder, DeferredWaitPermit) {
+        (self.responder, self.permit)
     }
 }
 
@@ -250,7 +268,8 @@ where
     ///
     /// The existing deferred-response fixed charge is counted exactly once.
     /// This method adds one inline `R`, the three registry indexes, the
-    /// conservative per-session bucket charge, and one durable ready marker.
+    /// conservative per-session bucket charge, transient ticket/claim
+    /// allocations, and fixed resume completion/job-cell ownership.
     /// Caller-declared resume allocations, filters, secondary-index leases,
     /// and metadata remain unchanged.
     ///
@@ -292,7 +311,10 @@ where
             drop(request);
             return Err(registry_error(kind, request_id, RegistryRecovery::None));
         }
-        let id = match self.inner.insert_shell(request_id, request.session_id()) {
+        let id = match self
+            .inner
+            .insert_shell(request_id, request.session_id(), request.control().clone())
+        {
             Ok(id) => id,
             Err(kind) => {
                 return Err(registry_error(
@@ -358,7 +380,10 @@ where
             drop(parts);
             return Err(registry_error(kind, request_id, RegistryRecovery::None));
         }
-        let id = match self.inner.insert_shell(request_id, parts.session_id()) {
+        let id = match self
+            .inner
+            .insert_shell(request_id, parts.session_id(), parts.control().clone())
+        {
             Ok(id) => id,
             Err(kind) => {
                 return Err(registry_error(
@@ -423,20 +448,77 @@ where
         ))
     }
 
-    #[allow(
-        dead_code,
-        reason = "DEF-05 consumes the durable wake seam without adding execution in DEF-04"
-    )]
-    pub(crate) fn wake(&self, id: DeferredId) -> DeferredWakeResult {
-        self.inner.wake(id)
-    }
-
-    #[allow(
-        dead_code,
-        reason = "DEF-05 consumes ready ownership without adding execution in DEF-04"
-    )]
-    pub(crate) fn take_ready(&self, id: DeferredId) -> bool {
-        self.inner.take_ready(id)
+    /// Claims one active deferred request or waits for its provisional registration.
+    ///
+    /// Concurrent wake reasons coalesce to the first reason observed. A
+    /// provisional waiter is notified durably if publication or lifecycle
+    /// removal wins before the waiter begins polling.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed failure when the identity is absent, another live claim
+    /// exists, response ownership is terminal, lifecycle has stopped, or an
+    /// internal registry invariant cannot be preserved.
+    pub async fn claim(
+        &self,
+        id: DeferredId,
+        reason: DeferredWakeReason,
+    ) -> Result<ClaimedDeferred<R>, DeferredClaimError> {
+        match self.inner.start_claim(id, reason, None) {
+            ClaimStart::Claimed(claimed) => Ok(claimed),
+            ClaimStart::Error(error) => Err(error),
+            ClaimStart::Wait(waiter) => {
+                let resolution = waiter.wait().await;
+                match resolution {
+                    TicketResolution::Published => match self.inner.start_claim(id, reason, Some(&waiter)) {
+                        ClaimStart::Claimed(claimed) => Ok(claimed),
+                        ClaimStart::Error(error) => Err(error),
+                        ClaimStart::Wait(_) => Err(DeferredClaimError::new(
+                            DeferredClaimErrorKind::RegistryInvariant,
+                            id,
+                            Some(waiter.request_id()),
+                            None,
+                            None,
+                        )),
+                    },
+                    TicketResolution::RemovedNotFound => Err(DeferredClaimError::new(
+                        DeferredClaimErrorKind::NotFound,
+                        id,
+                        Some(waiter.request_id()),
+                        None,
+                        None,
+                    )),
+                    TicketResolution::RemovedParentCancelled => Err(DeferredClaimError::new(
+                        DeferredClaimErrorKind::ParentCancelled,
+                        id,
+                        Some(waiter.request_id()),
+                        None,
+                        None,
+                    )),
+                    TicketResolution::RemovedSessionClosed => Err(DeferredClaimError::new(
+                        DeferredClaimErrorKind::SessionClosed,
+                        id,
+                        Some(waiter.request_id()),
+                        None,
+                        None,
+                    )),
+                    TicketResolution::RemovedDeadlineExpired => Err(DeferredClaimError::new(
+                        DeferredClaimErrorKind::DeadlineExpired,
+                        id,
+                        Some(waiter.request_id()),
+                        None,
+                        None,
+                    )),
+                    TicketResolution::RemovedInvariant | TicketResolution::Pending => Err(DeferredClaimError::new(
+                        DeferredClaimErrorKind::RegistryInvariant,
+                        id,
+                        Some(waiter.request_id()),
+                        None,
+                        None,
+                    )),
+                }
+            }
+        }
     }
 
     #[cfg(test)]

@@ -25,12 +25,16 @@ use super::ResponseBindingError;
 use super::ResponseError;
 use super::ResponseErrorKind;
 use super::ResponsePlan;
+use super::ResponsePlanError;
 use super::ResponseReceipt;
 use super::ResponseSink;
 use super::ResponseState;
 use super::ResponseStateError;
 use super::ResponseTerminalState;
 use super::WriteProgress;
+use crate::admission::AdmissionClass;
+use crate::request_ordering::RequestOrdering;
+use crate::session_executor::DeferredResumeExecutor;
 use crate::session_view::SessionId;
 use crate::telemetry::TransportTelemetry;
 
@@ -95,6 +99,7 @@ impl DeferredResponseErrorKind {
 enum DeferredResponseErrorSource {
     State(ResponseStateError),
     Binding(ResponseBindingError),
+    Plan(ResponsePlanError),
     Response(ResponseError),
 }
 
@@ -120,6 +125,12 @@ impl DeferredResponseError {
         }
     }
 
+    pub(crate) const fn from_plan(source: ResponsePlanError) -> Self {
+        Self {
+            source: DeferredResponseErrorSource::Plan(source),
+        }
+    }
+
     pub(crate) const fn from_response(source: ResponseError) -> Self {
         Self {
             source: DeferredResponseErrorSource::Response(source),
@@ -138,6 +149,7 @@ impl DeferredResponseError {
                 DeferredResponseErrorKind::InvalidTransition
             }
             DeferredResponseErrorSource::Binding(_) => DeferredResponseErrorKind::Binding,
+            DeferredResponseErrorSource::Plan(_) => DeferredResponseErrorKind::Encode,
             DeferredResponseErrorSource::Response(error) => match error.kind() {
                 ResponseErrorKind::AlreadyCompleted => DeferredResponseErrorKind::AlreadyCompleted,
                 ResponseErrorKind::DeadlineExceeded => DeferredResponseErrorKind::DeadlineExceeded,
@@ -157,7 +169,8 @@ impl DeferredResponseError {
             DeferredResponseErrorSource::State(ResponseStateError::AlreadyCompleted { .. })
             | DeferredResponseErrorSource::Response(ResponseError::AlreadyCompleted { .. }) => None,
             DeferredResponseErrorSource::State(ResponseStateError::InvalidTransition { .. })
-            | DeferredResponseErrorSource::Binding(_) => Some(WriteProgress::NotStarted),
+            | DeferredResponseErrorSource::Binding(_)
+            | DeferredResponseErrorSource::Plan(_) => Some(WriteProgress::NotStarted),
             DeferredResponseErrorSource::Response(error) => error.write_progress(),
         }
     }
@@ -167,7 +180,9 @@ impl DeferredResponseError {
     pub const fn retryable(&self) -> bool {
         match &self.source {
             DeferredResponseErrorSource::Response(error) => error.retryable(),
-            DeferredResponseErrorSource::State(_) | DeferredResponseErrorSource::Binding(_) => false,
+            DeferredResponseErrorSource::State(_)
+            | DeferredResponseErrorSource::Binding(_)
+            | DeferredResponseErrorSource::Plan(_) => false,
         }
     }
 
@@ -179,6 +194,7 @@ impl DeferredResponseError {
             | DeferredResponseErrorSource::Response(ResponseError::AlreadyCompleted { state }) => Some(*state),
             DeferredResponseErrorSource::State(ResponseStateError::InvalidTransition { .. })
             | DeferredResponseErrorSource::Binding(_)
+            | DeferredResponseErrorSource::Plan(_)
             | DeferredResponseErrorSource::Response(_) => None,
         }
     }
@@ -216,8 +232,34 @@ impl Error for DeferredResponseError {
         Some(match &self.source {
             DeferredResponseErrorSource::State(source) => source,
             DeferredResponseErrorSource::Binding(source) => source,
+            DeferredResponseErrorSource::Plan(source) => source,
             DeferredResponseErrorSource::Response(source) => source,
         })
+    }
+}
+
+pub(crate) struct CanonicalDeferredDeadlineResponse<T> {
+    value: T,
+}
+
+impl<T> CanonicalDeferredDeadlineResponse<T> {
+    fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    pub(crate) const fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub(crate) fn try_map<U, E>(
+        self,
+        map: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<CanonicalDeferredDeadlineResponse<U>, E> {
+        map(self.value).map(|value| CanonicalDeferredDeadlineResponse { value })
+    }
+
+    pub(crate) fn into_inner(self) -> T {
+        self.value
     }
 }
 
@@ -227,6 +269,14 @@ pub(crate) struct DeferredResponseSeed {
     telemetry: TransportTelemetry,
     session_id: SessionId,
     control: RequestControlView,
+    resume: Option<DeferredResumeContext>,
+}
+
+#[derive(Clone)]
+pub(crate) struct DeferredResumeContext {
+    pub(crate) ordering: RequestOrdering,
+    pub(crate) class: AdmissionClass,
+    pub(crate) executor: DeferredResumeExecutor,
 }
 
 impl DeferredResponseSeed {
@@ -241,7 +291,22 @@ impl DeferredResponseSeed {
             telemetry,
             session_id,
             control,
+            resume: None,
         }
+    }
+
+    pub(crate) fn with_resume_context(
+        mut self,
+        ordering: RequestOrdering,
+        class: AdmissionClass,
+        executor: DeferredResumeExecutor,
+    ) -> Self {
+        self.resume = Some(DeferredResumeContext {
+            ordering,
+            class,
+            executor,
+        });
+        self
     }
 
     pub(crate) fn into_responder(self, original: OriginalRequestIdentity) -> DeferredResponder {
@@ -254,6 +319,7 @@ impl DeferredResponseSeed {
             telemetry: self.telemetry,
             session_id: self.session_id,
             control: self.control,
+            resume: self.resume,
             active: true,
         }
     }
@@ -280,6 +346,7 @@ pub struct DeferredResponder {
     session_id: SessionId,
     #[allow(dead_code, reason = "DEF-04 consumes the retained canonical request control")]
     control: RequestControlView,
+    resume: Option<DeferredResumeContext>,
     active: bool,
 }
 
@@ -309,6 +376,68 @@ impl DeferredResponder {
     #[allow(dead_code, reason = "DEF-04 consumes the retained canonical request control")]
     pub(crate) const fn control(&self) -> &RequestControlView {
         &self.control
+    }
+
+    pub(crate) fn resume_context(&self) -> Option<&DeferredResumeContext> {
+        self.resume.as_ref()
+    }
+
+    pub(crate) fn response_state(&self) -> &Arc<ResponseState> {
+        &self.state
+    }
+
+    pub(crate) const fn original_opaque(&self) -> i32 {
+        self.original.original_opaque()
+    }
+
+    pub(crate) fn close(mut self) -> Result<(), DeferredResponseError> {
+        let result = self.state.close().map_err(DeferredResponseError::from_state);
+        self.active = false;
+        result
+    }
+
+    pub(crate) async fn respond_deadline(mut self) -> Result<ResponseReceipt, DeferredResponseError> {
+        let mut claim = self.state.begin_sending().map_err(DeferredResponseError::from_state)?;
+        self.active = false;
+        let plan = match ResponsePlan::command(super::authorized_dispatcher::deadline_response(
+            self.original.original_opaque(),
+        )) {
+            Ok(plan) => plan,
+            Err(source) => {
+                claim
+                    .fail(WriteProgress::NotStarted)
+                    .map_err(DeferredResponseError::from_state)?;
+                return Err(DeferredResponseError::from_plan(source));
+            }
+        };
+        let bound = match plan.bind(self.original) {
+            Ok(bound) => bound,
+            Err(source) => {
+                claim
+                    .fail(WriteProgress::NotStarted)
+                    .map_err(DeferredResponseError::from_state)?;
+                return Err(DeferredResponseError::from_binding(source));
+            }
+        };
+        let deadline = CanonicalDeferredDeadlineResponse::new(bound);
+        let sink = self.sink.take().ok_or_else(|| {
+            DeferredResponseError::from_state(ResponseStateError::InvalidTransition {
+                transition: super::deferred_response::ResponseTransition::BeginSending,
+                state: super::ResponseStateSnapshot::Sending,
+            })
+        })?;
+        let result = sink.send_deferred_deadline(deadline, &mut claim).await;
+        match result {
+            Ok(receipt) => {
+                claim.complete().map_err(DeferredResponseError::from_state)?;
+                Ok(receipt)
+            }
+            Err(error) => {
+                let progress = error.write_progress().unwrap_or(WriteProgress::NotStarted);
+                claim.fail(progress).map_err(DeferredResponseError::from_state)?;
+                Err(DeferredResponseError::from_response(error))
+            }
+        }
     }
 
     /// Binds and delivers one response through the request's canonical plan sink.
