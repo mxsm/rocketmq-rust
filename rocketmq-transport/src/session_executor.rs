@@ -198,6 +198,10 @@ impl SessionExecutor {
         self.inner.operation.close_admission();
     }
 
+    pub(crate) fn begin_close(&self) {
+        self.stop_admission();
+    }
+
     pub(crate) fn operation_context(&self) -> &OperationContext {
         &self.inner.operation
     }

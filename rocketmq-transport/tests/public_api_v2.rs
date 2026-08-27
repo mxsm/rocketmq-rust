@@ -38,6 +38,8 @@ use rocketmq_transport::api::v2::DeferredRegistration;
 use rocketmq_transport::api::v2::DeferredRegistry;
 use rocketmq_transport::api::v2::DeferredRegistryError;
 use rocketmq_transport::api::v2::DeferredRegistryErrorKind;
+use rocketmq_transport::api::v2::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::v2::DeferredRegistryShutdownStats;
 use rocketmq_transport::api::v2::DeferredRequest;
 use rocketmq_transport::api::v2::DeferredResponder;
 use rocketmq_transport::api::v2::DeferredResumeError;
@@ -235,6 +237,7 @@ fn assert_deferred_registry_contract<R, E>(
 {
     let _: DeferredRegistry<R> = registry.clone();
     let _: fn() -> DeferredRegistry<R> = DeferredRegistry::<R>::new;
+    let _: fn(&DeferredRegistry<R>) -> DeferredRegistryShutdownOutcome = DeferredRegistry::<R>::shutdown;
     let _ = id;
     if let Some(parts) = parts {
         let _: V2RequestId = parts.request_id();
@@ -503,6 +506,13 @@ fn v2_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_debug_contract::<DeferredParts>();
     assert_debug_contract::<DeferredRequest<String>>();
     assert_debug_contract::<DeferredRegistry<String>>();
+    assert_debug_contract::<DeferredRegistryShutdownOutcome>();
+    assert_debug_contract::<DeferredRegistryShutdownStats>();
+    let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::detached_entries;
+    let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::notified_tickets;
+    let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::terminalized_responses;
+    let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::in_progress_responses;
+    let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::invariant_failures;
     assert_error_contract::<DeferredRegistryError<String, std::io::Error>>();
     assert_eq!(DeferredRegistryErrorKind::Builder.as_str(), "builder");
     let _ = assert_claim_resume_contract::<String>;

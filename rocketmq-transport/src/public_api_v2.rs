@@ -37,6 +37,8 @@ pub use crate::dispatch::DeferredRegistration;
 pub use crate::dispatch::DeferredRegistry;
 pub use crate::dispatch::DeferredRegistryError;
 pub use crate::dispatch::DeferredRegistryErrorKind;
+pub use crate::dispatch::DeferredRegistryShutdownOutcome;
+pub use crate::dispatch::DeferredRegistryShutdownStats;
 pub use crate::dispatch::DeferredRequest;
 pub use crate::dispatch::DeferredResponder;
 pub use crate::dispatch::DeferredResponseError;

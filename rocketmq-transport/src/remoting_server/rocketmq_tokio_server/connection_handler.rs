@@ -82,6 +82,7 @@ pub(super) struct V2ConnectionHandler<P> {
 
 pub(crate) struct V2NetworkRouteState {
     _shutdown_complete: mpsc::Sender<()>,
+    deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner,
 }
 
 impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
@@ -240,7 +241,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for Con
         .await
     }
 
-    async fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+    fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
         self.dispatcher.close_network_session(&state.endpoint);
     }
 
@@ -255,9 +256,10 @@ where
 {
     type SessionState = V2NetworkRouteState;
 
-    async fn connected(&self, _session: crate::server::SessionHandle) -> Option<Self::SessionState> {
+    async fn connected(&self, session: crate::server::SessionHandle) -> Option<Self::SessionState> {
         Some(V2NetworkRouteState {
             _shutdown_complete: self.shutdown_complete_tx.clone(),
+            deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id()),
         })
     }
 
@@ -272,7 +274,7 @@ where
 
     async fn request(
         &self,
-        _state: &Self::SessionState,
+        state: &Self::SessionState,
         authorized_session: &AuthorizedDispatchSession,
         session: crate::server::SessionHandle,
         context: RequestContext,
@@ -290,13 +292,15 @@ where
                 received_at,
                 retained_bytes,
                 partial_frame_permit,
+                state.deferred_cleanup.registration(),
             )
             .await
             .is_ok()
     }
 
-    async fn close_pending(&self, _state: &Self::SessionState, _session: crate::server::SessionHandle) {
+    fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
         self.dispatcher.close_network_session();
+        let _ = state.deferred_cleanup.close();
     }
 
     async fn disconnected(&self, _state: Self::SessionState, session: crate::server::SessionHandle) {
@@ -351,7 +355,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for Int
             .await
     }
 
-    async fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+    fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
         self.inner.dispatcher.close_network_session(&state.endpoint);
     }
 

@@ -36,6 +36,8 @@ use super::DeferredId;
 use super::DeferredParts;
 use super::DeferredRegistry;
 use super::DeferredRegistryErrorKind;
+use super::DeferredRegistryShutdownOutcome;
+use super::DeferredRegistryShutdownStats;
 use super::DeferredRequest;
 use super::DeferredResponder;
 use super::DeferredResponseError;
@@ -47,7 +49,12 @@ use super::RequestId;
 use super::SessionId;
 use super::TicketResolution;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
+use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
+use crate::dispatch::deferred_session_cleanup::TargetRecord;
 use crate::dispatch::DeferredResponseErrorKind;
+use crate::dispatch::ResponseStateError;
+use crate::dispatch::ResponseStateSnapshot;
 
 const FIRST_DEFERRED_ID: u64 = 1;
 const EXHAUSTED_DEFERRED_ID: u64 = u64::MAX;
@@ -69,6 +76,8 @@ where
 {
     pub(super) inner: Arc<RegistryInner<R>>,
     pub(super) id: DeferredId,
+    pub(super) control: RequestControlView,
+    pub(super) response_state: Arc<crate::dispatch::ResponseState>,
     #[cfg(test)]
     pub(super) commit_checkpoint: Option<Box<dyn FnOnce() + Send + 'static>>,
 }
@@ -80,16 +89,18 @@ where
     fn commit(self: Box<Self>) -> Result<(), DeferredCommitError> {
         let inner = Arc::clone(&self.inner);
         let id = self.id;
+        let control = self.control.clone();
+        let response_state = Arc::clone(&self.response_state);
         #[cfg(test)]
         let commit_checkpoint = self.commit_checkpoint;
-        let mut transaction = CommitTransaction::begin(inner, id)?;
+        let mut transaction = CommitTransaction::begin(inner, id)
+            .map_err(|error| commit_race_error(&control, &response_state).unwrap_or(error))?;
         if let Some(kind) = lifecycle_stop(transaction.request().control()) {
             return Err(DeferredCommitError::lifecycle(kind));
         }
-        transaction
-            .request()
-            .register_response()
-            .map_err(DeferredCommitError::response)?;
+        transaction.request().register_response().map_err(|source| {
+            commit_race_error(&control, &response_state).unwrap_or_else(|| DeferredCommitError::response(source))
+        })?;
         #[cfg(test)]
         if let Some(checkpoint) = commit_checkpoint {
             checkpoint();
@@ -97,7 +108,9 @@ where
         if let Some(kind) = lifecycle_stop(transaction.request().control()) {
             return Err(DeferredCommitError::lifecycle(kind));
         }
-        transaction.publish()
+        transaction
+            .publish()
+            .map_err(|error| commit_race_error(&control, &response_state).unwrap_or(error))
     }
 
     fn rollback(self: Box<Self>) {
@@ -208,7 +221,7 @@ impl Error for DeferredCommitError {
     }
 }
 
-pub(super) struct RegistryInner<R>
+pub(in crate::dispatch) struct RegistryInner<R>
 where
     R: Send + 'static,
 {
@@ -217,6 +230,8 @@ where
     test_sequence: Option<Arc<AtomicU64>>,
     #[cfg(test)]
     claim_marker_checkpoint: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
+    #[cfg(test)]
+    session_cleanup_calls: AtomicUsize,
 }
 
 impl<R> Default for RegistryInner<R>
@@ -230,11 +245,14 @@ where
             test_sequence: None,
             #[cfg(test)]
             claim_marker_checkpoint: Mutex::new(None),
+            #[cfg(test)]
+            session_cleanup_calls: AtomicUsize::new(0),
         }
     }
 }
 
 struct RegistryState<R: Send + 'static> {
+    lifecycle: RegistryLifecycle,
     primary: HashMap<DeferredId, Entry<R>>,
     request_index: HashMap<RequestId, DeferredId>,
     session_index: HashMap<SessionId, HashSet<DeferredId>>,
@@ -244,6 +262,7 @@ struct RegistryState<R: Send + 'static> {
 impl<R: Send + 'static> Default for RegistryState<R> {
     fn default() -> Self {
         Self {
+            lifecycle: RegistryLifecycle::Open,
             primary: HashMap::new(),
             request_index: HashMap::new(),
             session_index: HashMap::new(),
@@ -252,10 +271,40 @@ impl<R: Send + 'static> Default for RegistryState<R> {
     }
 }
 
+fn commit_race_error(
+    control: &RequestControlView,
+    response_state: &crate::dispatch::ResponseState,
+) -> Option<DeferredCommitError> {
+    lifecycle_stop(control)
+        .map(DeferredCommitError::lifecycle)
+        .or_else(|| match response_state.terminal_state() {
+            Some(crate::dispatch::ResponseTerminalState::Closed) => {
+                Some(DeferredCommitError::lifecycle(DeferredRegistryErrorKind::SessionClosed))
+            }
+            Some(crate::dispatch::ResponseTerminalState::Cancelled) => Some(DeferredCommitError::lifecycle(
+                DeferredRegistryErrorKind::ParentCancelled,
+            )),
+            Some(
+                crate::dispatch::ResponseTerminalState::Completed
+                | crate::dispatch::ResponseTerminalState::Failed { .. },
+            )
+            | None => None,
+        })
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RegistryLifecycle {
+    Open,
+    Closing,
+    Closed,
+}
+
 pub(super) struct Entry<R> {
     request_id: RequestId,
     session_id: SessionId,
     control: RequestControlView,
+    response_state: Arc<crate::dispatch::ResponseState>,
+    enrollment: Option<CleanupEnrollment>,
     phase: EntryPhase<R>,
     first_reason: Option<DeferredWakeReason>,
     claim_ticket: Weak<ClaimTicket>,
@@ -301,6 +350,7 @@ where
             state: Mutex::new(RegistryState::default()),
             test_sequence: Some(sequence),
             claim_marker_checkpoint: Mutex::new(None),
+            session_cleanup_calls: AtomicUsize::new(0),
         }
     }
 
@@ -314,8 +364,13 @@ where
         request_id: RequestId,
         session_id: SessionId,
         control: RequestControlView,
+        response_state: Arc<crate::dispatch::ResponseState>,
+        enrollment: &mut Option<CleanupEnrollment>,
     ) -> Result<DeferredId, DeferredRegistryErrorKind> {
         let mut state = self.state.lock();
+        if state.lifecycle != RegistryLifecycle::Open {
+            return Err(DeferredRegistryErrorKind::ParentCancelled);
+        }
         if state.request_index.contains_key(&request_id) {
             return Err(DeferredRegistryErrorKind::DuplicateRequest);
         }
@@ -330,6 +385,8 @@ where
                 request_id,
                 session_id,
                 control,
+                response_state,
+                enrollment: enrollment.take(),
                 phase: EntryPhase::Shell,
                 first_reason: None,
                 claim_ticket: Weak::new(),
@@ -432,6 +489,58 @@ where
         Some(entry)
     }
 
+    pub(in crate::dispatch) fn remove_session(&self, session_id: SessionId) {
+        #[cfg(test)]
+        self.session_cleanup_calls.fetch_add(1, Ordering::SeqCst);
+        let batch = {
+            let mut state = self.state.lock();
+            let Some(ids) = state.session_index.remove(&session_id) else {
+                return;
+            };
+            let mut batch = DetachedBatch::default();
+            for id in ids {
+                if let Some(entry) = state.primary.remove(&id) {
+                    if state.request_index.get(&entry.request_id) == Some(&id) {
+                        state.request_index.remove(&entry.request_id);
+                    }
+                    batch.push_entry(entry, CleanupCause::SessionClosed);
+                }
+                if let Some(marker) = state.claims.remove(&id).and_then(|marker| marker.upgrade()) {
+                    batch.markers.push(marker);
+                }
+            }
+            batch
+        };
+        let _ = batch.finish(CleanupCause::SessionClosed);
+    }
+
+    pub(super) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+        let batch = {
+            let mut state = self.state.lock();
+            match state.lifecycle {
+                RegistryLifecycle::Open => state.lifecycle = RegistryLifecycle::Closing,
+                RegistryLifecycle::Closing => return DeferredRegistryShutdownOutcome::InProgress,
+                RegistryLifecycle::Closed => return DeferredRegistryShutdownOutcome::AlreadyClosed,
+            }
+            let mut batch = DetachedBatch::default();
+            for (_, entry) in std::mem::take(&mut state.primary) {
+                batch.push_entry(entry, CleanupCause::ParentCancelled);
+            }
+            for (_, marker) in std::mem::take(&mut state.claims) {
+                if let Some(marker) = marker.upgrade() {
+                    batch.markers.push(marker);
+                }
+            }
+            state.request_index.clear();
+            state.session_index.clear();
+            batch
+        };
+        let completion = RegistryShutdownCompletion::new(self);
+        let stats = batch.finish(CleanupCause::ParentCancelled);
+        completion.complete();
+        DeferredRegistryShutdownOutcome::Completed(stats)
+    }
+
     pub(super) fn start_claim(
         self: &Arc<Self>,
         id: DeferredId,
@@ -443,6 +552,15 @@ where
         let mut removed_ticket_resolution = None;
         let outcome = {
             let mut state = self.state.lock();
+            if state.lifecycle != RegistryLifecycle::Open {
+                return ClaimStart::Error(DeferredClaimError::new(
+                    DeferredClaimErrorKind::ParentCancelled,
+                    id,
+                    None,
+                    None,
+                    None,
+                ));
+            }
             if !state.primary.contains_key(&id) {
                 let marker = state.claims.get(&id).and_then(Weak::upgrade);
                 if marker.is_none() {
@@ -501,7 +619,7 @@ where
                     };
                     match claim_result {
                         Ok(()) => {
-                            let entry = remove_entry(&mut state, id)
+                            let mut entry = remove_entry_for_claim(&mut state, id)
                                 .expect("active entry was observed while the registry lock is held");
                             let request = match entry.phase {
                                 EntryPhase::Active(request) => request,
@@ -515,7 +633,10 @@ where
                                 self,
                                 id,
                                 request_id,
+                                entry.session_id,
+                                entry.control.clone(),
                                 Arc::clone(request.parts.responder.response_state()),
+                                entry.enrollment.take(),
                             ));
                             state.claims.insert(id, Arc::downgrade(&marker));
                             ClaimStart::Claimed(ClaimedDeferred::new(id, request_id, first_reason, request, marker))
@@ -609,7 +730,7 @@ where
         outcome
     }
 
-    pub(super) fn remove_claim_marker(&self, id: DeferredId, marker: *const ClaimMarker<R>) {
+    pub(super) fn remove_claim_marker(&self, id: DeferredId, session_id: SessionId, marker: *const ClaimMarker<R>) {
         let mut state = self.state.lock();
         let matches = state
             .claims
@@ -617,6 +738,7 @@ where
             .is_some_and(|current| std::ptr::eq(current.as_ptr(), marker));
         if matches {
             state.claims.remove(&id);
+            remove_session_member(&mut state, session_id, id);
         }
     }
 
@@ -643,6 +765,16 @@ where
     #[cfg(test)]
     pub(super) fn claim_marker_count(&self) -> usize {
         self.state.lock().claims.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn session_member_count(&self, session_id: SessionId) -> usize {
+        self.state.lock().session_index.get(&session_id).map_or(0, HashSet::len)
+    }
+
+    #[cfg(test)]
+    pub(super) fn session_cleanup_call_count(&self) -> usize {
+        self.session_cleanup_calls.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -680,6 +812,186 @@ fn remove_entry<R: Send + 'static>(state: &mut RegistryState<R>, id: DeferredId)
         state.session_index.remove(&entry.session_id);
     }
     Some(entry)
+}
+
+#[derive(Clone, Copy)]
+enum CleanupCause {
+    SessionClosed,
+    ParentCancelled,
+}
+
+struct RegistryShutdownCompletion<'a, R>
+where
+    R: Send + 'static,
+{
+    registry: &'a RegistryInner<R>,
+    armed: bool,
+}
+
+impl<'a, R> RegistryShutdownCompletion<'a, R>
+where
+    R: Send + 'static,
+{
+    fn new(registry: &'a RegistryInner<R>) -> Self {
+        Self { registry, armed: true }
+    }
+
+    fn complete(mut self) {
+        self.registry.state.lock().lifecycle = RegistryLifecycle::Closed;
+        self.armed = false;
+    }
+}
+
+impl<R> Drop for RegistryShutdownCompletion<'_, R>
+where
+    R: Send + 'static,
+{
+    fn drop(&mut self) {
+        if self.armed {
+            self.registry.state.lock().lifecycle = RegistryLifecycle::Closed;
+            self.armed = false;
+        }
+    }
+}
+
+struct DetachedBatch<R>
+where
+    R: Send + 'static,
+{
+    entries: Vec<(Entry<R>, CleanupCause)>,
+    tickets: Vec<(Arc<ClaimTicket>, TicketResolution)>,
+    markers: Vec<Arc<ClaimMarker<R>>>,
+}
+
+impl<R> Default for DetachedBatch<R>
+where
+    R: Send + 'static,
+{
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            tickets: Vec::new(),
+            markers: Vec::new(),
+        }
+    }
+}
+
+impl<R> DetachedBatch<R>
+where
+    R: Send + 'static,
+{
+    fn push_entry(&mut self, entry: Entry<R>, fallback: CleanupCause) {
+        let cause = match fallback {
+            CleanupCause::SessionClosed if entry.control.parent_is_cancelled() => CleanupCause::ParentCancelled,
+            cause => cause,
+        };
+        if let Some(ticket) = entry
+            .claim_ticket
+            .upgrade()
+            .filter(|ticket| ticket.resolution() == TicketResolution::Pending)
+        {
+            let resolution = match cause {
+                CleanupCause::SessionClosed => TicketResolution::RemovedSessionClosed,
+                CleanupCause::ParentCancelled => TicketResolution::RemovedParentCancelled,
+            };
+            self.tickets.push((ticket, resolution));
+        }
+        self.entries.push((entry, cause));
+    }
+
+    fn finish(mut self, cause: CleanupCause) -> DeferredRegistryShutdownStats {
+        let mut stats = DeferredRegistryShutdownStats::default();
+        for (ticket, resolution) in self.tickets.drain(..) {
+            ticket.publish(resolution);
+            stats.record_ticket();
+        }
+        for (entry, entry_cause) in &mut self.entries {
+            stats.record_detached_entry();
+            record_terminalization(&mut stats, entry.terminalize_response(entry_cause));
+        }
+        for marker in &self.markers {
+            let result = match cause {
+                CleanupCause::SessionClosed if marker.control().parent_is_cancelled() => marker.cancel_response(),
+                CleanupCause::SessionClosed => marker.close_response(),
+                CleanupCause::ParentCancelled => marker.cancel_response(),
+            };
+            record_state_terminalization(&mut stats, result);
+        }
+        drop(self.markers);
+        drop(self.entries);
+        stats
+    }
+}
+
+impl<R> Entry<R> {
+    fn terminalize_response(&mut self, cause: &CleanupCause) -> Result<(), DeferredResponseError> {
+        match &mut self.phase {
+            EntryPhase::Prepared(request) | EntryPhase::Active(request) => match cause {
+                CleanupCause::SessionClosed => request.parts.responder.cleanup_terminalize(),
+                CleanupCause::ParentCancelled => request.parts.responder.cleanup_cancel(),
+            },
+            EntryPhase::Shell | EntryPhase::Building | EntryPhase::Activating => match cause {
+                CleanupCause::SessionClosed => self.response_state.close().map_err(DeferredResponseError::from_state),
+                CleanupCause::ParentCancelled => {
+                    self.response_state.cancel().map_err(DeferredResponseError::from_state)
+                }
+            },
+        }
+    }
+}
+
+fn record_terminalization(stats: &mut DeferredRegistryShutdownStats, result: Result<(), DeferredResponseError>) {
+    match result {
+        Ok(()) => stats.record_terminalized(),
+        Err(error) if error.kind() == DeferredResponseErrorKind::InvalidTransition => {
+            if error.source().is_some_and(|source| {
+                source.downcast_ref::<ResponseStateError>().is_some_and(|error| {
+                    matches!(
+                        error,
+                        ResponseStateError::InvalidTransition {
+                            state: ResponseStateSnapshot::Sending,
+                            ..
+                        }
+                    )
+                })
+            }) {
+                stats.record_in_progress();
+            } else {
+                stats.record_invariant_failure();
+            }
+        }
+        Err(_) => {}
+    }
+}
+
+fn record_state_terminalization(stats: &mut DeferredRegistryShutdownStats, result: Result<(), ResponseStateError>) {
+    match result {
+        Ok(()) => stats.record_terminalized(),
+        Err(ResponseStateError::InvalidTransition {
+            state: ResponseStateSnapshot::Sending,
+            ..
+        }) => stats.record_in_progress(),
+        Err(ResponseStateError::InvalidTransition { .. }) => stats.record_invariant_failure(),
+        Err(ResponseStateError::AlreadyCompleted { .. }) => {}
+    }
+}
+
+fn remove_entry_for_claim<R: Send + 'static>(state: &mut RegistryState<R>, id: DeferredId) -> Option<Entry<R>> {
+    let entry = state.primary.remove(&id)?;
+    if state.request_index.get(&entry.request_id) == Some(&id) {
+        state.request_index.remove(&entry.request_id);
+    }
+    Some(entry)
+}
+
+fn remove_session_member<R: Send + 'static>(state: &mut RegistryState<R>, session_id: SessionId, id: DeferredId) {
+    let remove_session = state.session_index.get_mut(&session_id).is_some_and(|ids| {
+        ids.remove(&id);
+        ids.is_empty()
+    });
+    if remove_session {
+        state.session_index.remove(&session_id);
+    }
 }
 
 fn claim_marker_outcome<R>(id: DeferredId, marker: Option<Arc<ClaimMarker<R>>>) -> ClaimStart<R>
@@ -905,6 +1217,8 @@ where
         request_index: Layout::new::<(RequestId, DeferredId)>().size(),
         session_owner: Layout::new::<(SessionId, HashSet<DeferredId>)>().size(),
         session_member: Layout::new::<DeferredId>().size(),
+        cleanup_target: arc_allocation_bytes::<RegistryCleanupTarget<R>>()?,
+        cleanup_target_record: Layout::new::<(usize, TargetRecord)>().size(),
         claim_runtime,
     })
 }
@@ -918,6 +1232,8 @@ pub(super) struct RegistryLayoutSizes {
     pub(super) request_index: usize,
     pub(super) session_owner: usize,
     pub(super) session_member: usize,
+    pub(super) cleanup_target: usize,
+    pub(super) cleanup_target_record: usize,
     pub(super) claim_runtime: usize,
 }
 
@@ -928,11 +1244,13 @@ pub(super) fn checked_registry_layout_bytes(sizes: RegistryLayoutSizes) -> Optio
         .checked_add(sizes.permit)?;
     let primary_net = sizes.primary_entry.checked_sub(primary_payload)?;
     let session = sizes.session_owner.checked_add(sizes.session_member)?;
+    let cleanup = sizes.cleanup_target.checked_add(sizes.cleanup_target_record)?;
     checked_registry_component_sum(
         sizes.inline_resume,
         primary_net,
         sizes.request_index,
         session,
+        cleanup,
         sizes.claim_runtime,
     )
 }
@@ -942,12 +1260,14 @@ pub(super) fn checked_registry_component_sum(
     primary_net: usize,
     request_index: usize,
     session: usize,
+    cleanup: usize,
     claim_runtime: usize,
 ) -> Option<usize> {
     inline_resume
         .checked_add(primary_net)?
         .checked_add(request_index)?
         .checked_add(session)?
+        .checked_add(cleanup)?
         .checked_add(claim_runtime)
 }
 

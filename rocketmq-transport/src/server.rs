@@ -452,7 +452,7 @@ pub(crate) trait AuthorizedFrameRoute: Send + Sync + 'static {
         partial_frame_permit: Option<PartialFramePermit>,
     ) -> impl Future<Output = bool> + Send;
 
-    fn close_pending(&self, state: &Self::SessionState, session: SessionHandle) -> impl Future<Output = ()> + Send;
+    fn close_pending(&self, state: &Self::SessionState, session: SessionHandle);
 
     fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> impl Future<Output = ()> + Send;
 }
@@ -514,7 +514,7 @@ where
             .is_ok()
     }
 
-    async fn close_pending(&self, _state: &Self::SessionState, _session: SessionHandle) {}
+    fn close_pending(&self, _state: &Self::SessionState, _session: SessionHandle) {}
 
     async fn disconnected(&self, _state: Self::SessionState, session: SessionHandle) {
         self.handler.disconnected(session).await;
@@ -1160,7 +1160,8 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     // no longer accepts frames. Publish the session-close transition now so
     // read-only views observe shutdown without closing the response writer.
     let _ = session.send.session_closed_tx.send(true);
-    route.close_pending(&route_state, session.clone()).await;
+    executor.begin_close();
+    route.close_pending(&route_state, session.clone());
     let request_deadline = task_group
         .shutdown_deadline()
         .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));

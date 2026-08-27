@@ -228,6 +228,7 @@ where
         received_at: Instant,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
+        session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
         if context.transport() != RequestTransport::Network {
             return Err(AuthorizedDispatchV2Error::InvalidNetworkContext);
@@ -295,6 +296,7 @@ where
                         builder,
                         ordering,
                         resume_executor,
+                        session_cleanup,
                     )
                     .await
                 {
@@ -351,6 +353,7 @@ where
         builder: RemotingRequestBuilder,
         ordering: crate::request_ordering::RequestOrdering,
         resume_executor: crate::session_executor::DeferredResumeExecutor,
+        session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<(), AuthorizedDispatchV2Error> {
         let request_bytes = builder.command().body().map_or(0, |body| body.len() as u64);
         let mut metrics = processor.begin_admitted(original, request_bytes);
@@ -373,7 +376,15 @@ where
         let builder = if original.is_one_way() {
             builder
         } else {
-            processor.install_deferred_response(builder, &response, &session, ordering, class, resume_executor)?
+            processor.install_deferred_response(
+                builder,
+                &response,
+                &session,
+                ordering,
+                class,
+                resume_executor,
+                session_cleanup,
+            )?
         };
         let mut request = builder.build()?;
         let hook_snapshot = self.rpc_hooks.snapshot();
@@ -535,6 +546,7 @@ where
             builder,
             crate::request_ordering::RequestOrdering::Concurrent,
             crate::session_executor::DeferredResumeExecutor::retired(),
+            None,
         )
         .await
     }
@@ -558,6 +570,7 @@ where
             Instant::now(),
             retained_bytes,
             partial_frame_permit,
+            None,
         )
         .await
     }

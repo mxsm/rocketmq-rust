@@ -28,6 +28,16 @@ use tokio::net::TcpStream;
 
 use super::*;
 use crate::dispatch::bridge_construction_counts;
+use crate::dispatch::DeferredAdmission;
+use crate::dispatch::DeferredClaimErrorKind;
+use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistry;
+use crate::dispatch::DeferredRequest;
+use crate::dispatch::DeferredResumeErrorKind;
+use crate::dispatch::DeferredResumeRetainedSize;
+use crate::dispatch::DeferredRetainedSizeParts;
+use crate::dispatch::DeferredWaitLimits;
+use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::HandlerOutcome;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
@@ -233,13 +243,17 @@ fn loopback_security() -> Arc<TransportSecurity> {
     Arc::new(TransportSecurity::development_insecure_loopback(None, None))
 }
 
-async fn start_server(
-    server: TransportServerV2<TcpV2Processor>,
+async fn start_server<P>(
+    server: TransportServerV2<P>,
 ) -> (
     crate::connection::Connection,
+    SocketAddr,
     oneshot::Sender<()>,
     tokio::task::JoinHandle<Result<ShutdownReport, ServerStartError>>,
-) {
+)
+where
+    P: RequestProcessorV2 + Clone + Sync + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind V2 test listener");
     let address = listener.local_addr().expect("V2 test listener address");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -264,7 +278,78 @@ async fn start_server(
         address
     );
     let client = crate::connection::Connection::new(TcpStream::connect(address).await.expect("connect V2 client"));
-    (client, shutdown_tx, server_task)
+    (client, address, shutdown_tx, server_task)
+}
+
+async fn receive_deferred_registration(
+    registrations: &mut tokio::sync::mpsc::UnboundedReceiver<NetworkDeferredRegistration>,
+    opaque: i32,
+) -> NetworkDeferredRegistration {
+    let registration = tokio::time::timeout(Duration::from_secs(1), registrations.recv())
+        .await
+        .expect("network deferred registration deadline")
+        .expect("network deferred registration channel");
+    assert_eq!(registration.opaque, opaque);
+    registration
+}
+
+#[derive(Clone)]
+struct NetworkDeferredCleanupProcessor {
+    registry: DeferredRegistry<usize>,
+    admission: DeferredAdmission,
+    registered: tokio::sync::mpsc::UnboundedSender<NetworkDeferredRegistration>,
+    precommit_opaque: i32,
+    release_precommit: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NetworkDeferredRegistration {
+    opaque: i32,
+    session_id: crate::session_view::SessionId,
+    id: crate::dispatch::DeferredId,
+}
+
+impl RequestProcessorV2 for NetworkDeferredCleanupProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        if request.command().code() == 706 {
+            return Ok(HandlerOutcome::Reply(
+                ResponsePlan::bytes(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+                    Bytes::from_static(b"other-session-live"),
+                )
+                .expect("other-session response plan"),
+            ));
+        }
+
+        let opaque = request.original_identity().original_opaque();
+        let responder = request
+            .take_deferred_responder()
+            .map_err(|error| rocketmq_error::RocketMQError::illegal_argument(error.to_string()))?;
+        let retained = DeferredRegistry::<usize>::try_retained_size(DeferredRetainedSizeParts::new(0))
+            .map_err(|error| rocketmq_error::RocketMQError::illegal_argument(error.to_string()))?;
+        let permit = self
+            .admission
+            .try_reserve(retained)
+            .map_err(|error| rocketmq_error::RocketMQError::illegal_argument(error.to_string()))?;
+        let registration = self
+            .registry
+            .register(DeferredRequest::new(
+                opaque as usize,
+                DeferredParts::new(responder, permit),
+            ))
+            .map_err(|error| rocketmq_error::RocketMQError::illegal_argument(error.to_string()))?;
+        self.registered
+            .send(NetworkDeferredRegistration {
+                opaque,
+                session_id: request.session().id(),
+                id: registration.deferred_id(),
+            })
+            .map_err(|_| rocketmq_error::RocketMQError::illegal_argument("registration observer closed"))?;
+        if opaque == self.precommit_opaque {
+            self.release_precommit.notified().await;
+        }
+        Ok(HandlerOutcome::Deferred(registration))
+    }
 }
 
 #[tokio::test]
@@ -292,7 +377,7 @@ async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without
         None,
     )
     .with_admission_controller(admission);
-    let (mut client, shutdown_tx, server_task) = start_server(server).await;
+    let (mut client, _address, shutdown_tx, server_task) = start_server(server).await;
     state.clones.store(0, Ordering::SeqCst);
 
     client
@@ -456,7 +541,7 @@ async fn injected_boundary_conflicts_fail_before_hooks_are_merged() {
         service_context("transport-v2-unpolluted"),
         dispatcher,
     );
-    let (mut client, shutdown_tx, server_task) = start_server(matching_server).await;
+    let (mut client, _address, shutdown_tx, server_task) = start_server(matching_server).await;
     client
         .send_command(RemotingCommand::create_remoting_command(701).set_opaque(4_003))
         .await
@@ -586,6 +671,178 @@ async fn shutdown_drains_accepted_work_and_flushes_its_writer_before_retirement(
 }
 
 #[tokio::test]
+async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_other_session() {
+    const OTHER_OPAQUE: i32 = 5_100;
+    const RUNNING_OPAQUE: i32 = 5_101;
+    const HELD_OPAQUE: i32 = 5_102;
+    const PRECOMMIT_OPAQUE: i32 = 5_103;
+
+    let registry = DeferredRegistry::<usize>::new();
+    let admission_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+    let deferred_admission =
+        DeferredAdmission::try_configure(&admission_controller, DeferredWaitLimits::new(16, 16 * 1024 * 1024))
+            .expect("network deferred admission");
+    let (registered_tx, mut registered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let release_precommit = Arc::new(tokio::sync::Notify::new());
+    let processor = NetworkDeferredCleanupProcessor {
+        registry: registry.clone(),
+        admission: deferred_admission.clone(),
+        registered: registered_tx,
+        precommit_opaque: PRECOMMIT_OPAQUE,
+        release_precommit: Arc::clone(&release_precommit),
+    };
+    let server = TransportServerV2::new(
+        Arc::new(ServerConfig::default()),
+        service_context("transport-v2-deferred-disconnect"),
+        processor,
+    )
+    .with_admission_controller(Arc::clone(&admission_controller));
+    let (mut first_client, address, shutdown_tx, server_task) = start_server(server).await;
+    let mut second_client =
+        crate::connection::Connection::new(TcpStream::connect(address).await.expect("connect second V2 client"));
+
+    second_client
+        .send_command(RemotingCommand::create_remoting_command(705).set_opaque(OTHER_OPAQUE))
+        .await
+        .expect("send other-session deferred request");
+    let other = receive_deferred_registration(&mut registered_rx, OTHER_OPAQUE).await;
+
+    first_client
+        .send_command(RemotingCommand::create_remoting_command(705).set_opaque(RUNNING_OPAQUE))
+        .await
+        .expect("send running deferred request");
+    let running = receive_deferred_registration(&mut registered_rx, RUNNING_OPAQUE).await;
+    assert_ne!(running.session_id, other.session_id);
+    let running_claim = tokio::time::timeout(
+        Duration::from_secs(1),
+        registry.claim(running.id, DeferredWakeReason::MessageArrived),
+    )
+    .await
+    .expect("running claim deadline")
+    .expect("running claim after commit");
+
+    first_client
+        .send_command(RemotingCommand::create_remoting_command(705).set_opaque(HELD_OPAQUE))
+        .await
+        .expect("send held deferred request");
+    let held = receive_deferred_registration(&mut registered_rx, HELD_OPAQUE).await;
+    assert_eq!(held.session_id, running.session_id);
+    let held_claim = tokio::time::timeout(
+        Duration::from_secs(1),
+        registry.claim(held.id, DeferredWakeReason::ForcedRefresh),
+    )
+    .await
+    .expect("held claim deadline")
+    .expect("held claim after commit");
+
+    let (resume_started_tx, resume_started_rx) = oneshot::channel();
+    let release_resume = Arc::new(tokio::sync::Notify::new());
+    let handler_release = Arc::clone(&release_resume);
+    let running_resume = running_claim.resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
+        let _ = resume_started_tx.send(());
+        handler_release.notified().await;
+        Ok(ResponsePlan::bytes(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+            Bytes::from_static(b"must-not-be-written"),
+        )
+        .expect("blocked resume response plan"))
+    });
+    tokio::pin!(running_resume);
+    tokio::select! {
+        biased;
+        result = &mut running_resume => panic!("running resume completed before close: {result:?}"),
+        started = resume_started_rx => started.expect("running resume starts in session executor"),
+    }
+
+    first_client
+        .send_command(RemotingCommand::create_remoting_command(705).set_opaque(PRECOMMIT_OPAQUE))
+        .await
+        .expect("send precommit deferred request");
+    let precommit = receive_deferred_registration(&mut registered_rx, PRECOMMIT_OPAQUE).await;
+    assert_eq!(precommit.session_id, running.session_id);
+    let precommit_ticket = registry.claim(precommit.id, DeferredWakeReason::Timeout);
+    tokio::pin!(precommit_ticket);
+    tokio::select! {
+        biased;
+        result = &mut precommit_ticket => panic!("precommit ticket completed before disconnect: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+
+    first_client.shutdown().await.expect("half-close first V2 client");
+    let ticket_error = tokio::time::timeout(Duration::from_secs(1), &mut precommit_ticket)
+        .await
+        .expect("disconnect cleanup precedes executor drain")
+        .expect_err("disconnect resolves provisional ticket");
+    assert_eq!(ticket_error.kind(), DeferredClaimErrorKind::SessionClosed);
+    assert_eq!(registry.test_index_counts(), (1, 1, 1));
+    assert_eq!(registry.test_session_member_count(running.session_id), 0);
+    assert_eq!(registry.test_session_member_count(other.session_id), 1);
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    assert_eq!(
+        registry
+            .claim(precommit.id, DeferredWakeReason::Timeout)
+            .await
+            .expect_err("post-cleanup claim has no tombstone")
+            .kind(),
+        DeferredClaimErrorKind::NotFound
+    );
+
+    let held_handler_called = Arc::new(AtomicUsize::new(0));
+    let handler_called = Arc::clone(&held_handler_called);
+    let held_error = held_claim
+        .resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
+            handler_called.fetch_add(1, Ordering::SeqCst);
+            Ok(
+                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                    ResponseCode::Success,
+                ))
+                .expect("held response plan"),
+            )
+        })
+        .await
+        .expect_err("new resume submission is rejected after begin-close");
+    assert_eq!(held_error.kind(), DeferredResumeErrorKind::SessionClosed);
+    assert_eq!(held_handler_called.load(Ordering::SeqCst), 0);
+    assert_eq!(deferred_admission.snapshot().waiting_count(), 1);
+
+    release_precommit.notify_one();
+    release_resume.notify_one();
+    let running_error = tokio::time::timeout(Duration::from_secs(1), &mut running_resume)
+        .await
+        .expect("accepted resume drains")
+        .expect_err("accepted resume observes closed session");
+    assert_eq!(running_error.kind(), DeferredResumeErrorKind::SessionClosed);
+    let eof = tokio::time::timeout(Duration::from_secs(1), first_client.receive_command())
+        .await
+        .expect("first session retires after drain");
+    assert!(eof.is_none(), "closed session must not emit a second response frame");
+    assert_eq!(admission_controller.snapshot().processors.current_count, 0);
+    assert_eq!(deferred_admission.snapshot().waiting_count(), 1);
+    assert_eq!(registry.test_index_counts(), (1, 1, 1));
+
+    second_client
+        .send_command(RemotingCommand::create_remoting_command(706).set_opaque(5_104))
+        .await
+        .expect("send request on unaffected session");
+    let response = tokio::time::timeout(Duration::from_secs(1), second_client.receive_command())
+        .await
+        .expect("other-session response deadline")
+        .expect("other session remains connected")
+        .expect("other-session response frame");
+    assert_eq!(response.body(), Some(&Bytes::from_static(b"other-session-live")));
+
+    let _ = shutdown_tx.send(());
+    let report = tokio::time::timeout(Duration::from_secs(2), server_task)
+        .await
+        .expect("V2 server shutdown deadline")
+        .expect("join V2 deferred cleanup server")
+        .expect("V2 deferred cleanup shutdown report");
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(deferred_admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
 async fn hooks_registered_before_and_after_injection_append_once_to_existing_registry() {
     let state = Arc::new(ProcessorState::default());
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
@@ -617,7 +874,7 @@ async fn hooks_registered_before_and_after_injection_append_once_to_existing_reg
         .with_transport_security(Arc::clone(&security), None)
         .with_admission_controller(Arc::clone(&admission));
     server.register_rpc_hook(new_hook("post-injection"));
-    let (mut client, shutdown_tx, server_task) = start_server(server).await;
+    let (mut client, _address, shutdown_tx, server_task) = start_server(server).await;
 
     client
         .send_command(RemotingCommand::create_remoting_command(701).set_opaque(4_004))

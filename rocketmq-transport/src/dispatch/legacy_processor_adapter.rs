@@ -583,6 +583,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         ordering: RequestOrdering,
         class: crate::admission::AdmissionClass,
         resume_executor: crate::session_executor::DeferredResumeExecutor,
+        session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError>;
 
     fn process(
@@ -664,10 +665,14 @@ where
         ordering: RequestOrdering,
         class: crate::admission::AdmissionClass,
         resume_executor: crate::session_executor::DeferredResumeExecutor,
+        session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
-        let seed = response
+        let mut seed = response
             .network_deferred_seed_with_resume(session, ordering, class, resume_executor)
             .ok_or(super::remoting_request::RemotingRequestBuildError::DeferredResponseOwnerMismatch)?;
+        if let Some(session_cleanup) = session_cleanup {
+            seed = seed.with_session_cleanup(session_cleanup);
+        }
         Ok(builder.with_deferred_response_seed(seed))
     }
 
@@ -813,6 +818,7 @@ where
         _ordering: RequestOrdering,
         _class: crate::admission::AdmissionClass,
         _resume_executor: crate::session_executor::DeferredResumeExecutor,
+        _session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
         Ok(builder)
     }

@@ -270,6 +270,7 @@ pub(crate) struct DeferredResponseSeed {
     session_id: SessionId,
     control: RequestControlView,
     resume: Option<DeferredResumeContext>,
+    session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
 }
 
 #[derive(Clone)]
@@ -292,6 +293,7 @@ impl DeferredResponseSeed {
             session_id,
             control,
             resume: None,
+            session_cleanup: None,
         }
     }
 
@@ -309,6 +311,11 @@ impl DeferredResponseSeed {
         self
     }
 
+    pub(crate) fn with_session_cleanup(mut self, session_cleanup: super::DeferredSessionCleanupRegistration) -> Self {
+        self.session_cleanup = Some(session_cleanup);
+        self
+    }
+
     pub(crate) fn into_responder(self, original: OriginalRequestIdentity) -> DeferredResponder {
         #[cfg(test)]
         DEFERRED_STATE_ALLOCATIONS.with(|count| count.set(count.get() + 1));
@@ -320,6 +327,7 @@ impl DeferredResponseSeed {
             session_id: self.session_id,
             control: self.control,
             resume: self.resume,
+            session_cleanup: self.session_cleanup,
             active: true,
         }
     }
@@ -347,6 +355,7 @@ pub struct DeferredResponder {
     #[allow(dead_code, reason = "DEF-04 consumes the retained canonical request control")]
     control: RequestControlView,
     resume: Option<DeferredResumeContext>,
+    session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
     active: bool,
 }
 
@@ -384,6 +393,26 @@ impl DeferredResponder {
 
     pub(crate) fn response_state(&self) -> &Arc<ResponseState> {
         &self.state
+    }
+
+    pub(crate) fn take_session_cleanup(&mut self) -> Option<super::DeferredSessionCleanupRegistration> {
+        self.session_cleanup.take()
+    }
+
+    pub(crate) fn session_cleanup(&self) -> Option<super::DeferredSessionCleanupRegistration> {
+        self.session_cleanup.clone()
+    }
+
+    pub(crate) fn cleanup_terminalize(&mut self) -> Result<(), DeferredResponseError> {
+        let result = self.state.close().map_err(DeferredResponseError::from_state);
+        self.active = false;
+        result
+    }
+
+    pub(crate) fn cleanup_cancel(&mut self) -> Result<(), DeferredResponseError> {
+        let result = self.state.cancel().map_err(DeferredResponseError::from_state);
+        self.active = false;
+        result
     }
 
     pub(crate) const fn original_opaque(&self) -> i32 {
