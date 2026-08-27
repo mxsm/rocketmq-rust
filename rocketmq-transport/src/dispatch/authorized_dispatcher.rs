@@ -213,6 +213,7 @@ where
         received_at: Instant,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
+        session_cleanup: crate::dispatch::DeferredSessionCleanupRegistration,
     ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
         self.core
             .dispatch_network(
@@ -224,6 +225,7 @@ where
                 received_at,
                 retained_bytes,
                 partial_frame_permit,
+                Some(session_cleanup),
             )
             .await
     }
@@ -248,6 +250,10 @@ pub(crate) struct AuthorizedDispatchSession {
 }
 
 impl AuthorizedDispatchSession {
+    pub(crate) fn begin_close(&self) {
+        self.executor.begin_close();
+    }
+
     pub(crate) fn operation_context(&self) -> &OperationContext {
         self.executor.operation_context()
     }
@@ -447,6 +453,7 @@ where
                 received_at,
                 retained_bytes,
                 partial_frame_permit,
+                None,
             )
             .await
     }

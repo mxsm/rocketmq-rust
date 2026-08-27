@@ -58,6 +58,21 @@ where
 {
     let id = claimed.deferred_id();
     let request_id = claimed.request_id();
+    if let Some(stop @ (ResumeStop::ParentCancelled | ResumeStop::SessionClosed)) = current_stop(claimed.control()) {
+        drop(handler);
+        let ClaimExecutionParts {
+            resume,
+            responder,
+            mut permit,
+            marker,
+            ..
+        } = claimed.into_execution_parts();
+        if let Some(permit) = permit.take() {
+            permit.release();
+        }
+        drop(resume);
+        return finish_lifecycle(id, request_id, responder, marker, stop);
+    }
     let Some(context) = claimed.resume_context() else {
         drop(handler);
         drop(claimed);
@@ -112,14 +127,7 @@ where
         }
         Err(DeferredResumeSubmitError::Closing { source, cell }) => {
             if let Some(job) = cell.take() {
-                job.finish_without_execution(DeferredResumeError::new(
-                    DeferredResumeErrorKind::ExecutorClosing,
-                    id,
-                    request_id,
-                    None,
-                    None,
-                    Some(Box::new(source)),
-                ));
+                job.finish_executor_closing(source);
             }
         }
     }
@@ -317,6 +325,24 @@ impl DeferredResumeJob {
         self.completion.finish(Err(error));
         self.active = false;
     }
+
+    fn finish_executor_closing(self, source: rocketmq_runtime::RuntimeError) {
+        let kind = match self.work.as_ref().and_then(|work| work.current_stop()) {
+            Some(ResumeStop::ParentCancelled) => DeferredResumeErrorKind::Cancelled,
+            Some(ResumeStop::SessionClosed) => DeferredResumeErrorKind::SessionClosed,
+            Some(ResumeStop::DeadlineExpired) | None => DeferredResumeErrorKind::ExecutorClosing,
+        };
+        let id = self.completion.id;
+        let request_id = self.completion.request_id;
+        self.finish_without_execution(DeferredResumeError::new(
+            kind,
+            id,
+            request_id,
+            None,
+            None,
+            Some(Box::new(source)),
+        ));
+    }
 }
 
 impl Drop for DeferredResumeJob {
@@ -337,6 +363,8 @@ impl Drop for DeferredResumeJob {
 }
 
 trait DeferredResumeWork: Send + 'static {
+    fn current_stop(&self) -> Option<ResumeStop>;
+
     fn release_wait_permit(&mut self);
     fn execute(self: Box<Self>) -> WorkFuture;
     fn reject(self: Box<Self>, error: AdmissionError) -> WorkFuture;
@@ -368,6 +396,12 @@ where
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
     Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
 {
+    fn current_stop(&self) -> Option<ResumeStop> {
+        self.parts
+            .as_ref()
+            .and_then(|parts| current_stop(parts.responder.control()))
+    }
+
     fn release_wait_permit(&mut self) {
         if let Some(parts) = self.parts.as_mut() {
             if let Some(permit) = parts.permit.take() {
@@ -747,6 +781,10 @@ mod tests {
     }
 
     impl DeferredResumeWork for ProbeWork {
+        fn current_stop(&self) -> Option<super::ResumeStop> {
+            None
+        }
+
         fn release_wait_permit(&mut self) {
             self.wait_released.store(true, Ordering::Release);
         }

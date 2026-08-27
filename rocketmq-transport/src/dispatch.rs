@@ -22,6 +22,7 @@ mod deferred_responder;
 )]
 mod deferred_response;
 pub(crate) mod deferred_resume;
+mod deferred_session_cleanup;
 mod embedded_dispatch;
 mod handler_outcome;
 mod legacy_processor_adapter;
@@ -65,6 +66,8 @@ pub use deferred_registry::DeferredRegistration;
 pub use deferred_registry::DeferredRegistry;
 pub use deferred_registry::DeferredRegistryError;
 pub use deferred_registry::DeferredRegistryErrorKind;
+pub use deferred_registry::DeferredRegistryShutdownOutcome;
+pub use deferred_registry::DeferredRegistryShutdownStats;
 pub use deferred_registry::DeferredRequest;
 pub use deferred_registry::DeferredResumeError;
 pub use deferred_registry::DeferredResumeErrorKind;
@@ -97,6 +100,8 @@ pub(crate) use deferred_response::ResponseStateError;
     reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
 )]
 pub(crate) use deferred_response::ResponseStateSnapshot;
+pub(crate) use deferred_session_cleanup::DeferredSessionCleanupOwner;
+pub(crate) use deferred_session_cleanup::DeferredSessionCleanupRegistration;
 pub use embedded_dispatch::EmbeddedDispatchError;
 pub use embedded_dispatch::EmbeddedDispatchErrorKind;
 pub use embedded_dispatch::EmbeddedDispatchOutcome;

@@ -29,11 +29,14 @@ use super::DeferredId;
 use super::DeferredRequest;
 use super::DeferredResponseError;
 use super::RequestId;
+use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
+use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseState;
 use crate::dispatch::ResponseTerminalState;
 use crate::dispatch::WriteProgress;
+use crate::session_view::SessionId;
 
 /// Reason that caused a deferred request to become eligible for resume.
 ///
@@ -420,6 +423,27 @@ where
             .cloned()
     }
 
+    pub(crate) fn control(&self) -> &RequestControlView {
+        self.request
+            .as_ref()
+            .expect("claimed request remains owned")
+            .parts
+            .responder
+            .control()
+    }
+
+    #[cfg(test)]
+    pub(super) fn response_state_for_test(&self) -> Arc<ResponseState> {
+        Arc::clone(
+            self.request
+                .as_ref()
+                .expect("claimed request remains owned")
+                .parts
+                .responder
+                .response_state(),
+        )
+    }
+
     pub(in crate::dispatch) fn disarm_marker(&mut self) -> Arc<ClaimMarker<R>> {
         self.marker.take().expect("claimed marker remains owned")
     }
@@ -491,7 +515,10 @@ where
     registry: Weak<RegistryInner<R>>,
     id: DeferredId,
     request_id: RequestId,
+    session_id: SessionId,
+    control: RequestControlView,
     state: Arc<ResponseState>,
+    enrollment: Option<CleanupEnrollment>,
 }
 
 impl<R> ClaimMarker<R>
@@ -502,13 +529,19 @@ where
         registry: &Arc<RegistryInner<R>>,
         id: DeferredId,
         request_id: RequestId,
+        session_id: SessionId,
+        control: RequestControlView,
         state: Arc<ResponseState>,
+        enrollment: Option<CleanupEnrollment>,
     ) -> Self {
         Self {
             registry: Arc::downgrade(registry),
             id,
             request_id,
+            session_id,
+            control,
             state,
+            enrollment,
         }
     }
 
@@ -519,6 +552,18 @@ where
     pub(super) fn terminal_state(&self) -> Option<ResponseTerminalState> {
         self.state.terminal_state()
     }
+
+    pub(super) fn close_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+        self.state.close()
+    }
+
+    pub(super) fn cancel_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+        self.state.cancel()
+    }
+
+    pub(super) const fn control(&self) -> &RequestControlView {
+        &self.control
+    }
 }
 
 impl<R> Drop for ClaimMarker<R>
@@ -527,8 +572,9 @@ where
 {
     fn drop(&mut self) {
         if let Some(registry) = self.registry.upgrade() {
-            registry.remove_claim_marker(self.id, self as *const Self);
+            registry.remove_claim_marker(self.id, self.session_id, self as *const Self);
         }
+        drop(self.enrollment.take());
     }
 }
 

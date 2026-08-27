@@ -39,6 +39,8 @@ use super::internal::RegistryLayoutSizes;
 use super::*;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
+use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
+use crate::dispatch::deferred_session_cleanup::TargetRecord;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
@@ -107,6 +109,30 @@ impl Harness {
         self.parts_for_session(original, retained, &self.session)
     }
 
+    fn parts_with_cleanup<R>(
+        &self,
+        original: OriginalRequestIdentity,
+        cleanup: &crate::dispatch::DeferredSessionCleanupOwner,
+    ) -> DeferredParts
+    where
+        R: Send + 'static,
+    {
+        let retained = DeferredRegistry::<R>::try_retained_size(DeferredRetainedSizeParts::new(0))
+            .expect("registry retained size");
+        let control = RequestControlView::from_meta(
+            &RequestMeta::new(Instant::now(), None),
+            self.session.view().state().clone(),
+            &self.parent,
+        );
+        let (sink, _receiver) = ResponseSink::local();
+        let seed = sink
+            .deferred_seed_for_test(TransportTelemetry::noop(), self.session.view().id(), control)
+            .with_session_cleanup(cleanup.registration());
+        let responder = seed.into_responder(original);
+        let permit = self.admission.try_reserve(retained).expect("registry wait permit");
+        DeferredParts::new(responder, permit)
+    }
+
     fn parts_for_session(
         &self,
         original: OriginalRequestIdentity,
@@ -154,14 +180,22 @@ fn retained_size_counts_fixed_and_registry_storage_once_and_preserves_caller_par
     let request_index = Layout::new::<(RequestId, DeferredId)>().size();
     let session_owner = Layout::new::<(SessionId, HashSet<DeferredId>)>().size();
     let session_member = Layout::new::<DeferredId>().size();
+    let cleanup_target = arc_allocation::<RegistryCleanupTarget<AlignedResume>>();
+    let cleanup_target_record = Layout::new::<(usize, TargetRecord)>().size();
     let ticket = arc_allocation::<ClaimTicket>();
     let marker = arc_allocation::<ClaimMarker<AlignedResume>>();
     let claim_slot = Layout::new::<(DeferredId, std::sync::Weak<ClaimMarker<AlignedResume>>)>().size();
     let completion = arc_allocation::<crate::dispatch::deferred_resume::ResumeCompletion>();
     let job_cell = arc_allocation::<crate::dispatch::deferred_resume::ResumeJobCell>();
     let claim_runtime = ticket + marker + claim_slot + completion + job_cell;
-    let independent_registry_charge =
-        inline_resume + primary_net + request_index + session_owner + session_member + claim_runtime;
+    let independent_registry_charge = inline_resume
+        + primary_net
+        + request_index
+        + session_owner
+        + session_member
+        + cleanup_target
+        + cleanup_target_record
+        + claim_runtime;
     assert_eq!(registry - base, independent_registry_charge);
 
     let empty = DeferredRegistry::<AlignedResume>::try_retained_size(DeferredRetainedSizeParts::new(0))
@@ -186,9 +220,11 @@ fn retained_layout_checked_arithmetic_rejects_every_overflow_boundary() {
         request_index: 1,
         session_owner: 1,
         session_member: 1,
+        cleanup_target: 1,
+        cleanup_target_record: 1,
         claim_runtime: 1,
     };
-    assert_eq!(checked_registry_layout_bytes(valid), Some(6));
+    assert_eq!(checked_registry_layout_bytes(valid), Some(8));
 
     assert!(checked_registry_layout_bytes(RegistryLayoutSizes {
         inline_resume: usize::MAX,
@@ -210,11 +246,17 @@ fn retained_layout_checked_arithmetic_rejects_every_overflow_boundary() {
         ..valid
     })
     .is_none());
+    assert!(checked_registry_layout_bytes(RegistryLayoutSizes {
+        cleanup_target: usize::MAX,
+        ..valid
+    })
+    .is_none());
 
-    assert!(checked_registry_component_sum(usize::MAX, 1, 0, 0, 0).is_none());
-    assert!(checked_registry_component_sum(usize::MAX - 1, 1, 1, 0, 0).is_none());
-    assert!(checked_registry_component_sum(usize::MAX - 2, 1, 1, 1, 0).is_none());
-    assert!(checked_registry_component_sum(usize::MAX - 3, 1, 1, 1, 1).is_none());
+    assert!(checked_registry_component_sum(usize::MAX, 1, 0, 0, 0, 0).is_none());
+    assert!(checked_registry_component_sum(usize::MAX - 1, 1, 1, 0, 0, 0).is_none());
+    assert!(checked_registry_component_sum(usize::MAX - 2, 1, 1, 1, 0, 0).is_none());
+    assert!(checked_registry_component_sum(usize::MAX - 3, 1, 1, 1, 1, 0).is_none());
+    assert!(checked_registry_component_sum(usize::MAX - 4, 1, 1, 1, 1, 1).is_none());
     assert_eq!(checked_claim_runtime_sum(1, 2, 3, 4), Some(10));
     assert!(checked_claim_runtime_sum(usize::MAX, 1, 0, 0).is_none());
     assert!(checked_claim_runtime_sum(usize::MAX - 1, 1, 1, 0).is_none());
@@ -462,9 +504,16 @@ async fn assert_provisional_claim_from_phase(name: &'static str, owner: u64, bui
     let registry = DeferredRegistry::<u64>::new();
     let parts = harness.parts::<u64>(harness.identity(owner as i32));
     let request_id = parts.request_id();
+    let mut enrollment = None;
     let id = registry
         .inner
-        .insert_shell(request_id, parts.session_id(), parts.control().clone())
+        .insert_shell(
+            request_id,
+            parts.session_id(),
+            parts.control().clone(),
+            parts.response_state(),
+            &mut enrollment,
+        )
         .expect("insert shell");
     if building {
         assert!(registry.inner.transition_to_building(id));
@@ -608,12 +657,15 @@ async fn terminal_and_invalid_claim_cas_retire_all_registry_ownership() {
     let invalid_harness = Harness::new("deferred-registry-invalid-claim", 8123);
     let invalid_registry = DeferredRegistry::<u64>::new();
     let invalid_parts = invalid_harness.parts::<u64>(invalid_harness.identity(23));
+    let mut enrollment = None;
     let invalid_id = invalid_registry
         .inner
         .insert_shell(
             invalid_parts.request_id(),
             invalid_parts.session_id(),
             invalid_parts.control().clone(),
+            invalid_parts.response_state(),
+            &mut enrollment,
         )
         .expect("insert invalid shell");
     invalid_registry
@@ -878,4 +930,601 @@ fn active_registry_owns_resources_once_until_the_registry_is_dropped() {
     drop(registry);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
     assert_eq!(harness.admission.snapshot().retained_bytes(), 0);
+}
+
+#[test]
+fn session_cleanup_detaches_multiple_registries_once_and_preserves_other_sessions() {
+    let harness = Harness::new("deferred-registry-session-cleanup", 8120);
+    let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let first = DeferredRegistry::<u64>::new();
+    let second = DeferredRegistry::<String>::new();
+    let first_registration = first
+        .register(DeferredRequest::new(
+            1,
+            harness.parts_with_cleanup::<u64>(harness.identity(201), &cleanup),
+        ))
+        .expect("first cleanup registration");
+    first_registration.commit().expect("first cleanup commit");
+    let first_sibling = first
+        .register(DeferredRequest::new(
+            2,
+            harness.parts_with_cleanup::<u64>(harness.identity(214), &cleanup),
+        ))
+        .expect("same-registry cleanup registration");
+    first_sibling.commit().expect("same-registry cleanup commit");
+    let second_registration = second
+        .register(DeferredRequest::new(
+            "second".to_owned(),
+            harness.parts_with_cleanup::<String>(harness.identity(202), &cleanup),
+        ))
+        .expect("second cleanup registration");
+    second_registration.commit().expect("second cleanup commit");
+
+    let other = Harness::new("deferred-registry-other-session", 8121);
+    let other_registration = first
+        .register(DeferredRequest::new(3, other.parts::<u64>(other.identity(203))))
+        .expect("other session registration");
+    other_registration.commit().expect("other session commit");
+
+    harness.session.close();
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    assert_eq!(first.inner.session_member_count(harness.session.view().id()), 0);
+    assert_eq!(second.inner.session_member_count(harness.session.view().id()), 0);
+    assert_eq!(first.inner.session_cleanup_call_count(), 1);
+    assert_eq!(second.inner.session_cleanup_call_count(), 1);
+    assert_eq!(first.inner.index_counts(), (1, 1, 1));
+    assert_eq!(second.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_eq!(other.admission.snapshot().waiting_count(), 1);
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::AlreadyClosed
+    );
+    drop(first);
+    assert_eq!(other.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
+    let harness = Harness::new("deferred-registry-claimed-cleanup", 8122);
+    let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(
+            9,
+            harness.parts_with_cleanup::<u64>(harness.identity(204), &cleanup),
+        ))
+        .expect("claimed cleanup registration");
+    let id = registration.deferred_id();
+    registration.commit().expect("claimed cleanup commit");
+    let claimed = registry
+        .claim(id, DeferredWakeReason::ForcedRefresh)
+        .await
+        .expect("claim wins before close");
+    assert_eq!(registry.inner.session_member_count(harness.session.view().id()), 1);
+
+    harness.session.close();
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    assert_eq!(registry.inner.session_member_count(harness.session.view().id()), 0);
+    assert_eq!(registry.inner.claim_marker_count(), 0);
+    let error = registry
+        .claim(id, DeferredWakeReason::Timeout)
+        .await
+        .expect_err("fresh post-cleanup claim has no tombstone");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::NotFound);
+    drop(claimed);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[test]
+fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
+    let harness = Harness::new("deferred-registry-shutdown", 8123);
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(11, harness.parts::<u64>(harness.identity(205))))
+        .expect("shutdown registration");
+    registration.commit().expect("shutdown commit");
+    let outcome = registry.shutdown();
+    let DeferredRegistryShutdownOutcome::Completed(stats) = outcome else {
+        panic!("first shutdown must complete: {outcome:?}");
+    };
+    assert_eq!(stats.detached_entries(), 1);
+    assert_eq!(stats.terminalized_responses(), 1);
+    assert_eq!(stats.in_progress_responses(), 0);
+    assert_eq!(stats.invariant_failures(), 0);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+
+    let called = Arc::new(AtomicBool::new(false));
+    let builder_called = Arc::clone(&called);
+    let error = registry
+        .register_with(harness.parts::<u64>(harness.identity(206)), move |_| {
+            builder_called.store(true, Ordering::SeqCst);
+            Ok::<_, BuilderFailure>(12)
+        })
+        .expect_err("closed registry rejects registration");
+    assert_eq!(error.kind(), DeferredRegistryErrorKind::ParentCancelled);
+    assert!(!called.load(Ordering::SeqCst));
+}
+
+#[test]
+fn closed_cleanup_owner_rejects_before_id_allocation_and_builder_execution() {
+    let harness = Harness::new("deferred-registry-close-before-insert", 8124);
+    let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    let sequence = Arc::new(AtomicU64::new(900));
+    let registry = DeferredRegistry::<u64>::with_test_sequence(Arc::clone(&sequence));
+    let called = Arc::new(AtomicBool::new(false));
+    let builder_called = Arc::clone(&called);
+    let error = registry
+        .register_with(
+            harness.parts_with_cleanup::<u64>(harness.identity(207), &cleanup),
+            move |_| {
+                builder_called.store(true, Ordering::SeqCst);
+                Ok::<_, BuilderFailure>(13)
+            },
+        )
+        .expect_err("closed cleanup owner rejects registration");
+    assert_eq!(error.kind(), DeferredRegistryErrorKind::SessionClosed);
+    assert!(!called.load(Ordering::SeqCst));
+    assert_eq!(sequence.load(Ordering::SeqCst), 900);
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[test]
+fn cleanup_removes_shell_and_prepared_entries_independently() {
+    let harness = Harness::new("deferred-registry-shell-prepared-cleanup", 8131);
+
+    let shell_cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let shell_registry = DeferredRegistry::<u64>::new();
+    let mut shell_parts = harness.parts_with_cleanup::<u64>(harness.identity(215), &shell_cleanup);
+    let shell_state = shell_parts.response_state();
+    let shell_id = shell_registry
+        .insert_shell(
+            shell_parts.request_id(),
+            shell_parts.session_id(),
+            shell_parts.control().clone(),
+            Arc::clone(&shell_state),
+            shell_parts.session_cleanup(),
+        )
+        .expect("shell enrollment");
+    shell_parts.clear_session_cleanup();
+    assert_eq!(shell_registry.inner.phase(shell_id), Some(EntryPhaseTag::Shell));
+    assert_eq!(
+        shell_cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    assert_eq!(shell_registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(shell_state.terminal_state(), Some(ResponseTerminalState::Closed));
+    drop(shell_parts);
+
+    let prepared_cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let prepared_registry = DeferredRegistry::<u64>::new();
+    let prepared_parts = harness.parts_with_cleanup::<u64>(harness.identity(216), &prepared_cleanup);
+    let prepared_state = prepared_parts.response_state();
+    let prepared = prepared_registry
+        .register(DeferredRequest::new(21, prepared_parts))
+        .expect("prepared enrollment");
+    assert_eq!(
+        prepared_registry.inner.phase(prepared.deferred_id()),
+        Some(EntryPhaseTag::Prepared)
+    );
+    assert_eq!(
+        prepared_cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    assert_eq!(prepared_registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(prepared_state.terminal_state(), Some(ResponseTerminalState::Closed));
+    assert_eq!(
+        prepared
+            .commit()
+            .expect_err("prepared commit observes cleanup")
+            .category(),
+        "session_closed"
+    );
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[test]
+fn enrollment_gate_and_shell_insert_are_one_close_barrier() {
+    let harness = Harness::new("deferred-registry-enroll-close-barrier", 8132);
+    let cleanup = Arc::new(crate::dispatch::DeferredSessionCleanupOwner::new(
+        harness.session.view().id(),
+    ));
+    let checkpoint_entered = Arc::new(Barrier::new(2));
+    let checkpoint_release = Arc::new(Barrier::new(2));
+    let entered = Arc::clone(&checkpoint_entered);
+    let release = Arc::clone(&checkpoint_release);
+    cleanup.set_insert_checkpoint(Arc::new(move |state_is_locked| {
+        assert!(
+            state_is_locked,
+            "registry shell insert must run under the cleanup owner gate"
+        );
+        entered.wait();
+        release.wait();
+    }));
+    let close_acquired = Arc::new(Barrier::new(2));
+    let close_release = Arc::new(Barrier::new(2));
+    let acquired = Arc::clone(&close_acquired);
+    let release_close = Arc::clone(&close_release);
+    cleanup.set_close_acquired_checkpoint(Arc::new(move || {
+        acquired.wait();
+        release_close.wait();
+    }));
+    let sequence = Arc::new(AtomicU64::new(500));
+    let registry = DeferredRegistry::<u64>::with_test_sequence(Arc::clone(&sequence));
+    let register_registry = registry.clone();
+    let register_cleanup = Arc::clone(&cleanup);
+    let parts = harness.parts_with_cleanup::<u64>(harness.identity(217), &register_cleanup);
+    let register = std::thread::spawn(move || register_registry.register(DeferredRequest::new(22, parts)));
+    checkpoint_entered.wait();
+
+    let close_cleanup = Arc::clone(&cleanup);
+    let (close_started_tx, close_started_rx) = std::sync::mpsc::sync_channel(1);
+    let (close_done_tx, close_done_rx) = std::sync::mpsc::sync_channel(1);
+    let close = std::thread::spawn(move || {
+        close_started_tx.send(()).expect("publish close thread start");
+        let outcome = close_cleanup.close();
+        close_done_tx.send(outcome).expect("publish close outcome");
+    });
+    close_started_rx.recv().expect("close thread starts");
+    assert!(matches!(
+        close_done_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(sequence.load(Ordering::SeqCst), 500);
+
+    checkpoint_release.wait();
+    close_acquired.wait();
+    assert_eq!(sequence.load(Ordering::SeqCst), 501);
+    assert_eq!(registry.inner.index_counts(), (1, 1, 1));
+    assert!(matches!(
+        close_done_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    close_release.wait();
+    let outcome = close_done_rx.recv().expect("close completes after shell insertion");
+    assert_eq!(
+        outcome,
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    close.join().expect("close barrier thread");
+    drop(register.join().expect("registration barrier thread"));
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(cleanup.target_counts(), (0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+struct BuildingDropLease {
+    drops: Arc<AtomicUsize>,
+}
+
+impl Drop for BuildingDropLease {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn cleanup_detaches_building_entry_and_notifies_ticket_before_builder_returns() {
+    let harness = Harness::new("deferred-registry-building-cleanup", 8125);
+    let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let registry = DeferredRegistry::<BuildingDropLease>::new();
+    let builder_registry = registry.clone();
+    let parts = harness.parts_with_cleanup::<BuildingDropLease>(harness.identity(208), &cleanup);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let builder_drops = Arc::clone(&drops);
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let builder_entered = Arc::clone(&entered);
+    let builder_release = Arc::clone(&release);
+    let (id_tx, id_rx) = std::sync::mpsc::sync_channel(1);
+    let builder = std::thread::spawn(move || {
+        builder_registry.register_with(parts, move |id| {
+            id_tx.send(id).expect("publish building id");
+            builder_entered.wait();
+            builder_release.wait();
+            Ok::<_, BuilderFailure>(BuildingDropLease { drops: builder_drops })
+        })
+    });
+    let id = id_rx.recv().expect("builder publishes id");
+    entered.wait();
+    let claim = registry.claim(id, DeferredWakeReason::MessageArrived);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("building claim completed before cleanup: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    let error = claim.await.expect_err("cleanup wakes provisional ticket");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::SessionClosed);
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+
+    release.wait();
+    let error = builder
+        .join()
+        .expect("building registration thread")
+        .expect_err("closed building registration cannot publish");
+    assert_eq!(error.kind(), DeferredRegistryErrorKind::SessionClosed);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn session_cleanup_does_not_overwrite_sending_response() {
+    let harness = Harness::new("deferred-registry-sending-cleanup", 8126);
+    let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(
+            15,
+            harness.parts_with_cleanup::<u64>(harness.identity(209), &cleanup),
+        ))
+        .expect("sending cleanup registration");
+    let id = registration.deferred_id();
+    registration.commit().expect("sending cleanup commit");
+    let claimed = registry
+        .claim(id, DeferredWakeReason::ForcedRefresh)
+        .await
+        .expect("sending cleanup claim");
+    let state = claimed.response_state_for_test();
+    let send = state.begin_sending().expect("sending owner");
+    harness.session.close();
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    assert_eq!(state.snapshot(), crate::dispatch::ResponseStateSnapshot::Sending);
+    send.fail(crate::dispatch::WriteProgress::NotStarted)
+        .expect("sending owner keeps terminal authority");
+    drop(claimed);
+    assert_eq!(
+        state.terminal_state(),
+        Some(ResponseTerminalState::Failed {
+            progress: crate::dispatch::WriteProgress::NotStarted,
+        })
+    );
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+struct BlockingShutdownLease {
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+impl Drop for BlockingShutdownLease {
+    fn drop(&mut self) {
+        self.entered.wait();
+        self.release.wait();
+    }
+}
+
+#[test]
+fn concurrent_registry_shutdown_reports_in_progress_until_registry_batch_drops() {
+    let harness = Harness::new("deferred-registry-concurrent-shutdown", 8127);
+    let registry = DeferredRegistry::<BlockingShutdownLease>::new();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let registration = registry
+        .register(DeferredRequest::new(
+            BlockingShutdownLease {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            },
+            harness.parts::<BlockingShutdownLease>(harness.identity(210)),
+        ))
+        .expect("concurrent shutdown registration");
+    registration.commit().expect("concurrent shutdown commit");
+    let winner_registry = registry.clone();
+    let winner = std::thread::spawn(move || winner_registry.shutdown());
+    entered.wait();
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::InProgress);
+    release.wait();
+    assert!(matches!(
+        winner.join().expect("shutdown winner thread"),
+        DeferredRegistryShutdownOutcome::Completed(_)
+    ));
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+struct PanickingShutdownLease {
+    registry: DeferredRegistry<PanickingShutdownLease>,
+    observed: Arc<AtomicUsize>,
+    panicked: Arc<AtomicBool>,
+}
+
+impl Drop for PanickingShutdownLease {
+    fn drop(&mut self) {
+        let observed = match self.registry.shutdown() {
+            DeferredRegistryShutdownOutcome::InProgress => 1,
+            DeferredRegistryShutdownOutcome::Completed(_) | DeferredRegistryShutdownOutcome::AlreadyClosed => 2,
+        };
+        self.observed.store(observed, Ordering::SeqCst);
+        if !self.panicked.swap(true, Ordering::SeqCst) {
+            panic!("registry-owned resume drop panic");
+        }
+    }
+}
+
+#[test]
+fn panicking_registry_owned_drop_still_seals_shutdown_without_holding_the_lock() {
+    let harness = Harness::new("deferred-registry-panicking-shutdown", 8133);
+    let registry = DeferredRegistry::<PanickingShutdownLease>::new();
+    let observed = Arc::new(AtomicUsize::new(0));
+    let panicked = Arc::new(AtomicBool::new(false));
+    let registration = registry
+        .register(DeferredRequest::new(
+            PanickingShutdownLease {
+                registry: registry.clone(),
+                observed: Arc::clone(&observed),
+                panicked: Arc::clone(&panicked),
+            },
+            harness.parts::<PanickingShutdownLease>(harness.identity(218)),
+        ))
+        .expect("panicking shutdown registration");
+    registration.commit().expect("panicking shutdown commit");
+
+    let panic = std::panic::catch_unwind(AssertUnwindSafe(|| registry.shutdown()));
+    assert!(panic.is_err());
+    assert_eq!(observed.load(Ordering::SeqCst), 1);
+    assert!(panicked.load(Ordering::SeqCst));
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn simultaneous_parent_and_session_cleanup_cancel_entry_and_ticket_consistently() {
+    let harness = Harness::new("deferred-registry-parent-session-priority", 8134);
+    let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
+    let registry = DeferredRegistry::<u64>::new();
+    let parts = harness.parts_with_cleanup::<u64>(harness.identity(219), &cleanup);
+    let state = parts.response_state();
+    let registration = registry
+        .register(DeferredRequest::new(23, parts))
+        .expect("parent/session priority registration");
+    let id = registration.deferred_id();
+    let claim = registry.claim(id, DeferredWakeReason::MessageArrived);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("prepared claim completed before cleanup: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+
+    harness.parent.cancel();
+    harness.session.close();
+    assert_eq!(
+        cleanup.close(),
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+    );
+    let error = claim.await.expect_err("parent cancellation resolves cleanup ticket");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::ParentCancelled);
+    assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+    assert_eq!(
+        registration
+            .commit()
+            .expect_err("removed registration uses parent priority")
+            .category(),
+        "parent_cancelled"
+    );
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn registry_shutdown_wakes_provisional_ticket_and_claims_stay_parent_cancelled() {
+    let harness = Harness::new("deferred-registry-shutdown-ticket", 8128);
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(16, harness.parts::<u64>(harness.identity(211))))
+        .expect("shutdown ticket registration");
+    let id = registration.deferred_id();
+    let claim = registry.claim(id, DeferredWakeReason::Timeout);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("provisional claim completed before shutdown: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    let DeferredRegistryShutdownOutcome::Completed(stats) = registry.shutdown() else {
+        panic!("shutdown winner completes");
+    };
+    assert_eq!(stats.detached_entries(), 1);
+    assert_eq!(stats.notified_tickets(), 1);
+    let error = claim.await.expect_err("shutdown wakes provisional ticket");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::ParentCancelled);
+    let fresh = registry
+        .claim(id, DeferredWakeReason::Timeout)
+        .await
+        .expect_err("closed registry classifies every claim through its parent");
+    assert_eq!(fresh.kind(), DeferredClaimErrorKind::ParentCancelled);
+    drop(registration);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+struct ReentrantShutdownLease {
+    registry: DeferredRegistry<ReentrantShutdownLease>,
+    observed: Arc<AtomicUsize>,
+}
+
+impl Drop for ReentrantShutdownLease {
+    fn drop(&mut self) {
+        let observed = match self.registry.shutdown() {
+            DeferredRegistryShutdownOutcome::InProgress => 1,
+            DeferredRegistryShutdownOutcome::Completed(_) | DeferredRegistryShutdownOutcome::AlreadyClosed => 2,
+        };
+        self.observed.store(observed, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn registry_shutdown_is_reentrant_without_holding_the_registry_lock() {
+    let harness = Harness::new("deferred-registry-reentrant-shutdown", 8129);
+    let registry = DeferredRegistry::<ReentrantShutdownLease>::new();
+    let observed = Arc::new(AtomicUsize::new(0));
+    let registration = registry
+        .register(DeferredRequest::new(
+            ReentrantShutdownLease {
+                registry: registry.clone(),
+                observed: Arc::clone(&observed),
+            },
+            harness.parts::<ReentrantShutdownLease>(harness.identity(212)),
+        ))
+        .expect("reentrant shutdown registration");
+    registration.commit().expect("reentrant shutdown commit");
+    assert!(matches!(
+        registry.shutdown(),
+        DeferredRegistryShutdownOutcome::Completed(_)
+    ));
+    assert_eq!(observed.load(Ordering::SeqCst), 1);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[test]
+fn session_cleanup_wins_from_activating_and_commit_reports_session_closed() {
+    let harness = Harness::new("deferred-registry-activating-cleanup", 8130);
+    let cleanup = Arc::new(crate::dispatch::DeferredSessionCleanupOwner::new(
+        harness.session.view().id(),
+    ));
+    let registry = DeferredRegistry::<u64>::new();
+    let mut registration = registry
+        .register(DeferredRequest::new(
+            17,
+            harness.parts_with_cleanup::<u64>(harness.identity(213), &cleanup),
+        ))
+        .expect("activating cleanup registration");
+    let close = Arc::clone(&cleanup);
+    registration.set_commit_checkpoint(move || {
+        assert_eq!(
+            close.close(),
+            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        );
+    });
+    let error = registration
+        .commit()
+        .expect_err("cleanup between response registration and final publish wins");
+    assert_eq!(error.category(), "session_closed");
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
