@@ -45,6 +45,9 @@ use crate::dispatch::ResponsePlan;
 use crate::runtime::processor_v2::RejectRequestDecision;
 use crate::runtime::RPCHook;
 
+#[path = "tests/deferred_expiry.rs"]
+mod deferred_expiry;
+
 #[derive(Default)]
 struct ProcessorState {
     clones: AtomicUsize,
@@ -802,6 +805,10 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .await
         .expect_err("new resume submission is rejected after begin-close");
     assert_eq!(held_error.kind(), DeferredResumeErrorKind::SessionClosed);
+    assert_eq!(
+        held_error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::SessionClosed)
+    );
     assert_eq!(held_handler_called.load(Ordering::SeqCst), 0);
     assert_eq!(deferred_admission.snapshot().waiting_count(), 1);
 
@@ -812,6 +819,10 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .expect("accepted resume drains")
         .expect_err("accepted resume observes closed session");
     assert_eq!(running_error.kind(), DeferredResumeErrorKind::SessionClosed);
+    assert_eq!(
+        running_error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::SessionClosed)
+    );
     let eof = tokio::time::timeout(Duration::from_secs(1), first_client.receive_command())
         .await
         .expect("first session retires after drain");

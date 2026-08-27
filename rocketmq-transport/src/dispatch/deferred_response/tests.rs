@@ -43,7 +43,7 @@ const OPERATIONS: [ModelOperation; 8] = [
     ModelOperation::Close,
 ];
 
-const STATES: [u8; 9] = [
+const STATES: [u8; 16] = [
     OPEN,
     REGISTERED,
     CLAIMED,
@@ -51,15 +51,22 @@ const STATES: [u8; 9] = [
     COMPLETED,
     FAILED_NOT_STARTED,
     FAILED_POSSIBLY_PARTIAL,
-    CANCELLED,
-    CLOSED,
+    CANCELLED_EXPLICIT,
+    CLOSED_RECEIVER_DROPPED,
+    CANCELLED_ABANDONED,
+    CANCELLED_CLAIM_DROPPED,
+    CANCELLED_OWNER_DEADLINE,
+    CANCELLED_PARENT_CANCELLED,
+    CANCELLED_PROCESSOR_UNAVAILABLE,
+    CANCELLED_SERVICE_STOPPING,
+    CLOSED_SESSION_CLOSED,
 ];
 
 #[test]
-fn response_state_is_exactly_one_atomic_and_inline_state_does_not_embed_it() {
-    assert_eq!(std::mem::size_of::<ResponseState>(), std::mem::size_of::<AtomicU8>());
-    assert_eq!(std::mem::align_of::<ResponseState>(), std::mem::align_of::<AtomicU8>());
-    assert!(!std::mem::needs_drop::<ResponseState>());
+fn response_state_uses_one_atomic_and_inline_state_does_not_embed_it() {
+    let state = ResponseState::open();
+    assert_eq!(std::mem::size_of_val(&state.state), std::mem::size_of::<AtomicU8>());
+    assert_eq!(std::mem::align_of_val(&state.state), std::mem::align_of::<AtomicU8>());
 
     let inline = crate::dispatch::InlineResponseSlot::disabled();
     assert_eq!(
@@ -75,8 +82,9 @@ fn every_state_operation_pair_matches_the_reference_model() {
         for operation in OPERATIONS {
             let state = Arc::new(ResponseState {
                 state: AtomicU8::new(initial),
+                observer: DeferredTerminalObserver::noop(),
             });
-            let expected = model_transition(snapshot(initial), operation);
+            let expected = model_transition(initial, operation);
             let (actual, claim) = apply_actual(&state, operation);
 
             assert_eq!(
@@ -107,6 +115,7 @@ fn legal_registered_paths_preserve_both_failure_progress_values() {
         .complete()
         .expect("complete");
     assert_eq!(completed.terminal_state(), Some(ResponseTerminalState::Completed));
+    assert_eq!(completed.terminal_reason(), None);
 
     for progress in [WriteProgress::NotStarted, WriteProgress::PossiblyPartial] {
         let failed = Arc::new(ResponseState::open());
@@ -121,6 +130,95 @@ fn legal_registered_paths_preserve_both_failure_progress_values() {
             failed.terminal_state(),
             Some(ResponseTerminalState::Failed { progress })
         );
+        assert_eq!(failed.terminal_reason(), None);
+    }
+}
+
+#[test]
+fn every_terminal_reason_has_one_atomic_projection() {
+    let cases = [
+        (DeferredTerminalReason::Explicit, ResponseTerminalState::Cancelled),
+        (DeferredTerminalReason::ReceiverDropped, ResponseTerminalState::Closed),
+        (DeferredTerminalReason::Abandoned, ResponseTerminalState::Cancelled),
+        (DeferredTerminalReason::ClaimDropped, ResponseTerminalState::Cancelled),
+        (DeferredTerminalReason::OwnerDeadline, ResponseTerminalState::Cancelled),
+        (
+            DeferredTerminalReason::ParentCancelled,
+            ResponseTerminalState::Cancelled,
+        ),
+        (
+            DeferredTerminalReason::ProcessorUnavailable,
+            ResponseTerminalState::Cancelled,
+        ),
+        (
+            DeferredTerminalReason::ServiceStopping,
+            ResponseTerminalState::Cancelled,
+        ),
+        (DeferredTerminalReason::SessionClosed, ResponseTerminalState::Closed),
+    ];
+
+    for (reason, expected) in cases {
+        let state = ResponseState::open();
+        state
+            .stop_with_reason(reason, ResponseTransition::Cancel, |_| {})
+            .expect("the first terminal reason wins");
+        assert_eq!(state.terminal_state(), Some(expected));
+        assert_eq!(state.terminal_reason(), Some(reason));
+        assert_eq!(reason.terminal_state(), expected);
+        assert_eq!(
+            decode_terminal_reason(state.state.load(Ordering::Acquire)),
+            Some(reason)
+        );
+
+        assert_eq!(
+            state.cancel(),
+            Err(ResponseStateError::AlreadyCompleted {
+                state: expected,
+                reason: Some(reason),
+            })
+        );
+    }
+}
+
+#[test]
+fn deferred_terminal_metrics_use_only_fixed_request_code_buckets() {
+    use rocketmq_protocol::code::request_code::RequestCode;
+
+    let cases = [
+        (RequestCode::PullMessage.to_i32(), "pull_message"),
+        (RequestCode::PopMessage.to_i32(), "pop_message"),
+        (RequestCode::Notification.to_i32(), "notification"),
+        (RequestCode::SendMessage.to_i32(), "other"),
+    ];
+
+    for (request_code, expected_bucket) in cases {
+        let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
+        let state = ResponseState::observed(telemetry, request_code);
+        state.cancel().expect("the first terminal transition wins");
+        assert_eq!(
+            terminals.lock().as_slice(),
+            [(expected_bucket, DeferredTerminalReason::Explicit.as_str())]
+        );
+    }
+}
+
+#[test]
+fn delivered_and_failed_responses_do_not_record_non_response_terminal_metrics() {
+    for complete in [true, false] {
+        let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
+        let state = Arc::new(ResponseState::observed(
+            telemetry,
+            rocketmq_protocol::code::request_code::RequestCode::Notification.to_i32(),
+        ));
+        let claim = state.begin_sending().expect("sending starts");
+        if complete {
+            claim.complete().expect("response completes");
+        } else {
+            claim
+                .fail(WriteProgress::PossiblyPartial)
+                .expect("response failure completes");
+        }
+        assert!(terminals.lock().is_empty());
     }
 }
 
@@ -169,6 +267,7 @@ fn consuming_completion_disarms_the_claim_drop_path() {
         state.close(),
         Err(ResponseStateError::AlreadyCompleted {
             state: ResponseTerminalState::Completed,
+            reason: None,
         })
     );
 }
@@ -200,12 +299,13 @@ fn apply_actual(
     }
 }
 
-fn model_transition(
-    state: ResponseStateSnapshot,
-    operation: ModelOperation,
-) -> Result<ResponseStateSnapshot, ResponseStateError> {
+fn model_transition(state_code: u8, operation: ModelOperation) -> Result<ResponseStateSnapshot, ResponseStateError> {
+    let state = snapshot(state_code);
     if let ResponseStateSnapshot::Terminal(state) = state {
-        return Err(ResponseStateError::AlreadyCompleted { state });
+        return Err(ResponseStateError::AlreadyCompleted {
+            state,
+            reason: decode_terminal_reason(state_code),
+        });
     }
 
     let next = match (state, operation) {

@@ -306,7 +306,39 @@ impl DeferredResumeExecutor {
                 };
                 #[cfg(test)]
                 job.notify_before_ordering();
-                let ordering_guard = sequencer.acquire(ordering).await;
+                if let Some(stop) = job.current_before_resume() {
+                    drop(queued);
+                    drop(inflight);
+                    job.finish_stopped(stop);
+                    return;
+                }
+                let ordering_result = {
+                    let ordering_wait = sequencer.acquire(ordering);
+                    let stop_wait = job.wait_before_resume();
+                    tokio::pin!(ordering_wait);
+                    tokio::pin!(stop_wait);
+                    tokio::select! {
+                        biased;
+                        stop = &mut stop_wait => Err(stop),
+                        ordering_guard = &mut ordering_wait => Ok(ordering_guard),
+                    }
+                };
+                let ordering_guard = match ordering_result {
+                    Ok(ordering_guard) => ordering_guard,
+                    Err(stop) => {
+                        drop(queued);
+                        drop(inflight);
+                        job.finish_stopped(stop);
+                        return;
+                    }
+                };
+                if let Some(stop) = job.current_before_resume() {
+                    drop(ordering_guard);
+                    drop(queued);
+                    drop(inflight);
+                    job.finish_stopped(stop);
+                    return;
+                }
                 let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
                     Ok(processor) => processor,
                     Err(error) => {

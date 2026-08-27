@@ -36,6 +36,8 @@ pub struct TransportServerV2<P> {
     proxy_protocol: ProxyProtocolConfig,
     #[cfg(test)]
     write_preflight_barrier: Option<crate::write_strategy::WritePreflightBarrier>,
+    #[cfg(test)]
+    test_request_deadline: Option<Duration>,
 }
 
 struct PreparedV2Server<P> {
@@ -50,6 +52,8 @@ struct PreparedV2Server<P> {
     proxy_protocol: ProxyProtocolConfig,
     #[cfg(test)]
     write_preflight_barrier: Option<crate::write_strategy::WritePreflightBarrier>,
+    #[cfg(test)]
+    test_request_deadline: Option<Duration>,
 }
 
 impl<P> TransportServerV2<P>
@@ -73,6 +77,8 @@ where
             proxy_protocol: ProxyProtocolConfig::default(),
             #[cfg(test)]
             write_preflight_barrier: None,
+            #[cfg(test)]
+            test_request_deadline: None,
         }
     }
 
@@ -121,6 +127,8 @@ where
             proxy_protocol: ProxyProtocolConfig::default(),
             #[cfg(test)]
             write_preflight_barrier: None,
+            #[cfg(test)]
+            test_request_deadline: None,
         }
     }
 
@@ -184,6 +192,12 @@ where
     #[cfg(test)]
     fn with_write_preflight_barrier(mut self, barrier: crate::write_strategy::WritePreflightBarrier) -> Self {
         self.write_preflight_barrier = Some(barrier);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_request_deadline(mut self, deadline: Duration) -> Self {
+        self.test_request_deadline = Some(deadline);
         self
     }
 
@@ -440,6 +454,8 @@ where
             proxy_protocol: self.proxy_protocol,
             #[cfg(test)]
             write_preflight_barrier: self.write_preflight_barrier,
+            #[cfg(test)]
+            test_request_deadline: self.test_request_deadline,
         })
     }
 }
@@ -493,6 +509,8 @@ where
         proxy_protocol,
         #[cfg(test)]
         write_preflight_barrier,
+        #[cfg(test)]
+        test_request_deadline,
     } = prepared;
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     let route = Arc::new(V2ConnectionHandler {
@@ -515,6 +533,11 @@ where
     #[cfg(test)]
     let transport = match write_preflight_barrier {
         Some(barrier) => transport.with_write_preflight_barrier(barrier),
+        None => transport,
+    };
+    #[cfg(test)]
+    let transport = match test_request_deadline {
+        Some(deadline) => transport.with_test_request_deadline(deadline),
         None => transport,
     };
 

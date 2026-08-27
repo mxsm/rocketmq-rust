@@ -29,7 +29,10 @@ use super::DeferredId;
 use super::DeferredRequest;
 use super::DeferredResponseError;
 use super::RequestId;
+use crate::dispatch::deferred_response::DeferredSystemCancellationReason;
+use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
+use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
@@ -118,15 +121,35 @@ pub struct DeferredClaimError {
     deferred_id: DeferredId,
     request_id: Option<RequestId>,
     terminal: Option<ResponseTerminalState>,
+    terminal_reason: Option<DeferredTerminalReason>,
     source: Option<DeferredResponseError>,
 }
 
 impl DeferredClaimError {
-    pub(super) const fn new(
+    pub(super) fn new(
         kind: DeferredClaimErrorKind,
         deferred_id: DeferredId,
         request_id: Option<RequestId>,
         terminal: Option<ResponseTerminalState>,
+        source: Option<DeferredResponseError>,
+    ) -> Self {
+        let terminal_reason = source.as_ref().and_then(DeferredResponseError::prior_terminal_reason);
+        Self {
+            kind,
+            deferred_id,
+            request_id,
+            terminal,
+            terminal_reason,
+            source,
+        }
+    }
+
+    pub(super) const fn new_with_reason(
+        kind: DeferredClaimErrorKind,
+        deferred_id: DeferredId,
+        request_id: Option<RequestId>,
+        terminal: Option<ResponseTerminalState>,
+        terminal_reason: Option<DeferredTerminalReason>,
         source: Option<DeferredResponseError>,
     ) -> Self {
         Self {
@@ -134,6 +157,7 @@ impl DeferredClaimError {
             deferred_id,
             request_id,
             terminal,
+            terminal_reason,
             source,
         }
     }
@@ -161,6 +185,12 @@ impl DeferredClaimError {
     pub const fn prior_terminal_state(&self) -> Option<ResponseTerminalState> {
         self.terminal
     }
+
+    /// Returns the exact earlier terminal reason, when applicable.
+    #[must_use]
+    pub const fn prior_terminal_reason(&self) -> Option<DeferredTerminalReason> {
+        self.terminal_reason
+    }
 }
 
 impl fmt::Debug for DeferredClaimError {
@@ -171,6 +201,10 @@ impl fmt::Debug for DeferredClaimError {
             .field("deferred_id", &self.deferred_id)
             .field("request_id", &self.request_id)
             .field("terminal", &self.terminal.map(ResponseTerminalState::as_str))
+            .field(
+                "terminal_reason",
+                &self.terminal_reason.map(DeferredTerminalReason::as_str),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -231,6 +265,7 @@ pub struct DeferredResumeError {
     deferred_id: DeferredId,
     request_id: RequestId,
     terminal: Option<ResponseTerminalState>,
+    terminal_reason: Option<DeferredTerminalReason>,
     progress: Option<WriteProgress>,
     source: Option<Box<dyn Error + Send + Sync + 'static>>,
 }
@@ -249,6 +284,27 @@ impl DeferredResumeError {
             deferred_id,
             request_id,
             terminal,
+            terminal_reason: None,
+            progress,
+            source,
+        }
+    }
+
+    pub(crate) fn new_with_reason(
+        kind: DeferredResumeErrorKind,
+        deferred_id: DeferredId,
+        request_id: RequestId,
+        terminal: Option<ResponseTerminalState>,
+        terminal_reason: Option<DeferredTerminalReason>,
+        progress: Option<WriteProgress>,
+        source: Option<Box<dyn Error + Send + Sync + 'static>>,
+    ) -> Self {
+        Self {
+            kind,
+            deferred_id,
+            request_id,
+            terminal,
+            terminal_reason,
             progress,
             source,
         }
@@ -278,6 +334,12 @@ impl DeferredResumeError {
         self.terminal
     }
 
+    /// Returns the exact earlier terminal reason, when one was observed.
+    #[must_use]
+    pub const fn prior_terminal_reason(&self) -> Option<DeferredTerminalReason> {
+        self.terminal_reason
+    }
+
     /// Returns the exact canonical write progress, when applicable.
     #[must_use]
     pub const fn write_progress(&self) -> Option<WriteProgress> {
@@ -293,6 +355,10 @@ impl fmt::Debug for DeferredResumeError {
             .field("deferred_id", &self.deferred_id)
             .field("request_id", &self.request_id)
             .field("terminal", &self.terminal.map(ResponseTerminalState::as_str))
+            .field(
+                "terminal_reason",
+                &self.terminal_reason.map(DeferredTerminalReason::as_str),
+            )
             .field("progress", &self.progress.map(WriteProgress::as_str))
             .finish_non_exhaustive()
     }
@@ -432,6 +498,14 @@ where
             .control()
     }
 
+    pub(in crate::dispatch) fn expiry(&self) -> Option<super::DeferredExpiry> {
+        self.request
+            .as_ref()
+            .expect("claimed request remains owned")
+            .parts
+            .expiry()
+    }
+
     #[cfg(test)]
     pub(super) fn response_state_for_test(&self) -> Arc<ResponseState> {
         Arc::clone(
@@ -452,6 +526,7 @@ where
         let request = self.take_request();
         let marker = self.disarm_marker();
         let (resume, parts) = request.into_resume_and_parts();
+        let expiry = parts.expiry();
         let (responder, permit) = parts.into_resume_parts();
         ClaimExecutionParts {
             id: self.id,
@@ -461,6 +536,7 @@ where
             responder,
             permit: Some(permit),
             marker,
+            expiry,
         }
     }
 }
@@ -476,6 +552,24 @@ where
     pub(in crate::dispatch) responder: super::DeferredResponder,
     pub(in crate::dispatch) permit: Option<super::DeferredWaitPermit>,
     pub(in crate::dispatch) marker: Arc<ClaimMarker<R>>,
+    expiry: Option<super::DeferredExpiry>,
+}
+
+impl<R> ClaimExecutionParts<R>
+where
+    R: Send + 'static,
+{
+    pub(in crate::dispatch) const fn expiry(&self) -> Option<super::DeferredExpiry> {
+        self.expiry
+    }
+
+    pub(in crate::dispatch) fn resume_cutoff(&self) -> Option<tokio::time::Instant> {
+        self.expiry.and_then(super::DeferredExpiry::resume_cutoff)
+    }
+
+    pub(in crate::dispatch) fn write_cutoff(&self) -> Option<tokio::time::Instant> {
+        self.expiry.and_then(super::DeferredExpiry::write_cutoff)
+    }
 }
 
 impl<R> fmt::Debug for ClaimedDeferred<R>
@@ -497,11 +591,19 @@ where
     R: Send + 'static,
 {
     fn drop(&mut self) {
+        if let Some(marker) = &self.marker {
+            let _ = marker.terminalize_release();
+        }
         if let Some(request) = self.request.take() {
             let DeferredRequest { resume, parts } = request;
-            let super::DeferredParts { responder, permit } = parts;
+            let super::DeferredParts {
+                mut responder,
+                permit,
+                expiry: _,
+            } = parts;
             permit.release();
             drop(resume);
+            let _ = responder.cleanup_cancel_with_reason(DeferredSystemCancellationReason::CLAIM_DROPPED);
             drop(responder);
         }
         drop(self.marker.take());
@@ -518,6 +620,7 @@ where
     session_id: SessionId,
     control: RequestControlView,
     state: Arc<ResponseState>,
+    expiry: Option<super::DeferredExpiry>,
     enrollment: Option<CleanupEnrollment>,
 }
 
@@ -532,6 +635,7 @@ where
         session_id: SessionId,
         control: RequestControlView,
         state: Arc<ResponseState>,
+        expiry: Option<super::DeferredExpiry>,
         enrollment: Option<CleanupEnrollment>,
     ) -> Self {
         Self {
@@ -541,6 +645,7 @@ where
             session_id,
             control,
             state,
+            expiry,
             enrollment,
         }
     }
@@ -553,16 +658,45 @@ where
         self.state.terminal_state()
     }
 
-    pub(super) fn close_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
-        self.state.close()
+    pub(super) fn terminal_reason(&self) -> Option<DeferredTerminalReason> {
+        self.state.terminal_reason()
     }
 
-    pub(super) fn cancel_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
-        self.state.cancel()
+    pub(super) fn close_session_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+        self.state.close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED)
+    }
+
+    pub(super) fn cancel_parent_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+        self.state
+            .cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED)
+    }
+
+    pub(super) fn cancel_owner_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+        self.state
+            .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
     }
 
     pub(super) const fn control(&self) -> &RequestControlView {
         &self.control
+    }
+
+    fn terminalize_release(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+        if self.control.parent_is_cancelled() {
+            self.cancel_parent_response()
+        } else if self.control.session_is_closed() {
+            self.close_session_response()
+        } else if self
+            .expiry
+            .and_then(super::DeferredExpiry::resume_cutoff)
+            .or_else(|| self.control.deadline().map(|deadline| deadline.instant()))
+            .is_some_and(|cutoff| tokio::time::Instant::now() >= cutoff)
+        {
+            self.state
+                .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
+        } else {
+            self.state
+                .cancel_with_reason(DeferredSystemCancellationReason::CLAIM_DROPPED)
+        }
     }
 }
 
@@ -571,6 +705,7 @@ where
     R: Send + 'static,
 {
     fn drop(&mut self) {
+        let _ = self.terminalize_release();
         if let Some(registry) = self.registry.upgrade() {
             registry.remove_claim_marker(self.id, self.session_id, self as *const Self);
         }

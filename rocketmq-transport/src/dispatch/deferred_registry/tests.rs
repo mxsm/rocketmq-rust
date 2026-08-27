@@ -16,6 +16,7 @@ use std::alloc::Layout;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -23,6 +24,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -32,9 +34,11 @@ use rocketmq_runtime::RuntimeOwner;
 use super::internal::checked_claim_runtime_sum;
 use super::internal::checked_registry_component_sum;
 use super::internal::checked_registry_layout_bytes;
+use super::internal::checked_registry_with_expiry_bytes;
 use super::internal::reserve_deferred_id;
 use super::internal::Entry;
 use super::internal::EntryPhaseTag;
+use super::internal::ExpiryKey;
 use super::internal::RegistryLayoutSizes;
 use super::*;
 use crate::admission::AdmissionController;
@@ -42,6 +46,7 @@ use crate::admission::AdmissionLimits;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
 use crate::dispatch::DeferredAdmission;
+use crate::dispatch::DeferredExpiryKind;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestMeta;
@@ -49,6 +54,9 @@ use crate::dispatch::ResponseSink;
 use crate::dispatch::ResponseTerminalState;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
+
+#[path = "tests/expiry.rs"]
+mod expiry;
 
 struct Harness {
     _runtime: RuntimeOwner,
@@ -152,6 +160,33 @@ impl Harness {
     }
 }
 
+fn expiring_parts<R>(
+    harness: &Harness,
+    original: OriginalRequestIdentity,
+    deadline: Option<crate::deadline::RequestDeadline>,
+    cleanup: Option<&crate::dispatch::DeferredSessionCleanupOwner>,
+) -> DeferredParts
+where
+    R: Send + 'static,
+{
+    let retained = DeferredRegistry::<R>::try_retained_size(DeferredRetainedSizeParts::new(0))
+        .expect("expiry registry retained size");
+    let control = RequestControlView::from_meta(
+        &RequestMeta::new(Instant::now(), deadline),
+        harness.session.view().state().clone(),
+        &harness.parent,
+    );
+    let (sink, _receiver) = ResponseSink::local();
+    let seed = sink.deferred_seed_for_test(TransportTelemetry::noop(), harness.session.view().id(), control);
+    let seed = match cleanup {
+        Some(cleanup) => seed.with_session_cleanup(cleanup.registration()),
+        None => seed,
+    };
+    let responder = seed.into_responder(original);
+    let permit = harness.admission.try_reserve(retained).expect("expiry wait permit");
+    DeferredParts::new(responder, permit)
+}
+
 #[repr(align(128))]
 struct AlignedResume([u8; 3]);
 
@@ -188,6 +223,7 @@ fn retained_size_counts_fixed_and_registry_storage_once_and_preserves_caller_par
     let completion = arc_allocation::<crate::dispatch::deferred_resume::ResumeCompletion>();
     let job_cell = arc_allocation::<crate::dispatch::deferred_resume::ResumeJobCell>();
     let claim_runtime = ticket + marker + claim_slot + completion + job_cell;
+    let expiry_index = Layout::new::<ExpiryKey>().size();
     let independent_registry_charge = inline_resume
         + primary_net
         + request_index
@@ -195,7 +231,8 @@ fn retained_size_counts_fixed_and_registry_storage_once_and_preserves_caller_par
         + session_member
         + cleanup_target
         + cleanup_target_record
-        + claim_runtime;
+        + claim_runtime
+        + expiry_index;
     assert_eq!(registry - base, independent_registry_charge);
 
     let empty = DeferredRegistry::<AlignedResume>::try_retained_size(DeferredRetainedSizeParts::new(0))
@@ -225,6 +262,8 @@ fn retained_layout_checked_arithmetic_rejects_every_overflow_boundary() {
         claim_runtime: 1,
     };
     assert_eq!(checked_registry_layout_bytes(valid), Some(8));
+    assert_eq!(checked_registry_with_expiry_bytes(8, 3), Some(11));
+    assert_eq!(checked_registry_with_expiry_bytes(usize::MAX, 1), None);
 
     assert!(checked_registry_layout_bytes(RegistryLayoutSizes {
         inline_resume: usize::MAX,
@@ -512,6 +551,7 @@ async fn assert_provisional_claim_from_phase(name: &'static str, owner: u64, bui
             parts.session_id(),
             parts.control().clone(),
             parts.response_state(),
+            None,
             &mut enrollment,
         )
         .expect("insert shell");
@@ -665,6 +705,7 @@ async fn terminal_and_invalid_claim_cas_retire_all_registry_ownership() {
             invalid_parts.session_id(),
             invalid_parts.control().clone(),
             invalid_parts.response_state(),
+            None,
             &mut enrollment,
         )
         .expect("insert invalid shell");
@@ -1097,6 +1138,7 @@ fn cleanup_removes_shell_and_prepared_entries_independently() {
             shell_parts.control().clone(),
             Arc::clone(&shell_state),
             shell_parts.session_cleanup(),
+            None,
         )
         .expect("shell enrollment");
     shell_parts.clear_session_cleanup();
@@ -1419,7 +1461,15 @@ async fn simultaneous_parent_and_session_cleanup_cancel_entry_and_ticket_consist
     );
     let error = claim.await.expect_err("parent cancellation resolves cleanup ticket");
     assert_eq!(error.kind(), DeferredClaimErrorKind::ParentCancelled);
+    assert_eq!(
+        error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ParentCancelled)
+    );
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ParentCancelled)
+    );
     assert_eq!(
         registration
             .commit()
@@ -1453,6 +1503,10 @@ async fn registry_shutdown_wakes_provisional_ticket_and_claims_stay_parent_cance
     assert_eq!(stats.notified_tickets(), 1);
     let error = claim.await.expect_err("shutdown wakes provisional ticket");
     assert_eq!(error.kind(), DeferredClaimErrorKind::ParentCancelled);
+    assert_eq!(
+        error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ParentCancelled)
+    );
     let fresh = registry
         .claim(id, DeferredWakeReason::Timeout)
         .await
@@ -1525,6 +1579,99 @@ fn session_cleanup_wins_from_activating_and_commit_reports_session_closed() {
         .commit()
         .expect_err("cleanup between response registration and final publish wins");
     assert_eq!(error.category(), "session_closed");
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn resume_without_an_owned_processor_terminalizes_as_processor_unavailable() {
+    let harness = Harness::new("deferred-resume-processor-unavailable", 98194);
+    let registry = DeferredRegistry::<u64>::new();
+    let parts = harness.parts::<u64>(harness.identity(306));
+    let state = parts.response_state();
+    let registration = registry
+        .register(DeferredRequest::new(46, parts))
+        .expect("register processor-unavailable request");
+    let id = registration.deferred_id();
+    registration.commit().expect("publish processor-unavailable request");
+    let claim = registry
+        .claim(id, DeferredWakeReason::ForcedRefresh)
+        .await
+        .expect("claim processor-unavailable request");
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&handler_calls);
+    let error = claim
+        .resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(
+                crate::dispatch::ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+                    .expect("unused response plan"),
+            )
+        })
+        .await
+        .expect_err("missing session executor rejects before handler execution");
+
+    assert_eq!(error.kind(), DeferredResumeErrorKind::ExecutorClosing);
+    assert_eq!(
+        error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ProcessorUnavailable)
+    );
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ProcessorUnavailable)
+    );
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn claimed_owner_cutoff_cancels_without_reentering_the_handler() {
+    let harness = Harness::new("deferred-resume-claimed-owner-cutoff", 98195);
+    let registry = DeferredRegistry::<u64>::new();
+    let now = tokio::time::Instant::now();
+    let deadline = crate::deadline::RequestDeadline::after(Duration::from_secs(30));
+    let parts = expiring_parts::<u64>(&harness, harness.identity(307), Some(deadline), None);
+    let state = parts.response_state();
+    let parts = parts
+        .try_with_expiry(
+            now + Duration::from_secs(25),
+            DeferredExpiryMargins::new(Duration::from_secs(5), Duration::from_secs(5)),
+        )
+        .expect("attach claimed owner cutoff");
+    let registration = registry
+        .register(DeferredRequest::new(47, parts))
+        .expect("register claimed owner cutoff");
+    let id = registration.deferred_id();
+    registration.commit().expect("publish claimed owner cutoff");
+    let claim = registry
+        .claim(id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("claim before owner cutoff");
+    tokio::time::advance(Duration::from_secs(20)).await;
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&handler_calls);
+    let error = claim
+        .resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(
+                crate::dispatch::ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+                    .expect("unused response plan"),
+            )
+        })
+        .await
+        .expect_err("owner cutoff cancels before handler execution");
+
+    assert_eq!(error.kind(), DeferredResumeErrorKind::Cancelled);
+    assert_eq!(
+        error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
+    );
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
+    );
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }

@@ -26,7 +26,6 @@ use super::ResponseSink;
 use crate::admission::AdmissionClass;
 use crate::codec::prepare_response;
 use crate::dispatch::BoundResponsePlan;
-use crate::dispatch::CanonicalDeferredDeadlineResponse;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseError;
@@ -315,60 +314,17 @@ impl ResponseSink {
         deferred_claim: &mut ResponseSendClaim,
     ) -> Result<ResponseReceipt, ResponseError> {
         match self {
-            Self::Network(session) => {
-                send_deferred_network_plan(session, DeferredNetworkPlan::Standard(bound), deferred_claim).await
-            }
+            Self::Network(session) => send_deferred_network_plan(session, bound, deferred_claim).await,
             Self::Local(sink) => send_deferred_local_plan(sink, bound).await,
         }
     }
-
-    pub(crate) async fn send_deferred_deadline(
-        self,
-        deadline: CanonicalDeferredDeadlineResponse<BoundResponsePlan>,
-        deferred_claim: &mut ResponseSendClaim,
-    ) -> Result<ResponseReceipt, ResponseError> {
-        match self {
-            Self::Network(session) => {
-                send_deferred_network_plan(session, DeferredNetworkPlan::Deadline(deadline), deferred_claim).await
-            }
-            Self::Local(_) => Err(ResponseError::SessionClosed),
-        }
-    }
-}
-
-enum DeferredNetworkPlan {
-    Standard(BoundResponsePlan),
-    Deadline(CanonicalDeferredDeadlineResponse<BoundResponsePlan>),
-}
-
-impl DeferredNetworkPlan {
-    fn request_id(&self) -> crate::dispatch::RequestId {
-        match self {
-            Self::Standard(bound) => bound.request_id(),
-            Self::Deadline(deadline) => deadline.value().request_id(),
-        }
-    }
-
-    const fn stop_policy(&self) -> DeferredStopPolicy {
-        match self {
-            Self::Standard(_) => DeferredStopPolicy::All,
-            Self::Deadline(_) => DeferredStopPolicy::ParentOrSession,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum DeferredStopPolicy {
-    All,
-    ParentOrSession,
 }
 
 async fn send_deferred_network_plan(
     session: Arc<SessionHandle>,
-    plan: DeferredNetworkPlan,
+    bound: BoundResponsePlan,
     deferred_claim: &mut ResponseSendClaim,
 ) -> Result<ResponseReceipt, ResponseError> {
-    let stop_policy = plan.stop_policy();
     let Some(context) = session.response_plan_context() else {
         return Err(ResponseError::SessionClosed);
     };
@@ -376,8 +332,8 @@ async fn send_deferred_network_plan(
     let response_drop = context.transport_drop_handle();
     response_claim.observe_transport_drop(response_drop.clone());
     let deferred_drop = deferred_claim.observe_transport_drop(response_drop.delegation_token());
-    let request_id = plan.request_id();
-    if let Some(stop) = current_stop_for_deferred(context.control(), stop_policy) {
+    let request_id = bound.request_id();
+    if let Some(stop) = current_stop(context.control()) {
         response_claim.finish(stop.terminal());
         return Err(stop.into_error());
     }
@@ -391,15 +347,7 @@ async fn send_deferred_network_plan(
     if let Some(signal) = &context.enqueue_complete_signal {
         connection.set_enqueue_complete_signal(Arc::clone(signal));
     }
-    let prepared = match plan {
-        DeferredNetworkPlan::Standard(bound) => {
-            prepare_response(bound, connection.frame_limits()).map(EitherPrepared::Standard)
-        }
-        DeferredNetworkPlan::Deadline(deadline) => deadline
-            .try_map(|bound| prepare_response(bound, connection.frame_limits()))
-            .map(EitherPrepared::Deadline),
-    };
-    let prepared = match prepared {
+    let prepared = match prepare_response(bound, connection.frame_limits()) {
         Ok(prepared) => prepared,
         Err(error) => {
             response_claim.finish(terminal_for_error(&error));
@@ -408,23 +356,14 @@ async fn send_deferred_network_plan(
     };
     let metadata = *prepared.metadata();
     debug_assert_eq!(metadata.request_id(), request_id);
-    if let Some(stop) = current_stop_for_deferred(context.control(), stop_policy) {
+    if let Some(stop) = current_stop(context.control()) {
         response_claim.finish(stop.terminal());
         return Err(stop.into_error());
     }
 
-    let send = match prepared {
-        EitherPrepared::Standard(prepared) => {
-            connection
-                .send_prepared_deferred_response(prepared, context.control(), deferred_drop)
-                .await
-        }
-        EitherPrepared::Deadline(prepared) => {
-            connection
-                .send_prepared_deferred_deadline_response(prepared, context.control(), deferred_drop)
-                .await
-        }
-    };
+    let send = connection
+        .send_prepared_deferred_response(prepared, context.control(), deferred_drop)
+        .await;
     match send {
         Ok(()) => {
             response_claim.finish(ResponseTerminalState::Completed);
@@ -437,28 +376,6 @@ async fn send_deferred_network_plan(
             response_claim.finish(terminal_for_error(&error));
             Err(error)
         }
-    }
-}
-
-enum EitherPrepared {
-    Standard(crate::codec::PreparedResponse),
-    Deadline(CanonicalDeferredDeadlineResponse<crate::codec::PreparedResponse>),
-}
-
-impl EitherPrepared {
-    fn metadata(&self) -> &crate::codec::PreparedResponseMetadata {
-        match self {
-            Self::Standard(prepared) => prepared.metadata(),
-            Self::Deadline(prepared) => prepared.value().metadata(),
-        }
-    }
-}
-
-fn current_stop_for_deferred(control: &RequestControlView, policy: DeferredStopPolicy) -> Option<ResponseStop> {
-    let stop = current_stop(control);
-    match (policy, stop) {
-        (DeferredStopPolicy::ParentOrSession, Some(ResponseStop::DeadlineExceeded)) => None,
-        (_, stop) => stop,
     }
 }
 

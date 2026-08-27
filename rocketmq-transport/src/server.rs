@@ -583,6 +583,8 @@ pub struct TransportListener {
     proxy_protocol: ProxyProtocolConfig,
     #[cfg(test)]
     write_preflight_barrier: Option<crate::write_strategy::WritePreflightBarrier>,
+    #[cfg(test)]
+    test_request_deadline: Option<Duration>,
 }
 
 impl TransportListener {
@@ -613,6 +615,8 @@ impl TransportListener {
             proxy_protocol: ProxyProtocolConfig::default(),
             #[cfg(test)]
             write_preflight_barrier: None,
+            #[cfg(test)]
+            test_request_deadline: None,
         }
     }
 
@@ -665,6 +669,12 @@ impl TransportListener {
         barrier: crate::write_strategy::WritePreflightBarrier,
     ) -> Self {
         self.write_preflight_barrier = Some(barrier);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_request_deadline(mut self, deadline: Duration) -> Self {
+        self.test_request_deadline = Some(deadline);
         self
     }
 
@@ -789,6 +799,8 @@ impl TransportListener {
             let proxy_protocol = self.proxy_protocol.clone();
             #[cfg(test)]
             let write_preflight_barrier = self.write_preflight_barrier.clone();
+            #[cfg(test)]
+            let test_request_deadline = self.test_request_deadline;
             let spawn_group = session_group.clone();
             if spawn_group
                 .spawn_service("rocketmq.transport.session", async move {
@@ -852,6 +864,8 @@ impl TransportListener {
                         principal,
                         peer_is_tls,
                         session_io_policy,
+                        #[cfg(test)]
+                        test_request_deadline,
                         route,
                     )
                     .await;
@@ -939,6 +953,8 @@ async fn run_framed_session_with_request_sequence<H>(
         request_sequence,
         #[cfg(test)]
         request_identity_exhausted,
+        #[cfg(test)]
+        None,
         Arc::new(CompatibilityFrameRoute { handler }),
     )
     .await;
@@ -958,6 +974,7 @@ async fn run_authorized_framed_session<R>(
     principal: Option<Principal>,
     peer_is_tls: bool,
     io_policy: SessionIoPolicy,
+    #[cfg(test)] test_request_deadline: Option<Duration>,
     route: Arc<R>,
 ) where
     R: AuthorizedFrameRoute,
@@ -978,6 +995,8 @@ async fn run_authorized_framed_session<R>(
         AtomicU64::new(1),
         #[cfg(test)]
         None,
+        #[cfg(test)]
+        test_request_deadline,
         route,
     )
     .await;
@@ -999,6 +1018,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     io_policy: SessionIoPolicy,
     request_sequence: AtomicU64,
     #[cfg(test)] mut request_identity_exhausted: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(test)] test_request_deadline: Option<Duration>,
     route: Arc<R>,
 ) where
     R: AuthorizedFrameRoute,
@@ -1130,10 +1150,14 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
         let partial_frame_permit = decoded.partial_frame_permit;
         let class = AdmissionClass::for_request_code(original_request_identity.original_code());
         let bytes = decoded.retained_frame_bytes;
+        #[cfg(test)]
+        let request_deadline = test_request_deadline.map(crate::deadline::RequestDeadline::after);
+        #[cfg(not(test))]
+        let request_deadline = None;
         let context = RequestContext::network_with_security_profile(
             PeerInfo::new(remote_addr, peer_is_tls),
             principal.clone(),
-            None,
+            request_deadline,
             dispatch.security_profile(),
         );
         let request_session = session

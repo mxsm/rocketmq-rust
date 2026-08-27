@@ -255,7 +255,7 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
 }
 
 #[tokio::test(start_paused = true)]
-async fn expired_resume_uses_the_canonical_deadline_plan_without_polling_the_handler() {
+async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_response() {
     let mut harness = DispatchHarness::new("dispatch-v2-deferred-resume-deadline").await;
     let admission = DeferredAdmission::try_configure(
         harness.admission_controller.as_ref(),
@@ -273,7 +273,7 @@ async fn expired_resume_uses_the_canonical_deadline_plan_without_polling_the_han
         Vec::new(),
     ));
     let command = request(false);
-    let (session, original) = harness.request_session(&command);
+    let (session, _original) = harness.request_session(&command);
     dispatcher
         .dispatch(
             &harness.authorized,
@@ -299,7 +299,7 @@ async fn expired_resume_uses_the_canonical_deadline_plan_without_polling_the_han
     let handler_called = Arc::new(AtomicBool::new(false));
     tokio::time::advance(Duration::from_secs(5)).await;
     let called = Arc::clone(&handler_called);
-    let receipt = claimed
+    let error = claimed
         .resume(DeferredResumeRetainedSize::default(), move |_, _| {
             called.store(true, Ordering::SeqCst);
             async move {
@@ -308,16 +308,15 @@ async fn expired_resume_uses_the_canonical_deadline_plan_without_polling_the_han
             }
         })
         .await
-        .expect("deadline plan must bypass only the expired request deadline");
-    assert_eq!(receipt.request_id(), original.request_id());
+        .expect_err("owner deadline cancels instead of synthesizing a response");
+    assert_eq!(error.kind(), crate::dispatch::DeferredResumeErrorKind::Cancelled);
+    assert_eq!(
+        error.prior_terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
+    );
     assert!(!handler_called.load(Ordering::SeqCst));
     assert_eq!(admission.snapshot().waiting_count(), 0);
-    let response = harness.receive().await;
-    assert_eq!(response.opaque(), original.original_opaque());
-    assert_eq!(
-        rocketmq_protocol::code::response_code::ResponseCode::from(response.code()),
-        rocketmq_protocol::code::response_code::ResponseCode::SystemError
-    );
+    harness.assert_no_response().await;
     drop(dispatcher);
     drop(registry);
     harness.shutdown().await;

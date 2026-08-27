@@ -49,7 +49,11 @@ use crate::writer_runtime::writer_lanes;
 use crate::writer_runtime::WriterQueueConfig;
 
 fn identity(owner: u64, opaque: i32, one_way: bool) -> OriginalRequestIdentity {
-    let mut command = RemotingCommand::create_remoting_command(39).set_opaque(opaque);
+    identity_with_code(owner, opaque, one_way, 39)
+}
+
+fn identity_with_code(owner: u64, opaque: i32, one_way: bool, code: i32) -> OriginalRequestIdentity {
+    let mut command = RemotingCommand::create_remoting_command(code).set_opaque(opaque);
     if one_way {
         command.mark_oneway_rpc_ref();
     }
@@ -179,7 +183,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
 async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     let (harness, control) = ControlHarness::new("deferred-cancel-drop", 73);
     let original = identity(73, 19, false);
-    let (telemetry, events) = TransportTelemetry::with_lifecycle_event_capture();
+    let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
     let (sink, _receiver) = ResponseSink::local();
     let explicit = DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
         .into_responder(original);
@@ -193,12 +197,17 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     explicit.claim().expect("resume claim transition");
     explicit.cancel().expect("open responder cancels");
     assert_eq!(explicit_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+    assert_eq!(explicit_state.terminal_reason(), Some(DeferredTerminalReason::Explicit));
 
     let abandoned = DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
         .into_responder(original);
     let abandoned_state = Arc::clone(&abandoned.state);
     drop(abandoned);
     assert_eq!(abandoned_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+    assert_eq!(
+        abandoned_state.terminal_reason(),
+        Some(DeferredTerminalReason::Abandoned)
+    );
 
     let already_closed =
         DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
@@ -211,9 +220,44 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     drop(sending);
     drop(send_claim);
     assert_eq!(
-        events.lock().as_slice(),
-        [("deferred_response", "explicit"), ("deferred_response", "abandoned")]
+        terminals.lock().as_slice(),
+        [
+            ("other", "explicit"),
+            ("other", "abandoned"),
+            ("other", "session_closed"),
+        ]
     );
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
+    let (harness, control) = ControlHarness::new("deferred-receiver-drop", 80);
+    let original = identity_with_code(
+        80,
+        25,
+        false,
+        rocketmq_protocol::code::request_code::RequestCode::PullMessage.to_i32(),
+    );
+    let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
+    let (sink, _receiver) = ResponseSink::local();
+    let responder = DeferredResponseSeed::new(sink, telemetry, harness.session_id(), control).into_responder(original);
+    let state = Arc::clone(&responder.state);
+
+    responder
+        .cancel_with_reason(DeferredCancellationReason::ReceiverDropped)
+        .expect("caller-owned receiver drop closes the response");
+
+    assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Closed));
+    assert_eq!(state.terminal_reason(), Some(DeferredTerminalReason::ReceiverDropped));
+    let duplicate = state.cancel().expect_err("the terminal winner is immutable");
+    let error = DeferredResponseError::from_state(duplicate);
+    assert_eq!(error.prior_terminal_state(), Some(ResponseTerminalState::Closed));
+    assert_eq!(
+        error.prior_terminal_reason(),
+        Some(DeferredTerminalReason::ReceiverDropped)
+    );
+    assert_eq!(terminals.lock().as_slice(), [("pull_message", "receiver_dropped")]);
     harness.shutdown().await;
 }
 

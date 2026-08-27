@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::alloc::Layout;
 use std::error::Error;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Barrier;
 use std::time::Duration;
 
@@ -28,6 +30,7 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionLimits;
 use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
+use crate::dispatch::ResponseState;
 use crate::request_ordering::RequestOrdering;
 use crate::session_executor::SessionExecutor;
 
@@ -48,9 +51,11 @@ fn retained(resume_bytes: usize) -> DeferredRetainedSize {
 
 #[test]
 fn retained_size_charges_exact_layout_and_each_declared_part() {
-    if size_of::<usize>() == 8 {
-        assert_eq!(response_state_allocation_bytes(), 24);
-    }
+    let header = Layout::array::<AtomicUsize>(2).expect("Arc header layout");
+    let (allocation, _) = header
+        .extend(Layout::new::<ResponseState>())
+        .expect("Arc response-state layout");
+    assert_eq!(response_state_allocation_bytes(), allocation.pad_to_align().size());
     let fixed = size_of::<DeferredResponder>() + response_state_allocation_bytes() + size_of::<DeferredWaitPermit>();
     let empty = DeferredRetainedSize::try_from_parts(DeferredRetainedSizeParts::new(0)).expect("fixed retained size");
     assert_eq!(empty.bytes(), fixed);

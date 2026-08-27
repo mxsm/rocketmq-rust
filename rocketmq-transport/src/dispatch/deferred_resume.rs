@@ -35,13 +35,21 @@ use super::DeferredResumeError;
 use super::DeferredResumeErrorKind;
 use super::DeferredResumeRetainedSize;
 use super::DeferredWakeReason;
-use super::RequestControlView;
 use super::ResponsePlan;
 use super::ResponseReceipt;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionError;
 use crate::admission::FullPolicy;
 use crate::request_ordering::RequestOrdering;
+
+mod stop;
+
+use stop::finish_claimed_stop;
+use stop::finish_lifecycle;
+use stop::finish_parts_stop;
+use stop::resume_error_kind_for_reason;
+pub(crate) use stop::ResumeStop;
+use stop::ResumeStopView;
 
 type ResumeResult = Result<ResponseReceipt, DeferredResumeError>;
 type WorkFuture = Pin<Box<dyn Future<Output = ResumeResult> + Send + 'static>>;
@@ -58,32 +66,16 @@ where
 {
     let id = claimed.deferred_id();
     let request_id = claimed.request_id();
-    if let Some(stop @ (ResumeStop::ParentCancelled | ResumeStop::SessionClosed)) = current_stop(claimed.control()) {
+    let stop_view = ResumeStopView::new(claimed.control().clone(), claimed.expiry());
+    if let Some(stop) = stop_view.current_before_resume() {
+        let result = finish_claimed_stop(claimed, stop, None);
         drop(handler);
-        let ClaimExecutionParts {
-            resume,
-            responder,
-            mut permit,
-            marker,
-            ..
-        } = claimed.into_execution_parts();
-        if let Some(permit) = permit.take() {
-            permit.release();
-        }
-        drop(resume);
-        return finish_lifecycle(id, request_id, responder, marker, stop);
+        return result;
     }
     let Some(context) = claimed.resume_context() else {
+        let result = finish_claimed_stop(claimed, ResumeStop::ProcessorUnavailable, None);
         drop(handler);
-        drop(claimed);
-        return Err(DeferredResumeError::new(
-            DeferredResumeErrorKind::ExecutorClosing,
-            id,
-            request_id,
-            None,
-            None,
-            None,
-        ));
+        return result;
     };
     let execution_bytes =
         match execution_retained_bytes::<R, F, Fut>(claimed.retained_bytes(), handler_retained.dynamic_bytes()) {
@@ -102,15 +94,18 @@ where
             }
         };
     let parts = claimed.into_execution_parts();
+    let stop_view = ResumeStopView::from_execution_parts(&parts);
     let completion = ResumeCompletion::new(id, request_id);
     let work = ResumeWorkImpl {
         parts: Some(parts),
         handler: Some(handler),
+        stop_view: stop_view.clone(),
     };
     let job = DeferredResumeJob::new(
         execution_bytes,
         context.class,
         context.ordering,
+        stop_view,
         Box::new(work),
         Arc::clone(&completion),
     );
@@ -260,6 +255,7 @@ pub(crate) struct DeferredResumeJob {
     retained_bytes: usize,
     class: AdmissionClass,
     ordering: RequestOrdering,
+    stop_view: ResumeStopView,
     work: Option<Box<dyn DeferredResumeWork>>,
     completion: Arc<ResumeCompletion>,
     active: bool,
@@ -272,6 +268,7 @@ impl DeferredResumeJob {
         retained_bytes: usize,
         class: AdmissionClass,
         ordering: RequestOrdering,
+        stop_view: ResumeStopView,
         work: Box<dyn DeferredResumeWork>,
         completion: Arc<ResumeCompletion>,
     ) -> Self {
@@ -279,6 +276,7 @@ impl DeferredResumeJob {
             retained_bytes,
             class,
             ordering,
+            stop_view,
             work: Some(work),
             completion,
             active: true,
@@ -306,6 +304,22 @@ impl DeferredResumeJob {
         }
     }
 
+    pub(crate) fn current_before_resume(&self) -> Option<ResumeStop> {
+        self.stop_view.current_before_resume()
+    }
+
+    pub(crate) fn wait_before_resume(&self) -> impl Future<Output = ResumeStop> + Send + 'static {
+        let stop_view = self.stop_view.clone();
+        async move { stop_view.wait_before_resume().await }
+    }
+
+    pub(crate) fn finish_stopped(mut self, stop: ResumeStop) {
+        let work = self.work.take().expect("a stopped resume job owns one work item");
+        let result = work.finish_stopped(stop, None);
+        self.completion.finish(result);
+        self.active = false;
+    }
+
     pub(crate) async fn execute(mut self, _operation: OperationContext) {
         let work = self.work.take().expect("an accepted resume job owns one work item");
         let result = work.execute().await;
@@ -320,54 +334,53 @@ impl DeferredResumeJob {
         self.active = false;
     }
 
-    fn finish_without_execution(mut self, error: DeferredResumeError) {
-        drop(self.work.take());
-        self.completion.finish(Err(error));
+    fn finish_executor_closing(mut self, source: rocketmq_runtime::RuntimeError) {
+        let stop = self
+            .stop_view
+            .current_before_resume()
+            .unwrap_or(ResumeStop::ServiceStopping);
+        let work = self.work.take().expect("a closing resume job owns one work item");
+        let result = work.finish_stopped(stop, Some(Box::new(source)));
+        self.completion.finish(result);
         self.active = false;
-    }
-
-    fn finish_executor_closing(self, source: rocketmq_runtime::RuntimeError) {
-        let kind = match self.work.as_ref().and_then(|work| work.current_stop()) {
-            Some(ResumeStop::ParentCancelled) => DeferredResumeErrorKind::Cancelled,
-            Some(ResumeStop::SessionClosed) => DeferredResumeErrorKind::SessionClosed,
-            Some(ResumeStop::DeadlineExpired) | None => DeferredResumeErrorKind::ExecutorClosing,
-        };
-        let id = self.completion.id;
-        let request_id = self.completion.request_id;
-        self.finish_without_execution(DeferredResumeError::new(
-            kind,
-            id,
-            request_id,
-            None,
-            None,
-            Some(Box::new(source)),
-        ));
     }
 }
 
 impl Drop for DeferredResumeJob {
     fn drop(&mut self) {
         if self.active {
-            drop(self.work.take());
-            self.completion.finish(Err(DeferredResumeError::new(
-                DeferredResumeErrorKind::TaskTerminated,
-                self.completion.id,
-                self.completion.request_id,
-                None,
-                None,
-                None,
-            )));
+            let stop = self
+                .stop_view
+                .current_before_resume()
+                .unwrap_or(ResumeStop::ServiceStopping);
+            let result = self.work.take().map_or_else(
+                || {
+                    Err(DeferredResumeError::new(
+                        DeferredResumeErrorKind::TaskTerminated,
+                        self.completion.id,
+                        self.completion.request_id,
+                        None,
+                        None,
+                        None,
+                    ))
+                },
+                |work| work.finish_stopped(stop, None),
+            );
+            self.completion.finish(result);
             self.active = false;
         }
     }
 }
 
 trait DeferredResumeWork: Send + 'static {
-    fn current_stop(&self) -> Option<ResumeStop>;
-
     fn release_wait_permit(&mut self);
     fn execute(self: Box<Self>) -> WorkFuture;
     fn reject(self: Box<Self>, error: AdmissionError) -> WorkFuture;
+    fn finish_stopped(
+        self: Box<Self>,
+        stop: ResumeStop,
+        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ) -> ResumeResult;
 }
 
 struct ResumeWorkImpl<R, F>
@@ -377,6 +390,7 @@ where
 {
     parts: Option<ClaimExecutionParts<R>>,
     handler: Option<F>,
+    stop_view: ResumeStopView,
 }
 
 impl<R, F> Drop for ResumeWorkImpl<R, F>
@@ -396,12 +410,6 @@ where
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
     Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
 {
-    fn current_stop(&self) -> Option<ResumeStop> {
-        self.parts
-            .as_ref()
-            .and_then(|parts| current_stop(parts.responder.control()))
-    }
-
     fn release_wait_permit(&mut self) {
         if let Some(parts) = self.parts.as_mut() {
             if let Some(permit) = parts.permit.take() {
@@ -414,20 +422,33 @@ where
         Box::pin(async move {
             let parts = self.parts.take().expect("resume work owns claimed parts");
             let handler = self.handler.take().expect("resume work owns its handler");
-            execute_work(parts, handler).await
+            execute_work(parts, handler, self.stop_view.clone()).await
         })
     }
 
     fn reject(mut self: Box<Self>, error: AdmissionError) -> WorkFuture {
         Box::pin(async move {
             let parts = self.parts.take().expect("resume work owns claimed parts");
-            drop(self.handler.take());
-            reject_work(parts, error).await
+            let handler = self.handler.take();
+            let result = reject_work(parts, error, self.stop_view.clone()).await;
+            drop(handler);
+            result
         })
+    }
+
+    fn finish_stopped(
+        mut self: Box<Self>,
+        stop: ResumeStop,
+        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ) -> ResumeResult {
+        let parts = self.parts.take().expect("stopped resume work owns claimed parts");
+        let result = finish_parts_stop(parts, stop, source);
+        drop(self.handler.take());
+        result
     }
 }
 
-async fn execute_work<R, F, Fut>(parts: ClaimExecutionParts<R>, handler: F) -> ResumeResult
+async fn execute_work<R, F, Fut>(parts: ClaimExecutionParts<R>, handler: F, stop_view: ResumeStopView) -> ResumeResult
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
@@ -442,81 +463,80 @@ where
         marker,
         ..
     } = parts;
-    let control = responder.control().clone();
-    match current_stop(&control) {
-        Some(ResumeStop::ParentCancelled) => {
-            drop(handler);
-            drop(resume);
-            return finish_lifecycle(id, request_id, responder, marker, ResumeStop::ParentCancelled);
-        }
-        Some(ResumeStop::SessionClosed) => {
-            drop(handler);
-            drop(resume);
-            return finish_lifecycle(id, request_id, responder, marker, ResumeStop::SessionClosed);
-        }
-        Some(ResumeStop::DeadlineExpired) => {
-            drop(handler);
-            drop(resume);
-            let result = map_response(id, request_id, responder.respond_deadline().await);
-            drop(marker);
-            return result;
-        }
-        None => {}
+    let mut responder = Some(responder);
+    let mut marker = Some(marker);
+    if let Some(stop) = stop_view.current_before_resume() {
+        let result = finish_lifecycle(
+            id,
+            request_id,
+            responder.take().expect("pre-resume responder"),
+            marker.take().expect("pre-resume marker"),
+            stop,
+            None,
+        );
+        drop(handler);
+        drop(resume);
+        return result;
     }
     enum HandlerOutcome<T> {
         Completed(RocketMQResult<T>),
-        Stopped(ResumeStop),
+        Stopped(ResumeResult),
     }
     let outcome = {
         let handler_future = handler(resume, reason);
         tokio::pin!(handler_future);
-        match control.deadline() {
-            Some(deadline) => {
-                tokio::select! {
-                    biased;
-                    () = control.parent_or_session_cancelled() => {
-                        HandlerOutcome::Stopped(current_stop(&control).unwrap_or(ResumeStop::ParentCancelled))
-                    }
-                    result = deadline.timeout(&mut handler_future) => match result {
-                        Ok(result) => HandlerOutcome::Completed(result),
-                        Err(_) => HandlerOutcome::Stopped(ResumeStop::DeadlineExpired),
-                    },
+        tokio::select! {
+            biased;
+            stop = stop_view.wait_before_write() => HandlerOutcome::Stopped(finish_lifecycle(
+                id,
+                request_id,
+                responder.take().expect("stopped handler responder"),
+                marker.take().expect("stopped handler marker"),
+                stop,
+                None,
+            )),
+            result = &mut handler_future => {
+                match stop_view.current_before_write() {
+                    Some(stop) => HandlerOutcome::Stopped(finish_lifecycle(
+                        id,
+                        request_id,
+                        responder.take().expect("post-handler responder"),
+                        marker.take().expect("post-handler marker"),
+                        stop,
+                        None,
+                    )),
+                    None => HandlerOutcome::Completed(result),
                 }
-            }
-            None => {
-                tokio::select! {
-                    biased;
-                    () = control.parent_or_session_cancelled() => {
-                        HandlerOutcome::Stopped(current_stop(&control).unwrap_or(ResumeStop::ParentCancelled))
-                    }
-                    result = &mut handler_future => HandlerOutcome::Completed(result),
-                }
-            }
+            },
         }
     };
     let result = match outcome {
-        HandlerOutcome::Stopped(ResumeStop::ParentCancelled) => {
-            finish_lifecycle(id, request_id, responder, marker, ResumeStop::ParentCancelled)
-        }
-        HandlerOutcome::Stopped(ResumeStop::SessionClosed) => {
-            finish_lifecycle(id, request_id, responder, marker, ResumeStop::SessionClosed)
-        }
-        HandlerOutcome::Stopped(ResumeStop::DeadlineExpired) => {
-            let result = map_response(id, request_id, responder.respond_deadline().await);
-            drop(marker);
-            result
-        }
+        HandlerOutcome::Stopped(result) => result,
         HandlerOutcome::Completed(Ok(plan)) => {
-            let result = map_response(id, request_id, responder.respond(plan).await);
-            drop(marker);
+            if let Some(stop) = stop_view.current_before_write() {
+                return finish_lifecycle(
+                    id,
+                    request_id,
+                    responder.take().expect("pre-write responder"),
+                    marker.take().expect("pre-write marker"),
+                    stop,
+                    None,
+                );
+            }
+            let result = map_response(
+                id,
+                request_id,
+                responder.take().expect("response responder").respond(plan).await,
+            );
+            drop(marker.take());
             result
         }
         HandlerOutcome::Completed(Err(error)) => {
             let plan = match crate::error_response::response_plan_from_error(&error) {
                 Ok(plan) => plan,
                 Err(source) => {
-                    drop(responder);
-                    drop(marker);
+                    drop(responder.take());
+                    drop(marker.take());
                     return Err(DeferredResumeError::new(
                         DeferredResumeErrorKind::ResponsePlan,
                         id,
@@ -527,15 +547,29 @@ where
                     ));
                 }
             };
-            let result = map_response(id, request_id, responder.respond(plan).await);
-            drop(marker);
+            if let Some(stop) = stop_view.current_before_write() {
+                return finish_lifecycle(
+                    id,
+                    request_id,
+                    responder.take().expect("error pre-write responder"),
+                    marker.take().expect("error pre-write marker"),
+                    stop,
+                    None,
+                );
+            }
+            let result = map_response(
+                id,
+                request_id,
+                responder.take().expect("error response responder").respond(plan).await,
+            );
+            drop(marker.take());
             result
         }
     };
     result
 }
 
-async fn reject_work<R>(parts: ClaimExecutionParts<R>, error: AdmissionError) -> ResumeResult
+async fn reject_work<R>(parts: ClaimExecutionParts<R>, error: AdmissionError, stop_view: ResumeStopView) -> ResumeResult
 where
     R: Send + 'static,
 {
@@ -547,21 +581,12 @@ where
         marker,
         ..
     } = parts;
-    drop(resume);
-    match current_stop(responder.control()) {
-        Some(ResumeStop::ParentCancelled) => {
-            return finish_lifecycle(id, request_id, responder, marker, ResumeStop::ParentCancelled);
-        }
-        Some(ResumeStop::SessionClosed) => {
-            return finish_lifecycle(id, request_id, responder, marker, ResumeStop::SessionClosed);
-        }
-        Some(ResumeStop::DeadlineExpired) => {
-            let result = map_response(id, request_id, responder.respond_deadline().await);
-            drop(marker);
-            return result;
-        }
-        None => {}
+    if let Some(stop) = stop_view.current_before_write() {
+        let result = finish_lifecycle(id, request_id, responder, marker, stop, None);
+        drop(resume);
+        return result;
     }
+    drop(resume);
     if error.policy() == FullPolicy::Reject {
         let plan = match ResponsePlan::command(admission_response(responder.original_opaque(), &error)) {
             Ok(plan) => plan,
@@ -578,68 +603,22 @@ where
                 ));
             }
         };
+        if let Some(stop) = stop_view.current_before_write() {
+            return finish_lifecycle(id, request_id, responder, marker, stop, None);
+        }
         let result = map_response(id, request_id, responder.respond(plan).await);
         drop(marker);
         result
     } else {
-        drop(responder);
-        drop(marker);
-        Err(DeferredResumeError::new(
-            DeferredResumeErrorKind::Admission,
+        finish_lifecycle(
             id,
             request_id,
-            None,
-            None,
+            responder,
+            marker,
+            ResumeStop::ProcessorUnavailable,
             Some(Box::new(error)),
-        ))
+        )
     }
-}
-
-#[derive(Clone, Copy)]
-enum ResumeStop {
-    ParentCancelled,
-    SessionClosed,
-    DeadlineExpired,
-}
-
-fn current_stop(control: &RequestControlView) -> Option<ResumeStop> {
-    if control.parent_is_cancelled() {
-        Some(ResumeStop::ParentCancelled)
-    } else if control.session_is_closed() {
-        Some(ResumeStop::SessionClosed)
-    } else if control
-        .deadline()
-        .is_some_and(crate::deadline::RequestDeadline::is_expired)
-    {
-        Some(ResumeStop::DeadlineExpired)
-    } else {
-        None
-    }
-}
-
-fn finish_lifecycle<R>(
-    id: super::DeferredId,
-    request_id: super::RequestId,
-    responder: super::DeferredResponder,
-    marker: Arc<super::deferred_registry::ClaimMarker<R>>,
-    stop: ResumeStop,
-) -> ResumeResult
-where
-    R: Send + 'static,
-{
-    let kind = match stop {
-        ResumeStop::ParentCancelled => {
-            drop(responder.cancel());
-            DeferredResumeErrorKind::Cancelled
-        }
-        ResumeStop::SessionClosed => {
-            drop(responder.close());
-            DeferredResumeErrorKind::SessionClosed
-        }
-        ResumeStop::DeadlineExpired => DeferredResumeErrorKind::Response,
-    };
-    drop(marker);
-    Err(DeferredResumeError::new(kind, id, request_id, None, None, None))
 }
 
 fn map_response(
@@ -648,7 +627,7 @@ fn map_response(
     result: Result<ResponseReceipt, DeferredResponseError>,
 ) -> ResumeResult {
     result.map_err(|source| {
-        let kind = match source.kind() {
+        let fallback_kind = match source.kind() {
             DeferredResponseErrorKind::Cancelled => DeferredResumeErrorKind::Cancelled,
             DeferredResponseErrorKind::SessionClosed => DeferredResumeErrorKind::SessionClosed,
             DeferredResponseErrorKind::AlreadyCompleted
@@ -659,11 +638,15 @@ fn map_response(
             | DeferredResponseErrorKind::Encode
             | DeferredResponseErrorKind::Transport => DeferredResumeErrorKind::Response,
         };
-        DeferredResumeError::new(
+        let kind = source
+            .prior_terminal_reason()
+            .map_or(fallback_kind, resume_error_kind_for_reason);
+        DeferredResumeError::new_with_reason(
             kind,
             id,
             request_id,
             source.prior_terminal_state(),
+            source.prior_terminal_reason(),
             source.write_progress(),
             Some(Box::new(source)),
         )
@@ -739,19 +722,28 @@ mod tests {
     use super::DeferredResumeWork;
     use super::ResumeCompletion;
     use super::ResumeJobCell;
+    use super::ResumeStopView;
     use super::WorkFuture;
     use crate::admission::AdmissionClass;
     use crate::admission::AdmissionController;
     use crate::admission::AdmissionLimits;
     use crate::admission::AdmissionScope;
     use crate::admission::ResourceLimit;
+    use crate::deadline::RequestDeadline;
     use crate::dispatch::DeferredId;
     use crate::dispatch::DeferredResumeError;
     use crate::dispatch::DeferredResumeErrorKind;
+    use crate::dispatch::DeferredTerminalReason;
+    use crate::dispatch::RequestControlView;
     use crate::dispatch::RequestId;
+    use crate::dispatch::RequestMeta;
     use crate::request_ordering::RequestOrdering;
     use crate::request_ordering::RequestOrderingKey;
     use crate::session_executor::SessionExecutor;
+    use crate::session_view::EmbeddedSessionRecord;
+
+    #[path = "stop.rs"]
+    mod stop;
 
     #[repr(align(128))]
     struct HighAlignHandler([u8; 33]);
@@ -765,6 +757,7 @@ mod tests {
     {
         _parts: Option<ClaimExecutionParts<R>>,
         _handler: Option<F>,
+        _stop_view: ResumeStopView,
     }
 
     fn arc_allocation<T>() -> usize {
@@ -781,10 +774,6 @@ mod tests {
     }
 
     impl DeferredResumeWork for ProbeWork {
-        fn current_stop(&self) -> Option<super::ResumeStop> {
-            None
-        }
-
         fn release_wait_permit(&mut self) {
             self.wait_released.store(true, Ordering::Release);
         }
@@ -807,6 +796,22 @@ mod tests {
                 self.entered.notify_one();
                 Err(test_resume_error(DeferredResumeErrorKind::Admission))
             })
+        }
+
+        fn finish_stopped(
+            self: Box<Self>,
+            stop: super::ResumeStop,
+            _source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+        ) -> Result<crate::dispatch::ResponseReceipt, DeferredResumeError> {
+            Err(DeferredResumeError::new_with_reason(
+                DeferredResumeErrorKind::ExecutorClosing,
+                DeferredId::for_test(9814),
+                RequestId::real(9814, 1).expect("test request id"),
+                None,
+                Some(stop.terminal_reason()),
+                None,
+                None,
+            ))
         }
     }
 
@@ -832,6 +837,21 @@ mod tests {
         Arc<Notify>,
         Arc<AtomicUsize>,
     ) {
+        probe_job_with_stop(retained_bytes, ordering, release, ResumeStopView::never())
+    }
+
+    fn probe_job_with_stop(
+        retained_bytes: usize,
+        ordering: RequestOrdering,
+        release: Option<Arc<Notify>>,
+        stop_view: ResumeStopView,
+    ) -> (
+        DeferredResumeJob,
+        Arc<ResumeCompletion>,
+        Arc<AtomicBool>,
+        Arc<Notify>,
+        Arc<AtomicUsize>,
+    ) {
         let completion = ResumeCompletion::new(
             DeferredId::for_test(9814),
             RequestId::real(9814, 1).expect("test request id"),
@@ -850,6 +870,7 @@ mod tests {
                 retained_bytes,
                 AdmissionClass::Data,
                 ordering,
+                stop_view,
                 Box::new(work),
                 Arc::clone(&completion),
             ),
@@ -946,7 +967,7 @@ mod tests {
         drop(cell);
         assert_eq!(
             completion.wait().await.expect_err("unexecuted job terminates").kind(),
-            DeferredResumeErrorKind::TaskTerminated
+            DeferredResumeErrorKind::ExecutorClosing
         );
         let snapshot = controller.snapshot();
         assert_eq!(snapshot.queued.current_count, 0);
@@ -985,7 +1006,7 @@ mod tests {
         drop(cell);
         assert_eq!(
             completion.wait().await.expect_err("unexecuted job terminates").kind(),
-            DeferredResumeErrorKind::TaskTerminated
+            DeferredResumeErrorKind::ExecutorClosing
         );
         let snapshot = controller.snapshot();
         assert_eq!(snapshot.queued.current_count, 0);
@@ -1053,7 +1074,7 @@ mod tests {
         drop(cell);
         assert_eq!(
             completion.wait().await.expect_err("unspawned job terminates").kind(),
-            DeferredResumeErrorKind::TaskTerminated
+            DeferredResumeErrorKind::ExecutorClosing
         );
         let snapshot = controller.snapshot();
         assert_eq!(snapshot.queued.current_count, 0);
@@ -1062,7 +1083,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_never_polled_is_recovered_as_task_terminated_without_leaking_admission() {
+    async fn accepted_never_polled_is_service_stopped_without_leaking_admission() {
         let (_runtime, _controller, executor) =
             executor_with_limits("deferred-resume-never-polled", AdmissionLimits::default());
         let (job, completion, wait_released, _entered, _executions) = probe_job(128, RequestOrdering::Concurrent, None);
@@ -1083,13 +1104,11 @@ mod tests {
         first_poll_entered.notified().await;
         let report = executor.drain_until(ShutdownDeadline::after(Duration::ZERO)).await;
         assert_eq!(report.aborted, 1);
+        let error = completion.wait().await.expect_err("aborted owner terminalizes the job");
+        assert_eq!(error.kind(), DeferredResumeErrorKind::ExecutorClosing);
         assert_eq!(
-            completion
-                .wait()
-                .await
-                .expect_err("aborted owner terminates job")
-                .kind(),
-            DeferredResumeErrorKind::TaskTerminated
+            error.prior_terminal_reason(),
+            Some(DeferredTerminalReason::ServiceStopping)
         );
     }
 
