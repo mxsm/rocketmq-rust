@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod authorized_dispatcher;
+mod deferred_admission;
 mod deferred_responder;
 #[allow(
     dead_code,
@@ -42,6 +43,16 @@ pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
 pub(crate) use authorized_dispatcher::AuthorizedDispatchV2Error;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
+pub use deferred_admission::DeferredAdmission;
+pub use deferred_admission::DeferredAdmissionAcquireError;
+pub use deferred_admission::DeferredAdmissionAcquireErrorKind;
+pub use deferred_admission::DeferredAdmissionConfigError;
+pub use deferred_admission::DeferredAdmissionConfigErrorKind;
+pub use deferred_admission::DeferredAdmissionSnapshot;
+pub use deferred_admission::DeferredRetainedSize;
+pub use deferred_admission::DeferredRetainedSizeParts;
+pub use deferred_admission::DeferredWaitLimits;
+pub use deferred_admission::DeferredWaitPermit;
 pub use deferred_responder::DeferredResponder;
 pub use deferred_responder::DeferredResponseError;
 pub use deferred_responder::DeferredResponseErrorKind;

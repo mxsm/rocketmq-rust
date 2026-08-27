@@ -122,6 +122,10 @@ impl AuthorizedDispatchBoundary {
         Arc::clone(&self.admission)
     }
 
+    pub(crate) fn deferred_admission(&self) -> Option<crate::dispatch::DeferredAdmission> {
+        self.admission.deferred_admission()
+    }
+
     /// Returns the security profile enforced by this shared boundary.
     #[must_use]
     pub(crate) fn security_profile(&self) -> SecurityBootstrapProfile {
@@ -185,6 +189,15 @@ where
     #[must_use]
     pub fn boundary(&self) -> Arc<AuthorizedDispatchBoundary> {
         Arc::clone(&self.boundary)
+    }
+
+    /// Returns this V2 dispatcher's configured deferred-wait owner.
+    ///
+    /// `None` is a fail-closed signal: deferred registration must not proceed
+    /// until the admission controller was explicitly configured.
+    #[must_use]
+    pub fn deferred_admission(&self) -> Option<crate::dispatch::DeferredAdmission> {
+        self.boundary.deferred_admission()
     }
 
     pub(crate) fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {

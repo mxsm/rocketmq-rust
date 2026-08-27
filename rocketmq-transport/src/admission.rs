@@ -18,6 +18,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::dispatch::DeferredAdmission;
+use crate::dispatch::DeferredAdmissionConfigError;
+use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::EmbeddedCaller;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_runtime::BudgetCapacity;
@@ -560,6 +563,8 @@ impl Drop for AdmissionPermit {
 pub struct AdmissionController {
     limits: AdmissionLimits,
     global: GlobalBudgets,
+    process_budget: ResourceBudget,
+    deferred_admission: Mutex<Option<DeferredAdmission>>,
     scoped: Mutex<HashMap<ScopeKey, ResourceBudget>>,
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
 }
@@ -633,9 +638,38 @@ impl AdmissionController {
         Ok(Self {
             limits,
             global: GlobalBudgets::new(limits, process_budget)?,
+            process_budget: process_budget.clone(),
+            deferred_admission: Mutex::new(None),
             scoped: Mutex::new(HashMap::new()),
             observer,
         })
+    }
+
+    pub(crate) fn configure_deferred_admission(
+        &self,
+        limits: DeferredWaitLimits,
+    ) -> Result<DeferredAdmission, DeferredAdmissionConfigError> {
+        let mut configured = self
+            .deferred_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(admission) = configured.as_ref() {
+            return if admission.limits() == limits {
+                Ok(admission.clone())
+            } else {
+                Err(DeferredAdmissionConfigError::conflict())
+            };
+        }
+        let admission = DeferredAdmission::try_new(&self.process_budget, limits)?;
+        *configured = Some(admission.clone());
+        Ok(admission)
+    }
+
+    pub(crate) fn deferred_admission(&self) -> Option<DeferredAdmission> {
+        self.deferred_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn try_acquire(
