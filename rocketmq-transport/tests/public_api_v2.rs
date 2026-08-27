@@ -31,6 +31,9 @@ use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
 use rocketmq_transport::api::v2::DeferredRegistration;
 use rocketmq_transport::api::v2::EmbeddedCaller;
+use rocketmq_transport::api::v2::EmbeddedDispatchError;
+use rocketmq_transport::api::v2::EmbeddedDispatchErrorKind;
+use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::v2::FileRegion;
 use rocketmq_transport::api::v2::FileRegionSequence;
 use rocketmq_transport::api::v2::HandlerOutcome;
@@ -129,6 +132,26 @@ fn assert_file_region_dto_contract(_: Option<FileRegion>, _: Option<FileRegionSe
 fn assert_error_contract<T: std::error::Error>() {}
 
 fn assert_debug_contract<T: std::fmt::Debug>() {}
+
+fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchOutcome>, error: Option<EmbeddedDispatchError>) {
+    if let Some(outcome) = outcome {
+        match outcome {
+            EmbeddedDispatchOutcome::Reply(plan) => assert_response_plan_contract(Some(plan)),
+            EmbeddedDispatchOutcome::OneWay { request_id } | EmbeddedDispatchOutcome::Deferred { request_id } => {
+                let _: V2RequestId = request_id;
+            }
+            EmbeddedDispatchOutcome::NoReply { request_id, reason } => {
+                let _: V2RequestId = request_id;
+                let _: ProtocolNoResponseReason = reason;
+            }
+            _ => {}
+        }
+    }
+    if let Some(error) = error {
+        let _: EmbeddedDispatchErrorKind = error.kind();
+        let _: &(dyn std::error::Error + 'static) = &error;
+    }
+}
 
 fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
     if let Some(plan) = plan {
@@ -337,6 +360,14 @@ fn v2_exposes_the_request_aggregate_and_ingress_view_without_legacy_reexports() 
 fn v2_exposes_only_response_plan_metadata_and_file_region_construction_dtos() {
     assert_response_plan_contract(None);
     assert_file_region_dto_contract(None, None);
+}
+
+#[test]
+fn v2_exposes_the_affine_embedded_outcome_and_redacted_error_facades() {
+    assert_debug_contract::<EmbeddedDispatchOutcome>();
+    assert_debug_contract::<EmbeddedDispatchErrorKind>();
+    assert_error_contract::<EmbeddedDispatchError>();
+    assert_embedded_dispatch_contract(None, None);
 }
 
 #[test]

@@ -167,6 +167,26 @@ impl TransportSecurity {
         self.authorize(command, peer, principal, resource, action)
     }
 
+    pub(crate) fn authorize_embedded_for_dispatch(
+        &self,
+        command: &RemotingCommand,
+        principal: &Principal,
+        resource: Resource,
+        action: Action,
+    ) -> Decision {
+        if self.ingress_policy.is_some() {
+            return match self.authorize_ingress(command, None) {
+                Ok(IngressDecision::AllowToContinue) => Decision::Allow,
+                Ok(IngressDecision::Deny) | Err(_) => Decision::deny(LAYERED_AUTHORIZATION_DENIED_REASON),
+            };
+        }
+        let Some(policy) = &self.policy else {
+            return Decision::deny("embedded request policy is unavailable");
+        };
+        let context = RequestContext::new(request_view(command, None), Some(principal), resource, action);
+        evaluate_request(policy.as_ref(), &context)
+    }
+
     pub fn sign(&self, command: &mut RemotingCommand, peer: Option<&PeerInfo>) -> Result<(), SigningError> {
         let Some(signer) = &self.signer else {
             return match self.profile {

@@ -378,12 +378,16 @@ impl EmbeddedSessionRecord {
     pub(crate) fn view(&self) -> SessionView {
         self.view.clone()
     }
+
+    pub(crate) fn close(&self) {
+        let _ = self.state_tx.send(ConnectionState::Closed);
+        let _ = self.closed_tx.send(true);
+    }
 }
 
 impl Drop for EmbeddedSessionRecord {
     fn drop(&mut self) {
-        let _ = self.state_tx.send(ConnectionState::Closed);
-        let _ = self.closed_tx.send(true);
+        self.close();
     }
 }
 

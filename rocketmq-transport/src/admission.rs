@@ -18,6 +18,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::dispatch::EmbeddedCaller;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetClass;
@@ -374,6 +375,8 @@ enum ScopeKey {
     Ip(AdmissionResource, IpAddr),
     Tenant(AdmissionResource, IpAddr, u64),
     Session(AdmissionResource, IpAddr, Option<u64>, u64),
+    EmbeddedCaller(AdmissionResource, EmbeddedCaller),
+    EmbeddedSession(AdmissionResource, EmbeddedCaller, u64),
 }
 
 /// RAII ownership of global and scoped admission capacity.
@@ -687,6 +690,70 @@ impl AdmissionController {
             observer: self.observer.clone(),
             session_id,
         })
+    }
+
+    pub(crate) fn prepare_embedded_scope(
+        &self,
+        caller: EmbeddedCaller,
+        session_id: u64,
+    ) -> Result<AdmissionScopeHandle, AdmissionError> {
+        Ok(AdmissionScopeHandle {
+            budgets: Arc::new(PreparedScopeBudgets {
+                connection: self.embedded_scoped_budget(AdmissionResource::Connection, caller, session_id)?,
+                handshake: self.embedded_scoped_budget(AdmissionResource::Handshake, caller, session_id)?,
+                partial_frame: self.embedded_scoped_budget(AdmissionResource::PartialFrame, caller, session_id)?,
+                inflight: self.embedded_scoped_budget(AdmissionResource::Inflight, caller, session_id)?,
+                queued: self.embedded_scoped_budget(AdmissionResource::Queued, caller, session_id)?,
+                processor: self.embedded_scoped_budget(AdmissionResource::Processor, caller, session_id)?,
+            }),
+            observer: self.observer.clone(),
+            session_id: Some(session_id),
+        })
+    }
+
+    fn embedded_scoped_budget(
+        &self,
+        resource: AdmissionResource,
+        caller: EmbeddedCaller,
+        session_id: u64,
+    ) -> Result<ResourceBudget, AdmissionError> {
+        let mut scoped = self.scoped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let global = self.global.get(resource);
+        let scoped_reserve = reserve_for(resource, self.limits.control_reserve);
+        let caller_key = ScopeKey::EmbeddedCaller(resource, caller);
+        let session_key = ScopeKey::EmbeddedSession(resource, caller, session_id);
+        let scope_keys = [caller_key, session_key];
+        let mut missing_scope_count = scope_keys.into_iter().filter(|key| !scoped.contains_key(key)).count();
+        if scoped.len().saturating_add(missing_scope_count) > self.limits.max_scope_keys {
+            scoped.retain(|_, budget| budget.snapshot().current_count > 0);
+            missing_scope_count = scope_keys.into_iter().filter(|key| !scoped.contains_key(key)).count();
+        }
+        if scoped.len().saturating_add(missing_scope_count) > self.limits.max_scope_keys {
+            return Err(AdmissionError {
+                resource,
+                policy: policy_for(resource),
+            });
+        }
+        let caller_budget = scoped_child(
+            &mut scoped,
+            self.limits.max_scope_keys,
+            caller_key,
+            &global,
+            format!("embedded-caller-{caller:?}"),
+            self.limits.per_ip,
+            scoped_reserve,
+            resource,
+        )?;
+        scoped_child(
+            &mut scoped,
+            self.limits.max_scope_keys,
+            session_key,
+            &caller_budget,
+            format!("embedded-session-{session_id}"),
+            self.limits.per_session,
+            scoped_reserve,
+            resource,
+        )
     }
 
     fn scoped_budget(

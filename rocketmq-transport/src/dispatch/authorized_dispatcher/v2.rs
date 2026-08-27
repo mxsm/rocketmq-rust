@@ -131,6 +131,8 @@ pub(crate) struct AuthorizedDispatcherCore<D> {
     rpc_hooks: HookRegistry,
     #[cfg(test)]
     reported_failures: std::sync::Mutex<Vec<&'static str>>,
+    #[cfg(test)]
+    reported_failure_notify: tokio::sync::Notify,
 }
 
 #[cfg(test)]
@@ -146,6 +148,14 @@ where
     )]
     pub(crate) fn new(processor: P, rpc_hooks: Vec<Arc<dyn RPCHook>>) -> Self {
         Self::from_dispatch_processor(ExplicitV2Processor::new(processor), rpc_hooks)
+    }
+
+    pub(super) fn clone_explicit_processor(&self) -> ExplicitV2Processor<P> {
+        self.processor.clone()
+    }
+
+    pub(super) const fn explicit_processor(&self) -> &ExplicitV2Processor<P> {
+        &self.processor
     }
 }
 
@@ -182,6 +192,8 @@ where
             rpc_hooks: HookRegistry::new(rpc_hooks),
             #[cfg(test)]
             reported_failures: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            reported_failure_notify: tokio::sync::Notify::new(),
         }
     }
 
@@ -541,12 +553,14 @@ where
         self.report_failure_category(error.category());
     }
 
-    fn report_failure_category(&self, category: &'static str) {
+    pub(super) fn report_failure_category(&self, category: &'static str) {
         #[cfg(test)]
         self.reported_failures
             .lock()
             .expect("V2 failure report lock")
             .push(category);
+        #[cfg(test)]
+        self.reported_failure_notify.notify_waiters();
         tracing::warn!(
             failure = category,
             "admitted V2 dispatch terminated without a response attempt"
@@ -554,8 +568,20 @@ where
     }
 
     #[cfg(test)]
-    fn reported_failure_categories(&self) -> Vec<&'static str> {
+    pub(super) fn reported_failure_categories(&self) -> Vec<&'static str> {
         self.reported_failures.lock().expect("V2 failure report lock").clone()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait_for_failure_report(&self) {
+        if self
+            .reported_failures
+            .lock()
+            .expect("V2 failure report lock")
+            .is_empty()
+        {
+            self.reported_failure_notify.notified().await;
+        }
     }
 }
 

@@ -22,6 +22,8 @@ use super::OriginalRequestIdentity;
 use super::RequestId;
 use super::ResponsePlan;
 
+mod oneway;
+
 /// The one terminal contract outcome returned by a V2 request handler.
 ///
 /// Each variant owns an affine capability or response payload. A handler must

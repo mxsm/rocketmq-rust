@@ -326,6 +326,11 @@ impl ResponsePlan {
         &self.body
     }
 
+    #[cfg(test)]
+    pub(crate) const fn test_head(&self) -> &RemotingCommand {
+        &self.head
+    }
+
     fn new(head: RemotingCommand, body: ResponseBody, body_len: usize, body_part_count: usize) -> Self {
         Self {
             head,

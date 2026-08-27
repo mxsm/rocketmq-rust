@@ -67,6 +67,7 @@ use crate::session_executor::SessionExecutor;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
+mod embedded_v2;
 mod v2;
 
 pub(crate) use v2::AuthorizedDispatchV2Error;
