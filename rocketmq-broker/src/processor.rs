@@ -85,6 +85,7 @@ pub(crate) mod query_message_processor;
 pub(crate) mod recall_message_processor;
 pub(crate) mod reply_message_processor;
 mod request_ordering;
+pub(crate) mod response_plan;
 pub(crate) mod send_message_processor;
 
 pub enum BrokerProcessorType<MS: BrokerStorePort, TS> {

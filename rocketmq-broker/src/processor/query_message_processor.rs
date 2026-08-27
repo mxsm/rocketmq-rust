@@ -38,11 +38,15 @@ use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::info;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
+use crate::processor::response_plan::BrokerResponseParts;
 
 pub(crate) struct QueryMessageStoreCapability<MS: BrokerReadStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
@@ -126,6 +130,41 @@ fn unsafe_index_query_remark(query_message_result: &QueryMessageResult) -> Optio
     })
 }
 
+struct QueryResponseParts {
+    head: RemotingCommand,
+    body: Option<bytes::Bytes>,
+}
+
+impl QueryResponseParts {
+    fn command(head: RemotingCommand) -> Self {
+        Self { head, body: None }
+    }
+
+    fn bytes(head: RemotingCommand, body: bytes::Bytes) -> Self {
+        Self { head, body: Some(body) }
+    }
+
+    fn into_legacy_command(mut self) -> RemotingCommand {
+        if let Some(body) = self.body {
+            self.head.set_body_mut_ref(body);
+        }
+        self.head
+    }
+
+    fn into_legacy_command_with_opaque(mut self, opaque: i32) -> RemotingCommand {
+        self.head.set_opaque_mut(opaque);
+        self.into_legacy_command()
+    }
+
+    fn into_handler_outcome(self) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let parts = match self.body {
+            Some(body) => BrokerResponseParts::bytes(self.head, body)?,
+            None => BrokerResponseParts::command(self.head)?,
+        };
+        parts.into_handler_outcome()
+    }
+}
+
 impl<S> RequestProcessor for QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone,
@@ -156,6 +195,15 @@ where
                 Ok(Some(response))
             }
         }
+    }
+}
+
+impl<S> RequestProcessorV2 for QueryMessageProcessor<S>
+where
+    S: QueryMessageStore + Clone + 'static,
+{
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_command(request.command_mut()).await
     }
 }
 
@@ -219,19 +267,55 @@ where
         }
     }
 
+    async fn process_v2_command(
+        &mut self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let request_code = RequestCode::from(request.code());
+        info!("QueryMessageProcessor V2 received request code: {:?}", request_code);
+        let parts = match request_code {
+            RequestCode::QueryMessage => self.query_message_parts(request).await?,
+            RequestCode::ViewMessageById => self.view_message_by_id_parts(request).await?,
+            _ => {
+                warn!(
+                    "QueryMessageProcessor V2 received unknown request code: {:?}",
+                    request_code
+                );
+                QueryResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.command_factory,
+                    request.code(),
+                    format!("QueryMessageProcessor request code {} not supported", request.code()),
+                    0,
+                ))
+            }
+        };
+        parts.into_handler_outcome()
+    }
+
     async fn query_message(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let opaque = request.opaque();
+        Ok(Some(
+            self.query_message_parts(request)
+                .await?
+                .into_legacy_command_with_opaque(opaque),
+        ))
+    }
+
+    async fn query_message_parts(
+        &mut self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
         let mut response = self
             .command_factory
             .create_success_response_command_with_header(QueryMessageResponseHeader::default());
         let mut request_header = request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
-        response.set_opaque_mut(request.opaque());
         let Some(ext_fields) = request.ext_fields() else {
-            return Ok(Some(
+            return Ok(QueryResponseParts::command(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("ext fields is none"),
@@ -246,7 +330,7 @@ where
                 MessageConst::INDEX_KEY_TYPE | MessageConst::INDEX_UNIQUE_TYPE | MessageConst::INDEX_TAG_TYPE
             )
         }) {
-            return Ok(Some(
+            return Ok(QueryResponseParts::command(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("indexType must be K, U, or T"),
@@ -273,14 +357,14 @@ where
         let query_message_result = match query_message_result {
             Ok(Some(query_message_result)) => query_message_result,
             Ok(None) => {
-                return Ok(Some(
+                return Ok(QueryResponseParts::command(
                     response
                         .set_code(ResponseCode::QueryNotFound)
                         .set_remark("query message failed, no result returned"),
                 ));
             }
             Err(_) => {
-                return Ok(Some(
+                return Ok(QueryResponseParts::command(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark("message store is none"),
@@ -288,21 +372,26 @@ where
             }
         };
 
-        let response_header = response.read_custom_header_mut::<QueryMessageResponseHeader>().unwrap();
+        let Some(response_header) = response.read_custom_header_mut::<QueryMessageResponseHeader>() else {
+            return Err(rocketmq_error::RocketMQError::invariant_violated(
+                "query response lost its required response header",
+            ));
+        };
         response_header.index_last_update_phyoffset = query_message_result.index_last_update_phyoffset;
         response_header.index_last_update_timestamp = query_message_result.index_last_update_timestamp;
 
         if query_message_result.buffer_total_size > 0 {
-            let message_data = query_message_result.get_message_data();
-            if let Some(body) = message_data {
-                response.set_body_mut_ref(body);
+            if let Some(body) = query_message_result.get_message_data() {
+                return Ok(QueryResponseParts::bytes(response, body));
             }
-            return Ok(Some(response));
+            return Ok(QueryResponseParts::command(response));
         }
         if let Some(remark) = unsafe_index_query_remark(&query_message_result) {
-            return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(remark)));
+            return Ok(QueryResponseParts::command(
+                response.set_code(ResponseCode::SystemError).set_remark(remark),
+            ));
         }
-        Ok(Some(
+        Ok(QueryResponseParts::command(
             response
                 .set_code(ResponseCode::QueryNotFound)
                 .set_remark("can not find message, maybe time range not correct"),
@@ -315,13 +404,22 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = self.command_factory.create_success_response_command();
+        Ok(Some(
+            self.view_message_by_id_parts(request).await?.into_legacy_command(),
+        ))
+    }
+
+    async fn view_message_by_id_parts(
+        &mut self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
+        let response = self.command_factory.create_success_response_command();
         let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
 
         let select_mapped_buffer_result = match self.query_store.select_message_by_offset(request_header.offset) {
             Ok(result) => result,
             Err(_) => {
-                return Ok(Some(
+                return Ok(QueryResponseParts::command(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark("message store is none"),
@@ -329,24 +427,64 @@ where
             }
         };
         if let Some(result) = select_mapped_buffer_result {
-            let message_data = result.get_bytes();
-            if let Some(body) = message_data {
-                response.set_body_mut_ref(body)
-            }
-            return Ok(Some(response));
+            return Ok(QueryResponseParts::bytes(response, result.into_owner_bytes()));
         }
-        Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
-            "can not find message by offset: {}",
-            request_header.offset
-        ))))
+        Ok(QueryResponseParts::command(
+            response
+                .set_code(ResponseCode::SystemError)
+                .set_remark(format!("can not find message by offset: {}", request_header.offset)),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use bytes::Bytes;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
     use rocketmq_store::QueryMessageResult;
     use rocketmq_store::StorePorts;
+    use rocketmq_transport::api::v1::ServerConfig;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::test_support::Connection;
+    use tokio::net::TcpStream;
+    use tokio::sync::oneshot;
+
+    #[derive(Clone, Default)]
+    struct TestQueryStore {
+        query_body: Option<Bytes>,
+        view_body: Option<Bytes>,
+    }
+
+    impl QueryMessageStore for TestQueryStore {
+        async fn query_message(
+            &self,
+            _request: &QueryMessageRequest,
+        ) -> Result<Option<QueryMessageResult>, StoreError> {
+            let Some(body) = self.query_body.clone() else {
+                return Ok(None);
+            };
+            let selected = SelectMappedBufferResult::from_bytes(0, body).expect("test body length is representable");
+            let mut result = QueryMessageResult {
+                index_last_update_phyoffset: 17,
+                index_last_update_timestamp: 23,
+                ..QueryMessageResult::default()
+            };
+            result.add_message(selected);
+            Ok(Some(result))
+        }
+
+        fn select_message_by_offset(&self, _offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError> {
+            Ok(self
+                .view_body
+                .clone()
+                .and_then(|body| SelectMappedBufferResult::from_bytes(0, body)))
+        }
+    }
 
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {
@@ -435,5 +573,185 @@ mod tests {
             panic!("closed provider must reject select");
         };
         assert_eq!(StoreErrorKind::NotStarted, select_error.kind());
+    }
+
+    #[tokio::test]
+    async fn v2_query_success_returns_one_owned_bytes_plan() {
+        let body = Bytes::from_static(b"query-body");
+        let mut processor = QueryMessageProcessor::new(
+            64,
+            TestQueryStore {
+                query_body: Some(body.clone()),
+                view_body: None,
+            },
+        );
+        let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None));
+        request.make_custom_header_to_net();
+
+        let outcome = processor
+            .process_v2_command(&mut request)
+            .await
+            .expect("V2 query response plan");
+        let HandlerOutcome::Reply(plan) = outcome else {
+            panic!("query success must return an inline reply");
+        };
+
+        assert_eq!(ResponseCode::Success as i32, plan.response_code());
+        assert_eq!(ResponseBodyKind::Bytes, plan.body_kind());
+        assert_eq!(body.len(), plan.body_len());
+        assert_eq!(1, plan.body_part_count());
+    }
+
+    #[tokio::test]
+    async fn v2_query_real_dispatcher_rebinds_the_original_opaque() {
+        const ORIGINAL_OPAQUE: i32 = 8_701;
+
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-query-v2-dispatch-test"))
+            .expect("query V2 test runtime owner");
+        let server_context = owner.root_context().component("query-v2-server");
+        let runner_context = owner.root_context().component("query-v2-runner");
+        let processor = QueryMessageProcessor::new(
+            64,
+            TestQueryStore {
+                query_body: Some(Bytes::from_static(b"query-dispatch-body")),
+                view_body: None,
+            },
+        );
+        let server = TransportServerV2::new(
+            Arc::new(ServerConfig {
+                bind_address: "127.0.0.1".to_owned(),
+                listen_port: 0,
+                ..ServerConfig::default()
+            }),
+            server_context,
+            processor,
+        );
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        let (startup_sender, startup_receiver) = oneshot::channel();
+        let (result_sender, result_receiver) = oneshot::channel();
+        runner_context
+            .spawn_service("query-v2-server", async move {
+                let result = server
+                    .try_run_with_shutdown_report_and_startup(
+                        async move {
+                            let _ = shutdown_receiver.await;
+                        },
+                        startup_sender,
+                    )
+                    .await;
+                let _ = result_sender.send(result);
+            })
+            .expect("spawn query V2 server");
+
+        let address = startup_receiver
+            .await
+            .expect("query V2 startup channel")
+            .expect("query V2 server startup");
+        let mut client = Connection::new(TcpStream::connect(address).await.expect("connect query V2 client"));
+        let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None))
+            .set_opaque(ORIGINAL_OPAQUE);
+        request.make_custom_header_to_net();
+        client.send_command(request).await.expect("send query V2 request");
+
+        let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+            .await
+            .expect("query V2 response deadline")
+            .expect("query V2 connection remains open")
+            .expect("query V2 response frame");
+        assert_eq!(ORIGINAL_OPAQUE, response.opaque());
+        assert_eq!(ResponseCode::Success as i32, response.code());
+        assert_eq!(Some(&Bytes::from_static(b"query-dispatch-body")), response.body());
+
+        client.shutdown().await.expect("shutdown query V2 client");
+        let _ = shutdown_sender.send(());
+        let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
+            .await
+            .expect("query V2 shutdown deadline")
+            .expect("query V2 shutdown result channel")
+            .expect("query V2 shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let task_report = owner.shutdown_tasks().await;
+        assert!(task_report.is_healthy(), "{}", task_report.to_json());
+        let final_report = owner.shutdown_background();
+        assert!(final_report.is_healthy(), "{}", final_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn v2_view_consumes_the_selected_owner_into_one_bytes_plan() {
+        let body = Bytes::from_static(b"view-body");
+        let mut processor = QueryMessageProcessor::new(
+            64,
+            TestQueryStore {
+                query_body: None,
+                view_body: Some(body.clone()),
+            },
+        );
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ViewMessageById,
+            ViewMessageRequestHeader { topic: None, offset: 7 },
+        );
+        request.make_custom_header_to_net();
+
+        let outcome = processor
+            .process_v2_command(&mut request)
+            .await
+            .expect("V2 view response plan");
+        let HandlerOutcome::Reply(plan) = outcome else {
+            panic!("view success must return an inline reply");
+        };
+
+        assert_eq!(ResponseCode::Success as i32, plan.response_code());
+        assert_eq!(ResponseBodyKind::Bytes, plan.body_kind());
+        assert_eq!(body.len(), plan.body_len());
+    }
+
+    #[tokio::test]
+    async fn v2_query_not_found_returns_an_empty_reply_plan() {
+        let mut processor = QueryMessageProcessor::new(64, TestQueryStore::default());
+        let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None));
+        request.make_custom_header_to_net();
+
+        let outcome = processor
+            .process_v2_command(&mut request)
+            .await
+            .expect("V2 not-found response plan");
+        let HandlerOutcome::Reply(plan) = outcome else {
+            panic!("query not found must return an inline reply");
+        };
+
+        assert_eq!(ResponseCode::QueryNotFound as i32, plan.response_code());
+        assert_eq!(ResponseBodyKind::Empty, plan.body_kind());
+        assert_eq!(0, plan.body_len());
+    }
+
+    #[tokio::test]
+    async fn legacy_query_projection_keeps_opaque_and_body_behavior() {
+        let body = Bytes::from_static(b"legacy-query-body");
+        let mut processor = QueryMessageProcessor::new(
+            64,
+            TestQueryStore {
+                query_body: Some(body.clone()),
+                view_body: None,
+            },
+        );
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None)).set_opaque(-73);
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .query_message_parts(&mut request)
+            .await
+            .expect("legacy query response parts")
+            .into_legacy_command_with_opaque(request.opaque());
+
+        assert_eq!(-73, response.opaque());
+        assert_eq!(Some(body.as_ref()), response.body().map(Bytes::as_ref));
+    }
+
+    #[test]
+    fn query_processor_is_a_send_v2_leaf() {
+        fn assert_v2_processor<T: RequestProcessorV2 + Clone + Send + Sync + 'static>() {}
+
+        assert_v2_processor::<QueryMessageProcessor<TestQueryStore>>();
     }
 }

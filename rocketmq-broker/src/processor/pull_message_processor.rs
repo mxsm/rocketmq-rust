@@ -68,7 +68,9 @@ use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
+use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
+use crate::processor::response_plan::LegacyResponseDelivery;
 
 fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
     max_msg_bytes
@@ -781,7 +783,7 @@ where
     /// # Returns
     ///
     /// * `Ok(Some(response))` - Response to send to client
-    /// * `Ok(None)` - Request was suspended (cold data flow control or long polling)
+    /// * `Ok(None)` - Request was suspended or the V1 compatibility boundary wrote the response
     #[allow(unused_assignments)]
     async fn process_request_inner(
         &self,
@@ -1070,13 +1072,13 @@ where
             }
         };
         if let Some(get_message_result) = get_message_result {
-            return Ok(self
+            let result = self
                 .pull_message_result_handler
                 .handle(
                     get_message_result,
                     request,
                     request_header,
-                    channel,
+                    channel.clone(),
                     ctx,
                     subscription_data,
                     &subscription_group_config.unwrap(),
@@ -1086,7 +1088,13 @@ where
                     topic_queue_mapping_context,
                     begin_time_mills,
                 )
-                .await);
+                .await?;
+            return match result {
+                PullMessageResult::Reply(parts) => {
+                    Ok(legacy_pull_delivery_response(parts.deliver_legacy(&channel).await))
+                }
+                PullMessageResult::Suspended => Ok(None),
+            };
         }
         Ok(None)
     }
@@ -1216,6 +1224,19 @@ fn consumer_compensation_for_request_source(request_source: RequestSource) -> (C
     }
 }
 
+fn legacy_pull_delivery_response(
+    delivery: rocketmq_error::RocketMQResult<LegacyResponseDelivery>,
+) -> Option<RemotingCommand> {
+    match delivery {
+        Ok(LegacyResponseDelivery::Command(response)) => Some(response),
+        Ok(LegacyResponseDelivery::Written) => None,
+        Err(error) => {
+            warn!(%error, "Failed to send Pull response");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1227,6 +1248,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::config::broker_config::BrokerConfig;
+    use bytes::Bytes;
     use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
@@ -1248,14 +1270,18 @@ mod tests {
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::MAX_PULL_MSG_SIZE;
+    use rocketmq_transport::api::v1::Channel;
     use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::test_support::TestChannelBuilder;
 
     use super::consumer_compensation_for_request_source;
     use super::is_broadcast;
+    use super::legacy_pull_delivery_response;
     use super::rewrite_response_for_static_topic;
     use super::spawn_wakeup_pull_task;
     use super::static_topic_rewrite_error_response;
     use super::store_read_max_msg_bytes;
+    use super::LegacyResponseDelivery;
     use super::PullMessageProcessor;
     use super::StaticTopicMappingField;
     use super::StaticTopicMappingItem;
@@ -1265,6 +1291,7 @@ mod tests {
     use crate::client::consumer_group_info::ConsumerGroupInfo;
     use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
     use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
+    use crate::processor::response_plan::BrokerResponseParts;
 
     fn temp_test_root(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -1336,6 +1363,74 @@ mod tests {
             None,
         ));
         PullMessageProcessor::new(handler, context)
+    }
+
+    #[test]
+    fn legacy_pull_delivery_keeps_written_and_failed_responses_consumed() {
+        let command = RemotingCommand::create_response_command_with_code(ResponseCode::Success);
+        let returned = legacy_pull_delivery_response(Ok(LegacyResponseDelivery::Command(command)));
+        assert!(returned.is_some());
+
+        assert!(legacy_pull_delivery_response(Ok(LegacyResponseDelivery::Written)).is_none());
+
+        let write_error = rocketmq_error::RocketMQError::internal(
+            "pull-response-test",
+            std::io::Error::other("injected compatibility write failure"),
+        );
+        assert!(legacy_pull_delivery_response(Err(write_error)).is_none());
+    }
+
+    struct CountingBodyOwner {
+        drops: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AsRef<[u8]> for CountingBodyOwner {
+        fn as_ref(&self) -> &[u8] {
+            b"segmented-pull-body"
+        }
+    }
+
+    impl Drop for CountingBodyOwner {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    async fn closed_pull_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind Pull compatibility listener");
+        let address = listener.local_addr().expect("Pull compatibility address");
+        let stream = std::net::TcpStream::connect(address).expect("connect Pull compatibility stream");
+        let accepted = listener.accept().expect("accept Pull compatibility stream").0;
+        stream.set_nonblocking(true).expect("set Pull stream nonblocking");
+
+        let mut connection = Connection::new(tokio::net::TcpStream::from_std(stream).expect("Tokio Pull stream"));
+        connection.shutdown().await.expect("shut down Pull test connection");
+        drop(accepted);
+
+        TestChannelBuilder::new(connection, crate::test_task_group("pull-legacy-closed-channel"))
+            .addresses(address, address)
+            .build()
+            .expect("build closed Pull test channel")
+    }
+
+    #[tokio::test]
+    async fn segmented_legacy_write_failure_remains_consumed_and_drops_body_once() {
+        let channel = closed_pull_test_channel().await;
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let body = Bytes::from_owner(CountingBodyOwner {
+            drops: Arc::clone(&drops),
+        });
+        let parts = BrokerResponseParts::segments(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+            vec![body],
+        )
+        .expect("segmented Pull response parts");
+        assert_eq!(0, drops.load(Ordering::SeqCst));
+
+        let returned = legacy_pull_delivery_response(parts.deliver_legacy(&channel).await);
+
+        assert!(returned.is_none(), "Pull compatibility keeps failed writes consumed");
+        assert_eq!(1, drops.load(Ordering::SeqCst));
     }
 
     fn request_with_subscription(topic: &str, group: &str, expression: &str, version: i64) -> PullMessageRequestHeader {

@@ -24,13 +24,23 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
+use crate::processor::response_plan::BrokerResponseParts;
+
+/// The explicit outcome of composing a Pull response.
+pub(crate) enum PullMessageResult {
+    /// An immediate response whose head and affine body are ready for delivery.
+    Reply(BrokerResponseParts),
+    /// The request was admitted to the existing long-poll owner.
+    Suspended,
+}
+
 /// Trait defining the behavior for handling the result of a pull message request.
 ///
 /// This trait is designed to be implemented by types that handle the result of a pull message
 /// request in a RocketMQ broker. It provides a method for processing the result of a message
 /// retrieval operation, along with various parameters related to the request and the broker's
 /// state.
-pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
+pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
     /// Handles the result of a pull message request.
     ///
     /// This method processes the result of a message retrieval operation (`get_message_result`),
@@ -53,8 +63,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
     /// - `begin_time_mills`: The timestamp (in milliseconds) when the request began processing.
     ///
     /// # Returns
-    /// An optional `RemotingCommand` representing the response to the pull message request.
-    /// If `None`, it indicates that no response should be sent back to the client.
+    /// An explicit immediate response or suspension result.
     #[allow(
         clippy::too_many_arguments,
         reason = "existing pull result protocol context is tracked by the lint debt registry"
@@ -73,7 +82,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
         response: RemotingCommand,
         mapping_context: TopicQueueMappingContext,
         begin_time_mills: u64,
-    ) -> Option<RemotingCommand>;
+    ) -> rocketmq_error::RocketMQResult<PullMessageResult>;
 
     /// Returns a mutable reference to `self` as a trait object of type `Any`.
     ///
