@@ -324,6 +324,32 @@ fn store_result(
     )?))
 }
 
+#[cfg(test)]
+pub(crate) fn pull_bytes_wire_fixture_parts(
+    response: RemotingCommand,
+    body: Bytes,
+) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+    let PullMessageResult::Reply(parts) = bytes_result(response, body)? else {
+        return Err(rocketmq_error::RocketMQError::invariant_violated(
+            "the Pull bytes builder unexpectedly suspended",
+        ));
+    };
+    Ok(parts)
+}
+
+#[cfg(test)]
+pub(crate) fn pull_store_wire_fixture_parts(
+    response: RemotingCommand,
+    result: GetMessageResult,
+) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+    let PullMessageResult::Reply(parts) = store_result(response, result)? else {
+        return Err(rocketmq_error::RocketMQError::invariant_violated(
+            "the Pull store-result builder unexpectedly suspended",
+        ));
+    };
+    Ok(parts)
+}
+
 impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
     /// Read message result and return (body bytes, last store timestamp)
     fn read_get_message_result(

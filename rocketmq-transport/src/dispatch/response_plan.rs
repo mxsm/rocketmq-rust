@@ -699,10 +699,20 @@ mod tests {
         let regions = FileRegionSequence::try_new(vec![region]).expect("validated region sequence");
 
         assert_eq!(Arc::strong_count(&lease), 2);
-        let plan = ResponsePlan::file_regions(response_head(), regions).expect("valid file-region response");
+        let mut plan = ResponsePlan::file_regions(response_head(), regions).expect("valid file-region response");
         assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
         assert_metadata(&plan, ResponseBodyKind::FileRegions, 11, 1);
         assert_eq!(Arc::strong_count(&lease), 2);
+        plan.with_body_free_hook_head(|head| {
+            assert!(head.body().is_none());
+            head.set_remark_mut("hook-observed");
+            Ok(())
+        })
+        .expect("body-free hook projection");
+        assert_eq!(plan.response_code(), 7);
+        assert_eq!(plan.body_len(), 11);
+        assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
         let debug = format!("{plan:?}");
         assert!(!debug.contains("FileRegion {"));
         assert!(!debug.contains("offset"));

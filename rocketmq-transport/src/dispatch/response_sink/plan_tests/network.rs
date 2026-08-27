@@ -27,6 +27,7 @@ async fn network_plan_prepares_and_writes_all_four_bodies_before_issuing_receipt
     )
     .await;
     let encodes = Arc::new(AtomicUsize::new(0));
+    let (file_plan, file_accesses, file_drops) = counting_file_plan(94, 903, b"file-body");
     let plans = [
         ResponsePlan::command(response_head(91, 900)).expect("empty response plan"),
         ResponsePlan::bytes(
@@ -41,15 +42,11 @@ async fn network_plan_prepares_and_writes_all_four_bodies_before_issuing_receipt
             vec![Bytes::from_static(b"segment-"), Bytes::from_static(b"body")],
         )
         .expect("segments response plan"),
-        {
-            let mut file = tempfile::tempfile().expect("temporary file");
-            file.write_all(b"file-body").expect("write file body");
-            let region = FileRegion::try_new(Arc::new(file), 0, 9).expect("file region");
-            ResponsePlan::file_regions(response_head(94, 903), FileRegionSequence::single(region))
-                .expect("file response plan")
-        },
+        file_plan,
     ];
     let expected_bodies: [&[u8]; 4] = [b"", b"bytes-body", b"segment-body", b"file-body"];
+    assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
+    assert_eq!(file_drops.load(Ordering::SeqCst), 0);
 
     for (index, (plan, expected_body)) in plans.into_iter().zip(expected_bodies).enumerate() {
         let owner = 801 + index as u64;
@@ -66,29 +63,30 @@ async fn network_plan_prepares_and_writes_all_four_bodies_before_issuing_receipt
         let received = harness.receive().await;
         assert_eq!(received.opaque(), 1_001 + index as i32);
         assert_eq!(received.body().map(Bytes::as_ref).unwrap_or_default(), expected_body);
+        if index == 3 {
+            assert!(file_accesses.load(Ordering::SeqCst) >= 2);
+            assert_eq!(file_drops.load(Ordering::SeqCst), 1);
+        }
     }
     assert_eq!(encodes.load(Ordering::SeqCst), 1);
+    assert_eq!(file_drops.load(Ordering::SeqCst), 1);
 
     harness.shutdown().await;
 }
 
 #[tokio::test]
 async fn network_plan_flush_failure_reports_exact_progress_and_never_issues_or_retries_a_receipt() {
-    let mut harness = NetworkHarness::new_with_flush_failure("network-plan-flush-failure").await;
+    let harness = NetworkHarness::new_with_flush_failure("network-plan-flush-failure").await;
+    let flushes = Arc::clone(&harness.flushes);
     let (control, _parent) = harness.control("network-plan-flush-failure-control", None);
     let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
     let duplicate = sink.clone();
+    let (plan, accesses, drops) = counting_file_plan(117, 1_117, b"written-before-flush-fails");
+    assert_eq!(accesses.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
 
     let error = sink
-        .send_plan(bind(
-            ResponsePlan::bytes(
-                response_head(117, 1_117),
-                Bytes::from_static(b"written-before-flush-fails"),
-            )
-            .expect("response plan"),
-            824,
-            1_117,
-        ))
+        .send_plan(bind(plan, 824, 1_117))
         .await
         .expect_err("flush failure must prevent a receipt");
     assert!(matches!(
@@ -112,20 +110,17 @@ async fn network_plan_flush_failure_reports_exact_progress_and_never_issues_or_r
             }
         })
     ));
-    let received = harness.receive().await;
+    let frames = harness.close_and_collect_frames().await;
+    assert_eq!(frames.len(), 1, "flush failure must write exactly one frame");
+    let received = &frames[0];
     assert_eq!(received.opaque(), 1_117);
     assert_eq!(
         received.body().map(Bytes::as_ref),
         Some(&b"written-before-flush-fails"[..])
     );
-    assert_eq!(harness.flushes.load(Ordering::SeqCst), 0);
-    let second = tokio::time::timeout(Duration::from_millis(25), harness.peer.receive_command()).await;
-    assert!(
-        !matches!(second, Ok(Some(Ok(_)))),
-        "terminal duplicate must not write a second frame"
-    );
-
-    harness.shutdown().await;
+    assert_eq!(flushes.load(Ordering::SeqCst), 0);
+    assert!(accesses.load(Ordering::SeqCst) >= 2);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -246,18 +241,7 @@ async fn network_plan_queue_rejection_is_not_started_and_drops_a_file_lease_once
         None,
     )
     .await;
-    let accesses = Arc::new(AtomicUsize::new(0));
-    let drops = Arc::new(AtomicUsize::new(0));
-    let mut file = tempfile::tempfile().expect("temporary file");
-    file.write_all(b"leased body").expect("write leased body");
-    let lease = Arc::new(CountingLease {
-        file,
-        accesses: Arc::clone(&accesses),
-        drops: Arc::clone(&drops),
-    });
-    let region = FileRegion::try_new(lease.clone(), 0, 11).expect("file region");
-    let plan = ResponsePlan::file_regions(response_head(99, 1_009), FileRegionSequence::single(region))
-        .expect("response plan");
+    let (plan, accesses, drops) = counting_file_plan(99, 1_009, b"leased body");
     let (control, _parent) = harness.control("network-plan-queue-reject-control", None);
     let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
     let duplicate = sink.clone();
@@ -281,9 +265,6 @@ async fn network_plan_queue_rejection_is_not_started_and_drops_a_file_lease_once
         })
     ));
     assert_eq!(accesses.load(Ordering::SeqCst), 1);
-    assert_eq!(Arc::strong_count(&lease), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
-    drop(lease);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 
     harness.shutdown().await;
@@ -492,7 +473,7 @@ async fn session_close_after_writer_claim_but_before_start_stays_closed_and_writ
     let checked = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
-    let mut harness = NetworkHarness::new(
+    let harness = NetworkHarness::new(
         "network-plan-claimed-close",
         FrameLimits::default(),
         AdmissionLimits::default(),
@@ -508,13 +489,11 @@ async fn session_close_after_writer_claim_but_before_start_stays_closed_and_writ
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let send = tokio::spawn(sink.send_plan(bind(
-        ResponsePlan::bytes(response_head(115, 1_115), Bytes::from_static(b"must-not-start")).expect("response plan"),
-        822,
-        1_115,
-    )));
+    let (plan, accesses, drops) = counting_file_plan(115, 1_115, b"must-not-start");
+    let send = tokio::spawn(sink.send_plan(bind(plan, 822, 1_115)));
     enqueued.notified().await;
     checked.notified().await;
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
     harness.session.abort();
     assert!(matches!(
         send.await.expect("plan send task"),
@@ -537,13 +516,13 @@ async fn session_close_after_writer_claim_but_before_start_stays_closed_and_writ
         "unexpected duplicate result: {duplicate_result:?}"
     );
     resume.notify_one();
-    let observed = tokio::time::timeout(Duration::from_millis(25), harness.peer.receive_command()).await;
+    let frames = harness.close_and_collect_frames().await;
     assert!(
-        !matches!(observed, Ok(Some(Ok(_)))),
-        "session close before writer start must not touch the socket"
+        frames.is_empty(),
+        "session close before writer start must not write a frame"
     );
-
-    harness.shutdown().await;
+    assert_eq!(accesses.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -619,7 +598,7 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
     let checked = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
-    let mut harness = NetworkHarness::new(
+    let harness = NetworkHarness::new(
         "network-plan-waiting-cancel",
         FrameLimits::default(),
         AdmissionLimits::default(),
@@ -644,12 +623,10 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let send = tokio::spawn(sink.send_plan(bind(
-        ResponsePlan::bytes(response_head(107, 1_107), Bytes::from_static(b"cancelled")).expect("response plan"),
-        815,
-        1_107,
-    )));
+    let (plan, accesses, drops) = counting_file_plan(107, 1_107, b"cancelled");
+    let send = tokio::spawn(sink.send_plan(bind(plan, 815, 1_107)));
     enqueued.notified().await;
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
     parent.cancel();
     assert!(matches!(
         send.await.expect("plan send task"),
@@ -667,19 +644,16 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
             state: ResponseTerminalState::Cancelled
         })
     ));
+    assert_eq!(accesses.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
 
     resume.notify_one();
     blocker.await.expect("blocker task should complete");
-    assert_eq!(harness.receive().await.opaque(), 1_106);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(25), harness.peer.receive_command())
-            .await
-            .is_err(),
-        "cancelled waiting response must not reach the socket"
-    );
     assert_eq!(harness.session.writer_snapshot().deadline_expired, 0);
-
-    harness.shutdown().await;
+    let frames = harness.close_and_collect_frames().await;
+    assert_eq!(frames.len(), 1, "parent cancellation must not retry the response");
+    assert_eq!(frames[0].opaque(), 1_106);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(start_paused = true)]

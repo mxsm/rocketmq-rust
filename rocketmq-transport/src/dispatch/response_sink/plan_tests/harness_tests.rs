@@ -309,6 +309,20 @@ impl NetworkHarness {
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
+
+    async fn close_and_collect_frames(mut self) -> Vec<RemotingCommand> {
+        self.peer.shutdown().await.expect("close peer write half");
+        self.runner.await.expect("connected session runner should drain");
+        drop(self.session);
+
+        let mut frames = Vec::new();
+        while let Some(frame) = self.peer.receive_command().await {
+            frames.push(frame.expect("drained response frame should decode"));
+        }
+        let report = self.runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        frames
+    }
 }
 
 impl FileRegionLease for CountingLease {
@@ -322,6 +336,23 @@ impl Drop for CountingLease {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);
     }
+}
+
+fn counting_file_plan(code: i32, opaque: i32, body: &[u8]) -> (ResponsePlan, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let accesses = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut file = tempfile::tempfile().expect("temporary counting lease file");
+    file.write_all(body).expect("write counting lease body");
+    let lease = Arc::new(CountingLease {
+        file,
+        accesses: Arc::clone(&accesses),
+        drops: Arc::clone(&drops),
+    });
+    let region = FileRegion::try_new(lease.clone(), 0, body.len() as u64).expect("counting file region");
+    let plan = ResponsePlan::file_regions(response_head(code, opaque), FileRegionSequence::single(region))
+        .expect("counting file response plan");
+    drop(lease);
+    (plan, accesses, drops)
 }
 
 #[path = "local.rs"]

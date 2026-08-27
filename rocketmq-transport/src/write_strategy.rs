@@ -1176,6 +1176,10 @@ fn advance_segments(
 }
 
 #[cfg(test)]
+#[path = "write_strategy/brk02_tests.rs"]
+mod brk02_tests;
+
+#[cfg(test)]
 mod file_frame_tests {
     use std::error::Error;
     use std::fmt;

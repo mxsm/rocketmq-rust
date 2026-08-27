@@ -156,12 +156,16 @@ impl QueryResponseParts {
         self.into_legacy_command()
     }
 
-    fn into_handler_outcome(self) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn into_broker_response_parts(self) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
         let parts = match self.body {
             Some(body) => BrokerResponseParts::bytes(self.head, body)?,
             None => BrokerResponseParts::command(self.head)?,
         };
-        parts.into_handler_outcome()
+        Ok(parts)
+    }
+
+    fn into_handler_outcome(self) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.into_broker_response_parts()?.into_handler_outcome()
     }
 }
 
@@ -435,6 +439,119 @@ where
                 .set_remark(format!("can not find message by offset: {}", request_header.offset)),
         ))
     }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum QueryWireFixtureKind {
+    Query,
+    View,
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct QueryWireFixtureStore {
+    query_body: Option<bytes::Bytes>,
+    view_body: Option<bytes::Bytes>,
+}
+
+#[cfg(test)]
+impl QueryMessageStore for QueryWireFixtureStore {
+    async fn query_message(&self, _request: &QueryMessageRequest) -> Result<Option<QueryMessageResult>, StoreError> {
+        let Some(body) = self.query_body.clone() else {
+            return Ok(None);
+        };
+        let Some(selected) = SelectMappedBufferResult::from_bytes(0, body) else {
+            return Ok(None);
+        };
+        let mut result = QueryMessageResult {
+            index_last_update_phyoffset: 17,
+            index_last_update_timestamp: 23,
+            ..QueryMessageResult::default()
+        };
+        result.add_message(selected);
+        Ok(Some(result))
+    }
+
+    fn select_message_by_offset(&self, _offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError> {
+        Ok(self
+            .view_body
+            .clone()
+            .and_then(|body| SelectMappedBufferResult::from_bytes(0, body)))
+    }
+}
+
+#[cfg(test)]
+async fn query_wire_fixture_response(
+    kind: QueryWireFixtureKind,
+    body: Option<&[u8]>,
+) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+
+    let body = body.map(bytes::Bytes::copy_from_slice);
+    let store = match kind {
+        QueryWireFixtureKind::Query => QueryWireFixtureStore {
+            query_body: body,
+            view_body: None,
+        },
+        QueryWireFixtureKind::View => QueryWireFixtureStore {
+            query_body: None,
+            view_body: body,
+        },
+    };
+    let factory = RemotingCommandFactory::new(RemotingCommandDefaults::default());
+    let mut processor = QueryMessageProcessor::new_with_factory(64, store, factory);
+    let mut request = match kind {
+        QueryWireFixtureKind::Query => factory.create_request_command(
+            RequestCode::QueryMessage,
+            QueryMessageRequestHeader {
+                topic: CheetahString::from_static_str("TopicA"),
+                key: CheetahString::from_static_str("KeyA"),
+                max_num: 32,
+                begin_timestamp: 0,
+                end_timestamp: i64::MAX,
+                index_type: None,
+                last_key: None,
+                topic_request_header: None,
+            },
+        ),
+        QueryWireFixtureKind::View => factory.create_request_command(
+            RequestCode::ViewMessageById,
+            ViewMessageRequestHeader {
+                topic: Some(CheetahString::from_static_str("TopicA")),
+                offset: 41,
+            },
+        ),
+    };
+    request.make_custom_header_to_net();
+    let response = match kind {
+        QueryWireFixtureKind::Query => processor.query_message_parts(&mut request).await?,
+        QueryWireFixtureKind::View => processor.view_message_by_id_parts(&mut request).await?,
+    };
+    Ok(response)
+}
+
+#[cfg(test)]
+pub(crate) async fn query_wire_fixture_legacy_command(
+    kind: QueryWireFixtureKind,
+    body: Option<&[u8]>,
+    opaque: i32,
+) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    let response = query_wire_fixture_response(kind, body).await?;
+    Ok(match kind {
+        QueryWireFixtureKind::Query => response.into_legacy_command_with_opaque(opaque),
+        QueryWireFixtureKind::View => response.into_legacy_command(),
+    })
+}
+
+#[cfg(test)]
+pub(crate) async fn query_wire_fixture_parts(
+    kind: QueryWireFixtureKind,
+    body: Option<&[u8]>,
+) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+    query_wire_fixture_response(kind, body)
+        .await?
+        .into_broker_response_parts()
 }
 
 #[cfg(test)]
