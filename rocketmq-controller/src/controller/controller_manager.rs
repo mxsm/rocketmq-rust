@@ -1937,9 +1937,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_leadership_watch_enables_scheduling_for_openraft_leader() {
-        let port = 9883;
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
         let config = ControllerConfig::default()
-            .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
             .with_storage_backend(crate::config::StorageBackendType::Memory);
@@ -1957,7 +1958,7 @@ mod tests {
             1,
             Node {
                 node_id: 1,
-                rpc_addr: format!("127.0.0.1:{port}"),
+                rpc_addr: raft_addr.to_string(),
             },
         );
         manager
@@ -2094,9 +2095,10 @@ mod tests {
 
     #[tokio::test]
     async fn inactive_slave_does_not_elect_but_inactive_master_does() {
-        let port = 9886;
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
         let config = ControllerConfig::default()
-            .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
             .with_storage_backend(crate::config::StorageBackendType::Memory)
@@ -2115,7 +2117,7 @@ mod tests {
             1,
             Node {
                 node_id: 1,
-                rpc_addr: format!("127.0.0.1:{port}"),
+                rpc_addr: raft_addr.to_string(),
             },
         );
         manager
@@ -2279,9 +2281,10 @@ mod tests {
 
     #[tokio::test]
     async fn processor_successful_manual_election_records_role_change_notification() {
-        let port = 9887;
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
         let config = ControllerConfig::default()
-            .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
             .with_storage_backend(crate::config::StorageBackendType::Memory)
@@ -2300,7 +2303,7 @@ mod tests {
             1,
             Node {
                 node_id: 1,
-                rpc_addr: format!("127.0.0.1:{port}"),
+                rpc_addr: raft_addr.to_string(),
             },
         );
         manager
