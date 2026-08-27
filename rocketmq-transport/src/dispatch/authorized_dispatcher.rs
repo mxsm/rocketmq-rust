@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -58,6 +59,7 @@ use crate::remoting::inner::RemotingGeneralHandler;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
+use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
@@ -67,8 +69,8 @@ use crate::telemetry::TransportTelemetry;
 
 mod v2;
 
-pub(crate) use v2::AuthorizedCommandDispatcherV2;
 pub(crate) use v2::AuthorizedDispatchV2Error;
+pub(crate) use v2::AuthorizedDispatcherCore;
 
 /// Result of submitting a command to the shared dispatch boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +127,18 @@ impl AuthorizedDispatchBoundary {
         self.security.profile()
     }
 
+    pub(crate) fn has_security_owner(&self, security: &Arc<TransportSecurity>) -> bool {
+        Arc::ptr_eq(&self.security, security)
+    }
+
+    pub(crate) fn security_owner(&self) -> Arc<TransportSecurity> {
+        Arc::clone(&self.security)
+    }
+
+    pub(crate) fn has_admission_owner(&self, admission: &Arc<AdmissionController>) -> bool {
+        Arc::ptr_eq(&self.admission, admission)
+    }
+
     pub(crate) fn session(
         self: &Arc<Self>,
         task_group: &TaskGroup,
@@ -135,6 +149,77 @@ impl AuthorizedDispatchBoundary {
             session_id: scope.session_id(),
             executor: SessionExecutor::try_new(task_group, scope)?,
         })
+    }
+}
+
+/// Public network dispatcher for the V2 request-processor contract.
+///
+/// The facade owns one security/admission boundary and one statically
+/// monomorphized V2 processor core. It does not construct legacy channel or
+/// pending-response capabilities.
+pub struct AuthorizedCommandDispatcherV2<P> {
+    boundary: Arc<AuthorizedDispatchBoundary>,
+    core: Arc<AuthorizedDispatcherCore<crate::dispatch::ExplicitV2Processor<P>>>,
+}
+
+impl<P> AuthorizedCommandDispatcherV2<P>
+where
+    P: RequestProcessorV2 + Clone + Sync + 'static,
+{
+    /// Creates a network-only V2 dispatcher.
+    #[must_use]
+    pub fn new(
+        request_processor: P,
+        rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        security: Arc<TransportSecurity>,
+        admission: Arc<AdmissionController>,
+    ) -> Self {
+        Self {
+            boundary: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
+            core: Arc::new(AuthorizedDispatcherCore::new(request_processor, rpc_hooks)),
+        }
+    }
+
+    /// Returns the exact security and admission boundary used by this dispatcher.
+    #[must_use]
+    pub fn boundary(&self) -> Arc<AuthorizedDispatchBoundary> {
+        Arc::clone(&self.boundary)
+    }
+
+    pub(crate) fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
+        self.core.register_rpc_hook(hook);
+    }
+
+    pub(crate) async fn dispatch_network(
+        &self,
+        authorized_session: &AuthorizedDispatchSession,
+        session: crate::server::SessionHandle,
+        context: RequestContext,
+        command: RemotingCommand,
+        received_at: Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
+        self.core
+            .dispatch_network(
+                authorized_session,
+                (),
+                session,
+                context,
+                command,
+                received_at,
+                retained_bytes,
+                partial_frame_permit,
+            )
+            .await
+    }
+
+    pub(crate) fn complete_network_response(&self, response: RemotingCommand) {
+        self.core.complete_network_response(&(), response);
+    }
+
+    pub(crate) fn close_network_session(&self) {
+        self.core.close_network_session(&());
     }
 }
 
@@ -247,6 +332,7 @@ impl AuthorizedDispatchSession {
 pub struct AuthorizedCommandDispatcher<RP> {
     boundary: Arc<AuthorizedDispatchBoundary>,
     handler: Arc<RemotingGeneralHandler<RP>>,
+    network: Arc<AuthorizedDispatcherCore<crate::dispatch::LegacyProcessorAdapter<RP>>>,
 }
 
 impl<RP> AuthorizedCommandDispatcher<RP>
@@ -279,14 +365,24 @@ where
                 error.to_string(),
             )
         })?;
+        let boundary = Arc::new(AuthorizedDispatchBoundary::new(security, admission));
+        let network_processor = request_processor.clone();
+        let handler = Arc::new(RemotingGeneralHandler::new_with_telemetry(
+            request_processor,
+            rpc_hooks.clone(),
+            response_table.clone(),
+            telemetry.clone(),
+        ));
+        let adapter = crate::dispatch::LegacyProcessorAdapter::new(
+            network_processor,
+            std::any::type_name::<RP>(),
+            telemetry,
+            response_table,
+        );
         Ok(Self {
-            boundary: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
-            handler: Arc::new(RemotingGeneralHandler::new_with_telemetry(
-                request_processor,
-                rpc_hooks,
-                response_table,
-                telemetry,
-            )),
+            boundary,
+            handler,
+            network: Arc::new(AuthorizedDispatcherCore::new_legacy(adapter, rpc_hooks)),
         })
     }
 
@@ -296,23 +392,49 @@ where
         Arc::clone(&self.boundary)
     }
 
-    pub(crate) fn response_table(&self) -> PendingRequestTable {
-        self.handler.response_table.clone()
-    }
-
     pub(crate) fn request_ordering(&self, command: &RemotingCommand) -> RequestOrdering {
         self.handler.request_processor.request_ordering(command)
     }
 
-    pub(crate) async fn process_network(
+    pub(crate) fn open_network_session(&self) -> crate::dispatch::LegacyNetworkSession {
+        self.network.open_network_session()
+    }
+
+    pub(crate) fn complete_network_response(
         &self,
-        context: &crate::runtime::connection_handler_context::ConnectionHandlerContext,
-        original_request_identity: Option<OriginalRequestIdentity>,
-        command: RemotingCommand,
+        session: &crate::dispatch::LegacyNetworkSession,
+        response: RemotingCommand,
     ) {
-        self.handler
-            .process_message_received(context, original_request_identity, command)
-            .await;
+        self.network.complete_network_response(session, response);
+    }
+
+    pub(crate) fn close_network_session(&self, session: &crate::dispatch::LegacyNetworkSession) {
+        self.network.close_network_session(session);
+    }
+
+    pub(crate) async fn dispatch_network(
+        &self,
+        authorized_session: &AuthorizedDispatchSession,
+        network_session: crate::dispatch::LegacyNetworkSession,
+        session: crate::server::SessionHandle,
+        context: RequestContext,
+        command: RemotingCommand,
+        received_at: Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
+        self.network
+            .dispatch_network(
+                authorized_session,
+                network_session,
+                session,
+                context,
+                command,
+                received_at,
+                retained_bytes,
+                partial_frame_permit,
+            )
+            .await
     }
 
     /// Dispatches one embedded command without creating a listener, socket

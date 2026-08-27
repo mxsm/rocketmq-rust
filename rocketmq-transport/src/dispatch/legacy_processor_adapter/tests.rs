@@ -146,7 +146,8 @@ async fn network_bridge_uses_one_real_session_and_the_adapter_stable_response_ta
     let harness = NetworkHarness::new().await;
     let response = harness.plan_response(&harness.first);
     let stable_table = PendingRequestTable::new();
-    let bridge = LegacyRequestBridge::from_network_session(&harness.first, &response, stable_table.clone())
+    let endpoint = LegacyNetworkSession::for_test(stable_table.clone());
+    let bridge = LegacyRequestBridge::from_network_session(&harness.first, &response, &endpoint)
         .expect("canonical network bridge");
 
     assert_eq!(
@@ -193,7 +194,8 @@ async fn network_bridge_uses_one_real_session_and_the_adapter_stable_response_ta
 async fn network_bridge_request_apis_use_the_canonical_writer_and_stable_endpoint_table() {
     let mut harness = NetworkHarness::new().await;
     let response = harness.plan_response(&harness.first);
-    let bridge = LegacyRequestBridge::from_network_session(&harness.first, &response, PendingRequestTable::new())
+    let endpoint = LegacyNetworkSession::for_test(PendingRequestTable::new());
+    let bridge = LegacyRequestBridge::from_network_session(&harness.first, &response, &endpoint)
         .expect("canonical network bridge");
 
     let send_channel = bridge.channel.clone();
@@ -280,13 +282,76 @@ async fn network_bridge_request_apis_use_the_canonical_writer_and_stable_endpoin
 }
 
 #[tokio::test]
+async fn dropping_borrowed_bridge_keeps_session_owner_live_until_canonical_close() {
+    let mut harness = NetworkHarness::new().await;
+    let response = harness.plan_response(&harness.first);
+    let endpoint = LegacyNetworkSession::for_test(PendingRequestTable::new());
+    let first_bridge = LegacyRequestBridge::from_network_session(&harness.first, &response, &endpoint)
+        .expect("first borrowed network bridge");
+    drop(first_bridge);
+
+    let second_bridge = LegacyRequestBridge::from_network_session(&harness.first, &response, &endpoint)
+        .expect("later bridge keeps the same session owner");
+    let send_channel = second_bridge.channel.clone();
+    let endpoint_for_completion = endpoint.clone();
+    let peer = &mut harness.first_peer;
+    let (returned, ()) = tokio::join!(
+        send_channel.send_wait_response(RemotingCommand::create_remoting_command(604).set_opaque(8_604), 1_000),
+        async move {
+            let outbound = peer
+                .receive_command()
+                .await
+                .expect("peer stays open after first bridge drop")
+                .expect("later bridge request is written");
+            assert!(endpoint_for_completion.response_table().complete_response_for_owner(
+                endpoint_for_completion.owner(),
+                outbound.opaque(),
+                RemotingCommand::create_response_command_with_code(0).set_opaque(outbound.opaque()),
+            ));
+        },
+    );
+    assert_eq!(returned.expect("later request correlates").opaque(), 8_604);
+
+    let closing_channel = second_bridge.channel.clone();
+    let endpoint_for_close = endpoint.clone();
+    let peer = &mut harness.first_peer;
+    let (closed, ()) = tokio::join!(
+        closing_channel.send_wait_response(RemotingCommand::create_remoting_command(605).set_opaque(8_605), 5_000),
+        async move {
+            let outbound = peer
+                .receive_command()
+                .await
+                .expect("peer remains open until canonical close")
+                .expect("pending request is written before close");
+            assert_eq!(outbound.opaque(), 8_605);
+            assert_eq!(
+                endpoint_for_close
+                    .response_table()
+                    .close_owner(endpoint_for_close.owner(), || {
+                        rocketmq_error::RocketMQError::network_connection_failed(
+                            "test_session_close",
+                            "canonical owner closed",
+                        )
+                    }),
+                1
+            );
+        },
+    );
+    assert!(closed.is_err(), "only canonical owner close releases the waiter");
+
+    drop((second_bridge, response));
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn network_bridge_fails_closed_for_cross_session_same_id_writer_and_transport_mismatches() {
     let harness = NetworkHarness::new().await;
     assert_ne!(harness.first.session_id(), harness.second.session_id());
     let first_response = harness.plan_response(&harness.first);
     let second_response = harness.plan_response(&harness.second);
     let table = PendingRequestTable::new();
-    let bridge = LegacyRequestBridge::from_network_session(&harness.first, &first_response, table.clone())
+    let endpoint = LegacyNetworkSession::for_test(table.clone());
+    let bridge = LegacyRequestBridge::from_network_session(&harness.first, &first_response, &endpoint)
         .expect("first canonical bridge");
 
     assert!(matches!(
@@ -297,7 +362,7 @@ async fn network_bridge_fails_closed_for_cross_session_same_id_writer_and_transp
     let second_id = SessionId::from_session_owner(harness.second.session_id());
     let mut same_id_different_writer = harness
         .first
-        .legacy_processor_channel(first_response.clone(), table)
+        .legacy_processor_channel(first_response.clone(), table, endpoint.owner().clone())
         .expect("first writer channel");
     same_id_different_writer.set_canonical_session_id_for_test(second_id);
     let forged = LegacyRequestBridge {
@@ -311,8 +376,9 @@ async fn network_bridge_fails_closed_for_cross_session_same_id_writer_and_transp
     ));
 
     let (local, _receiver) = ResponseSink::local();
+    let local_endpoint = LegacyNetworkSession::for_test(PendingRequestTable::new());
     assert!(matches!(
-        LegacyRequestBridge::from_network_session(&harness.first, &local, PendingRequestTable::new(),),
+        LegacyRequestBridge::from_network_session(&harness.first, &local, &local_endpoint),
         Err(LegacyProcessorAdapterError::TransportKindMismatch)
     ));
 

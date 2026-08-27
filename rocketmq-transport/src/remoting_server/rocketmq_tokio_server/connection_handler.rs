@@ -14,6 +14,13 @@
 
 use super::lifecycle_events::LifecycleEventPublisher;
 use super::*;
+use crate::admission::PartialFramePermit;
+use crate::dispatch::AuthorizedCommandDispatcherV2;
+use crate::dispatch::AuthorizedDispatchSession;
+use crate::dispatch::LegacyNetworkSession;
+use crate::dispatch::RequestContext;
+use crate::runtime::processor_v2::RequestProcessorV2;
+use crate::server::AuthorizedFrameRoute;
 
 #[cfg(all(test, not(doctest)))]
 pub(super) enum TestRequestHookResult {
@@ -54,49 +61,39 @@ pub(super) struct InterceptingConnectionHandler<RP> {
 
 pub(super) struct RemotingSession<C> {
     context: C,
+    endpoint: LegacyNetworkSession,
     _shutdown_complete: mpsc::Sender<()>,
 }
 
-enum RemotingSessionAction {
-    Connect,
-    Command(rocketmq_protocol::protocol::remoting_command::RemotingCommand),
+pub(crate) struct V1NetworkRouteState {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "test interceptor observes the canonical V1 channel")
+    )]
+    context: ConnectionHandlerContext,
+    endpoint: LegacyNetworkSession,
+}
+
+pub(super) struct V2ConnectionHandler<P> {
+    pub(super) shutdown_complete_tx: mpsc::Sender<()>,
+    pub(super) conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    pub(super) dispatcher: Arc<AuthorizedCommandDispatcherV2<P>>,
+}
+
+pub(crate) struct V2NetworkRouteState {
+    _shutdown_complete: mpsc::Sender<()>,
 }
 
 impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
-    async fn run(
-        &self,
-        session: crate::server::SessionHandle,
-        action: RemotingSessionAction,
-        #[cfg(all(test, not(doctest)))] command_interceptor: Option<&dyn SessionCommandInterceptor>,
-    ) {
-        let channel_id = match &action {
-            RemotingSessionAction::Connect => format!("transport-session-{}", session.session_id()),
-            RemotingSessionAction::Command(_) => {
-                let Some(channel_id) = self
-                    .sessions
-                    .get(&session.session_id())
-                    .map(|remoting_session| remoting_session.context.channel().channel_id().to_owned())
-                else {
-                    return;
-                };
-                channel_id
-            }
-        };
-        let channel_inner = match &action {
-            RemotingSessionAction::Connect => ChannelInner::new_transport_session(
-                session.connection(),
-                self.dispatcher.response_table(),
-                session.task_group().clone(),
-            ),
-            RemotingSessionAction::Command(_) => ChannelInner::new_transport_session_with_task_group(
-                session.connection(),
-                self.dispatcher.response_table(),
-                session.task_group().clone(),
-            ),
-        };
-        let Ok(channel_inner) = channel_inner else {
-            return;
-        };
+    async fn connected_state(&self, session: crate::server::SessionHandle) -> Option<V1NetworkRouteState> {
+        let endpoint = self.dispatcher.open_network_session();
+        let channel_inner = ChannelInner::new_transport_session_with_owner(
+            session.connection(),
+            endpoint.response_table().clone(),
+            endpoint.owner().clone(),
+            session.task_group().clone(),
+        )
+        .ok()?;
         let mut channel = Channel::new_with_proxy_protocol(
             Arc::new(channel_inner),
             session.local_addr(),
@@ -104,151 +101,261 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
             session.transport_peer_addr(),
             session.proxy_protocol().cloned(),
         );
-        channel.set_channel_id(channel_id);
+        channel.set_channel_id(format!("transport-session-{}", session.session_id()));
+        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel));
         let remoting_session = RemotingSession {
-            context: Arc::new(ConnectionHandlerContextWrapper::new(channel)),
+            context: context.clone(),
+            endpoint: endpoint.clone(),
             _shutdown_complete: self.shutdown_complete_tx.clone(),
         };
-        match action {
-            RemotingSessionAction::Connect => {
-                let event_channel = remoting_session.context.channel().clone();
-                self.sessions.insert(session.session_id(), remoting_session);
-                if let Some(publisher) = &self.event_publisher {
-                    let outcome = publisher
-                        .publish(TokioEvent::new(
-                            ConnectionNetEvent::CONNECTED(session.remote_addr()),
-                            session.remote_addr(),
-                            event_channel,
-                        ))
-                        .await;
-                    if !outcome.is_queued() {
-                        warn!(?outcome, event = "connected", "Remoting lifecycle event was not queued");
-                    }
-                }
+        let event_channel = context.channel().clone();
+        self.sessions.insert(session.session_id(), remoting_session);
+        if let Some(publisher) = &self.event_publisher {
+            let outcome = publisher
+                .publish(TokioEvent::new(
+                    ConnectionNetEvent::CONNECTED(session.remote_addr()),
+                    session.remote_addr(),
+                    event_channel,
+                ))
+                .await;
+            if !outcome.is_queued() {
+                warn!(?outcome, event = "connected", "Remoting lifecycle event was not queued");
             }
-            RemotingSessionAction::Command(command) => {
-                #[cfg(all(test, not(doctest)))]
-                if let Some(command_interceptor) = command_interceptor {
-                    if command_interceptor.intercept(
-                        command.code(),
-                        command.opaque(),
-                        remoting_session.context.channel().clone(),
-                        session.task_group().clone(),
-                    ) {
-                        return;
-                    }
-                }
-                let dispatcher = self.dispatcher.clone();
-                dispatcher
-                    .process_network(&remoting_session.context, session.original_request_identity(), command)
-                    .await;
+        }
+        Some(V1NetworkRouteState { context, endpoint })
+    }
+
+    async fn request(
+        &self,
+        state: &V1NetworkRouteState,
+        authorized_session: &AuthorizedDispatchSession,
+        session: crate::server::SessionHandle,
+        context: RequestContext,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        received_at: Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+        #[cfg(all(test, not(doctest)))] command_interceptor: Option<&dyn SessionCommandInterceptor>,
+    ) -> bool {
+        #[cfg(all(test, not(doctest)))]
+        if let Some(command_interceptor) = command_interceptor {
+            if command_interceptor.intercept(
+                command.code(),
+                command.opaque(),
+                state.context.channel().clone(),
+                session.task_group().clone(),
+            ) {
+                return true;
+            }
+        }
+        self.dispatcher
+            .dispatch_network(
+                authorized_session,
+                state.endpoint.clone(),
+                session,
+                context,
+                command,
+                received_at,
+                retained_bytes,
+                partial_frame_permit,
+            )
+            .await
+            .is_ok()
+    }
+
+    async fn disconnected_state(&self, state: V1NetworkRouteState, session: crate::server::SessionHandle) {
+        let event_publisher = self.event_publisher.clone();
+        let conn_disconnect_notify = self.conn_disconnect_notify.clone();
+        let Some((_, remoting_session)) = self.sessions.remove(&session.session_id()) else {
+            return;
+        };
+        debug_assert!(remoting_session.endpoint.owner().same_owner(state.endpoint.owner()));
+        let channel_report = remoting_session
+            .context
+            .channel()
+            .close_with_report(Duration::from_secs(3))
+            .await;
+        channel_report.log_if_unhealthy();
+        if let Some(notify) = conn_disconnect_notify {
+            let _ = notify.send(session.remote_addr());
+        }
+        if let Some(publisher) = event_publisher {
+            let outcome = publisher
+                .publish(TokioEvent::new(
+                    ConnectionNetEvent::DISCONNECTED,
+                    session.remote_addr(),
+                    remoting_session.context.channel().clone(),
+                ))
+                .await;
+            if !outcome.is_queued() {
+                warn!(
+                    ?outcome,
+                    event = "disconnected",
+                    "Remoting lifecycle event was not queued"
+                );
             }
         }
     }
 }
 
-impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for ConnectionHandler<RP> {
-    fn connected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            self.run(
-                session,
-                RemotingSessionAction::Connect,
-                #[cfg(all(test, not(doctest)))]
-                None,
-            )
-            .await;
-        })
+impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for ConnectionHandler<RP> {
+    type SessionState = V1NetworkRouteState;
+
+    async fn connected(&self, session: crate::server::SessionHandle) -> Option<Self::SessionState> {
+        self.connected_state(session).await
     }
 
-    fn request_ordering(
+    async fn response(
         &self,
-        command: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> crate::request_ordering::RequestOrdering {
-        self.dispatcher.request_ordering(command)
-    }
-
-    fn command(
-        &self,
-        session: crate::server::SessionHandle,
+        state: &Self::SessionState,
+        _session: crate::server::SessionHandle,
         command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            self.run(
-                session,
-                RemotingSessionAction::Command(command),
-                #[cfg(all(test, not(doctest)))]
-                None,
-            )
-            .await;
+    ) {
+        self.dispatcher.complete_network_response(&state.endpoint, command);
+    }
+
+    async fn request(
+        &self,
+        state: &Self::SessionState,
+        authorized_session: &AuthorizedDispatchSession,
+        session: crate::server::SessionHandle,
+        context: RequestContext,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        received_at: Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> bool {
+        self.request(
+            state,
+            authorized_session,
+            session,
+            context,
+            command,
+            received_at,
+            retained_bytes,
+            partial_frame_permit,
+            #[cfg(all(test, not(doctest)))]
+            None,
+        )
+        .await
+    }
+
+    async fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+        self.dispatcher.close_network_session(&state.endpoint);
+    }
+
+    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) {
+        self.disconnected_state(state, session).await;
+    }
+}
+
+impl<P> AuthorizedFrameRoute for V2ConnectionHandler<P>
+where
+    P: RequestProcessorV2 + Clone + Sync + 'static,
+{
+    type SessionState = V2NetworkRouteState;
+
+    async fn connected(&self, _session: crate::server::SessionHandle) -> Option<Self::SessionState> {
+        Some(V2NetworkRouteState {
+            _shutdown_complete: self.shutdown_complete_tx.clone(),
         })
     }
 
-    fn disconnected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let event_publisher = self.event_publisher.clone();
-        let conn_disconnect_notify = self.conn_disconnect_notify.clone();
-        Box::pin(async move {
-            let Some((_, remoting_session)) = self.sessions.remove(&session.session_id()) else {
-                return;
-            };
-            let channel_report = remoting_session
-                .context
-                .channel()
-                .close_with_report(Duration::from_secs(3))
-                .await;
-            channel_report.log_if_unhealthy();
-            if let Some(notify) = conn_disconnect_notify {
-                let _ = notify.send(session.remote_addr());
-            }
-            if let Some(publisher) = event_publisher {
-                let outcome = publisher
-                    .publish(TokioEvent::new(
-                        ConnectionNetEvent::DISCONNECTED,
-                        session.remote_addr(),
-                        remoting_session.context.channel().clone(),
-                    ))
-                    .await;
-                if !outcome.is_queued() {
-                    warn!(
-                        ?outcome,
-                        event = "disconnected",
-                        "Remoting lifecycle event was not queued"
-                    );
-                }
-            }
-        })
+    async fn response(
+        &self,
+        _state: &Self::SessionState,
+        _session: crate::server::SessionHandle,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    ) {
+        self.dispatcher.complete_network_response(command);
+    }
+
+    async fn request(
+        &self,
+        _state: &Self::SessionState,
+        authorized_session: &AuthorizedDispatchSession,
+        session: crate::server::SessionHandle,
+        context: RequestContext,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        received_at: Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> bool {
+        self.dispatcher
+            .dispatch_network(
+                authorized_session,
+                session,
+                context,
+                command,
+                received_at,
+                retained_bytes,
+                partial_frame_permit,
+            )
+            .await
+            .is_ok()
+    }
+
+    async fn close_pending(&self, _state: &Self::SessionState, _session: crate::server::SessionHandle) {
+        self.dispatcher.close_network_session();
+    }
+
+    async fn disconnected(&self, _state: Self::SessionState, session: crate::server::SessionHandle) {
+        if let Some(notify) = &self.conn_disconnect_notify {
+            let _ = notify.send(session.remote_addr());
+        }
     }
 }
 
 #[cfg(all(test, not(doctest)))]
-impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for InterceptingConnectionHandler<RP> {
-    fn connected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        self.inner.connected(session)
+impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for InterceptingConnectionHandler<RP> {
+    type SessionState = V1NetworkRouteState;
+
+    async fn connected(&self, session: crate::server::SessionHandle) -> Option<Self::SessionState> {
+        self.inner.connected_state(session).await
     }
 
-    fn request_ordering(
+    async fn response(
         &self,
-        command: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> crate::request_ordering::RequestOrdering {
-        self.inner.request_ordering(command)
-    }
-
-    fn command(
-        &self,
-        session: crate::server::SessionHandle,
+        state: &Self::SessionState,
+        _session: crate::server::SessionHandle,
         command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            self.inner
-                .run(
-                    session,
-                    RemotingSessionAction::Command(command),
-                    Some(self.command_interceptor.as_ref()),
-                )
-                .await;
-        })
+    ) {
+        self.inner
+            .dispatcher
+            .complete_network_response(&state.endpoint, command);
     }
 
-    fn disconnected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        self.inner.disconnected(session)
+    async fn request(
+        &self,
+        state: &Self::SessionState,
+        authorized_session: &AuthorizedDispatchSession,
+        session: crate::server::SessionHandle,
+        context: RequestContext,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        received_at: Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> bool {
+        self.inner
+            .request(
+                state,
+                authorized_session,
+                session,
+                context,
+                command,
+                received_at,
+                retained_bytes,
+                partial_frame_permit,
+                Some(self.command_interceptor.as_ref()),
+            )
+            .await
+    }
+
+    async fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+        self.inner.dispatcher.close_network_session(&state.endpoint);
+    }
+
+    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) {
+        self.inner.disconnected_state(state, session).await;
     }
 }

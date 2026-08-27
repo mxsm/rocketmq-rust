@@ -422,6 +422,11 @@ impl Channel {
         self.inner.pending_request_owner()
     }
 
+    pub(crate) fn has_pending_request_owner(&self, owner: &PendingRequestOwner) -> bool {
+        self.pending_request_owner()
+            .is_some_and(|candidate| candidate.same_owner(owner))
+    }
+
     /// Routes one response through this channel's stable correlation owner.
     #[allow(
         dead_code,
@@ -682,6 +687,10 @@ pub struct ChannelInner {
 
     /// Correlation generation owned by this physical connection.
     pending_request_owner: Option<PendingRequestOwner>,
+    /// Whether this channel is responsible for retiring its correlation owner.
+    /// DSP-06 session channels and per-request bridges borrow one stable owner
+    /// whose retirement belongs to the canonical reader session state.
+    pending_request_owner_authority: PendingRequestOwnerAuthority,
 
     /// Plan-bound completion owner for response-shaped public writes made by
     /// a legacy processor. Ordinary channels leave this absent.
@@ -690,6 +699,12 @@ pub struct ChannelInner {
     /// Tracks the outbound send task for shutdown diagnostics.
     send_task_group: TaskGroup,
     send_task_id: Option<TaskId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingRequestOwnerAuthority {
+    Owned,
+    Borrowed,
 }
 
 enum ChannelIo {
@@ -817,6 +832,7 @@ impl ChannelInner {
             connection_state: ConnectionStateHandle::healthy(),
             response_table: PendingRequestTable::new(),
             pending_request_owner: None,
+            pending_request_owner_authority: PendingRequestOwnerAuthority::Borrowed,
             legacy_plan_response: None,
             send_task_group: task_group,
             send_task_id: None,
@@ -841,6 +857,7 @@ impl ChannelInner {
             connection_state: ConnectionStateHandle::healthy(),
             response_table,
             pending_request_owner,
+            pending_request_owner_authority: PendingRequestOwnerAuthority::Owned,
             legacy_plan_response: Some(response),
             send_task_group: task_group,
             send_task_id: None,
@@ -884,7 +901,14 @@ impl ChannelInner {
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
         let owner = response_table.new_owner();
-        Self::try_new_with_send_task_group(connection, response_table, Some(owner), parent_task_group, true)
+        Self::try_new_with_send_task_group(
+            connection,
+            response_table,
+            Some(owner),
+            parent_task_group,
+            true,
+            PendingRequestOwnerAuthority::Owned,
+        )
     }
 
     pub(crate) fn new_transport_session(
@@ -908,16 +932,41 @@ impl ChannelInner {
         task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
         let pending_request_owner = Some(response_table.new_owner());
-        Self::try_new_with_send_task_group(connection, response_table, pending_request_owner, task_group, false)
+        Self::try_new_with_send_task_group(
+            connection,
+            response_table,
+            pending_request_owner,
+            task_group,
+            false,
+            PendingRequestOwnerAuthority::Owned,
+        )
+    }
+
+    pub(crate) fn new_transport_session_with_owner(
+        connection: Connection,
+        response_table: PendingRequestTable,
+        pending_request_owner: PendingRequestOwner,
+        task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        Self::try_new_with_send_task_group(
+            connection,
+            response_table,
+            Some(pending_request_owner),
+            task_group,
+            false,
+            PendingRequestOwnerAuthority::Borrowed,
+        )
     }
 
     pub(crate) fn new_legacy_network_bridge(
         connection: Connection,
         response: ResponseSink,
         response_table: PendingRequestTable,
+        pending_request_owner: PendingRequestOwner,
         task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        let mut inner = Self::new_transport_session_with_task_group(connection, response_table, task_group)?;
+        let mut inner =
+            Self::new_transport_session_with_owner(connection, response_table, pending_request_owner, task_group)?;
         inner.legacy_plan_response = Some(response);
         Ok(inner)
     }
@@ -928,6 +977,7 @@ impl ChannelInner {
         pending_request_owner: Option<PendingRequestOwner>,
         task_group: TaskGroup,
         start_send_task: bool,
+        pending_request_owner_authority: PendingRequestOwnerAuthority,
     ) -> rocketmq_error::RocketMQResult<Self> {
         const QUEUE_CAPACITY: usize = 1024;
 
@@ -961,6 +1011,7 @@ impl ChannelInner {
             connection_state,
             response_table,
             pending_request_owner,
+            pending_request_owner_authority,
             legacy_plan_response: None,
             send_task_group: task_group,
             send_task_id,
@@ -983,7 +1034,10 @@ impl ChannelInner {
             }
         }
         report.elapsed = started_at.elapsed();
-        if let Some(owner) = self.pending_request_owner.as_ref() {
+        if self.pending_request_owner_authority == PendingRequestOwnerAuthority::Owned {
+            let Some(owner) = self.pending_request_owner.as_ref() else {
+                return report;
+            };
             self.response_table.close_owner(owner, || {
                 RocketMQError::network_connection_failed("channel", "connection closed")
             });
@@ -999,7 +1053,10 @@ impl Drop for ChannelInner {
         if let Some(task_id) = self.send_task_id {
             self.send_task_group.abort_task(task_id);
         }
-        if let Some(owner) = self.pending_request_owner.as_ref() {
+        if self.pending_request_owner_authority == PendingRequestOwnerAuthority::Owned {
+            let Some(owner) = self.pending_request_owner.as_ref() else {
+                return;
+            };
             self.response_table.close_owner(owner, || {
                 RocketMQError::network_connection_failed("channel", "connection dropped")
             });

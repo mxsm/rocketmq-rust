@@ -25,12 +25,9 @@ mod response_plan;
 mod response_sink;
 
 pub use authorized_dispatcher::AuthorizedCommandDispatcher;
-#[allow(
-    unused_imports,
-    reason = "DSP-03 exposes the private V2 dispatcher core to later coexistence routing"
-)]
-pub(crate) use authorized_dispatcher::AuthorizedCommandDispatcherV2;
+pub use authorized_dispatcher::AuthorizedCommandDispatcherV2;
 pub use authorized_dispatcher::AuthorizedDispatchBoundary;
+pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
 #[allow(
     unused_imports,
     reason = "DSP-03 exposes the private V2 dispatcher failure to later coexistence routing"
@@ -49,12 +46,15 @@ pub(crate) use handler_outcome::InlineResponseSlot;
 pub use handler_outcome::ProtocolNoResponse;
 pub use handler_outcome::ProtocolNoResponseError;
 pub use handler_outcome::ProtocolNoResponseReason;
+#[cfg(test)]
+pub(crate) use legacy_processor_adapter::bridge_construction_counts;
 pub(crate) use legacy_processor_adapter::DispatchMetricsGuard;
 pub(crate) use legacy_processor_adapter::DispatchProcessor;
 pub(crate) use legacy_processor_adapter::DispatchProcessorError;
 pub(crate) use legacy_processor_adapter::ExplicitV2Processor;
 pub(crate) use legacy_processor_adapter::InternalProcessorCandidate;
 pub(crate) use legacy_processor_adapter::InternalProcessorOutcome;
+pub(crate) use legacy_processor_adapter::LegacyNetworkSession;
 pub(crate) use legacy_processor_adapter::LegacyProcessorAdapter;
 pub(crate) use legacy_processor_adapter::LegacyProcessorAdapterError;
 pub(crate) use legacy_processor_adapter::LegacyReplyCandidate;

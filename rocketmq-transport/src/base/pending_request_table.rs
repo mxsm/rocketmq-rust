@@ -108,6 +108,13 @@ impl PendingRequestOwner {
     fn retire(&self) {
         self.accepting.store(false, Ordering::Release);
     }
+
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
+        self.table_id == other.table_id
+            && self.id == other.id
+            && Arc::ptr_eq(&self.accepting, &other.accepting)
+            && Arc::ptr_eq(&self.completion, &other.completion)
+    }
 }
 
 struct PendingRequest {

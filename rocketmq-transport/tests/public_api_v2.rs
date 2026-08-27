@@ -21,9 +21,14 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Principal;
+use rocketmq_transport::api::v1::AuthorizedCommandDispatcher;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
 use rocketmq_transport::api::v1::RequestId as V1RequestId;
+use rocketmq_transport::api::v1::TransportServer;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::AuthenticationState;
+use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
 use rocketmq_transport::api::v2::DeferredRegistration;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::FileRegion;
@@ -58,6 +63,7 @@ use rocketmq_transport::api::v2::ResponseWritePath;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::SessionStateView;
 use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::v2::TransportServerV2;
 use rocketmq_transport::api::v2::WriteProgress;
 
 fn assert_same_deadline_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
@@ -187,6 +193,7 @@ impl LocalRequestProcessorV2 for LocalOnlyProcessor {
     }
 }
 
+#[derive(Clone)]
 struct SendProcessor;
 
 impl RequestProcessorV2 for SendProcessor {
@@ -388,4 +395,43 @@ fn v2_processor_side_contracts_are_typed_and_body_free() {
     let _ = RequestOrdering::Concurrent;
     let _ = RequestOrdering::Ordered(RequestOrderingKey::new(9));
     let _: fn(&ResponseWriteObservationV2) = assert_response_write_observation_contract;
+}
+
+#[test]
+fn v2_network_dispatcher_and_server_are_public_nameable_facades() {
+    let runtime = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::default())
+        .expect("public V2 facade runtime");
+    let service_context = runtime.root_context().component("public-v2-facades");
+    let security =
+        std::sync::Arc::new(rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None));
+    let admission = std::sync::Arc::new(rocketmq_transport::api::v1::AdmissionController::new(
+        rocketmq_transport::api::v1::AdmissionLimits::default(),
+    ));
+
+    let v1_dispatcher: std::sync::Arc<AuthorizedCommandDispatcher<DefaultRequestProcessor>> = std::sync::Arc::new(
+        AuthorizedCommandDispatcher::try_new(
+            DefaultRequestProcessor,
+            Vec::new(),
+            &service_context.process_budget(),
+            TransportTelemetry::noop(),
+            std::sync::Arc::clone(&security),
+            std::sync::Arc::clone(&admission),
+        )
+        .expect("public V1 facade construction"),
+    );
+    let _: std::sync::Arc<rocketmq_transport::api::v1::AuthorizedDispatchBoundary> = v1_dispatcher.boundary();
+    let _: TransportServer<DefaultRequestProcessor> = TransportServer::new(
+        std::sync::Arc::new(rocketmq_transport::api::v1::ServerConfig::default()),
+        service_context.clone(),
+    );
+
+    let dispatcher: std::sync::Arc<AuthorizedCommandDispatcherV2<SendProcessor>> = std::sync::Arc::new(
+        AuthorizedCommandDispatcherV2::new(SendProcessor, Vec::new(), security, admission),
+    );
+    let _: std::sync::Arc<rocketmq_transport::api::v1::AuthorizedDispatchBoundary> = dispatcher.boundary();
+    let _: TransportServerV2<SendProcessor> = TransportServerV2::new_with_authorized_dispatcher(
+        std::sync::Arc::new(rocketmq_transport::api::v1::ServerConfig::default()),
+        service_context,
+        dispatcher,
+    );
 }

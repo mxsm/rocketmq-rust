@@ -50,6 +50,7 @@ use rocketmq_transport::api::v1::DispatchError;
 use rocketmq_transport::api::v1::RequestContext;
 use rocketmq_transport::api::v1::RequestContextError;
 use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::RequestOrdering;
 use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::ResourceLimit;
 use rocketmq_transport::api::v1::ResponseSinkError;
@@ -113,6 +114,73 @@ impl RequestProcessor for ConformanceProcessor {
             )),
             ProcessorBehavior::Pending => future::pending().await,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CloneIdentityEvent {
+    Clone { from: usize, to: usize },
+    Ordering { generation: usize, code: i32 },
+    Process { generation: usize, code: i32 },
+}
+
+struct CloneIdentityProcessor {
+    generation: usize,
+    events: Arc<Mutex<Vec<CloneIdentityEvent>>>,
+}
+
+impl CloneIdentityProcessor {
+    fn supplied(events: Arc<Mutex<Vec<CloneIdentityEvent>>>) -> Self {
+        Self { generation: 0, events }
+    }
+}
+
+impl Clone for CloneIdentityProcessor {
+    fn clone(&self) -> Self {
+        let generation = self.generation + 1;
+        self.events
+            .lock()
+            .expect("clone identity event lock")
+            .push(CloneIdentityEvent::Clone {
+                from: self.generation,
+                to: generation,
+            });
+        Self {
+            generation,
+            events: Arc::clone(&self.events),
+        }
+    }
+}
+
+impl RequestProcessor for CloneIdentityProcessor {
+    async fn process_request(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.events
+            .lock()
+            .expect("clone identity event lock")
+            .push(CloneIdentityEvent::Process {
+                generation: self.generation,
+                code: request.code(),
+            });
+        Ok(Some(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_body(vec![self.generation as u8]),
+        ))
+    }
+
+    fn request_ordering(&self, request: &RemotingCommand) -> RequestOrdering {
+        self.events
+            .lock()
+            .expect("clone identity event lock")
+            .push(CloneIdentityEvent::Ordering {
+                generation: self.generation,
+                code: request.code(),
+            });
+        RequestOrdering::Concurrent
     }
 }
 
@@ -644,5 +712,130 @@ async fn unknown_raw_code_is_preserved_in_the_authorization_resource() {
     );
     assert_eq!(fixture.processor.calls.load(Ordering::SeqCst), 2);
     let report = fixture.service.task_group().shutdown(Duration::from_secs(1)).await;
+    report.assert_no_task_leak().expect("test tasks should be owned");
+}
+
+#[tokio::test]
+async fn v1_embedded_retains_the_supplied_processor_while_network_uses_its_admitted_clone() {
+    const EMBEDDED_CODE: i32 = 61_000;
+    const NETWORK_CODE: i32 = 61_001;
+
+    let runtime = RuntimeContext::from_current("authorized-dispatch-clone-identity");
+    let service = runtime.service_context("clone-identity");
+    let process_budget = service.process_budget();
+    let admission = Arc::new(
+        AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+            .expect("test admission limits should be valid"),
+    );
+    let security = Arc::new(TransportSecurity::development_insecure_loopback(None, None));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dispatcher = Arc::new(
+        AuthorizedCommandDispatcher::try_new(
+            CloneIdentityProcessor::supplied(Arc::clone(&events)),
+            Vec::new(),
+            &process_budget,
+            TransportTelemetry::noop(),
+            Arc::clone(&security),
+            admission,
+        )
+        .expect("test dispatcher should fit the process budget"),
+    );
+
+    assert_eq!(
+        events.lock().expect("clone identity event lock").as_slice(),
+        [CloneIdentityEvent::Clone { from: 0, to: 1 }]
+    );
+    events.lock().expect("clone identity event lock").clear();
+
+    let embedded = dispatcher
+        .dispatch_embedded(
+            service.task_group(),
+            RequestContext::try_embedded(Some(Principal::new("clone-identity")), None)
+                .expect("embedded identity should be valid"),
+            RemotingCommand::create_remoting_command(EMBEDDED_CODE).set_opaque(60),
+        )
+        .await
+        .expect("embedded processor should respond");
+    assert_eq!(embedded.body().map(|body| body.as_ref()), Some([1_u8].as_slice()));
+    assert_eq!(
+        events.lock().expect("clone identity event lock").as_slice(),
+        [
+            CloneIdentityEvent::Ordering {
+                generation: 0,
+                code: EMBEDDED_CODE,
+            },
+            CloneIdentityEvent::Clone { from: 0, to: 1 },
+            CloneIdentityEvent::Process {
+                generation: 1,
+                code: EMBEDDED_CODE,
+            },
+        ]
+    );
+    events.lock().expect("clone identity event lock").clear();
+
+    let config = Arc::new(ServerConfig {
+        bind_address: "127.0.0.1".to_owned(),
+        listen_port: 0,
+        ..ServerConfig::default()
+    });
+    let mut server = TransportServer::new(config, service.component("network"))
+        .with_transport_security(Arc::clone(&security), Some(Principal::new("clone-identity")))
+        .with_authorized_dispatcher(Arc::clone(&dispatcher));
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let automatic_events = Arc::new(Mutex::new(Vec::new()));
+    let server_task = tokio::spawn(async move {
+        server
+            .run_with_shutdown_report_and_startup(
+                CloneIdentityProcessor::supplied(automatic_events),
+                None,
+                async {
+                    let _ = shutdown_rx.await;
+                },
+                startup_tx,
+            )
+            .await
+    });
+    let address = startup_rx
+        .await
+        .expect("server should report startup")
+        .expect("server should bind");
+    assert!(events.lock().expect("clone identity event lock").is_empty());
+
+    let stream = TcpStream::connect(address).await.expect("client should connect");
+    let mut connection = Connection::new(stream);
+    connection
+        .send_command(RemotingCommand::create_remoting_command(NETWORK_CODE).set_opaque(61))
+        .await
+        .expect("network request should be written");
+    let network = tokio::time::timeout(Duration::from_secs(2), connection.receive_command())
+        .await
+        .expect("network request should complete before the test timeout")
+        .expect("network read should succeed")
+        .expect("server should return one response frame");
+    assert_eq!(network.body().map(|body| body.as_ref()), Some([2_u8].as_slice()));
+    assert_eq!(
+        events.lock().expect("clone identity event lock").as_slice(),
+        [
+            CloneIdentityEvent::Ordering {
+                generation: 1,
+                code: NETWORK_CODE,
+            },
+            CloneIdentityEvent::Clone { from: 1, to: 2 },
+            CloneIdentityEvent::Process {
+                generation: 2,
+                code: NETWORK_CODE,
+            },
+        ]
+    );
+
+    drop(connection);
+    let _ = shutdown_tx.send(());
+    let report = server_task
+        .await
+        .expect("server task should not panic")
+        .expect("server should report shutdown");
+    assert!(report.is_healthy(), "{}", report.to_json());
+    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
     report.assert_no_task_leak().expect("test tasks should be owned");
 }

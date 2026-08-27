@@ -49,6 +49,8 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
+use crate::admission::PartialFramePermit;
+use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SocketOptions;
@@ -62,6 +64,7 @@ use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
 use crate::dispatch::reserve_session_owner;
 use crate::dispatch::AuthorizedDispatchBoundary;
+use crate::dispatch::AuthorizedDispatchSession;
 use crate::dispatch::NetworkResponsePlanContext;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
@@ -185,11 +188,13 @@ impl SessionHandle {
         &self,
         response: ResponseSink,
         response_table: PendingRequestTable,
+        pending_request_owner: PendingRequestOwner,
     ) -> RocketMQResult<Channel> {
         let inner = ChannelInner::new_legacy_network_bridge(
             self.connection(),
             response,
             response_table,
+            pending_request_owner,
             self.task_group().clone(),
         )?;
         Ok(Channel::new_canonical_network(Arc::new(inner), self.clone()))
@@ -418,6 +423,104 @@ pub trait ConnectionHandler: Send + Sync + 'static {
     }
 }
 
+/// Statically selected frame route used by production authorized servers.
+///
+/// The associated state makes per-session capabilities generation-specific
+/// without a runtime mode tag or a processor trait object.
+pub(crate) trait AuthorizedFrameRoute: Send + Sync + 'static {
+    type SessionState: Send + Sync + 'static;
+
+    fn connected(&self, session: SessionHandle) -> impl Future<Output = Option<Self::SessionState>> + Send;
+
+    fn response(
+        &self,
+        state: &Self::SessionState,
+        session: SessionHandle,
+        command: RemotingCommand,
+    ) -> impl Future<Output = ()> + Send;
+
+    #[allow(clippy::too_many_arguments)]
+    fn request(
+        &self,
+        state: &Self::SessionState,
+        authorized_session: &AuthorizedDispatchSession,
+        session: SessionHandle,
+        context: RequestContext,
+        command: RemotingCommand,
+        received_at: std::time::Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> impl Future<Output = bool> + Send;
+
+    fn close_pending(&self, state: &Self::SessionState, session: SessionHandle) -> impl Future<Output = ()> + Send;
+
+    fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> impl Future<Output = ()> + Send;
+}
+
+struct CompatibilityFrameRoute<H> {
+    handler: Arc<H>,
+}
+
+impl<H> AuthorizedFrameRoute for CompatibilityFrameRoute<H>
+where
+    H: ConnectionHandler,
+{
+    type SessionState = ();
+
+    async fn connected(&self, session: SessionHandle) -> Option<Self::SessionState> {
+        self.handler.connected(session).await;
+        Some(())
+    }
+
+    async fn response(&self, _state: &Self::SessionState, session: SessionHandle, command: RemotingCommand) {
+        self.handler.command(session, command).await;
+    }
+
+    async fn request(
+        &self,
+        _state: &Self::SessionState,
+        authorized_session: &AuthorizedDispatchSession,
+        session: SessionHandle,
+        context: RequestContext,
+        command: RemotingCommand,
+        _received_at: std::time::Instant,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> bool {
+        let original = session.original_request_identity();
+        let class = AdmissionClass::for_request_code(
+            original.map_or_else(|| command.code(), OriginalRequestIdentity::original_code),
+        );
+        let ordering = self.handler.request_ordering(&command);
+        let request_handler = Arc::clone(&self.handler);
+        let request_session = session.clone().with_response_class(class);
+        let response = ResponseSink::Network(Arc::new(session.clone().with_response_class(class)));
+        authorized_session
+            .dispatch(
+                context,
+                original,
+                command,
+                retained_bytes,
+                partial_frame_permit,
+                ordering,
+                response,
+                move |request_operation, command| async move {
+                    request_handler
+                        .command(request_session.with_operation_context(request_operation), command)
+                        .await;
+                },
+            )
+            .await
+            .is_ok()
+    }
+
+    async fn close_pending(&self, _state: &Self::SessionState, _session: SessionHandle) {}
+
+    async fn disconnected(&self, _state: Self::SessionState, session: SessionHandle) {
+        self.handler.disconnected(session).await;
+    }
+}
+
 #[derive(Clone, Copy)]
 struct NegotiationTimeouts {
     protocol_detection: Duration,
@@ -478,6 +581,8 @@ pub struct TransportListener {
     file_transfer_mode: FileTransferMode,
     frame_limits: FrameLimits,
     proxy_protocol: ProxyProtocolConfig,
+    #[cfg(test)]
+    write_preflight_barrier: Option<crate::write_strategy::WritePreflightBarrier>,
 }
 
 impl TransportListener {
@@ -506,6 +611,8 @@ impl TransportListener {
             file_transfer_mode: FileTransferMode::Auto,
             frame_limits: FrameLimits::default(),
             proxy_protocol: ProxyProtocolConfig::default(),
+            #[cfg(test)]
+            write_preflight_barrier: None,
         }
     }
 
@@ -533,11 +640,32 @@ impl TransportListener {
         Ok(self)
     }
 
+    pub(crate) fn with_validated_frame_limits(mut self, frame_limits: FrameLimits) -> Self {
+        debug_assert!(frame_limits.validate().is_ok());
+        self.frame_limits = frame_limits;
+        self
+    }
+
     /// Applies the trusted PROXY protocol policy before TLS/application negotiation.
     pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> RocketMQResult<Self> {
         config.validate()?;
         self.proxy_protocol = config;
         Ok(self)
+    }
+
+    pub(crate) fn with_validated_proxy_protocol(mut self, config: ProxyProtocolConfig) -> Self {
+        debug_assert!(config.validate().is_ok());
+        self.proxy_protocol = config;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_write_preflight_barrier(
+        mut self,
+        barrier: crate::write_strategy::WritePreflightBarrier,
+    ) -> Self {
+        self.write_preflight_barrier = Some(barrier);
+        self
     }
 
     #[allow(dead_code, reason = "custom security is used by the feature-gated session harness")]
@@ -585,9 +713,27 @@ impl TransportListener {
         self
     }
 
+    #[allow(
+        dead_code,
+        reason = "preserved low-level ConnectionHandler compatibility entry point"
+    )]
     pub async fn run<H>(self, handler: Arc<H>) -> RocketMQResult<()>
     where
         H: ConnectionHandler,
+    {
+        self.run_route(Arc::new(CompatibilityFrameRoute { handler })).await
+    }
+
+    pub(crate) async fn run_authorized<R>(self, route: Arc<R>) -> RocketMQResult<()>
+    where
+        R: AuthorizedFrameRoute,
+    {
+        self.run_route(route).await
+    }
+
+    async fn run_route<R>(self, route: Arc<R>) -> RocketMQResult<()>
+    where
+        R: AuthorizedFrameRoute,
     {
         let io_policy = self.io_policy.validate()?;
         let cancellation = self.task_group.cancellation_token();
@@ -635,12 +781,14 @@ impl TransportListener {
             let handshake_timeout = self.handshake_timeout;
             let session_io_policy = io_policy;
             let principal = self.principal.clone();
-            let handler = handler.clone();
+            let route = route.clone();
             let telemetry = self.telemetry.clone();
             let file_region_blocking = self.file_region_blocking.clone();
             let file_transfer_mode = self.file_transfer_mode;
             let frame_limits = self.frame_limits;
             let proxy_protocol = self.proxy_protocol.clone();
+            #[cfg(test)]
+            let write_preflight_barrier = self.write_preflight_barrier.clone();
             let spawn_group = session_group.clone();
             if spawn_group
                 .spawn_service("rocketmq.transport.session", async move {
@@ -681,11 +829,17 @@ impl TransportListener {
                         return;
                     };
                     let (connection, peer_is_tls) = negotiated.into_parts();
+                    #[cfg(test)]
+                    let mut connection = connection;
+                    #[cfg(test)]
+                    if let Some(barrier) = write_preflight_barrier {
+                        connection.set_write_preflight_barrier(barrier);
+                    }
                     let mut connection = connection.with_telemetry(telemetry);
                     if let Some(blocking) = file_region_blocking {
                         connection = connection.with_file_region_io(blocking, file_transfer_mode);
                     }
-                    run_framed_session(
+                    run_authorized_framed_session(
                         connection,
                         effective_local_addr,
                         effective_remote_addr,
@@ -698,7 +852,7 @@ impl TransportListener {
                         principal,
                         peer_is_tls,
                         session_io_policy,
-                        handler,
+                        route,
                     )
                     .await;
                 })
@@ -764,10 +918,90 @@ async fn run_framed_session_with_request_sequence<H>(
     peer_is_tls: bool,
     io_policy: SessionIoPolicy,
     request_sequence: AtomicU64,
-    #[cfg(test)] mut request_identity_exhausted: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(test)] request_identity_exhausted: Option<tokio::sync::oneshot::Sender<()>>,
     handler: Arc<H>,
 ) where
     H: ConnectionHandler,
+{
+    run_authorized_framed_session_with_request_sequence(
+        connection,
+        local_addr,
+        remote_addr,
+        transport_peer_addr,
+        proxy_protocol,
+        session_id,
+        scope,
+        task_group,
+        dispatch,
+        principal,
+        peer_is_tls,
+        io_policy,
+        request_sequence,
+        #[cfg(test)]
+        request_identity_exhausted,
+        Arc::new(CompatibilityFrameRoute { handler }),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_authorized_framed_session<R>(
+    connection: Connection,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    transport_peer_addr: SocketAddr,
+    proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
+    session_id: u64,
+    scope: AdmissionScope,
+    task_group: TaskGroup,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
+    principal: Option<Principal>,
+    peer_is_tls: bool,
+    io_policy: SessionIoPolicy,
+    route: Arc<R>,
+) where
+    R: AuthorizedFrameRoute,
+{
+    run_authorized_framed_session_with_request_sequence(
+        connection,
+        local_addr,
+        remote_addr,
+        transport_peer_addr,
+        proxy_protocol,
+        session_id,
+        scope,
+        task_group,
+        dispatch,
+        principal,
+        peer_is_tls,
+        io_policy,
+        AtomicU64::new(1),
+        #[cfg(test)]
+        None,
+        route,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_authorized_framed_session_with_request_sequence<R>(
+    connection: Connection,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    transport_peer_addr: SocketAddr,
+    proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
+    session_id: u64,
+    scope: AdmissionScope,
+    task_group: TaskGroup,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
+    principal: Option<Principal>,
+    peer_is_tls: bool,
+    io_policy: SessionIoPolicy,
+    request_sequence: AtomicU64,
+    #[cfg(test)] mut request_identity_exhausted: Option<tokio::sync::oneshot::Sender<()>>,
+    route: Arc<R>,
+) where
+    R: AuthorizedFrameRoute,
 {
     let connection_id = connection.connection_id().clone();
     let frame_limits = connection.frame_limits();
@@ -852,7 +1086,11 @@ async fn run_framed_session_with_request_sequence<H>(
         response_plan_context: None,
     };
 
-    handler.connected(session.clone()).await;
+    let Some(route_state) = route.connected(session.clone()).await else {
+        let _ = session.send.session_closed_tx.send(true);
+        let _ = session.retire().await;
+        return;
+    };
     let cancellation = task_group.cancellation_token();
     loop {
         let next = tokio::select! {
@@ -864,32 +1102,33 @@ async fn run_framed_session_with_request_sequence<H>(
             Ok(Some(Ok(decoded))) => decoded,
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         };
+        let received_at = std::time::Instant::now();
         let command = decoded.command;
-        let original_request_identity = if command.get_type() == RemotingCommandType::REQUEST {
-            let Some(identity) = OriginalRequestIdentity::capture(session_id, &session.send.request_sequence, &command)
-            else {
-                #[cfg(test)]
-                if let Some(signal) = request_identity_exhausted.take() {
-                    let _ = signal.send(());
-                }
-                tracing::error!(
-                    reason = "sequence_exhausted",
-                    "transport session stopped accepting because request identity allocation is exhausted"
-                );
-                break;
-            };
-            Some(identity)
-        } else {
-            None
-        };
         session
             .send
             .telemetry
             .record_inbound_decoded_plaintext_bytes(decoded.retained_frame_bytes);
+
+        if command.get_type() == RemotingCommandType::RESPONSE {
+            route.response(&route_state, session.clone(), command).await;
+            continue;
+        }
+
+        let Some(original_request_identity) =
+            OriginalRequestIdentity::capture(session_id, &session.send.request_sequence, &command)
+        else {
+            #[cfg(test)]
+            if let Some(signal) = request_identity_exhausted.take() {
+                let _ = signal.send(());
+            }
+            tracing::error!(
+                reason = "sequence_exhausted",
+                "transport session stopped accepting because request identity allocation is exhausted"
+            );
+            break;
+        };
         let partial_frame_permit = decoded.partial_frame_permit;
-        let class = AdmissionClass::for_request_code(
-            original_request_identity.map_or_else(|| command.code(), OriginalRequestIdentity::original_code),
-        );
+        let class = AdmissionClass::for_request_code(original_request_identity.original_code());
         let bytes = decoded.retained_frame_bytes;
         let context = RequestContext::network_with_security_profile(
             PeerInfo::new(remote_addr, peer_is_tls),
@@ -897,30 +1136,22 @@ async fn run_framed_session_with_request_sequence<H>(
             None,
             dispatch.security_profile(),
         );
-        let ordering = handler.request_ordering(&command);
-        let request_handler = handler.clone();
         let request_session = session
             .clone()
             .with_response_class(class)
-            .with_original_request_identity(original_request_identity);
-        let response = ResponseSink::Network(Arc::new(session.clone().with_response_class(class)));
-        if executor
-            .dispatch(
+            .with_original_request_identity(Some(original_request_identity));
+        if !route
+            .request(
+                &route_state,
+                &executor,
+                request_session,
                 context,
-                original_request_identity,
                 command,
+                received_at,
                 bytes,
                 partial_frame_permit,
-                ordering,
-                response,
-                move |request_operation, command| async move {
-                    request_handler
-                        .command(request_session.with_operation_context(request_operation), command)
-                        .await;
-                },
             )
             .await
-            .is_err()
         {
             break;
         }
@@ -929,11 +1160,12 @@ async fn run_framed_session_with_request_sequence<H>(
     // no longer accepts frames. Publish the session-close transition now so
     // read-only views observe shutdown without closing the response writer.
     let _ = session.send.session_closed_tx.send(true);
+    route.close_pending(&route_state, session.clone()).await;
     let request_deadline = task_group
         .shutdown_deadline()
         .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
     executor.drain_until(request_deadline).await.log_if_unhealthy();
-    handler.disconnected(session.clone()).await;
+    route.disconnected(route_state, session.clone()).await;
     let _ = session.retire().await;
 }
 
