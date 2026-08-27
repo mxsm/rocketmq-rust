@@ -13,6 +13,11 @@
 // limitations under the License.
 
 mod authorized_dispatcher;
+#[allow(
+    dead_code,
+    reason = "DEF-01 provides the deferred response foundation consumed by later DEF stages"
+)]
+mod deferred_response;
 mod embedded_dispatch;
 mod handler_outcome;
 mod legacy_processor_adapter;
@@ -36,6 +41,26 @@ pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
 pub(crate) use authorized_dispatcher::AuthorizedDispatchV2Error;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
+#[allow(
+    unused_imports,
+    reason = "DEF-01 exposes the private state machine to later deferred runtime stages"
+)]
+pub(crate) use deferred_response::ResponseSendClaim;
+#[allow(
+    unused_imports,
+    reason = "DEF-01 exposes the private state machine to later deferred runtime stages"
+)]
+pub(crate) use deferred_response::ResponseState;
+#[allow(
+    unused_imports,
+    reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
+)]
+pub(crate) use deferred_response::ResponseStateError;
+#[allow(
+    unused_imports,
+    reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
+)]
+pub(crate) use deferred_response::ResponseStateSnapshot;
 pub use embedded_dispatch::EmbeddedDispatchError;
 pub use embedded_dispatch::EmbeddedDispatchErrorKind;
 pub use embedded_dispatch::EmbeddedDispatchOutcome;
