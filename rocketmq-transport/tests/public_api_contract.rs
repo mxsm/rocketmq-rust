@@ -702,7 +702,31 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredId".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredParts".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::dispatch::DeferredRegistration".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredRegistry".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredRegistryError".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredRegistryErrorKind".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::DeferredRequest".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
@@ -895,7 +919,7 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
     Ok(())
 }
 
-const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::AuthorizedCommandDispatcherV2; pub use crate::dispatch::DeferredAdmission; pub use crate::dispatch::DeferredAdmissionAcquireError; pub use crate::dispatch::DeferredAdmissionAcquireErrorKind; pub use crate::dispatch::DeferredAdmissionConfigError; pub use crate::dispatch::DeferredAdmissionConfigErrorKind; pub use crate::dispatch::DeferredAdmissionSnapshot; pub use crate::dispatch::DeferredRegistration; pub use crate::dispatch::DeferredResponder; pub use crate::dispatch::DeferredResponseError; pub use crate::dispatch::DeferredResponseErrorKind; pub use crate::dispatch::DeferredRetainedSize; pub use crate::dispatch::DeferredRetainedSizeParts; pub use crate::dispatch::DeferredWaitLimits; pub use crate::dispatch::DeferredWaitPermit; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::EmbeddedDispatchError; pub use crate::dispatch::EmbeddedDispatchErrorKind; pub use crate::dispatch::EmbeddedDispatchOutcome; pub use crate::dispatch::HandlerOutcome; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::ProtocolNoResponse; pub use crate::dispatch::ProtocolNoResponseError; pub use crate::dispatch::ProtocolNoResponseReason; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponseDisposition; pub use crate::dispatch::ResponseErrorKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::dispatch::ResponseReceipt; pub use crate::dispatch::ResponseTerminalState; pub use crate::dispatch::TakeDeferredResponderError; pub use crate::dispatch::WriteProgress; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2; pub use crate::request_ordering::RequestOrdering; pub use crate::request_ordering::RequestOrderingKey; pub use crate::runtime::processor_v2::LocalRequestProcessorV2; pub use crate::runtime::processor_v2::RejectRequestDecision; pub use crate::runtime::processor_v2::RequestProcessorV2; pub use crate::runtime::processor_v2::ResponseWriteObservationV2; pub use crate::runtime::processor_v2::ResponseWriteOutcomeV2; pub use crate::runtime::processor_v2::ResponseWritePath; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
+const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::AuthorizedCommandDispatcherV2; pub use crate::dispatch::DeferredAdmission; pub use crate::dispatch::DeferredAdmissionAcquireError; pub use crate::dispatch::DeferredAdmissionAcquireErrorKind; pub use crate::dispatch::DeferredAdmissionConfigError; pub use crate::dispatch::DeferredAdmissionConfigErrorKind; pub use crate::dispatch::DeferredAdmissionSnapshot; pub use crate::dispatch::DeferredId; pub use crate::dispatch::DeferredParts; pub use crate::dispatch::DeferredRegistration; pub use crate::dispatch::DeferredRegistry; pub use crate::dispatch::DeferredRegistryError; pub use crate::dispatch::DeferredRegistryErrorKind; pub use crate::dispatch::DeferredRequest; pub use crate::dispatch::DeferredResponder; pub use crate::dispatch::DeferredResponseError; pub use crate::dispatch::DeferredResponseErrorKind; pub use crate::dispatch::DeferredRetainedSize; pub use crate::dispatch::DeferredRetainedSizeParts; pub use crate::dispatch::DeferredWaitLimits; pub use crate::dispatch::DeferredWaitPermit; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::EmbeddedDispatchError; pub use crate::dispatch::EmbeddedDispatchErrorKind; pub use crate::dispatch::EmbeddedDispatchOutcome; pub use crate::dispatch::HandlerOutcome; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::ProtocolNoResponse; pub use crate::dispatch::ProtocolNoResponseError; pub use crate::dispatch::ProtocolNoResponseReason; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponseDisposition; pub use crate::dispatch::ResponseErrorKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::dispatch::ResponseReceipt; pub use crate::dispatch::ResponseTerminalState; pub use crate::dispatch::TakeDeferredResponderError; pub use crate::dispatch::WriteProgress; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2; pub use crate::request_ordering::RequestOrdering; pub use crate::request_ordering::RequestOrderingKey; pub use crate::runtime::processor_v2::LocalRequestProcessorV2; pub use crate::runtime::processor_v2::RejectRequestDecision; pub use crate::runtime::processor_v2::RequestProcessorV2; pub use crate::runtime::processor_v2::ResponseWriteObservationV2; pub use crate::runtime::processor_v2::ResponseWriteOutcomeV2; pub use crate::runtime::processor_v2::ResponseWritePath; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
 
 #[test]
 fn lib_rs_exposes_only_the_curated_versioned_boundary() {

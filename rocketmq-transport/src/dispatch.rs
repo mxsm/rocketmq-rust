@@ -14,6 +14,7 @@
 
 mod authorized_dispatcher;
 mod deferred_admission;
+mod deferred_registry;
 mod deferred_responder;
 #[allow(
     dead_code,
@@ -53,6 +54,14 @@ pub use deferred_admission::DeferredRetainedSize;
 pub use deferred_admission::DeferredRetainedSizeParts;
 pub use deferred_admission::DeferredWaitLimits;
 pub use deferred_admission::DeferredWaitPermit;
+pub(crate) use deferred_registry::DeferredCommitError;
+pub use deferred_registry::DeferredId;
+pub use deferred_registry::DeferredParts;
+pub use deferred_registry::DeferredRegistration;
+pub use deferred_registry::DeferredRegistry;
+pub use deferred_registry::DeferredRegistryError;
+pub use deferred_registry::DeferredRegistryErrorKind;
+pub use deferred_registry::DeferredRequest;
 pub use deferred_responder::DeferredResponder;
 pub use deferred_responder::DeferredResponseError;
 pub use deferred_responder::DeferredResponseErrorKind;
@@ -82,7 +91,6 @@ pub(crate) use deferred_response::ResponseStateSnapshot;
 pub use embedded_dispatch::EmbeddedDispatchError;
 pub use embedded_dispatch::EmbeddedDispatchErrorKind;
 pub use embedded_dispatch::EmbeddedDispatchOutcome;
-pub use handler_outcome::DeferredRegistration;
 pub use handler_outcome::HandlerOutcome;
 #[allow(
     unused_imports,

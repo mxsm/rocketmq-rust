@@ -164,6 +164,13 @@ impl DeferredRetainedSize {
     pub const fn bytes(self) -> usize {
         self.0
     }
+
+    pub(crate) fn checked_add(self, additional: usize) -> Result<Self, DeferredAdmissionAcquireError> {
+        self.0
+            .checked_add(additional)
+            .map(Self)
+            .ok_or_else(DeferredAdmissionAcquireError::retained_size_overflow)
+    }
 }
 
 /// Stable category for deferred admission configuration failures.
@@ -294,7 +301,7 @@ pub struct DeferredAdmissionAcquireError {
 }
 
 impl DeferredAdmissionAcquireError {
-    const fn retained_size_overflow() -> Self {
+    pub(crate) const fn retained_size_overflow() -> Self {
         Self {
             kind: DeferredAdmissionAcquireErrorKind::RetainedSizeOverflow,
             source: DeferredAdmissionAcquireErrorSource::RetainedSizeOverflow,

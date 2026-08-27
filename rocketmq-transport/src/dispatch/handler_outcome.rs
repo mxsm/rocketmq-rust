@@ -18,6 +18,7 @@ use std::fmt;
 
 use rocketmq_error::RocketMQError;
 
+use super::DeferredRegistration;
 use super::DeferredResponder;
 use super::DeferredResponseSeed;
 use super::OriginalRequestIdentity;
@@ -76,87 +77,6 @@ pub enum HandlerOutcome {
     Deferred(DeferredRegistration),
     /// Complete the request without a direct response where protocol policy permits it.
     NoReply(ProtocolNoResponse),
-}
-
-/// Proof that trusted deferred storage accepted one request's response lifecycle.
-///
-/// The fields and seal are private, and this stage intentionally provides no
-/// production constructor. Deferred registry integration will create this
-/// proof only after it owns the responder, resume data, and wait permit.
-///
-/// ```compile_fail
-/// use rocketmq_transport::api::v2::{DeferredRegistration, RequestId};
-///
-/// fn cannot_forge(request_id: RequestId) -> DeferredRegistration {
-///     DeferredRegistration { request_id }
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredRegistration;
-///
-/// fn registrations_are_affine(registration: &DeferredRegistration) {
-///     let _: DeferredRegistration = registration.clone();
-/// }
-/// ```
-#[must_use]
-pub struct DeferredRegistration {
-    request_id: RequestId,
-    seal: DeferredRegistrationSeal,
-}
-
-#[cfg(not(test))]
-struct DeferredRegistrationSeal;
-
-#[cfg(test)]
-struct DeferredRegistrationSeal {
-    drop_probe: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
-}
-
-#[cfg(test)]
-impl Drop for DeferredRegistrationSeal {
-    fn drop(&mut self) {
-        if let Some(probe) = &self.drop_probe {
-            probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-}
-
-impl DeferredRegistration {
-    /// Returns the exact request accepted by trusted deferred storage.
-    #[must_use]
-    pub const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(request_id: RequestId) -> Self {
-        Self {
-            request_id,
-            seal: DeferredRegistrationSeal { drop_probe: None },
-        }
-    }
-
-    #[cfg(test)]
-    fn with_drop_probe(request_id: RequestId, drop_probe: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
-        Self {
-            request_id,
-            seal: DeferredRegistrationSeal {
-                drop_probe: Some(drop_probe),
-            },
-        }
-    }
-}
-
-impl fmt::Debug for DeferredRegistration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let _ = &self.seal;
-        formatter
-            .debug_struct("DeferredRegistration")
-            .field("request_id", &self.request_id)
-            .field("sealed", &true)
-            .finish()
-    }
 }
 
 /// Closed protocol reason for completing a request without a direct response.
