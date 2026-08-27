@@ -126,14 +126,17 @@ impl AuthorizedDispatchV2Error {
     dead_code,
     reason = "DSP-03 defines the private dispatcher core wired by the later coexistence stage"
 )]
-pub(crate) struct AuthorizedCommandDispatcherV2<D> {
+pub(crate) struct AuthorizedDispatcherCore<D> {
     processor: D,
     rpc_hooks: HookRegistry,
     #[cfg(test)]
     reported_failures: std::sync::Mutex<Vec<&'static str>>,
 }
 
-impl<P> AuthorizedCommandDispatcherV2<ExplicitV2Processor<P>>
+#[cfg(test)]
+type AuthorizedCommandDispatcherV2<D> = AuthorizedDispatcherCore<D>;
+
+impl<P> AuthorizedDispatcherCore<ExplicitV2Processor<P>>
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
@@ -156,7 +159,7 @@ impl From<DispatchProcessorError> for AuthorizedDispatchV2Error {
     }
 }
 
-impl<P> AuthorizedCommandDispatcherV2<LegacyProcessorAdapter<P>>
+impl<P> AuthorizedDispatcherCore<LegacyProcessorAdapter<P>>
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
@@ -169,7 +172,7 @@ where
     }
 }
 
-impl<D> AuthorizedCommandDispatcherV2<D>
+impl<D> AuthorizedDispatcherCore<D>
 where
     D: DispatchProcessor,
 {
@@ -182,17 +185,31 @@ where
         }
     }
 
+    pub(crate) fn open_network_session(&self) -> D::NetworkSession {
+        self.processor.open_network_session()
+    }
+
+    pub(crate) fn complete_network_response(&self, session: &D::NetworkSession, response: RemotingCommand) {
+        self.processor.complete_network_response(session, response);
+    }
+
+    pub(crate) fn close_network_session(&self, session: &D::NetworkSession) {
+        self.processor.close_network_session(session);
+    }
+
     /// Admits one canonical network request into its existing session executor.
     #[allow(
         dead_code,
         reason = "DSP-03 dispatch remains private until later coexistence routing"
     )]
-    pub(crate) async fn dispatch(
+    pub(crate) async fn dispatch_network(
         self: &Arc<Self>,
         authorized_session: &AuthorizedDispatchSession,
+        network_session: D::NetworkSession,
         session: SessionHandle,
         context: RequestContext,
         command: RemotingCommand,
+        received_at: Instant,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
     ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
@@ -212,7 +229,7 @@ where
             return Err(AuthorizedDispatchV2Error::OriginalIdentityMismatch);
         }
 
-        let request_started = Instant::now();
+        let request_started = received_at;
         let class = AdmissionClass::for_request_code(original.original_code());
         let lifecycle = RequestLifecycleProvenance::from_network_session(&session);
         let builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
@@ -250,9 +267,10 @@ where
             move |_operation| async move {
                 let processor = admitted_dispatcher.processor.clone();
                 if let Err(error) = admitted_dispatcher
-                    .execute_admitted(
+                    .execute_admitted_network(
                         processor,
                         admitted_session,
+                        network_session,
                         class,
                         original,
                         remote_address,
@@ -302,10 +320,11 @@ where
         dead_code,
         reason = "DSP-03 admitted execution is reached through the not-yet-wired private dispatcher"
     )]
-    async fn execute_admitted(
+    async fn execute_admitted_network(
         &self,
         mut processor: D,
         session: SessionHandle,
+        network_session: D::NetworkSession,
         class: AdmissionClass,
         original: OriginalRequestIdentity,
         remote_address: std::net::SocketAddr,
@@ -338,6 +357,7 @@ where
                 hook_snapshot.as_deref(),
                 remote_address,
                 &session,
+                &network_session,
                 &response,
             )
             .await?;
@@ -463,9 +483,55 @@ where
         }
     }
 
-    #[cfg(test)]
-    fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
+    pub(crate) fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
         self.rpc_hooks.register(hook);
+    }
+
+    #[cfg(test)]
+    async fn execute_admitted(
+        &self,
+        processor: D,
+        session: SessionHandle,
+        class: AdmissionClass,
+        original: OriginalRequestIdentity,
+        remote_address: std::net::SocketAddr,
+        request_started: Instant,
+        builder: RemotingRequestBuilder,
+    ) -> Result<(), AuthorizedDispatchV2Error> {
+        self.execute_admitted_network(
+            processor,
+            session,
+            self.open_network_session(),
+            class,
+            original,
+            remote_address,
+            request_started,
+            builder,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn dispatch(
+        self: &Arc<Self>,
+        authorized_session: &AuthorizedDispatchSession,
+        session: SessionHandle,
+        context: RequestContext,
+        command: RemotingCommand,
+        retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
+    ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
+        self.dispatch_network(
+            authorized_session,
+            self.open_network_session(),
+            session,
+            context,
+            command,
+            Instant::now(),
+            retained_bytes,
+            partial_frame_permit,
+        )
+        .await
     }
 
     fn report_admitted_failure(&self, error: &AuthorizedDispatchV2Error) {

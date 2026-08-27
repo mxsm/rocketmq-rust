@@ -14,6 +14,7 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+#[cfg(all(test, not(doctest)))]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +58,6 @@ use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
-use crate::server::ConnectionHandler as TransportConnectionHandler;
 use crate::server::TransportListener;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsServerRuntime;
@@ -69,6 +69,9 @@ mod connection_listener;
 mod launch;
 mod lifecycle_events;
 mod shutdown;
+mod v2_server;
+
+pub use v2_server::TransportServerV2;
 
 #[cfg(all(test, not(doctest)))]
 use connection_handler::TestRequestHook;

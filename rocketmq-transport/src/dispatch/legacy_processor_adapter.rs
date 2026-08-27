@@ -36,6 +36,7 @@ use super::ResponsePlan;
 use super::ResponsePlanError;
 use super::ResponseReceipt;
 use super::ResponseSink;
+use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::hook_registry::HookSnapshot;
 use crate::net::channel::Channel;
@@ -73,7 +74,7 @@ static BRIDGE_CONSTRUCTIONS: Mutex<Vec<SessionId>> = Mutex::new(Vec::new());
 static BRIDGE_CHANNEL_INNER_CONSTRUCTIONS: Mutex<Vec<SessionId>> = Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub(super) fn bridge_construction_counts(session_id: SessionId) -> (usize, usize) {
+pub(crate) fn bridge_construction_counts(session_id: SessionId) -> (usize, usize) {
     let bridges = BRIDGE_CONSTRUCTIONS
         .lock()
         .expect("legacy bridge construction counter lock")
@@ -110,7 +111,7 @@ impl LegacyRequestBridge {
     fn from_network_session(
         session: &SessionHandle,
         response: &ResponseSink,
-        response_table: PendingRequestTable,
+        endpoint: &LegacyNetworkSession,
     ) -> Result<Self, LegacyProcessorAdapterError> {
         let canonical_session_id = SessionId::from_session_owner(session.session_id());
         #[cfg(test)]
@@ -133,7 +134,11 @@ impl LegacyRequestBridge {
             .expect("legacy bridge ChannelInner construction counter lock")
             .push(canonical_session_id);
         let channel = session
-            .legacy_processor_channel(response.clone(), response_table)
+            .legacy_processor_channel(
+                response.clone(),
+                endpoint.response_table.clone(),
+                endpoint.owner.clone(),
+            )
             .map_err(LegacyProcessorAdapterError::BridgeConstruction)?;
         let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let bridge = Self {
@@ -142,6 +147,9 @@ impl LegacyRequestBridge {
             canonical_session_id,
         };
         bridge.validate_network(session, response)?;
+        if !bridge.channel.has_pending_request_owner(&endpoint.owner) {
+            return Err(LegacyProcessorAdapterError::CompletionOwnerMismatch);
+        }
         Ok(bridge)
     }
 
@@ -278,6 +286,30 @@ impl LegacyRequestBridge {
     }
 }
 
+/// Stable response-correlation owner allocated once for one canonical V1
+/// network session and reused by every admitted legacy bridge in that session.
+#[derive(Clone)]
+pub(crate) struct LegacyNetworkSession {
+    response_table: PendingRequestTable,
+    owner: PendingRequestOwner,
+}
+
+impl LegacyNetworkSession {
+    #[cfg(test)]
+    pub(crate) fn for_test(response_table: PendingRequestTable) -> Self {
+        let owner = response_table.new_owner();
+        Self { response_table, owner }
+    }
+
+    pub(crate) fn response_table(&self) -> &PendingRequestTable {
+        &self.response_table
+    }
+
+    pub(crate) fn owner(&self) -> &PendingRequestOwner {
+        &self.owner
+    }
+}
+
 /// Existing V1 processor plus the stable endpoint capabilities needed by each
 /// admitted bridge invocation.
 #[allow(
@@ -307,6 +339,13 @@ impl<P> LegacyProcessorAdapter<P> {
             processor_name,
             telemetry,
             response_table,
+        }
+    }
+
+    pub(crate) fn open_network_session(&self) -> LegacyNetworkSession {
+        LegacyNetworkSession {
+            response_table: self.response_table.clone(),
+            owner: self.response_table.new_owner(),
         }
     }
 }
@@ -516,6 +555,14 @@ impl DispatchMetricsGuard {
 
 /// Sealed statically dispatched processor boundary used by the V2 core.
 pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'static {
+    type NetworkSession: Clone + Send + Sync + 'static;
+
+    fn open_network_session(&self) -> Self::NetworkSession;
+
+    fn complete_network_response(&self, session: &Self::NetworkSession, response: RemotingCommand);
+
+    fn close_network_session(&self, session: &Self::NetworkSession);
+
     fn request_ordering(&self, builder: &RemotingRequestBuilder) -> RequestOrdering;
 
     fn begin_admitted(&self, original: OriginalRequestIdentity, request_bytes: u64) -> DispatchMetricsGuard;
@@ -530,6 +577,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         hook_snapshot: Option<&HookSnapshot>,
         remote_address: SocketAddr,
         session: &SessionHandle,
+        network_session: &Self::NetworkSession,
         response: &ResponseSink,
     ) -> impl Future<Output = Result<InternalProcessorCandidate, DispatchProcessorError>> + Send;
 
@@ -556,6 +604,20 @@ impl<P> DispatchProcessor for ExplicitV2Processor<P>
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
+    type NetworkSession = ();
+
+    fn open_network_session(&self) -> Self::NetworkSession {}
+
+    fn complete_network_response(&self, _session: &Self::NetworkSession, _response: RemotingCommand) {
+        tracing::warn!(
+            frame = "unexpected_response",
+            generation = "v2",
+            "unexpected response frame dropped on V2-only transport session"
+        );
+    }
+
+    fn close_network_session(&self, _session: &Self::NetworkSession) {}
+
     fn request_ordering(&self, builder: &RemotingRequestBuilder) -> RequestOrdering {
         self.processor.request_ordering(builder.ingress_view())
     }
@@ -590,6 +652,7 @@ where
         hook_snapshot: Option<&HookSnapshot>,
         remote_address: SocketAddr,
         _session: &SessionHandle,
+        _network_session: &Self::NetworkSession,
         _response: &ResponseSink,
     ) -> impl Future<Output = Result<InternalProcessorCandidate, DispatchProcessorError>> + Send {
         async move {
@@ -682,6 +745,35 @@ impl<P> DispatchProcessor for LegacyProcessorAdapter<P>
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
+    type NetworkSession = LegacyNetworkSession;
+
+    fn open_network_session(&self) -> Self::NetworkSession {
+        self.open_network_session()
+    }
+
+    fn complete_network_response(&self, session: &Self::NetworkSession, response: RemotingCommand) {
+        let opaque = response.opaque();
+        if !session
+            .response_table
+            .complete_response_for_owner(&session.owner, opaque, response)
+        {
+            tracing::warn!(
+                frame = "unmatched_response",
+                generation = "v1",
+                "response frame did not match pending work for its canonical session owner"
+            );
+        }
+    }
+
+    fn close_network_session(&self, session: &Self::NetworkSession) {
+        session.response_table.close_owner(&session.owner, || {
+            rocketmq_error::RocketMQError::network_connection_failed(
+                "legacy_session_pending_requests",
+                "canonical V1 network session closed",
+            )
+        });
+    }
+
     fn request_ordering(&self, builder: &RemotingRequestBuilder) -> RequestOrdering {
         self.processor.request_ordering(builder.command())
     }
@@ -724,10 +816,11 @@ where
         hook_snapshot: Option<&HookSnapshot>,
         remote_address: SocketAddr,
         session: &SessionHandle,
+        network_session: &Self::NetworkSession,
         response: &ResponseSink,
     ) -> impl Future<Output = Result<InternalProcessorCandidate, DispatchProcessorError>> + Send {
         async move {
-            let bridge = LegacyRequestBridge::from_network_session(session, response, self.response_table.clone())?;
+            let bridge = LegacyRequestBridge::from_network_session(session, response, network_session)?;
             bridge.validate_request(request)?;
 
             if let Err(error) = run_before_rpc_hooks(hook_snapshot, remote_address, request.legacy_command_mut()) {

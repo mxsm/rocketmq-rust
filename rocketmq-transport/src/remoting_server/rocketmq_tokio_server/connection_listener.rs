@@ -148,6 +148,6 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             event_publisher,
             sessions: dashmap::DashMap::new(),
         });
-        transport.run(connection_handler).await
+        transport.run_authorized(connection_handler).await
     }
 }

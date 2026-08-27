@@ -21,6 +21,7 @@
 
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
+pub use crate::dispatch::AuthorizedCommandDispatcherV2;
 pub use crate::dispatch::DeferredRegistration;
 pub use crate::dispatch::EmbeddedCaller;
 pub use crate::dispatch::HandlerOutcome;
@@ -43,6 +44,7 @@ pub use crate::dispatch::ResponseReceipt;
 pub use crate::dispatch::WriteProgress;
 pub use crate::file_region::FileRegion;
 pub use crate::file_region::FileRegionSequence;
+pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;
 pub use crate::runtime::processor_v2::LocalRequestProcessorV2;

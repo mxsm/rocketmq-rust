@@ -22,6 +22,8 @@ use crate::config::TlsConfig;
 use crate::config::TlsMode;
 #[cfg(feature = "tls")]
 use crate::config::TlsServerConfig;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -49,6 +51,33 @@ use super::lifecycle_events::LifecycleEventConfig;
 use super::lifecycle_events::LifecycleEventPublishOutcome;
 use super::lifecycle_events::LifecycleEventPublisher;
 use super::shutdown::new_remoting_server_task_group_with_service_context;
+
+#[derive(Clone)]
+struct CorrelatingV1Processor;
+
+impl RequestProcessor for CorrelatingV1Processor {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::remoting_command::RemotingCommand>> {
+        let correlated = channel
+            .send_wait_response(
+                rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(8_801)
+                    .set_opaque(request.opaque()),
+                30_000,
+            )
+            .await?;
+        Ok(Some(
+            rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_response_command_with_code(
+                rocketmq_protocol::code::response_code::ResponseCode::Success,
+            )
+            .set_opaque(request.opaque())
+            .set_body(correlated.body().cloned().unwrap_or_default()),
+        ))
+    }
+}
 
 #[cfg(test)]
 mod runtime_test_support {
@@ -1330,4 +1359,162 @@ async fn run_shutdown_report_includes_tls_reload_task() {
         .expect("remoting shutdown report should include tls reload task group");
     assert!(tls_report.is_healthy(), "{}", tls_report.to_json());
     assert_eq!(tls_report.leaked, 0, "{}", tls_report.to_json());
+}
+
+#[tokio::test]
+async fn v1_network_response_frames_complete_the_exact_session_owner() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind V1 correlation listener");
+    let address = listener.local_addr().expect("V1 correlation listener address");
+    let mut server = TransportServer::new(
+        Arc::new(ServerConfig::default()),
+        test_service_context("remoting-server-v1-correlation"),
+    );
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        server
+            .try_serve_bound_listener_until_with_startup(
+                listener,
+                CorrelatingV1Processor,
+                None,
+                None,
+                async {
+                    let _ = shutdown_rx.await;
+                },
+                startup_tx,
+            )
+            .await
+    });
+    assert_eq!(
+        startup_rx
+            .await
+            .expect("V1 startup channel")
+            .expect("V1 startup succeeds"),
+        address
+    );
+
+    let mut first = crate::connection::Connection::new(TcpStream::connect(address).await.expect("first V1 client"));
+    let mut second = crate::connection::Connection::new(TcpStream::connect(address).await.expect("second V1 client"));
+    first
+        .send_command(RemotingCommand::create_remoting_command(8_800).set_opaque(41))
+        .await
+        .expect("first inbound request");
+    second
+        .send_command(RemotingCommand::create_remoting_command(8_800).set_opaque(41))
+        .await
+        .expect("second inbound request");
+
+    let first_outbound = tokio::time::timeout(Duration::from_secs(1), first.receive_command())
+        .await
+        .expect("first outbound deadline")
+        .expect("first client connected")
+        .expect("first outbound request");
+    let second_outbound = tokio::time::timeout(Duration::from_secs(1), second.receive_command())
+        .await
+        .expect("second outbound deadline")
+        .expect("second client connected")
+        .expect("second outbound request");
+    assert_eq!((first_outbound.code(), first_outbound.opaque()), (8_801, 41));
+    assert_eq!((second_outbound.code(), second_outbound.opaque()), (8_801, 41));
+
+    first
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_opaque(41)
+                .set_body(b"first-owner".to_vec()),
+        )
+        .await
+        .expect("first correlated response");
+    second
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_opaque(41)
+                .set_body(b"second-owner".to_vec()),
+        )
+        .await
+        .expect("second correlated response");
+
+    let first_final = tokio::time::timeout(Duration::from_secs(1), first.receive_command())
+        .await
+        .expect("first final deadline")
+        .expect("first connection")
+        .expect("first final response");
+    let second_final = tokio::time::timeout(Duration::from_secs(1), second.receive_command())
+        .await
+        .expect("second final deadline")
+        .expect("second connection")
+        .expect("second final response");
+    assert_eq!(first_final.opaque(), 41);
+    assert_eq!(first_final.body(), Some(&bytes::Bytes::from_static(b"first-owner")));
+    assert_eq!(second_final.opaque(), 41);
+    assert_eq!(second_final.body(), Some(&bytes::Bytes::from_static(b"second-owner")));
+
+    first
+        .send_command(RemotingCommand::create_remoting_command(8_800).set_opaque(51))
+        .await
+        .expect("first concurrent request");
+    first
+        .send_command(RemotingCommand::create_remoting_command(8_800).set_opaque(52))
+        .await
+        .expect("second concurrent request");
+    let first_pending = tokio::time::timeout(Duration::from_secs(1), first.receive_command())
+        .await
+        .expect("first concurrent outbound deadline")
+        .expect("first connection")
+        .expect("first concurrent outbound");
+    let second_pending = tokio::time::timeout(Duration::from_secs(1), first.receive_command())
+        .await
+        .expect("second concurrent outbound deadline")
+        .expect("first connection")
+        .expect("second concurrent outbound");
+    assert_ne!(first_pending.opaque(), second_pending.opaque());
+    for outbound in [first_pending, second_pending] {
+        first
+            .send_command(
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                    .set_opaque(outbound.opaque())
+                    .set_body(format!("owner-{}", outbound.opaque()).into_bytes()),
+            )
+            .await
+            .expect("complete same-session pending request");
+    }
+    let mut completed = Vec::new();
+    for _ in 0..2 {
+        let response = tokio::time::timeout(Duration::from_secs(1), first.receive_command())
+            .await
+            .expect("same-session final deadline")
+            .expect("first connection")
+            .expect("same-session final response");
+        completed.push((response.opaque(), response.body().cloned()));
+    }
+    completed.sort_by_key(|(opaque, _)| *opaque);
+    assert_eq!(
+        completed,
+        vec![
+            (51, Some(bytes::Bytes::from_static(b"owner-51"))),
+            (52, Some(bytes::Bytes::from_static(b"owner-52"))),
+        ]
+    );
+
+    let mut closing = crate::connection::Connection::new(TcpStream::connect(address).await.expect("closing V1 client"));
+    closing
+        .send_command(RemotingCommand::create_remoting_command(8_800).set_opaque(61))
+        .await
+        .expect("closing inbound request");
+    let _ = tokio::time::timeout(Duration::from_secs(1), closing.receive_command())
+        .await
+        .expect("closing outbound deadline")
+        .expect("closing connection")
+        .expect("closing outbound request");
+    drop(closing);
+
+    let _ = shutdown_tx.send(());
+    let report = tokio::time::timeout(Duration::from_secs(2), server_task)
+        .await
+        .expect("owner close releases pending waiter before drain")
+        .expect("join V1 correlation server")
+        .expect("V1 correlation shutdown report");
+    assert!(report.is_healthy(), "{}", report.to_json());
 }
