@@ -971,8 +971,14 @@ mod tests {
         );
         let snapshot = controller.snapshot();
         assert_eq!(snapshot.queued.current_count, 0);
+        assert_eq!(snapshot.queued.current_bytes, 0);
+        assert_eq!(snapshot.queued.rejected_count, 1);
         assert_eq!(snapshot.inflight.current_count, 0);
+        assert_eq!(snapshot.inflight.current_bytes, 0);
+        assert_eq!(snapshot.inflight.rejected_count, 0);
         assert_eq!(snapshot.processors.current_count, 0);
+        assert_eq!(snapshot.processors.current_bytes, 0);
+        assert_eq!(snapshot.processors.rejected_count, 0);
     }
 
     #[tokio::test]
@@ -1010,7 +1016,14 @@ mod tests {
         );
         let snapshot = controller.snapshot();
         assert_eq!(snapshot.queued.current_count, 0);
+        assert_eq!(snapshot.queued.current_bytes, 0);
+        assert_eq!(snapshot.queued.rejected_count, 0);
         assert_eq!(snapshot.inflight.current_count, 0);
+        assert_eq!(snapshot.inflight.current_bytes, 0);
+        assert_eq!(snapshot.inflight.rejected_count, 1);
+        assert_eq!(snapshot.processors.current_count, 0);
+        assert_eq!(snapshot.processors.current_bytes, 0);
+        assert_eq!(snapshot.processors.rejected_count, 0);
     }
 
     #[tokio::test]
@@ -1027,10 +1040,11 @@ mod tests {
             ..defaults
         };
         let (_runtime, controller, executor) = executor_with_limits("deferred-resume-processor-reject", limits);
-        let (job, completion, _wait_released, rejected, executions) =
+        let (job, completion, wait_released, rejected, executions) =
             probe_job(charge, RequestOrdering::Concurrent, None);
         let cell = Arc::new(ResumeJobCell::new(job));
         cell.release_wait_permit();
+        assert!(wait_released.load(Ordering::Acquire));
         let submitted = executor
             .deferred_resume_executor()
             .try_execute_resume(Arc::clone(&cell));
@@ -1038,18 +1052,23 @@ mod tests {
         drop(cell);
         rejected.notified().await;
         assert_eq!(executions.load(Ordering::Acquire), 0);
-        assert_eq!(
-            completion.wait().await.expect_err("processor rejection result").kind(),
-            DeferredResumeErrorKind::Admission
-        );
+        let error = completion.wait().await.expect_err("processor rejection result");
+        assert_eq!(error.kind(), DeferredResumeErrorKind::Admission);
+        assert_eq!(error.prior_terminal_reason(), None);
         let report = executor
             .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
             .await;
         assert_eq!(report.aborted, 0);
         let snapshot = controller.snapshot();
         assert_eq!(snapshot.queued.current_count, 0);
+        assert_eq!(snapshot.queued.current_bytes, 0);
+        assert_eq!(snapshot.queued.rejected_count, 0);
         assert_eq!(snapshot.inflight.current_count, 0);
+        assert_eq!(snapshot.inflight.current_bytes, 0);
+        assert_eq!(snapshot.inflight.rejected_count, 0);
         assert_eq!(snapshot.processors.current_count, 0);
+        assert_eq!(snapshot.processors.current_bytes, 0);
+        assert_eq!(snapshot.processors.rejected_count, 1);
     }
 
     #[tokio::test]

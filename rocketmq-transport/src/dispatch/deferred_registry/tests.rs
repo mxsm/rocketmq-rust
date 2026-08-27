@@ -160,6 +160,17 @@ impl Harness {
     }
 }
 
+fn assert_registry_released<R>(registry: &DeferredRegistry<R>, admission: &DeferredAdmission)
+where
+    R: Send + 'static,
+{
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    let snapshot = admission.snapshot();
+    assert_eq!(snapshot.waiting_count(), 0);
+    assert_eq!(snapshot.retained_bytes(), 0);
+}
+
 fn expiring_parts<R>(
     harness: &Harness,
     original: OriginalRequestIdentity,
@@ -386,6 +397,7 @@ fn underreported_permit_is_rejected_before_id_index_and_builder_with_exact_parts
     let recovered = error.into_parts().expect("preflight returns exact parts");
     assert_eq!(recovered.request_id(), original.request_id());
     assert_eq!(recovered.retained_bytes(), retained_bytes);
+    drop(recovered);
 
     let direct_original = harness.identity(101);
     let direct = registry
@@ -398,12 +410,13 @@ fn underreported_permit_is_rejected_before_id_index_and_builder_with_exact_parts
     let direct_request = direct.into_request().expect("direct preflight returns exact request");
     assert_eq!(direct_request.request_id(), direct_original.request_id());
     assert_eq!(direct_request.resume(), &8);
+    drop(direct_request);
     assert_eq!(
         sequence.load(Ordering::SeqCst),
         700,
         "retained-size preflight must run before deferred-id allocation"
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_registry_released(&registry, &harness.admission);
 }
 
 #[test]
@@ -419,8 +432,7 @@ fn guard_drop_atomically_cleans_all_indexes_and_empty_session_bucket() {
         Some(EntryPhaseTag::Prepared)
     );
     drop(registration);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_registry_released(&registry, &harness.admission);
 }
 
 #[test]
@@ -435,10 +447,14 @@ fn duplicate_request_has_one_deterministic_owner_and_recovers_the_loser() {
         .register(DeferredRequest::new(2, harness.parts::<u64>(original)))
         .expect_err("same request cannot register twice");
     assert_eq!(loser.kind(), DeferredRegistryErrorKind::DuplicateRequest);
-    assert_eq!(loser.into_request().expect("loser request").resume(), &2);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 2);
+    let loser = loser.into_request().expect("loser request");
+    assert_eq!(loser.resume(), &2);
+    drop(loser);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
     assert_eq!(registry.inner.index_counts(), (1, 1, 1));
     drop(winner);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_registry_released(&registry, &harness.admission);
 }
 
 #[derive(Debug)]
@@ -476,7 +492,9 @@ fn typed_builder_failure_preserves_source_and_parts_while_outer_formatting_is_re
     let (source, parts) = error.into_builder_failure().expect("builder error and exact parts");
     assert_eq!(source.0, "secret business key");
     assert_eq!(parts.request_id(), original.request_id());
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
+    drop(parts);
+    assert_registry_released(&registry, &harness.admission);
 }
 
 struct ReentrantLease {
@@ -510,8 +528,7 @@ fn panicking_builder_rolls_back_after_reentrant_lease_drop_without_holding_the_l
     }));
     assert!(result.is_err());
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_registry_released(&registry, &harness.admission);
 }
 
 #[tokio::test]
@@ -753,16 +770,22 @@ async fn activating_claim_is_published_without_a_second_ready_state_machine() {
     assert_eq!(claimed.reason(), DeferredWakeReason::ForcedRefresh);
 }
 
-#[tokio::test]
-async fn concurrent_claims_have_one_winner_and_transient_marker_diagnostics() {
-    let harness = Harness::new("deferred-registry-one-claim", 8113);
+async fn assert_first_claim_reason_wins(
+    name: &'static str,
+    owner: u64,
+    first_reason: DeferredWakeReason,
+    second_reason: DeferredWakeReason,
+) {
+    let harness = Harness::new(name, owner);
     let registry = DeferredRegistry::<u64>::new();
+    let parts = harness.parts::<u64>(harness.identity(owner as i32));
+    let state = parts.response_state();
     let registration = registry
-        .register(DeferredRequest::new(27, harness.parts::<u64>(harness.identity(13))))
+        .register(DeferredRequest::new(27, parts))
         .expect("prepared registration");
     let id = registration.deferred_id();
-    let first = registry.claim(id, DeferredWakeReason::MessageArrived);
-    let second = registry.claim(id, DeferredWakeReason::Timeout);
+    let first = registry.claim(id, first_reason);
+    let second = registry.claim(id, second_reason);
     tokio::pin!(first);
     tokio::pin!(second);
     tokio::select! {
@@ -777,13 +800,19 @@ async fn concurrent_claims_have_one_winner_and_transient_marker_diagnostics() {
     }
     registration.commit().expect("publish active registration");
     let claimed = first.await.expect("first waiter wins");
-    assert_eq!(claimed.reason(), DeferredWakeReason::MessageArrived);
+    assert_eq!(claimed.reason(), first_reason);
     let error = second.await.expect_err("second waiter observes the live marker");
     assert_eq!(error.kind(), DeferredClaimErrorKind::AlreadyClaimed);
     assert_eq!(error.request_id(), Some(claimed.request_id()));
-    assert_eq!(registry.inner.claim_marker_count(), 1);
+    assert_eq!(error.prior_terminal_reason(), None);
+    assert!(!registry.test_contains(id));
+    assert_eq!(registry.test_session_member_count(harness.session.view().id()), 1);
+    assert_eq!(registry.test_claim_marker_count(), 1);
     drop(claimed);
-    assert_eq!(registry.inner.claim_marker_count(), 0);
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::ClaimDropped)
+    );
     assert_eq!(
         registry
             .claim(id, DeferredWakeReason::ForcedRefresh)
@@ -792,8 +821,25 @@ async fn concurrent_claims_have_one_winner_and_transient_marker_diagnostics() {
             .kind(),
         DeferredClaimErrorKind::NotFound
     );
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_registry_released(&registry, &harness.admission);
+}
+
+#[tokio::test]
+async fn message_and_timeout_claims_freeze_the_first_reason_in_both_linearizations() {
+    assert_first_claim_reason_wins(
+        "deferred-registry-message-before-timeout",
+        8113,
+        DeferredWakeReason::MessageArrived,
+        DeferredWakeReason::Timeout,
+    )
+    .await;
+    assert_first_claim_reason_wins(
+        "deferred-registry-timeout-before-message",
+        8114,
+        DeferredWakeReason::Timeout,
+        DeferredWakeReason::MessageArrived,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1033,11 +1079,10 @@ async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
     let harness = Harness::new("deferred-registry-claimed-cleanup", 8122);
     let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
     let registry = DeferredRegistry::<u64>::new();
+    let parts = harness.parts_with_cleanup::<u64>(harness.identity(204), &cleanup);
+    let state = parts.response_state();
     let registration = registry
-        .register(DeferredRequest::new(
-            9,
-            harness.parts_with_cleanup::<u64>(harness.identity(204), &cleanup),
-        ))
+        .register(DeferredRequest::new(9, parts))
         .expect("claimed cleanup registration");
     let id = registration.deferred_id();
     registration.commit().expect("claimed cleanup commit");
@@ -1054,13 +1099,22 @@ async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
     );
     assert_eq!(registry.inner.session_member_count(harness.session.view().id()), 0);
     assert_eq!(registry.inner.claim_marker_count(), 0);
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::SessionClosed)
+    );
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
     let error = registry
         .claim(id, DeferredWakeReason::Timeout)
         .await
         .expect_err("fresh post-cleanup claim has no tombstone");
     assert_eq!(error.kind(), DeferredClaimErrorKind::NotFound);
     drop(claimed);
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_eq!(
+        state.terminal_reason(),
+        Some(crate::dispatch::DeferredTerminalReason::SessionClosed)
+    );
+    assert_registry_released(&registry, &harness.admission);
 }
 
 #[test]
@@ -1080,8 +1134,7 @@ fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
     assert_eq!(stats.in_progress_responses(), 0);
     assert_eq!(stats.invariant_failures(), 0);
     assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
-    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
-    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+    assert_registry_released(&registry, &harness.admission);
 
     let called = Arc::new(AtomicBool::new(false));
     let builder_called = Arc::clone(&called);
@@ -1093,6 +1146,11 @@ fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
         .expect_err("closed registry rejects registration");
     assert_eq!(error.kind(), DeferredRegistryErrorKind::ParentCancelled);
     assert!(!called.load(Ordering::SeqCst));
+    assert!(
+        error.into_parts().is_none(),
+        "lifecycle stop consumes and releases response ownership"
+    );
+    assert_registry_released(&registry, &harness.admission);
 }
 
 #[test]

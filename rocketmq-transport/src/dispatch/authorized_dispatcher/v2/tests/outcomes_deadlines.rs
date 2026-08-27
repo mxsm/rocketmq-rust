@@ -221,21 +221,39 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         .lock()
         .expect("registered deferred id lock")
         .expect("processor should publish deferred id");
+    assert!(registry.test_contains(id));
+    assert_eq!(registry.test_index_counts(), (1, 1, 1));
+    assert_eq!(registry.test_claim_marker_count(), 0);
+    assert_eq!(admission.snapshot().waiting_count(), 1);
+    assert!(admission.snapshot().retained_bytes() > 0);
     let claimed = registry
         .claim(id, crate::dispatch::DeferredWakeReason::MessageArrived)
         .await
         .expect("commit should publish an active claim");
     assert_eq!(claimed.resume_data(), "dispatcher-owned deferred resume");
+    assert!(!registry.test_contains(id));
+    assert_eq!(registry.test_claim_marker_count(), 1);
     assert_eq!(admission.snapshot().waiting_count(), 1);
     harness.assert_no_response().await;
 
     let handler_admission = admission.clone();
+    let handler_controller = Arc::clone(&harness.admission_controller);
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&handler_calls);
     let receipt = claimed
         .resume(
             DeferredResumeRetainedSize::default(),
             move |resume, reason| async move {
+                calls.fetch_add(1, Ordering::SeqCst);
                 assert_eq!(handler_admission.snapshot().waiting_count(), 0);
                 assert_eq!(handler_admission.snapshot().retained_bytes(), 0);
+                let execution = handler_controller.snapshot();
+                assert_eq!(execution.queued.current_count, 0);
+                assert_eq!(execution.queued.current_bytes, 0);
+                assert_eq!(execution.inflight.current_count, 1);
+                assert!(execution.inflight.current_bytes > 0);
+                assert_eq!(execution.processors.current_count, 1);
+                assert!(execution.processors.current_bytes > 0);
                 assert_eq!(resume, "dispatcher-owned deferred resume");
                 assert_eq!(reason, DeferredWakeReason::MessageArrived);
                 ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
@@ -245,9 +263,26 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         .await
         .expect("resume should use the same session executor and writer");
     assert_eq!(receipt.request_id(), original.request_id());
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
     assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(admission.snapshot().retained_bytes(), 0);
+    harness.drain_requests().await;
+    let execution = harness.admission_controller.snapshot();
+    assert_eq!(execution.queued.current_count, 0);
+    assert_eq!(execution.queued.current_bytes, 0);
+    assert_eq!(execution.inflight.current_count, 0);
+    assert_eq!(execution.inflight.current_bytes, 0);
+    assert_eq!(execution.processors.current_count, 0);
+    assert_eq!(execution.processors.current_bytes, 0);
     let response = harness.receive().await;
     assert_eq!(response.opaque(), original.original_opaque());
+    let writer = harness.session.writer_snapshot();
+    assert_eq!(writer.accepted, 1);
+    assert_eq!(writer.queued_items, 0);
+    assert_eq!(writer.queued_bytes, 0);
+    assert_eq!(writer.completed, 1);
     drop(dispatcher);
     drop(registry);
     assert_eq!(admission.snapshot().waiting_count(), 0);
@@ -315,7 +350,17 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
     );
     assert!(!handler_called.load(Ordering::SeqCst));
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(registry.test_claim_marker_count(), 0);
     assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(admission.snapshot().retained_bytes(), 0);
+    let execution = harness.admission_controller.snapshot();
+    assert_eq!(execution.queued.current_count, 0);
+    assert_eq!(execution.queued.current_bytes, 0);
+    assert_eq!(execution.inflight.current_count, 0);
+    assert_eq!(execution.inflight.current_bytes, 0);
+    assert_eq!(execution.processors.current_count, 0);
+    assert_eq!(execution.processors.current_bytes, 0);
     harness.assert_no_response().await;
     drop(dispatcher);
     drop(registry);
@@ -333,7 +378,9 @@ async fn real_registry_guards_rollback_on_unclaimed_wrong_and_oneway_handler_out
         let (fixture, registration) = real_registration_fixture(name, owner);
         assert!(fixture.registry.test_contains(fixture.id));
         assert_eq!(fixture.registry.test_index_counts(), (1, 1, 1));
+        assert_eq!(fixture.registry.test_claim_marker_count(), 0);
         assert_eq!(fixture.admission.snapshot().waiting_count(), 1);
+        assert!(fixture.admission.snapshot().retained_bytes() > 0);
         let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
             RollbackRegistrationProcessor {
                 registration: Arc::new(Mutex::new(Some(registration))),
@@ -353,6 +400,7 @@ async fn real_registry_guards_rollback_on_unclaimed_wrong_and_oneway_handler_out
         assert_eq!(dispatcher.reported_failure_categories(), ["handler_contract"]);
         assert!(!fixture.registry.test_contains(fixture.id));
         assert_eq!(fixture.registry.test_index_counts(), (0, 0, 0));
+        assert_eq!(fixture.registry.test_claim_marker_count(), 0);
         assert_eq!(fixture.admission.snapshot().waiting_count(), 0);
         assert_eq!(fixture.admission.snapshot().retained_bytes(), 0);
         harness.assert_no_response().await;
