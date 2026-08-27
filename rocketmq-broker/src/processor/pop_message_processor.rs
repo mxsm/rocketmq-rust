@@ -95,6 +95,11 @@ use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
 use crate::processor::pop_message_processor::capability::PopBufferMergeContext;
 use crate::processor::pop_message_processor::capability::PopMessageProcessorContext;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
+use crate::processor::response_plan::pop::attach_pop_response_header;
+use crate::processor::response_plan::pop::deliver_pop_legacy;
+use crate::processor::response_plan::pop::pop_heap_response_parts;
+use crate::processor::response_plan::pop::pop_segmented_response_parts;
+use crate::processor::response_plan::pop::take_pop_body_segments;
 
 const BORN_TIME: &str = "bornTime";
 const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -800,39 +805,20 @@ where
 
         match ResponseCode::from(final_response.code()) {
             ResponseCode::Success => {
+                let final_response = attach_pop_response_header(final_response, response_header);
                 if policy.transfer_msg_by_heap {
-                    if let Some(bytes) = self.read_get_message_result(
+                    let body = self.read_get_message_result(
                         &get_message_result,
                         &request_header.consumer_group,
                         &request_header.topic,
                         request_header.queue_id,
-                    ) {
-                        final_response.set_body_mut_ref(bytes);
-                    }
-                    final_response.set_command_custom_header_ref(response_header);
-                    Ok(Some(final_response))
+                    );
+                    let parts = pop_heap_response_parts(final_response, body)?;
+                    deliver_pop_legacy(parts, &channel).await
                 } else {
-                    //zero copy transfer
-                    let header_bytes = final_response
-                        .encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
-                        .ok_or_else(|| {
-                            rocketmq_error::RocketMQError::Serialization(
-                                rocketmq_error::SerializationError::encode_failed(
-                                    "remoting-command",
-                                    "failed to encode POP response header",
-                                ),
-                            )
-                        })?;
-                    let mut frame_segments = Vec::with_capacity(get_message_result.message_mapped_list().len() + 1);
-                    frame_segments.push(header_bytes);
-                    for select_result in get_message_result.message_mapped_list_mut() {
-                        if let Some(message) = select_result.take() {
-                            frame_segments.push(message);
-                        }
-                    }
-                    channel.send_frame_segments(frame_segments).await?;
-
-                    Ok(None)
+                    let body_segments = take_pop_body_segments(get_message_result);
+                    let parts = pop_segmented_response_parts(final_response, body_segments)?;
+                    deliver_pop_legacy(parts, &channel).await
                 }
             }
             _ => Ok(Some(final_response)),

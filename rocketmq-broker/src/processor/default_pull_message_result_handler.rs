@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::fs::File;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -41,15 +40,11 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::FileRangeTransferHandle;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::FileRegion;
-use rocketmq_transport::api::v1::FileRegionLease;
-use rocketmq_transport::api::v1::FileRegionSequence;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -63,35 +58,15 @@ use crate::processor::pull_message_processor::is_broadcast;
 use crate::processor::pull_message_processor::rewrite_response_for_static_topic;
 use crate::processor::pull_message_processor::static_topic_rewrite_error_response;
 use crate::processor::pull_message_processor::StaticTopicRewriteError;
+use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
+use crate::processor::response_plan::store_response_parts;
+use crate::processor::response_plan::BrokerResponseParts;
 
 pub struct DefaultPullMessageResultHandler<MS: BrokerReadStore> {
     context: Arc<PullMessageProcessorContext<MS>>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
     broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
-}
-
-struct PullFileRegionLease {
-    handle: FileRangeTransferHandle,
-}
-
-impl FileRegionLease for PullFileRegionLease {
-    fn file(&self) -> &File {
-        self.handle.file()
-    }
-}
-
-fn pull_file_regions(get_message_result: &GetMessageResult) -> Option<FileRegionSequence> {
-    let mut regions = Vec::with_capacity(get_message_result.message_mapped_list().len());
-    for selected in get_message_result.message_mapped_list() {
-        let range = selected.file_range()?;
-        let position = range.position();
-        let len = u64::try_from(range.len()).ok()?;
-        let handle = range.try_transfer_handle().ok()?;
-        let region = FileRegion::try_new(Arc::new(PullFileRegionLease { handle }), position, len).ok()?;
-        regions.push(region);
-    }
-    FileRegionSequence::try_new(regions).ok()
 }
 
 impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
@@ -111,7 +86,7 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
 impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultHandler<MS> {
     async fn handle(
         &self,
-        mut get_message_result: GetMessageResult,
+        get_message_result: GetMessageResult,
         request: &mut RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
@@ -123,7 +98,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
         _begin_time_mills: u64,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
         let client_address = channel.remote_address().to_string();
         let policy = self.context.policy();
         let topic_config = self.context.topics().select_topic_config(request_header.topic.as_ref());
@@ -147,7 +122,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
         );
         {
             let Some(response_header) = response.read_custom_header_mut::<PullMessageResponseHeader>() else {
-                return Some(static_topic_rewrite_error_response(
+                return command_result(static_topic_rewrite_error_response(
                     self.context.command_factory(),
                     StaticTopicRewriteError::MissingResponseHeader,
                     &mapping_context,
@@ -160,10 +135,10 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                 &mut mapping_context,
                 code,
             ) {
-                Ok(Some(response)) => return Some(response),
+                Ok(Some(response)) => return command_result(response),
                 Ok(None) => {}
                 Err(error) => {
-                    return Some(static_topic_rewrite_error_response(
+                    return command_result(static_topic_rewrite_error_response(
                         self.context.command_factory(),
                         error,
                         &mapping_context,
@@ -238,36 +213,9 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                         request_header.queue_id,
                         latency,
                     );
-                    if let Some(body) = body {
-                        response.set_body_mut_ref(body);
-                    }
-                    Some(response)
+                    bytes_result(response, body.unwrap_or_default())
                 } else {
-                    if let Some(regions) = pull_file_regions(&get_message_result) {
-                        if let Err(error) = channel.send_file_regions_response(response, regions).await {
-                            warn!(%error, "Failed to send owner-backed pull response");
-                        }
-                        return None;
-                    }
-
-                    let Some(header_bytes) =
-                        response.encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
-                    else {
-                        warn!("Failed to encode pull response header");
-                        return None;
-                    };
-                    let mut frame_segments = Vec::with_capacity(get_message_result.message_mapped_list().len() + 1);
-                    frame_segments.push(header_bytes);
-                    for select_result in get_message_result.message_mapped_list_mut() {
-                        if let Some(message) = select_result.take() {
-                            frame_segments.push(message);
-                        }
-                    }
-                    if let Err(error) = channel.send_frame_segments(frame_segments).await {
-                        warn!(%error, "Failed to send segmented pull response");
-                    }
-
-                    None
+                    store_result(response, get_message_result)
                 }
             }
             ResponseCode::PullNotFound => {
@@ -298,12 +246,12 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                     );
                     let suspended = self.context.suspend_pull_request(topic, queue_id, pull_request);
                     if suspended {
-                        return None;
+                        return Ok(PullMessageResult::Suspended);
                     }
                 }
-                Some(response)
+                command_result(response)
             }
-            ResponseCode::PullRetryImmediately => Some(response),
+            ResponseCode::PullRetryImmediately => command_result(response),
             ResponseCode::PullOffsetMoved => {
                 if policy.broker_role != BrokerRole::Slave || policy.offset_check_in_slave {
                     let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>().unwrap();
@@ -340,11 +288,11 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                         subscription_group_config.broker_id()
                     );
                 }
-                Some(response)
+                command_result(response)
             }
             _ => {
                 warn!("[BUG] impossible result code of get message: {}", response.code());
-                Some(response)
+                command_result(response)
             }
         }
     }
@@ -356,6 +304,24 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+fn command_result(response: RemotingCommand) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    Ok(PullMessageResult::Reply(BrokerResponseParts::command(response)?))
+}
+
+fn bytes_result(response: RemotingCommand, body: Bytes) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    Ok(PullMessageResult::Reply(BrokerResponseParts::bytes(response, body)?))
+}
+
+fn store_result(
+    response: RemotingCommand,
+    get_message_result: GetMessageResult,
+) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    Ok(PullMessageResult::Reply(store_response_parts(
+        response,
+        get_message_result.message_mapped_vec(),
+    )?))
 }
 
 impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
@@ -704,9 +670,54 @@ mod tests {
     use super::*;
     use rocketmq_store::DefaultMappedFile;
     use rocketmq_store::MappedFile;
+    use rocketmq_store::SelectMappedBufferResult;
+    use rocketmq_transport::api::v2::HandlerOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::api::v2::ResponsePlan;
+
+    fn response_head() -> RemotingCommand {
+        RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+    }
+
+    fn reply_plan(result: rocketmq_error::RocketMQResult<PullMessageResult>) -> ResponsePlan {
+        let PullMessageResult::Reply(parts) = result.expect("valid Pull result") else {
+            panic!("expected an immediate Pull reply");
+        };
+        let HandlerOutcome::Reply(plan) = parts.into_handler_outcome().expect("valid Pull response plan") else {
+            panic!("immediate Pull parts must map to a Reply outcome");
+        };
+        plan
+    }
 
     #[test]
-    fn pull_file_regions_preserve_multiple_store_ranges_without_snapshots() {
+    fn pull_result_distinguishes_immediate_reply_from_suspension() {
+        let immediate = command_result(response_head()).expect("valid immediate Pull result");
+        assert!(matches!(&immediate, PullMessageResult::Reply(_)));
+        let PullMessageResult::Reply(parts) = immediate else {
+            panic!("immediate Pull result must remain a reply");
+        };
+        let HandlerOutcome::Reply(plan) = parts.into_handler_outcome().expect("valid empty Pull plan") else {
+            panic!("immediate Pull parts must map to a Reply outcome");
+        };
+        let suspended = PullMessageResult::Suspended;
+
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+        assert!(matches!(suspended, PullMessageResult::Suspended));
+    }
+
+    #[test]
+    fn heap_pull_reply_exposes_bytes_at_the_v2_seam() {
+        let body = Bytes::from_static(b"heap-pull-body");
+        let plan = reply_plan(bytes_result(response_head(), body));
+
+        assert_eq!(plan.response_code(), ResponseCode::Success as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
+        assert_eq!(plan.body_len(), 14);
+        assert_eq!(plan.body_part_count(), 1);
+    }
+
+    #[test]
+    fn non_heap_pull_uses_file_regions_when_every_selection_has_a_range() {
         let directory = tempfile::tempdir().expect("temporary pull range directory");
         let path = directory.path().join("00000000000000000000");
         let mapped_file = DefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 64)
@@ -727,11 +738,38 @@ mod tests {
         let mut result = GetMessageResult::new_result_size(2);
         result.add_message(first, 0, 1);
         result.add_message(second, 1, 1);
-        let regions = pull_file_regions(&result).expect("owner-backed region sequence");
-        assert_eq!(regions.len(), 15);
         assert!(result
             .message_mapped_list()
             .iter()
             .all(|selected| !selected.has_byte_snapshot()));
+
+        let plan = reply_plan(store_result(response_head(), result));
+        assert_eq!(plan.body_kind(), ResponseBodyKind::FileRegions);
+        assert_eq!(plan.body_len(), 15);
+        assert_eq!(plan.body_part_count(), 2);
+    }
+
+    #[test]
+    fn non_heap_pull_falls_back_to_ordered_body_only_segments() {
+        let directory = tempfile::tempdir().expect("temporary mixed pull directory");
+        let path = directory.path().join("00000000000000000000");
+        let mapped_file = DefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 64)
+            .expect("mapped file");
+        assert!(mapped_file.append_message_bytes(b"file-first"));
+
+        let file_selection = mapped_file
+            .try_file_range_selection(0, 10)
+            .expect("file selection")
+            .expect("published file range");
+        let byte_selection =
+            SelectMappedBufferResult::from_bytes(10, Bytes::from_static(b"bytes-second")).expect("byte selection");
+        let mut result = GetMessageResult::new_result_size(2);
+        result.add_message(file_selection, 0, 1);
+        result.add_message(byte_selection, 1, 1);
+
+        let plan = reply_plan(store_result(response_head(), result));
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Segments);
+        assert_eq!(plan.body_len(), 22);
+        assert_eq!(plan.body_part_count(), 2);
     }
 }
