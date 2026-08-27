@@ -18,11 +18,20 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use parking_lot::Mutex;
 
+use super::ClaimMarker;
+use super::ClaimStart;
+use super::ClaimTicket;
+use super::ClaimWaiter;
+use super::ClaimedDeferred;
+use super::DeferredClaimError;
+use super::DeferredClaimErrorKind;
 use super::DeferredId;
 use super::DeferredParts;
 use super::DeferredRegistry;
@@ -32,10 +41,13 @@ use super::DeferredResponder;
 use super::DeferredResponseError;
 use super::DeferredRetainedSizeParts;
 use super::DeferredWaitPermit;
+use super::DeferredWakeReason;
 use super::RequestControlView;
 use super::RequestId;
 use super::SessionId;
+use super::TicketResolution;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::DeferredResponseErrorKind;
 
 const FIRST_DEFERRED_ID: u64 = 1;
 const EXHAUSTED_DEFERRED_ID: u64 = u64::MAX;
@@ -196,13 +208,6 @@ impl Error for DeferredCommitError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeferredWakeResult {
-    Recorded,
-    Coalesced,
-    NotFound,
-}
-
 pub(super) struct RegistryInner<R>
 where
     R: Send + 'static,
@@ -210,6 +215,8 @@ where
     state: Mutex<RegistryState<R>>,
     #[cfg(test)]
     test_sequence: Option<Arc<AtomicU64>>,
+    #[cfg(test)]
+    claim_marker_checkpoint: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
 }
 
 impl<R> Default for RegistryInner<R>
@@ -221,22 +228,26 @@ where
             state: Mutex::new(RegistryState::default()),
             #[cfg(test)]
             test_sequence: None,
+            #[cfg(test)]
+            claim_marker_checkpoint: Mutex::new(None),
         }
     }
 }
 
-struct RegistryState<R> {
+struct RegistryState<R: Send + 'static> {
     primary: HashMap<DeferredId, Entry<R>>,
     request_index: HashMap<RequestId, DeferredId>,
     session_index: HashMap<SessionId, HashSet<DeferredId>>,
+    claims: HashMap<DeferredId, Weak<ClaimMarker<R>>>,
 }
 
-impl<R> Default for RegistryState<R> {
+impl<R: Send + 'static> Default for RegistryState<R> {
     fn default() -> Self {
         Self {
             primary: HashMap::new(),
             request_index: HashMap::new(),
             session_index: HashMap::new(),
+            claims: HashMap::new(),
         }
     }
 }
@@ -244,9 +255,11 @@ impl<R> Default for RegistryState<R> {
 pub(super) struct Entry<R> {
     request_id: RequestId,
     session_id: SessionId,
+    control: RequestControlView,
     phase: EntryPhase<R>,
-    pending: bool,
-    ready: bool,
+    first_reason: Option<DeferredWakeReason>,
+    claim_ticket: Weak<ClaimTicket>,
+    ticket_epoch: u64,
 }
 
 enum EntryPhase<R> {
@@ -287,13 +300,20 @@ where
         Self {
             state: Mutex::new(RegistryState::default()),
             test_sequence: Some(sequence),
+            claim_marker_checkpoint: Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_claim_marker_checkpoint(&self, checkpoint: Box<dyn FnOnce() + Send + 'static>) {
+        *self.claim_marker_checkpoint.lock() = Some(checkpoint);
     }
 
     pub(super) fn insert_shell(
         &self,
         request_id: RequestId,
         session_id: SessionId,
+        control: RequestControlView,
     ) -> Result<DeferredId, DeferredRegistryErrorKind> {
         let mut state = self.state.lock();
         if state.request_index.contains_key(&request_id) {
@@ -309,9 +329,11 @@ where
             Entry {
                 request_id,
                 session_id,
+                control,
                 phase: EntryPhase::Shell,
-                pending: false,
-                ready: false,
+                first_reason: None,
+                claim_ticket: Weak::new(),
+                ticket_epoch: 0,
             },
         );
         state.request_index.insert(request_id, id);
@@ -382,70 +404,220 @@ where
         id: DeferredId,
         request: DeferredRequest<R>,
     ) -> Result<(), Box<DeferredRequest<R>>> {
-        let mut state = self.state.lock();
-        let Some(entry) = state.primary.get_mut(&id) else {
-            return Err(Box::new(request));
+        let ticket = {
+            let mut state = self.state.lock();
+            let Some(entry) = state.primary.get_mut(&id) else {
+                return Err(Box::new(request));
+            };
+            if entry.phase.tag() != EntryPhaseTag::Activating {
+                return Err(Box::new(request));
+            }
+            entry.phase = EntryPhase::Active(request);
+            entry.claim_ticket.upgrade()
         };
-        if entry.phase.tag() != EntryPhaseTag::Activating {
-            return Err(Box::new(request));
+        if let Some(ticket) = ticket {
+            ticket.publish(TicketResolution::Published);
         }
-        entry.ready |= entry.pending;
-        entry.pending = false;
-        entry.phase = EntryPhase::Active(request);
         Ok(())
     }
 
     pub(super) fn remove(&self, id: DeferredId) -> Option<Entry<R>> {
-        let mut state = self.state.lock();
-        let entry = state.primary.remove(&id)?;
-        if state.request_index.get(&entry.request_id) == Some(&id) {
-            state.request_index.remove(&entry.request_id);
-        }
-        let remove_session = state.session_index.get_mut(&entry.session_id).is_some_and(|ids| {
-            ids.remove(&id);
-            ids.is_empty()
-        });
-        if remove_session {
-            state.session_index.remove(&entry.session_id);
+        let entry = {
+            let mut state = self.state.lock();
+            remove_entry(&mut state, id)?
+        };
+        if let Some(ticket) = entry.claim_ticket.upgrade() {
+            ticket.publish(ticket_resolution_for_entry(&entry));
         }
         Some(entry)
     }
 
-    pub(super) fn wake(&self, id: DeferredId) -> DeferredWakeResult {
-        let mut state = self.state.lock();
-        let Some(entry) = state.primary.get_mut(&id) else {
-            return DeferredWakeResult::NotFound;
+    pub(super) fn start_claim(
+        self: &Arc<Self>,
+        id: DeferredId,
+        reason: DeferredWakeReason,
+        expected: Option<&ClaimWaiter>,
+    ) -> ClaimStart<R> {
+        let mut removed = None;
+        let mut removed_ticket = None;
+        let mut removed_ticket_resolution = None;
+        let outcome = {
+            let mut state = self.state.lock();
+            if !state.primary.contains_key(&id) {
+                let marker = state.claims.get(&id).and_then(Weak::upgrade);
+                if marker.is_none() {
+                    state.claims.remove(&id);
+                }
+                #[cfg(test)]
+                if let Some(checkpoint) = self.claim_marker_checkpoint.lock().take() {
+                    checkpoint();
+                }
+                drop(state);
+                return claim_marker_outcome(id, marker);
+            }
+            let entry = state
+                .primary
+                .get_mut(&id)
+                .expect("the primary entry was observed while the registry lock is held");
+            let request_id = entry.request_id;
+            if let Some(kind) = lifecycle_stop(&entry.control) {
+                let entry = remove_entry(&mut state, id).expect("entry was observed while the registry lock is held");
+                removed_ticket = entry.claim_ticket.upgrade();
+                removed = Some(entry);
+                ClaimStart::Error(DeferredClaimError::new(
+                    claim_kind_from_registry(kind),
+                    id,
+                    Some(request_id),
+                    None,
+                    None,
+                ))
+            } else if matches!(entry.phase, EntryPhase::Active(_)) {
+                let expected_matches = expected.is_none_or(|waiter| {
+                    entry.claim_ticket.upgrade().is_some_and(|ticket| {
+                        ticket.epoch() == waiter.epoch()
+                            && waiter.same_ticket(&ticket)
+                            && ticket.resolution() == TicketResolution::Published
+                    })
+                });
+                if !expected_matches {
+                    let entry = remove_entry(&mut state, id)
+                        .expect("active entry was observed while the registry lock is held");
+                    removed_ticket = entry.claim_ticket.upgrade();
+                    removed_ticket_resolution = Some(TicketResolution::RemovedInvariant);
+                    removed = Some(entry);
+                    ClaimStart::Error(DeferredClaimError::new(
+                        DeferredClaimErrorKind::RegistryInvariant,
+                        id,
+                        Some(request_id),
+                        None,
+                        None,
+                    ))
+                } else {
+                    let claim_result = match &entry.phase {
+                        EntryPhase::Active(request) => request.parts.responder.claim(),
+                        EntryPhase::Shell | EntryPhase::Building | EntryPhase::Prepared(_) | EntryPhase::Activating => {
+                            unreachable!("the active phase was checked above")
+                        }
+                    };
+                    match claim_result {
+                        Ok(()) => {
+                            let entry = remove_entry(&mut state, id)
+                                .expect("active entry was observed while the registry lock is held");
+                            let request = match entry.phase {
+                                EntryPhase::Active(request) => request,
+                                EntryPhase::Shell
+                                | EntryPhase::Building
+                                | EntryPhase::Prepared(_)
+                                | EntryPhase::Activating => unreachable!("the active phase was checked above"),
+                            };
+                            let first_reason = entry.first_reason.unwrap_or(reason);
+                            let marker = Arc::new(ClaimMarker::new(
+                                self,
+                                id,
+                                request_id,
+                                Arc::clone(request.parts.responder.response_state()),
+                            ));
+                            state.claims.insert(id, Arc::downgrade(&marker));
+                            ClaimStart::Claimed(ClaimedDeferred::new(id, request_id, first_reason, request, marker))
+                        }
+                        Err(source) => {
+                            let terminal = source.prior_terminal_state();
+                            let kind = match source.kind() {
+                                DeferredResponseErrorKind::AlreadyCompleted => DeferredClaimErrorKind::AlreadyCompleted,
+                                DeferredResponseErrorKind::InvalidTransition
+                                | DeferredResponseErrorKind::Binding
+                                | DeferredResponseErrorKind::DeadlineExceeded
+                                | DeferredResponseErrorKind::Cancelled
+                                | DeferredResponseErrorKind::SessionClosed
+                                | DeferredResponseErrorKind::QueueSaturated
+                                | DeferredResponseErrorKind::Encode
+                                | DeferredResponseErrorKind::Transport => DeferredClaimErrorKind::RegistryInvariant,
+                            };
+                            removed = remove_entry(&mut state, id);
+                            ClaimStart::Error(DeferredClaimError::new(
+                                kind,
+                                id,
+                                Some(request_id),
+                                terminal,
+                                Some(source),
+                            ))
+                        }
+                    }
+                }
+            } else {
+                entry.first_reason.get_or_insert(reason);
+                let ticket = match entry
+                    .claim_ticket
+                    .upgrade()
+                    .filter(|ticket| ticket.live_waiters() > 0 && ticket.resolution() == TicketResolution::Pending)
+                {
+                    Some(ticket) => Some(ticket),
+                    None => match entry.ticket_epoch.checked_add(1).filter(|epoch| *epoch != 0) {
+                        Some(epoch) => {
+                            entry.ticket_epoch = epoch;
+                            let ticket = Arc::new(ClaimTicket::new(epoch));
+                            entry.claim_ticket = Arc::downgrade(&ticket);
+                            Some(ticket)
+                        }
+                        None => {
+                            let retired = remove_entry(&mut state, id)
+                                .expect("entry was observed while the registry lock is held");
+                            removed_ticket = retired.claim_ticket.upgrade();
+                            removed_ticket_resolution = Some(TicketResolution::RemovedInvariant);
+                            removed = Some(retired);
+                            None
+                        }
+                    },
+                };
+                match ticket {
+                    None => ClaimStart::Error(DeferredClaimError::new(
+                        DeferredClaimErrorKind::RegistryInvariant,
+                        id,
+                        Some(request_id),
+                        None,
+                        None,
+                    )),
+                    Some(ticket) => match ClaimWaiter::try_new(ticket, request_id) {
+                        Ok(waiter) => ClaimStart::Wait(waiter),
+                        Err(()) => {
+                            let entry = remove_entry(&mut state, id)
+                                .expect("entry was observed while the registry lock is held");
+                            removed_ticket = entry.claim_ticket.upgrade();
+                            removed_ticket_resolution = Some(TicketResolution::RemovedInvariant);
+                            removed = Some(entry);
+                            ClaimStart::Error(DeferredClaimError::new(
+                                DeferredClaimErrorKind::RegistryInvariant,
+                                id,
+                                Some(request_id),
+                                None,
+                                None,
+                            ))
+                        }
+                    },
+                }
+            }
         };
-        match entry.phase {
-            EntryPhase::Active(_) => {
-                if entry.ready {
-                    DeferredWakeResult::Coalesced
-                } else {
-                    entry.ready = true;
-                    DeferredWakeResult::Recorded
-                }
-            }
-            EntryPhase::Shell | EntryPhase::Building | EntryPhase::Prepared(_) | EntryPhase::Activating => {
-                if entry.pending {
-                    DeferredWakeResult::Coalesced
-                } else {
-                    entry.pending = true;
-                    DeferredWakeResult::Recorded
-                }
-            }
+        if let Some(ticket) = removed_ticket {
+            let resolution = removed_ticket_resolution.unwrap_or_else(|| {
+                removed
+                    .as_ref()
+                    .map_or(TicketResolution::RemovedInvariant, ticket_resolution_for_entry)
+            });
+            ticket.publish(resolution);
         }
+        drop(removed);
+        outcome
     }
 
-    pub(super) fn take_ready(&self, id: DeferredId) -> bool {
+    pub(super) fn remove_claim_marker(&self, id: DeferredId, marker: *const ClaimMarker<R>) {
         let mut state = self.state.lock();
-        let Some(entry) = state.primary.get_mut(&id) else {
-            return false;
-        };
-        if !matches!(entry.phase, EntryPhase::Active(_)) || !entry.ready {
-            return false;
+        let matches = state
+            .claims
+            .get(&id)
+            .is_some_and(|current| std::ptr::eq(current.as_ptr(), marker));
+        if matches {
+            state.claims.remove(&id);
         }
-        entry.ready = false;
-        true
     }
 
     #[cfg(test)]
@@ -466,6 +638,105 @@ where
     #[cfg(test)]
     pub(super) fn contains(&self, id: DeferredId) -> bool {
         self.state.lock().primary.contains_key(&id)
+    }
+
+    #[cfg(test)]
+    pub(super) fn claim_marker_count(&self) -> usize {
+        self.state.lock().claims.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn ticket_epoch(&self, id: DeferredId) -> Option<u64> {
+        self.state.lock().primary.get(&id).map(|entry| entry.ticket_epoch)
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_ticket_epoch(&self, id: DeferredId, epoch: u64) {
+        self.state.lock().primary.get_mut(&id).expect("test entry").ticket_epoch = epoch;
+    }
+
+    #[cfg(test)]
+    pub(super) fn install_claim_ticket(&self, id: DeferredId, epoch: u64, live_waiters: usize) -> Arc<ClaimTicket> {
+        let ticket = Arc::new(ClaimTicket::new(epoch));
+        ticket.set_live_waiters(live_waiters);
+        let mut state = self.state.lock();
+        let entry = state.primary.get_mut(&id).expect("test entry");
+        entry.ticket_epoch = epoch;
+        entry.claim_ticket = Arc::downgrade(&ticket);
+        ticket
+    }
+}
+
+fn remove_entry<R: Send + 'static>(state: &mut RegistryState<R>, id: DeferredId) -> Option<Entry<R>> {
+    let entry = state.primary.remove(&id)?;
+    if state.request_index.get(&entry.request_id) == Some(&id) {
+        state.request_index.remove(&entry.request_id);
+    }
+    let remove_session = state.session_index.get_mut(&entry.session_id).is_some_and(|ids| {
+        ids.remove(&id);
+        ids.is_empty()
+    });
+    if remove_session {
+        state.session_index.remove(&entry.session_id);
+    }
+    Some(entry)
+}
+
+fn claim_marker_outcome<R>(id: DeferredId, marker: Option<Arc<ClaimMarker<R>>>) -> ClaimStart<R>
+where
+    R: Send + 'static,
+{
+    let Some(marker) = marker else {
+        return ClaimStart::Error(DeferredClaimError::new(
+            DeferredClaimErrorKind::NotFound,
+            id,
+            None,
+            None,
+            None,
+        ));
+    };
+    let terminal = marker.terminal_state();
+    ClaimStart::Error(DeferredClaimError::new(
+        if terminal.is_some() {
+            DeferredClaimErrorKind::AlreadyCompleted
+        } else {
+            DeferredClaimErrorKind::AlreadyClaimed
+        },
+        id,
+        Some(marker.request_id()),
+        terminal,
+        None,
+    ))
+}
+
+fn claim_kind_from_registry(kind: DeferredRegistryErrorKind) -> DeferredClaimErrorKind {
+    match kind {
+        DeferredRegistryErrorKind::ParentCancelled => DeferredClaimErrorKind::ParentCancelled,
+        DeferredRegistryErrorKind::SessionClosed => DeferredClaimErrorKind::SessionClosed,
+        DeferredRegistryErrorKind::DeadlineExpired => DeferredClaimErrorKind::DeadlineExpired,
+        DeferredRegistryErrorKind::RetainedSizeOverflow
+        | DeferredRegistryErrorKind::RetainedSizeUnderreported
+        | DeferredRegistryErrorKind::DuplicateRequest
+        | DeferredRegistryErrorKind::IdentityExhausted
+        | DeferredRegistryErrorKind::Builder
+        | DeferredRegistryErrorKind::RegistryInvariant => DeferredClaimErrorKind::RegistryInvariant,
+    }
+}
+
+fn ticket_resolution_for_entry<R>(entry: &Entry<R>) -> TicketResolution {
+    match lifecycle_stop(&entry.control) {
+        Some(DeferredRegistryErrorKind::ParentCancelled) => TicketResolution::RemovedParentCancelled,
+        Some(DeferredRegistryErrorKind::SessionClosed) => TicketResolution::RemovedSessionClosed,
+        Some(DeferredRegistryErrorKind::DeadlineExpired) => TicketResolution::RemovedDeadlineExpired,
+        Some(
+            DeferredRegistryErrorKind::RetainedSizeOverflow
+            | DeferredRegistryErrorKind::RetainedSizeUnderreported
+            | DeferredRegistryErrorKind::DuplicateRequest
+            | DeferredRegistryErrorKind::IdentityExhausted
+            | DeferredRegistryErrorKind::Builder
+            | DeferredRegistryErrorKind::RegistryInvariant,
+        ) => TicketResolution::RemovedInvariant,
+        None => TicketResolution::RemovedNotFound,
     }
 }
 
@@ -616,7 +887,16 @@ where
     }
 }
 
-pub(super) fn registry_additional_bytes<R>() -> Option<usize> {
+pub(super) fn registry_additional_bytes<R>() -> Option<usize>
+where
+    R: Send + 'static,
+{
+    let claim_runtime = checked_claim_runtime_sum(
+        arc_allocation_bytes::<ClaimTicket>()?,
+        arc_allocation_bytes::<ClaimMarker<R>>()?,
+        Layout::new::<(DeferredId, Weak<ClaimMarker<R>>)>().size(),
+        crate::dispatch::deferred_resume::deferred_resume_fixed_bytes()?,
+    )?;
     checked_registry_layout_bytes(RegistryLayoutSizes {
         inline_resume: Layout::new::<R>().size(),
         primary_entry: Layout::new::<(DeferredId, Entry<R>)>().size(),
@@ -625,7 +905,7 @@ pub(super) fn registry_additional_bytes<R>() -> Option<usize> {
         request_index: Layout::new::<(RequestId, DeferredId)>().size(),
         session_owner: Layout::new::<(SessionId, HashSet<DeferredId>)>().size(),
         session_member: Layout::new::<DeferredId>().size(),
-        ready: Layout::new::<DeferredId>().size(),
+        claim_runtime,
     })
 }
 
@@ -638,7 +918,7 @@ pub(super) struct RegistryLayoutSizes {
     pub(super) request_index: usize,
     pub(super) session_owner: usize,
     pub(super) session_member: usize,
-    pub(super) ready: usize,
+    pub(super) claim_runtime: usize,
 }
 
 pub(super) fn checked_registry_layout_bytes(sizes: RegistryLayoutSizes) -> Option<usize> {
@@ -653,7 +933,7 @@ pub(super) fn checked_registry_layout_bytes(sizes: RegistryLayoutSizes) -> Optio
         primary_net,
         sizes.request_index,
         session,
-        sizes.ready,
+        sizes.claim_runtime,
     )
 }
 
@@ -662,13 +942,28 @@ pub(super) fn checked_registry_component_sum(
     primary_net: usize,
     request_index: usize,
     session: usize,
-    ready: usize,
+    claim_runtime: usize,
 ) -> Option<usize> {
     inline_resume
         .checked_add(primary_net)?
         .checked_add(request_index)?
         .checked_add(session)?
-        .checked_add(ready)
+        .checked_add(claim_runtime)
+}
+
+fn arc_allocation_bytes<T>() -> Option<usize> {
+    let header = Layout::array::<AtomicUsize>(2).ok()?;
+    let (allocation, _) = header.extend(Layout::new::<T>()).ok()?;
+    Some(allocation.pad_to_align().size())
+}
+
+pub(super) fn checked_claim_runtime_sum(
+    ticket: usize,
+    marker: usize,
+    claim_slot: usize,
+    resume: usize,
+) -> Option<usize> {
+    ticket.checked_add(marker)?.checked_add(claim_slot)?.checked_add(resume)
 }
 
 pub(super) fn lifecycle_stop(control: &RequestControlView) -> Option<DeferredRegistryErrorKind> {

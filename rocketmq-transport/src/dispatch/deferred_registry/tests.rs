@@ -22,12 +22,14 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Barrier;
 use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
+use super::internal::checked_claim_runtime_sum;
 use super::internal::checked_registry_component_sum;
 use super::internal::checked_registry_layout_bytes;
 use super::internal::reserve_deferred_id;
@@ -42,6 +44,7 @@ use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseSink;
+use crate::dispatch::ResponseTerminalState;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -128,6 +131,11 @@ struct AlignedResume([u8; 3]);
 
 #[test]
 fn retained_size_counts_fixed_and_registry_storage_once_and_preserves_caller_parts() {
+    fn arc_allocation<T>() -> usize {
+        let header = Layout::array::<AtomicUsize>(2).expect("Arc header layout");
+        let (allocation, _) = header.extend(Layout::new::<T>()).expect("Arc data layout");
+        allocation.pad_to_align().size()
+    }
     let caller = DeferredRetainedSizeParts::new(11)
         .with_filter_bytes(13)
         .with_secondary_index_bytes(17)
@@ -146,9 +154,14 @@ fn retained_size_counts_fixed_and_registry_storage_once_and_preserves_caller_par
     let request_index = Layout::new::<(RequestId, DeferredId)>().size();
     let session_owner = Layout::new::<(SessionId, HashSet<DeferredId>)>().size();
     let session_member = Layout::new::<DeferredId>().size();
-    let ready = Layout::new::<DeferredId>().size();
+    let ticket = arc_allocation::<ClaimTicket>();
+    let marker = arc_allocation::<ClaimMarker<AlignedResume>>();
+    let claim_slot = Layout::new::<(DeferredId, std::sync::Weak<ClaimMarker<AlignedResume>>)>().size();
+    let completion = arc_allocation::<crate::dispatch::deferred_resume::ResumeCompletion>();
+    let job_cell = arc_allocation::<crate::dispatch::deferred_resume::ResumeJobCell>();
+    let claim_runtime = ticket + marker + claim_slot + completion + job_cell;
     let independent_registry_charge =
-        inline_resume + primary_net + request_index + session_owner + session_member + ready;
+        inline_resume + primary_net + request_index + session_owner + session_member + claim_runtime;
     assert_eq!(registry - base, independent_registry_charge);
 
     let empty = DeferredRegistry::<AlignedResume>::try_retained_size(DeferredRetainedSizeParts::new(0))
@@ -173,7 +186,7 @@ fn retained_layout_checked_arithmetic_rejects_every_overflow_boundary() {
         request_index: 1,
         session_owner: 1,
         session_member: 1,
-        ready: 1,
+        claim_runtime: 1,
     };
     assert_eq!(checked_registry_layout_bytes(valid), Some(6));
 
@@ -202,6 +215,10 @@ fn retained_layout_checked_arithmetic_rejects_every_overflow_boundary() {
     assert!(checked_registry_component_sum(usize::MAX - 1, 1, 1, 0, 0).is_none());
     assert!(checked_registry_component_sum(usize::MAX - 2, 1, 1, 1, 0).is_none());
     assert!(checked_registry_component_sum(usize::MAX - 3, 1, 1, 1, 1).is_none());
+    assert_eq!(checked_claim_runtime_sum(1, 2, 3, 4), Some(10));
+    assert!(checked_claim_runtime_sum(usize::MAX, 1, 0, 0).is_none());
+    assert!(checked_claim_runtime_sum(usize::MAX - 1, 1, 1, 0).is_none());
+    assert!(checked_claim_runtime_sum(usize::MAX - 2, 1, 1, 1).is_none());
 }
 
 #[test]
@@ -416,32 +433,212 @@ fn panicking_builder_rolls_back_after_reentrant_lease_drop_without_holding_the_l
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
 
-#[test]
-fn wakes_coalesce_while_building_and_prepared_then_replay_once_after_commit() {
+#[tokio::test]
+async fn provisional_claim_replays_the_first_reason_once_after_commit() {
     let harness = Harness::new("deferred-registry-wake", 8106);
     let registry = DeferredRegistry::<u64>::new();
-    let builder_registry = registry.clone();
     let registration = registry
-        .register_with(harness.parts::<u64>(harness.identity(6)), move |id| {
-            assert_eq!(builder_registry.wake(id), DeferredWakeResult::Recorded);
-            assert_eq!(builder_registry.wake(id), DeferredWakeResult::Coalesced);
+        .register_with(harness.parts::<u64>(harness.identity(6)), move |_| {
             Ok::<_, BuilderFailure>(11)
         })
         .expect("prepared registration");
     let id = registration.deferred_id();
     assert_eq!(registry.inner.phase(id), Some(EntryPhaseTag::Prepared));
-    assert_eq!(registry.wake(id), DeferredWakeResult::Coalesced);
+    let claim = registry.claim(id, DeferredWakeReason::MessageArrived);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("provisional claim completed before commit: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
     registration.commit().expect("commit registration");
-    assert_eq!(registry.inner.phase(id), Some(EntryPhaseTag::Active));
-    assert!(registry.take_ready(id));
-    assert!(!registry.take_ready(id));
-    assert_eq!(registry.wake(id), DeferredWakeResult::Recorded);
-    assert_eq!(registry.wake(id), DeferredWakeResult::Coalesced);
-    assert!(registry.take_ready(id));
+    let claimed = claim.await.expect("published claim");
+    assert_eq!(claimed.reason(), DeferredWakeReason::MessageArrived);
+    assert_eq!(*claimed.resume_data(), 11);
 }
 
-#[test]
-fn activating_wake_is_promoted_to_one_active_ready_marker() {
+async fn assert_provisional_claim_from_phase(name: &'static str, owner: u64, building: bool) {
+    let harness = Harness::new(name, owner);
+    let registry = DeferredRegistry::<u64>::new();
+    let parts = harness.parts::<u64>(harness.identity(owner as i32));
+    let request_id = parts.request_id();
+    let id = registry
+        .inner
+        .insert_shell(request_id, parts.session_id(), parts.control().clone())
+        .expect("insert shell");
+    if building {
+        assert!(registry.inner.transition_to_building(id));
+        assert_eq!(registry.inner.phase(id), Some(EntryPhaseTag::Building));
+    } else {
+        assert_eq!(registry.inner.phase(id), Some(EntryPhaseTag::Shell));
+    }
+
+    let claim = registry.claim(id, DeferredWakeReason::MessageArrived);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("provisional claim completed before publication: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    let request = DeferredRequest::new(37, parts);
+    if building {
+        registry
+            .inner
+            .store_prepared_from_building(id, request)
+            .expect("store building request");
+    } else {
+        registry
+            .inner
+            .store_prepared_from_shell(id, request)
+            .expect("store shell request");
+    }
+    let request = registry.inner.begin_activation(id).expect("begin activation");
+    request.register_response().expect("register response");
+    registry.inner.publish_active(id, request).expect("publish active");
+    let claimed = claim.await.expect("provisional claim publishes");
+    assert_eq!(claimed.request_id(), request_id);
+    assert_eq!(*claimed.resume_data(), 37);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 1);
+    drop(claimed);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn shell_and_building_claims_wait_for_one_durable_publication() {
+    assert_provisional_claim_from_phase("deferred-registry-shell-claim", 8117, false).await;
+    assert_provisional_claim_from_phase("deferred-registry-building-claim", 8118, true).await;
+}
+
+#[tokio::test]
+async fn cancelled_waiter_replaces_its_ticket_and_retains_the_first_reason() {
+    let harness = Harness::new("deferred-registry-ticket-replacement", 8119);
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(41, harness.parts::<u64>(harness.identity(19))))
+        .expect("prepared registration");
+    let id = registration.deferred_id();
+
+    let mut first = Box::pin(registry.claim(id, DeferredWakeReason::MessageArrived));
+    tokio::select! {
+        biased;
+        result = &mut first => panic!("first waiter completed before publication: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    assert_eq!(registry.inner.ticket_epoch(id), Some(1));
+    drop(first);
+
+    let mut replacement = Box::pin(registry.claim(id, DeferredWakeReason::Timeout));
+    tokio::select! {
+        biased;
+        result = &mut replacement => panic!("replacement completed before publication: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    assert_eq!(registry.inner.ticket_epoch(id), Some(2));
+    registration.commit().expect("publish registration");
+    let claimed = replacement.await.expect("replacement wins publication");
+    assert_eq!(claimed.reason(), DeferredWakeReason::MessageArrived);
+}
+
+#[tokio::test]
+async fn ticket_epoch_and_waiter_overflow_retire_every_index() {
+    let epoch_harness = Harness::new("deferred-registry-ticket-epoch-overflow", 8120);
+    let epoch_registry = DeferredRegistry::<u64>::new();
+    let epoch_registration = epoch_registry
+        .register(DeferredRequest::new(
+            43,
+            epoch_harness.parts::<u64>(epoch_harness.identity(20)),
+        ))
+        .expect("prepared epoch registration");
+    let epoch_id = epoch_registration.deferred_id();
+    epoch_registry.inner.set_ticket_epoch(epoch_id, u64::MAX);
+    let epoch_error = epoch_registry
+        .claim(epoch_id, DeferredWakeReason::Timeout)
+        .await
+        .expect_err("epoch overflow retires the entry");
+    assert_eq!(epoch_error.kind(), DeferredClaimErrorKind::RegistryInvariant);
+    assert_eq!(epoch_registry.inner.index_counts(), (0, 0, 0));
+    drop(epoch_registration);
+    assert_eq!(epoch_harness.admission.snapshot().waiting_count(), 0);
+
+    let waiter_harness = Harness::new("deferred-registry-ticket-waiter-overflow", 8121);
+    let waiter_registry = DeferredRegistry::<u64>::new();
+    let waiter_registration = waiter_registry
+        .register(DeferredRequest::new(
+            47,
+            waiter_harness.parts::<u64>(waiter_harness.identity(21)),
+        ))
+        .expect("prepared waiter registration");
+    let waiter_id = waiter_registration.deferred_id();
+    let ticket = waiter_registry.inner.install_claim_ticket(waiter_id, 1, usize::MAX);
+    let waiter_error = waiter_registry
+        .claim(waiter_id, DeferredWakeReason::ForcedRefresh)
+        .await
+        .expect_err("waiter overflow retires the entry");
+    assert_eq!(waiter_error.kind(), DeferredClaimErrorKind::RegistryInvariant);
+    assert_eq!(ticket.resolution(), TicketResolution::RemovedInvariant);
+    assert_eq!(waiter_registry.inner.index_counts(), (0, 0, 0));
+    drop(waiter_registration);
+    assert_eq!(waiter_harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn terminal_and_invalid_claim_cas_retire_all_registry_ownership() {
+    let terminal_harness = Harness::new("deferred-registry-terminal-claim", 8122);
+    let terminal_registry = DeferredRegistry::<u64>::new();
+    let terminal_request = DeferredRequest::new(53, terminal_harness.parts::<u64>(terminal_harness.identity(22)));
+    let terminal_state = Arc::clone(terminal_request.parts.responder.response_state());
+    let terminal_registration = terminal_registry
+        .register(terminal_request)
+        .expect("prepared terminal registration");
+    let terminal_id = terminal_registration.deferred_id();
+    terminal_registration.commit().expect("publish terminal registration");
+    terminal_state.cancel().expect("external lifecycle terminal wins");
+    let terminal_error = terminal_registry
+        .claim(terminal_id, DeferredWakeReason::Timeout)
+        .await
+        .expect_err("terminal claim fails");
+    assert_eq!(terminal_error.kind(), DeferredClaimErrorKind::AlreadyCompleted);
+    assert_eq!(
+        terminal_error.prior_terminal_state(),
+        Some(ResponseTerminalState::Cancelled)
+    );
+    assert_eq!(terminal_registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(terminal_harness.admission.snapshot().waiting_count(), 0);
+
+    let invalid_harness = Harness::new("deferred-registry-invalid-claim", 8123);
+    let invalid_registry = DeferredRegistry::<u64>::new();
+    let invalid_parts = invalid_harness.parts::<u64>(invalid_harness.identity(23));
+    let invalid_id = invalid_registry
+        .inner
+        .insert_shell(
+            invalid_parts.request_id(),
+            invalid_parts.session_id(),
+            invalid_parts.control().clone(),
+        )
+        .expect("insert invalid shell");
+    invalid_registry
+        .inner
+        .store_prepared_from_shell(invalid_id, DeferredRequest::new(59, invalid_parts))
+        .expect("store invalid request");
+    let invalid_request = invalid_registry
+        .inner
+        .begin_activation(invalid_id)
+        .expect("begin invalid activation");
+    invalid_registry
+        .inner
+        .publish_active(invalid_id, invalid_request)
+        .expect("publish intentionally unregistered response");
+    let invalid_error = invalid_registry
+        .claim(invalid_id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect_err("open response state is an invalid claim transition");
+    assert_eq!(invalid_error.kind(), DeferredClaimErrorKind::RegistryInvariant);
+    assert_eq!(invalid_registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(invalid_harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn activating_claim_is_published_without_a_second_ready_state_machine() {
     let harness = Harness::new("deferred-registry-activating-wake", 8107);
     let registry = DeferredRegistry::<u64>::new();
     let mut registration = registry
@@ -449,13 +646,129 @@ fn activating_wake_is_promoted_to_one_active_ready_marker() {
         .expect("prepared registration");
     let id = registration.deferred_id();
     let request = registry.inner.begin_activation(id).expect("begin activation");
-    assert_eq!(registry.wake(id), DeferredWakeResult::Recorded);
-    assert_eq!(registry.wake(id), DeferredWakeResult::Coalesced);
+    let claim = registry.claim(id, DeferredWakeReason::ForcedRefresh);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("activating claim completed before publish: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
     request.register_response().expect("register response state");
     registry.inner.publish_active(id, request).expect("publish active");
     drop(registration.owner.take());
-    assert!(registry.take_ready(id));
-    assert!(!registry.take_ready(id));
+    let claimed = claim.await.expect("published activating claim");
+    assert_eq!(claimed.reason(), DeferredWakeReason::ForcedRefresh);
+}
+
+#[tokio::test]
+async fn concurrent_claims_have_one_winner_and_transient_marker_diagnostics() {
+    let harness = Harness::new("deferred-registry-one-claim", 8113);
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(27, harness.parts::<u64>(harness.identity(13))))
+        .expect("prepared registration");
+    let id = registration.deferred_id();
+    let first = registry.claim(id, DeferredWakeReason::MessageArrived);
+    let second = registry.claim(id, DeferredWakeReason::Timeout);
+    tokio::pin!(first);
+    tokio::pin!(second);
+    tokio::select! {
+        biased;
+        result = &mut first => panic!("first claim completed before publication: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    tokio::select! {
+        biased;
+        result = &mut second => panic!("second claim completed before publication: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    registration.commit().expect("publish active registration");
+    let claimed = first.await.expect("first waiter wins");
+    assert_eq!(claimed.reason(), DeferredWakeReason::MessageArrived);
+    let error = second.await.expect_err("second waiter observes the live marker");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::AlreadyClaimed);
+    assert_eq!(error.request_id(), Some(claimed.request_id()));
+    assert_eq!(registry.inner.claim_marker_count(), 1);
+    drop(claimed);
+    assert_eq!(registry.inner.claim_marker_count(), 0);
+    assert_eq!(
+        registry
+            .claim(id, DeferredWakeReason::ForcedRefresh)
+            .await
+            .expect_err("marker disappears after the affine claim drops")
+            .kind(),
+        DeferredClaimErrorKind::NotFound
+    );
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn duplicate_claim_drops_its_upgraded_marker_after_releasing_the_registry_lock() {
+    let harness = Harness::new("deferred-registry-marker-drop", 8116);
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(31, harness.parts::<u64>(harness.identity(17))))
+        .expect("prepared registration");
+    let id = registration.deferred_id();
+    registration.commit().expect("publish registration");
+    let claimed = registry
+        .claim(id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("first claim owns the marker");
+
+    let upgraded = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let checkpoint_upgraded = Arc::clone(&upgraded);
+    let checkpoint_release = Arc::clone(&release);
+    registry.inner.set_claim_marker_checkpoint(Box::new(move || {
+        checkpoint_upgraded.wait();
+        checkpoint_release.wait();
+    }));
+
+    let duplicate_registry = registry.clone();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    harness
+        .parent
+        .spawn_service("deferred-registry.duplicate-claim", async move {
+            let result = duplicate_registry.claim(id, DeferredWakeReason::Timeout).await;
+            let _ = result_tx.send(result);
+        })
+        .expect("lifecycle-owned duplicate claim task");
+
+    upgraded.wait();
+    drop(claimed);
+    release.wait();
+    let error = result_rx
+        .await
+        .expect("duplicate task publishes its result")
+        .expect_err("the upgraded marker remains a duplicate claim");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::AlreadyCompleted);
+    assert_eq!(error.prior_terminal_state(), Some(ResponseTerminalState::Cancelled));
+    assert_eq!(registry.inner.claim_marker_count(), 0);
+    assert_eq!(harness.admission.snapshot().waiting_count(), 0);
+}
+
+#[tokio::test]
+async fn provisional_waiter_observes_parent_removal_even_when_it_awaits_after_rollback() {
+    let harness = Harness::new("deferred-registry-removal-before-await", 8114);
+    let registry = DeferredRegistry::<u64>::new();
+    let registration = registry
+        .register(DeferredRequest::new(29, harness.parts::<u64>(harness.identity(14))))
+        .expect("prepared registration");
+    let id = registration.deferred_id();
+    let claim = registry.claim(id, DeferredWakeReason::Timeout);
+    tokio::pin!(claim);
+    tokio::select! {
+        biased;
+        result = &mut claim => panic!("claim completed before rollback: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    harness.parent.cancel();
+    drop(registration);
+    let error = claim.await.expect_err("durable removal wakes a registered waiter");
+    assert_eq!(error.kind(), DeferredClaimErrorKind::ParentCancelled);
+    assert_eq!(registry.inner.index_counts(), (0, 0, 0));
 }
 
 #[test]

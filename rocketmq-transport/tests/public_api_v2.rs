@@ -29,6 +29,9 @@ use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+use rocketmq_transport::api::v2::ClaimedDeferred;
+use rocketmq_transport::api::v2::DeferredClaimError;
+use rocketmq_transport::api::v2::DeferredClaimErrorKind;
 use rocketmq_transport::api::v2::DeferredId;
 use rocketmq_transport::api::v2::DeferredParts;
 use rocketmq_transport::api::v2::DeferredRegistration;
@@ -37,9 +40,13 @@ use rocketmq_transport::api::v2::DeferredRegistryError;
 use rocketmq_transport::api::v2::DeferredRegistryErrorKind;
 use rocketmq_transport::api::v2::DeferredRequest;
 use rocketmq_transport::api::v2::DeferredResponder;
+use rocketmq_transport::api::v2::DeferredResumeError;
+use rocketmq_transport::api::v2::DeferredResumeErrorKind;
+use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
 use rocketmq_transport::api::v2::DeferredRetainedSize;
 use rocketmq_transport::api::v2::DeferredRetainedSizeParts;
 use rocketmq_transport::api::v2::DeferredWaitPermit;
+use rocketmq_transport::api::v2::DeferredWakeReason;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::EmbeddedDispatchError;
 use rocketmq_transport::api::v2::EmbeddedDispatchErrorKind;
@@ -260,6 +267,49 @@ fn assert_deferred_registry_recovery_contract() {
     let _: fn(Error) -> Option<(std::io::Error, DeferredParts)> = Error::into_builder_failure;
 }
 
+fn assert_claim_resume_contract<R>(
+    registry: &DeferredRegistry<R>,
+    id: DeferredId,
+    mut claimed: ClaimedDeferred<R>,
+    claim_error: Option<&DeferredClaimError>,
+    resume_error: Option<&DeferredResumeError>,
+) where
+    R: Send + 'static,
+{
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_send_future<F: Future + Send>(_: F) {}
+
+    let _: DeferredId = claimed.deferred_id();
+    let _: V2RequestId = claimed.request_id();
+    let _: DeferredWakeReason = claimed.reason();
+    let _: &R = claimed.resume_data();
+    let _: &mut R = claimed.resume_data_mut();
+    assert_send_future(registry.claim(id, DeferredWakeReason::MessageArrived));
+    let resume = claimed.resume(DeferredResumeRetainedSize::new(7), |_, _| async move {
+        ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    });
+    assert_send_future(resume);
+    if let Some(error) = claim_error {
+        let _: DeferredClaimErrorKind = error.kind();
+        let _: DeferredId = error.deferred_id();
+        let _: Option<V2RequestId> = error.request_id();
+        let _ = error.prior_terminal_state();
+    }
+    if let Some(error) = resume_error {
+        let _: DeferredResumeErrorKind = error.kind();
+        let _: DeferredId = error.deferred_id();
+        let _: V2RequestId = error.request_id();
+        let _ = error.prior_terminal_state();
+        let _: Option<WriteProgress> = error.write_progress();
+    }
+    let _: usize = DeferredResumeRetainedSize::default().dynamic_bytes();
+    assert_send::<DeferredRegistry<std::cell::Cell<u8>>>();
+    assert_sync::<DeferredRegistry<std::cell::Cell<u8>>>();
+    assert_send::<ClaimedDeferred<std::cell::Cell<u8>>>();
+}
+
 struct LocalOnlyProcessor;
 
 impl LocalRequestProcessorV2 for LocalOnlyProcessor {
@@ -455,6 +505,11 @@ fn v2_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_debug_contract::<DeferredRegistry<String>>();
     assert_error_contract::<DeferredRegistryError<String, std::io::Error>>();
     assert_eq!(DeferredRegistryErrorKind::Builder.as_str(), "builder");
+    let _ = assert_claim_resume_contract::<String>;
+    assert_error_contract::<DeferredClaimError>();
+    assert_error_contract::<DeferredResumeError>();
+    assert_eq!(DeferredClaimErrorKind::AlreadyClaimed.as_str(), "already_claimed");
+    assert_eq!(DeferredResumeErrorKind::TaskTerminated.as_str(), "task_terminated");
 }
 
 #[test]

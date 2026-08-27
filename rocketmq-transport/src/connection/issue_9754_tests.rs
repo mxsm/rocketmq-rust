@@ -40,6 +40,7 @@ use tokio_util::sync::CancellationToken;
 use super::Connection;
 use super::ConnectionState;
 use super::FrameLimits;
+use super::RequestStopPolicy;
 use super::SessionLifecycle;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
@@ -393,6 +394,7 @@ async fn actual_dropped_queued_completion_before_start_maps_to_typed_not_started
                 None,
                 None,
                 None,
+                RequestStopPolicy::All,
                 None,
                 "dropped-before-start-target".to_string(),
             )
@@ -463,6 +465,7 @@ async fn actual_dropped_active_completion_maps_to_typed_possibly_partial() {
                 None,
                 None,
                 None,
+                RequestStopPolicy::All,
                 None,
                 "dropped-active-target".to_string(),
             )
@@ -572,6 +575,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
             None,
             None,
             None,
+            RequestStopPolicy::All,
             None,
             "typed-sendfile-target".to_string(),
         )
@@ -600,6 +604,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
             None,
             None,
             None,
+            RequestStopPolicy::All,
             None,
             "legacy-sendfile-target".to_string(),
         )
@@ -638,6 +643,7 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
                     std::time::Duration::from_millis(10),
                 )),
                 None,
+                RequestStopPolicy::All,
                 None,
                 "typed-direct-target".to_string(),
             )
@@ -761,6 +767,7 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
                     std::time::Duration::from_millis(10),
                 )),
                 None,
+                RequestStopPolicy::All,
                 None,
                 "typed-queued-target".to_string(),
             )
@@ -863,6 +870,7 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
             None,
             None,
             None,
+            RequestStopPolicy::All,
             None,
             "typed-queued-target".to_string(),
         )

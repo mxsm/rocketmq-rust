@@ -580,6 +580,9 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         builder: RemotingRequestBuilder,
         response: &ResponseSink,
         session: &SessionHandle,
+        ordering: RequestOrdering,
+        class: crate::admission::AdmissionClass,
+        resume_executor: crate::session_executor::DeferredResumeExecutor,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError>;
 
     fn process(
@@ -658,9 +661,12 @@ where
         builder: RemotingRequestBuilder,
         response: &ResponseSink,
         session: &SessionHandle,
+        ordering: RequestOrdering,
+        class: crate::admission::AdmissionClass,
+        resume_executor: crate::session_executor::DeferredResumeExecutor,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
         let seed = response
-            .network_deferred_seed(session)
+            .network_deferred_seed_with_resume(session, ordering, class, resume_executor)
             .ok_or(super::remoting_request::RemotingRequestBuildError::DeferredResponseOwnerMismatch)?;
         Ok(builder.with_deferred_response_seed(seed))
     }
@@ -804,6 +810,9 @@ where
         builder: RemotingRequestBuilder,
         _response: &ResponseSink,
         _session: &SessionHandle,
+        _ordering: RequestOrdering,
+        _class: crate::admission::AdmissionClass,
+        _resume_executor: crate::session_executor::DeferredResumeExecutor,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
         Ok(builder)
     }

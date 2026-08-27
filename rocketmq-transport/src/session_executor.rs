@@ -16,6 +16,8 @@ use std::fmt;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
@@ -32,6 +34,8 @@ use crate::admission::AdmissionError;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
+use crate::dispatch::deferred_resume::DeferredResumeSubmitError;
+use crate::dispatch::deferred_resume::ResumeJobCell;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
 
@@ -84,21 +88,31 @@ impl From<RuntimeError> for SessionDispatchError {
 /// for any declared ordering predecessor, converts queued capacity into a
 /// processor permit, and runs under the session's bounded operation context.
 pub(crate) struct SessionExecutor {
+    inner: Arc<SessionExecutorInner>,
+}
+
+struct SessionExecutorInner {
     admission: AdmissionScopeHandle,
     request_group: TaskGroup,
     operation: OperationContext,
     sequencer: RequestSequencer,
     accepting: AtomicBool,
+    #[cfg(test)]
+    close_resume_operation_before_spawn: AtomicBool,
 }
 
 impl SessionExecutor {
     pub(crate) fn try_new(session_group: &TaskGroup, admission: AdmissionScopeHandle) -> RuntimeResult<Self> {
         Ok(Self {
-            admission,
-            request_group: session_group.clone(),
-            operation: OperationContext::without_deadline(TaskKind::Worker),
-            sequencer: RequestSequencer::default(),
-            accepting: AtomicBool::new(true),
+            inner: Arc::new(SessionExecutorInner {
+                admission,
+                request_group: session_group.clone(),
+                operation: OperationContext::without_deadline(TaskKind::Worker),
+                sequencer: RequestSequencer::default(),
+                accepting: AtomicBool::new(true),
+                #[cfg(test)]
+                close_resume_operation_before_spawn: AtomicBool::new(false),
+            }),
         })
     }
 
@@ -117,13 +131,14 @@ impl SessionExecutor {
         R: FnOnce(OperationContext, AdmissionError) -> Rejected + Send + 'static,
         Rejected: Future<Output = ()> + Send + 'static,
     {
-        if !self.accepting.load(Ordering::Acquire) {
+        if !self.inner.accepting.load(Ordering::Acquire) {
             return Err(SessionDispatchError::Closing(RuntimeError::TaskGroupClosing {
-                group_id: self.request_group.id(),
-                group_name: self.request_group.name().into(),
+                group_id: self.inner.request_group.id(),
+                group_name: self.inner.request_group.name().into(),
             }));
         }
         let queued = match self
+            .inner
             .admission
             .try_acquire(AdmissionResource::Queued, retained_bytes, class)
         {
@@ -137,7 +152,7 @@ impl SessionExecutor {
         };
         let inflight = match partial_frame {
             Some(partial_frame) => {
-                match partial_frame.try_rebind(&self.admission, AdmissionResource::Inflight, class) {
+                match partial_frame.try_rebind(&self.inner.admission, AdmissionResource::Inflight, class) {
                     Ok(inflight) => inflight,
                     Err((retained_partial, error)) => {
                         return Err(SessionDispatchError::Admission {
@@ -148,14 +163,15 @@ impl SessionExecutor {
                 }
             }
             None => self
+                .inner
                 .admission
                 .try_acquire(AdmissionResource::Inflight, retained_bytes, class)?,
         };
-        let admission = self.admission.clone();
-        let sequencer = self.sequencer.clone();
-        let request_operation = self.operation.clone();
+        let admission = self.inner.admission.clone();
+        let sequencer = self.inner.sequencer.clone();
+        let request_operation = self.inner.operation.clone();
         let request_operation_for_task = request_operation.clone();
-        let spawn_group = self.request_group.clone();
+        let spawn_group = self.inner.request_group.clone();
         spawn_group
             .spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", async move {
                 let ordering_guard = sequencer.acquire(ordering).await;
@@ -178,21 +194,35 @@ impl SessionExecutor {
     }
 
     fn stop_admission(&self) {
-        self.accepting.store(false, Ordering::Release);
-        self.operation.close_admission();
+        self.inner.accepting.store(false, Ordering::Release);
+        self.inner.operation.close_admission();
     }
 
     pub(crate) fn operation_context(&self) -> &OperationContext {
-        &self.operation
+        &self.inner.operation
+    }
+
+    pub(crate) fn deferred_resume_executor(&self) -> DeferredResumeExecutor {
+        DeferredResumeExecutor {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn close_resume_operation_before_spawn_for_test(&self) {
+        self.inner
+            .close_resume_operation_before_spawn
+            .store(true, Ordering::Release);
     }
 
     pub(crate) async fn drain_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         let started_at = Instant::now();
         self.stop_admission();
-        let active_before = self.operation.active_task_count();
+        let active_before = self.inner.operation.active_task_count();
         let joined = self
+            .inner
             .operation
-            .wait(&self.request_group, deadline.remaining())
+            .wait(&self.inner.request_group, deadline.remaining())
             .await
             .unwrap_or(false);
         let mut report = ShutdownReport::new("rocketmq.transport.session.requests", started_at.elapsed());
@@ -203,5 +233,91 @@ impl SessionExecutor {
             report.timed_out = usize::from(active_before > 0);
         }
         report
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DeferredResumeExecutor {
+    inner: Weak<SessionExecutorInner>,
+}
+
+impl DeferredResumeExecutor {
+    #[cfg(test)]
+    pub(crate) fn retired() -> Self {
+        Self { inner: Weak::new() }
+    }
+
+    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> Result<TaskId, DeferredResumeSubmitError> {
+        let Some(inner) = self.inner.upgrade() else {
+            return Err(DeferredResumeSubmitError::Closing {
+                source: RuntimeError::LifecycleOperation {
+                    operation: "deferred_resume.upgrade_session_executor",
+                    message: "session executor retired".to_owned(),
+                },
+                cell,
+            });
+        };
+        if !inner.accepting.load(Ordering::Acquire) {
+            return Err(DeferredResumeSubmitError::Closing {
+                source: RuntimeError::TaskGroupClosing {
+                    group_id: inner.request_group.id(),
+                    group_name: inner.request_group.name().into(),
+                },
+                cell,
+            });
+        }
+        let retained_bytes = cell.retained_bytes();
+        let class = cell.class();
+        let ordering = cell.ordering();
+        let queued = inner
+            .admission
+            .try_acquire(AdmissionResource::Queued, retained_bytes, class)
+            .map_err(|error| DeferredResumeSubmitError::Admission {
+                error,
+                cell: Arc::clone(&cell),
+            })?;
+        let inflight = inner
+            .admission
+            .try_acquire(AdmissionResource::Inflight, retained_bytes, class)
+            .map_err(|error| DeferredResumeSubmitError::Admission {
+                error,
+                cell: Arc::clone(&cell),
+            })?;
+        let admission = inner.admission.clone();
+        let sequencer = inner.sequencer.clone();
+        let operation = inner.operation.clone();
+        let operation_for_task = operation.clone();
+        let spawn_group = inner.request_group.clone();
+        let task_cell = Arc::clone(&cell);
+        #[cfg(test)]
+        if inner.close_resume_operation_before_spawn.swap(false, Ordering::AcqRel) {
+            operation.close_admission();
+        }
+        spawn_group
+            .spawn_draining_operation(&operation, "rocketmq.transport.session.deferred-resume", async move {
+                #[cfg(test)]
+                task_cell.wait_first_poll_gate().await;
+                let Some(job) = task_cell.take() else {
+                    return;
+                };
+                #[cfg(test)]
+                job.notify_before_ordering();
+                let ordering_guard = sequencer.acquire(ordering).await;
+                let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
+                    Ok(processor) => processor,
+                    Err(error) => {
+                        drop(ordering_guard);
+                        drop(queued);
+                        job.reject(error).await;
+                        return;
+                    }
+                };
+                drop(queued);
+                let _inflight = inflight;
+                let _processor = processor;
+                let _ordering_guard = ordering_guard;
+                job.execute(operation_for_task).await;
+            })
+            .map_err(|source| DeferredResumeSubmitError::Closing { source, cell })
     }
 }
