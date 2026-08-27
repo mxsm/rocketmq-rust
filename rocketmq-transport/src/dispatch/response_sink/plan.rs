@@ -31,6 +31,7 @@ use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseError;
 use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
+use crate::dispatch::ResponseSendClaim;
 use crate::dispatch::ResponseTerminalState;
 use crate::dispatch::WriteProgress;
 use crate::server::SessionHandle;
@@ -60,7 +61,7 @@ impl NetworkResponsePlanContext {
         }
     }
 
-    fn control(&self) -> &RequestControlView {
+    pub(crate) fn control(&self) -> &RequestControlView {
         &self.control
     }
 
@@ -70,6 +71,11 @@ impl NetworkResponsePlanContext {
 
     pub(crate) fn transport_drop_handle(&self) -> ResponseTransportDropHandle {
         self.transport_drop.clone()
+    }
+
+    pub(crate) fn same_lifecycle_owner(&self, session: &SessionHandle) -> bool {
+        self.control
+            .same_lifecycle_owner(session.session_view().state(), session.task_group())
     }
 
     #[cfg(test)]
@@ -301,6 +307,83 @@ impl ResponseSink {
             Self::Local(sink) => send_local_plan(sink, bound).await,
         }
     }
+
+    pub(crate) async fn send_deferred_plan(
+        self,
+        bound: BoundResponsePlan,
+        deferred_claim: &mut ResponseSendClaim,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        match self {
+            Self::Network(session) => send_deferred_network_plan(session, bound, deferred_claim).await,
+            Self::Local(sink) => send_deferred_local_plan(sink, bound).await,
+        }
+    }
+}
+
+async fn send_deferred_network_plan(
+    session: Arc<SessionHandle>,
+    bound: BoundResponsePlan,
+    deferred_claim: &mut ResponseSendClaim,
+) -> Result<ResponseReceipt, ResponseError> {
+    let Some(context) = session.response_plan_context() else {
+        return Err(ResponseError::SessionClosed);
+    };
+    let mut response_claim = context.slot().claim().await?;
+    let response_drop = context.transport_drop_handle();
+    response_claim.observe_transport_drop(response_drop.clone());
+    let deferred_drop = deferred_claim.observe_transport_drop(response_drop.delegation_token());
+    let request_id = bound.request_id();
+    if let Some(stop) = current_stop(context.control()) {
+        response_claim.finish(stop.terminal());
+        return Err(stop.into_error());
+    }
+
+    let mut connection = session.connection();
+    #[cfg(test)]
+    if let Some((checked, resume)) = &context.enqueue_gate {
+        connection.set_enqueue_gate(Arc::clone(checked), Arc::clone(resume));
+    }
+    #[cfg(test)]
+    if let Some(signal) = &context.enqueue_complete_signal {
+        connection.set_enqueue_complete_signal(Arc::clone(signal));
+    }
+    let prepared = match prepare_response(bound, connection.frame_limits()) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            response_claim.finish(terminal_for_error(&error));
+            return Err(error);
+        }
+    };
+    let metadata = *prepared.metadata();
+    debug_assert_eq!(metadata.request_id(), request_id);
+    if let Some(stop) = current_stop(context.control()) {
+        response_claim.finish(stop.terminal());
+        return Err(stop.into_error());
+    }
+
+    match connection
+        .send_prepared_deferred_response(prepared, context.control(), deferred_drop)
+        .await
+    {
+        Ok(()) => {
+            response_claim.finish(ResponseTerminalState::Completed);
+            Ok(ResponseReceipt::new(
+                metadata.request_id(),
+                ResponseDisposition::TransportWritten,
+            ))
+        }
+        Err(error) => {
+            response_claim.finish(terminal_for_error(&error));
+            Err(error)
+        }
+    }
+}
+
+async fn send_deferred_local_plan(
+    sink: LocalResponseSink,
+    bound: BoundResponsePlan,
+) -> Result<ResponseReceipt, ResponseError> {
+    send_local_plan(sink, bound).await
 }
 
 async fn send_network_plan(
@@ -516,6 +599,10 @@ impl ResponseTransportDropHandle {
 
     pub(crate) fn resume_outer(&self) {
         self.delegated.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn delegation_token(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.delegated)
     }
 
     fn is_delegated(&self) -> bool {

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod authorized_dispatcher;
+mod deferred_responder;
 #[allow(
     dead_code,
     reason = "DEF-01 provides the deferred response foundation consumed by later DEF stages"
@@ -41,6 +42,12 @@ pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
 pub(crate) use authorized_dispatcher::AuthorizedDispatchV2Error;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
+pub use deferred_responder::DeferredResponder;
+pub use deferred_responder::DeferredResponseError;
+pub use deferred_responder::DeferredResponseErrorKind;
+pub(crate) use deferred_responder::DeferredResponseSeed;
+pub use deferred_responder::TakeDeferredResponderError;
+pub(crate) use deferred_response::DeferredTransportDropHandle;
 #[allow(
     unused_imports,
     reason = "DEF-01 exposes the private state machine to later deferred runtime stages"

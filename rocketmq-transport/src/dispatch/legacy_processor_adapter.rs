@@ -575,6 +575,13 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
 
     fn deadline_candidate(&self, plan: ResponsePlan) -> InternalProcessorCandidate;
 
+    fn install_deferred_response(
+        &self,
+        builder: RemotingRequestBuilder,
+        response: &ResponseSink,
+        session: &SessionHandle,
+    ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError>;
+
     fn process(
         &mut self,
         request: &mut RemotingRequest,
@@ -644,6 +651,18 @@ where
             InternalProcessorOutcome::V2(HandlerOutcome::Reply(plan)),
             InternalFailureOrigin::Deadline,
         )
+    }
+
+    fn install_deferred_response(
+        &self,
+        builder: RemotingRequestBuilder,
+        response: &ResponseSink,
+        session: &SessionHandle,
+    ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
+        let seed = response
+            .network_deferred_seed(session)
+            .ok_or(super::remoting_request::RemotingRequestBuildError::DeferredResponseOwnerMismatch)?;
+        Ok(builder.with_deferred_response_seed(seed))
     }
 
     #[allow(
@@ -778,6 +797,15 @@ where
             InternalFailureOrigin::Deadline,
         )
         .suppress_observation()
+    }
+
+    fn install_deferred_response(
+        &self,
+        builder: RemotingRequestBuilder,
+        _response: &ResponseSink,
+        _session: &SessionHandle,
+    ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
+        Ok(builder)
     }
 
     #[allow(

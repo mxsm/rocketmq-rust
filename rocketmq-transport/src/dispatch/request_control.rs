@@ -181,6 +181,13 @@ impl RequestControlView {
             && self.parent_cancellation == parent_task_group.cancellation_token()
     }
 
+    #[cfg(test)]
+    pub(crate) fn same_lifecycle_view(&self, other: &Self) -> bool {
+        self.deadline == other.deadline
+            && self.session.same_canonical_owner(&other.session)
+            && self.parent_cancellation == other.parent_cancellation
+    }
+
     /// Returns the canonical ingress deadline, when one was supplied.
     #[must_use]
     pub const fn deadline(&self) -> Option<RequestDeadline> {

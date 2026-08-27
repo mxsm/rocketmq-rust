@@ -21,6 +21,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::request_control::LazyExtensions;
 use super::AuthenticationState;
+use super::DeferredResponder;
 use super::HandlerOutcome;
 use super::HandlerOutcomeContractError;
 use super::InlineResponseSlot;
@@ -31,6 +32,7 @@ use super::ProtocolNoResponseReason;
 use super::RequestControlView;
 use super::RequestMeta;
 use super::RequestOrigin;
+use super::TakeDeferredResponderError;
 use crate::session_view::SessionView;
 
 mod builder;
@@ -183,6 +185,22 @@ impl RemotingRequest {
         reason: ProtocolNoResponseReason,
     ) -> Result<ProtocolNoResponse, ProtocolNoResponseError> {
         ProtocolNoResponse::from_original(self.original, reason)
+    }
+
+    /// Transfers the request's single later-response capability.
+    ///
+    /// Only admitted network V2 requests can provide this capability. Taking
+    /// it exposes no channel, session, context, cancellation authority, or raw
+    /// transport writer. Failed takes leave the response contract available
+    /// for its honest current state and allocate no deferred response state.
+    ///
+    /// # Errors
+    ///
+    /// Returns one of the four stable [`TakeDeferredResponderError`] variants
+    /// for one-way, unsupported transport, duplicate-take, or completed-outcome
+    /// state.
+    pub fn take_deferred_responder(&mut self) -> Result<DeferredResponder, TakeDeferredResponderError> {
+        self.inline_response.take_deferred_responder(self.original)
     }
 
     /// Returns the owned command as it currently stands.

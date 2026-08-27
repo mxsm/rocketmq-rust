@@ -30,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::DeferredResponseSeed;
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseError;
 use crate::dispatch::ResponseReceipt;
@@ -282,8 +283,37 @@ impl ResponseSink {
         matches!(
             self,
             Self::Network(owner)
-                if owner.same_canonical_owner(session) && owner.response_plan_context().is_some()
+                if owner.same_canonical_owner(session)
+                    && owner
+                        .response_plan_context()
+                        .is_some_and(|context| context.same_lifecycle_owner(session))
         )
+    }
+
+    pub(crate) fn network_deferred_seed(&self, session: &SessionHandle) -> Option<DeferredResponseSeed> {
+        if !self.is_canonical_network_plan_owner(session) {
+            return None;
+        }
+        let Self::Network(owner) = self else {
+            return None;
+        };
+        let context = owner.response_plan_context()?;
+        Some(DeferredResponseSeed::new(
+            self.clone(),
+            session.connection().telemetry(),
+            session.session_view().id(),
+            context.control().clone(),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deferred_seed_for_test(
+        &self,
+        telemetry: crate::telemetry::TransportTelemetry,
+        session_id: crate::session_view::SessionId,
+        control: crate::dispatch::RequestControlView,
+    ) -> DeferredResponseSeed {
+        DeferredResponseSeed::new(self.clone(), telemetry, session_id, control)
     }
 
     #[cfg(test)]

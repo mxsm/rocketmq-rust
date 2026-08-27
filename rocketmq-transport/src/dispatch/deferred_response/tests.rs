@@ -56,7 +56,7 @@ const STATES: [u8; 9] = [
 ];
 
 #[test]
-fn response_state_is_exactly_one_atomic_and_inline_state_remains_separate() {
+fn response_state_is_exactly_one_atomic_and_inline_state_does_not_embed_it() {
     assert_eq!(std::mem::size_of::<ResponseState>(), std::mem::size_of::<AtomicU8>());
     assert_eq!(std::mem::align_of::<ResponseState>(), std::mem::align_of::<AtomicU8>());
     assert!(!std::mem::needs_drop::<ResponseState>());
@@ -66,7 +66,7 @@ fn response_state_is_exactly_one_atomic_and_inline_state_remains_separate() {
         std::mem::size_of_val(&inline),
         std::mem::size_of::<crate::dispatch::InlineResponseSlot>()
     );
-    assert!(!std::mem::needs_drop::<crate::dispatch::InlineResponseSlot>());
+    assert!(!inline.has_deferred_capability());
 }
 
 #[test]
@@ -180,6 +180,7 @@ fn apply_actual(
     let claim_for_existing_sending = || ResponseSendClaim {
         state: Arc::clone(state),
         drop_progress: WriteProgress::NotStarted,
+        delegated: None,
         active: true,
     };
     match operation {
