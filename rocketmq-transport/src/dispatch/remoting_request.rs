@@ -276,6 +276,21 @@ impl RemotingRequest {
         self.inline_response.resolve_legacy_oneway_reply()
     }
 
+    pub(crate) fn consume_oneway_deferred(
+        &mut self,
+        registration: crate::dispatch::DeferredRegistration,
+    ) -> Result<(), HandlerOutcomeContractError> {
+        self.inline_response
+            .consume_oneway_deferred(self.original, registration)
+    }
+
+    pub(crate) fn consume_oneway_no_reply(
+        &mut self,
+        marker: crate::dispatch::ProtocolNoResponse,
+    ) -> Result<(), HandlerOutcomeContractError> {
+        self.inline_response.consume_oneway_no_reply(self.original, marker)
+    }
+
     #[allow(
         dead_code,
         reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"

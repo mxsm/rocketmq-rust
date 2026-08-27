@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod authorized_dispatcher;
+mod embedded_dispatch;
 mod handler_outcome;
 mod legacy_processor_adapter;
 mod remoting_request;
@@ -35,6 +36,9 @@ pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
 pub(crate) use authorized_dispatcher::AuthorizedDispatchV2Error;
 pub use authorized_dispatcher::DispatchError;
 pub use authorized_dispatcher::DispatchOutcome;
+pub use embedded_dispatch::EmbeddedDispatchError;
+pub use embedded_dispatch::EmbeddedDispatchErrorKind;
+pub use embedded_dispatch::EmbeddedDispatchOutcome;
 pub use handler_outcome::DeferredRegistration;
 pub use handler_outcome::HandlerOutcome;
 #[allow(
@@ -51,7 +55,10 @@ pub(crate) use legacy_processor_adapter::bridge_construction_counts;
 pub(crate) use legacy_processor_adapter::DispatchMetricsGuard;
 pub(crate) use legacy_processor_adapter::DispatchProcessor;
 pub(crate) use legacy_processor_adapter::DispatchProcessorError;
+pub(crate) use legacy_processor_adapter::EmbeddedProcessorResolveError;
+pub(crate) use legacy_processor_adapter::EmbeddedResolvedOutcome;
 pub(crate) use legacy_processor_adapter::ExplicitV2Processor;
+pub(crate) use legacy_processor_adapter::InternalFailureOrigin;
 pub(crate) use legacy_processor_adapter::InternalProcessorCandidate;
 pub(crate) use legacy_processor_adapter::InternalProcessorOutcome;
 pub(crate) use legacy_processor_adapter::LegacyNetworkSession;

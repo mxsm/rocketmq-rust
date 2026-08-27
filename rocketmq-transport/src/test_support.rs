@@ -26,6 +26,9 @@ use crate::base::pending_request_table::PendingRequestTable;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 
+mod embedded_v2;
+pub use embedded_v2::EmbeddedRequestHarnessV2;
+
 pub use crate::client::connect_target_with_config_options_and_telemetry;
 pub use crate::client::connect_with_config;
 pub use crate::client::connect_with_config_and_telemetry;

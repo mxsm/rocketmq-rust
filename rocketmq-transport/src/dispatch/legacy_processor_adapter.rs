@@ -376,6 +376,10 @@ impl<P> ExplicitV2Processor<P> {
     }
 }
 
+mod embedded_v2_processor;
+pub(crate) use embedded_v2_processor::EmbeddedProcessorResolveError;
+pub(crate) use embedded_v2_processor::EmbeddedResolvedOutcome;
+
 impl<P> Clone for ExplicitV2Processor<P>
 where
     P: Clone,
@@ -426,7 +430,7 @@ pub(crate) struct InternalProcessorCandidate {
 }
 
 impl InternalProcessorCandidate {
-    fn success(outcome: InternalProcessorOutcome) -> Self {
+    pub(crate) fn success(outcome: InternalProcessorOutcome) -> Self {
         Self {
             outcome,
             failure: None,
@@ -434,7 +438,7 @@ impl InternalProcessorCandidate {
         }
     }
 
-    fn failure(outcome: InternalProcessorOutcome, failure: InternalFailureOrigin) -> Self {
+    pub(crate) fn failure(outcome: InternalProcessorOutcome, failure: InternalFailureOrigin) -> Self {
         Self {
             outcome,
             failure: Some(failure),
@@ -661,38 +665,8 @@ where
             });
             let candidate = match before_result {
                 Ok(()) => {
-                    let processed = match request.meta().deadline() {
-                        Some(deadline) => deadline.timeout(self.processor.process(request)).await,
-                        None => Ok(self.processor.process(request).await),
-                    };
-                    match processed {
-                        Ok(Ok(outcome)) => apply_v2_after_hook(
-                            request,
-                            InternalProcessorCandidate::success(InternalProcessorOutcome::V2(outcome)),
-                            hook_snapshot,
-                            remote_address,
-                        )?,
-                        Ok(Err(error)) => {
-                            let plan = crate::error_response::response_plan_from_error(&error)?;
-                            apply_v2_after_hook(
-                                request,
-                                InternalProcessorCandidate::failure(
-                                    InternalProcessorOutcome::V2(HandlerOutcome::Reply(plan)),
-                                    InternalFailureOrigin::ProcessorError,
-                                ),
-                                hook_snapshot,
-                                remote_address,
-                            )?
-                        }
-                        Err(_) => InternalProcessorCandidate::failure(
-                            InternalProcessorOutcome::V2(HandlerOutcome::Reply(ResponsePlan::command(
-                                super::authorized_dispatcher::deadline_response(
-                                    request.original_identity().original_opaque(),
-                                ),
-                            )?)),
-                            InternalFailureOrigin::Deadline,
-                        ),
-                    }
+                    let candidate = self.process_embedded(request).await?;
+                    apply_v2_after_hook(request, candidate, hook_snapshot, remote_address)?
                 }
                 Err(error) => InternalProcessorCandidate::failure(
                     InternalProcessorOutcome::V2(HandlerOutcome::Reply(

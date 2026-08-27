@@ -231,6 +231,20 @@ impl RequestControlView {
             }
         }
     }
+
+    /// Waits for an external lifecycle stop without observing the request deadline.
+    ///
+    /// Original one-way requests use this narrower waiter so an admitted
+    /// processor timeout can produce and consume its owned deadline plan
+    /// through the normal one-way policy before terminal completion.
+    pub(crate) async fn parent_or_session_cancelled(&self) {
+        let session = self.session.clone();
+        let parent_cancellation = self.parent_cancellation.clone();
+        tokio::select! {
+            _ = session.closed() => {}
+            _ = parent_cancellation.cancelled() => {}
+        }
+    }
 }
 
 type ExtensionValue = Box<dyn Any + Send + Sync>;
