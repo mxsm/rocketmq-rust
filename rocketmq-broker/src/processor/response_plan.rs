@@ -290,3 +290,7 @@ where
 #[cfg(test)]
 #[path = "response_plan/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "response_plan/tests/wire_equivalence.rs"]
+mod wire_equivalence;

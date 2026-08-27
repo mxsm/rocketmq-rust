@@ -13,6 +13,60 @@
 // limitations under the License.
 
 use super::harness::*;
+
+struct DispatchCountingLease {
+    file: std::fs::File,
+    accesses: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+}
+
+impl crate::file_region::FileRegionLease for DispatchCountingLease {
+    fn file(&self) -> &std::fs::File {
+        self.accesses.fetch_add(1, Ordering::SeqCst);
+        &self.file
+    }
+}
+
+impl Drop for DispatchCountingLease {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[derive(Default)]
+struct FileReplyState {
+    plan: Mutex<Option<ResponsePlan>>,
+    observations: Mutex<Vec<ResponseWriteObservationV2>>,
+    observed: tokio::sync::Notify,
+}
+
+#[derive(Clone)]
+struct FileReplyProcessor {
+    state: Arc<FileReplyState>,
+}
+
+impl RequestProcessorV2 for FileReplyProcessor {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        Ok(HandlerOutcome::Reply(
+            self.state
+                .plan
+                .lock()
+                .expect("file reply plan lock")
+                .take()
+                .expect("file reply plan should be consumed once"),
+        ))
+    }
+
+    fn observe_response_write(&self, observation: ResponseWriteObservationV2) {
+        self.state
+            .observations
+            .lock()
+            .expect("file reply observation lock")
+            .push(observation);
+        self.state.observed.notify_one();
+    }
+}
+
 #[tokio::test]
 async fn admitted_reply_uses_body_free_hooks_resolve_bind_writer_and_one_observation_in_order() {
     let mut harness = DispatchHarness::new("dispatch-v2-reply").await;
@@ -82,6 +136,104 @@ async fn admitted_reply_uses_body_free_hooks_resolve_bind_writer_and_one_observa
             if receipt.request_id() == original.request_id()
                 && receipt.disposition() == ResponseDisposition::TransportWritten
     ));
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn file_region_crosses_v2_hooks_and_metric_projection_without_entering_the_observation() {
+    use std::io::Write;
+
+    let (mut harness, writer_barrier) =
+        DispatchHarness::new_with_post_start_barrier("dispatch-v2-file-region-ownership").await;
+    let accesses = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut file = tempfile::tempfile().expect("temporary dispatch file");
+    file.write_all(b"dispatch-file-body").expect("write dispatch file body");
+    let lease = Arc::new(DispatchCountingLease {
+        file,
+        accesses: Arc::clone(&accesses),
+        drops: Arc::clone(&drops),
+    });
+    let region = crate::file_region::FileRegion::try_new(lease.clone(), 0, 18).expect("dispatch file region");
+    let plan = ResponsePlan::file_regions(
+        RemotingCommand::create_response_command_with_code(79),
+        crate::file_region::FileRegionSequence::single(region),
+    )
+    .expect("dispatch file-region response plan");
+    drop(lease);
+    assert_eq!(accesses.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+
+    let state = Arc::new(FileReplyState {
+        plan: Mutex::new(Some(plan)),
+        ..FileReplyState::default()
+    });
+    let processor = FileReplyProcessor {
+        state: Arc::clone(&state),
+    };
+    let hook_events = Arc::new(Mutex::new(Vec::new()));
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        processor,
+        vec![Arc::new(hook(false, false, Arc::clone(&hook_events)))],
+    ));
+    let command = request(false);
+    let (session, original) = harness.request_session(&command);
+
+    let outcome = dispatcher
+        .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
+        .await
+        .expect("dispatch file response");
+    assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+    writer_barrier.wait_reached().await;
+
+    assert_eq!(
+        hook_events.lock().expect("hook events lock").as_slice(),
+        ["before", "after"]
+    );
+    assert!(state.observations.lock().expect("observation lock").is_empty());
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "canonical writer still owns the file plan"
+    );
+
+    writer_barrier.release();
+    let response = harness.receive().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let observed = state.observed.notified();
+            if !state.observations.lock().expect("observation lock").is_empty() {
+                break;
+            }
+            observed.await;
+        }
+    })
+    .await
+    .expect("file response observation");
+
+    assert_eq!(response.opaque(), 811);
+    assert_eq!(response.code(), 79);
+    assert_eq!(response.body().map(Bytes::as_ref), Some(&b"dispatch-file-body"[..]));
+    assert!(accesses.load(Ordering::SeqCst) >= 2);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    let observation = state.observations.lock().expect("observation lock")[0];
+    assert_eq!(observation.request_id(), original.request_id());
+    assert_eq!(observation.original_code(), 91);
+    assert_eq!(observation.response_code(), 79);
+    assert_eq!(observation.body_kind(), ResponseBodyKind::FileRegions);
+    assert_eq!(observation.path(), ResponseWritePath::Inline);
+    assert!(matches!(
+        observation.outcome(),
+        ResponseWriteOutcomeV2::Written(receipt)
+            if receipt.request_id() == original.request_id()
+                && receipt.disposition() == ResponseDisposition::TransportWritten
+    ));
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "scalar observation must not retain the lease"
+    );
+
     harness.shutdown().await;
 }
 

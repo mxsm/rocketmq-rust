@@ -492,7 +492,10 @@ impl DispatchHarness {
         let local_addr = "127.0.0.1:19131".parse().expect("local address");
         let remote_addr = "127.0.0.1:19132".parse().expect("remote address");
         let runner = tokio::spawn(run_connected_session(
-            Connection::new_with_plaintext_stream(transport),
+            Connection::new_with_plaintext_stream(transport).with_file_region_io(
+                runtime.blocking(rocketmq_runtime::BlockingLane::StorageIo).clone(),
+                crate::file_region::FileTransferMode::Portable,
+            ),
             local_addr,
             remote_addr,
             service.task_group().clone(),
