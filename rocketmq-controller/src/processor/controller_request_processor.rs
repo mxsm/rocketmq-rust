@@ -577,7 +577,12 @@ impl ControllerRequestProcessor {
         if let Some(broker_id) = &request_header.broker_id {
             let heartbeat_timeout_mills = request_header.heartbeat_timeout_mills.ok_or_else(|| {
                 RocketMQError::request_header_error("BrokerHeartbeatRequestHeader.heartbeat_timeout_mills is missing")
-            })? as u64;
+            })?;
+            let heartbeat_timeout_mills = u64::try_from(heartbeat_timeout_mills).map_err(|_| {
+                RocketMQError::request_header_error(
+                    "BrokerHeartbeatRequestHeader.heartbeat_timeout_mills must be non-negative",
+                )
+            })?;
             self.heartbeat_manager.on_broker_heartbeat(
                 &request_header.cluster_name,
                 &request_header.broker_name,

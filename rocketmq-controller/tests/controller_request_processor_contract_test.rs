@@ -474,9 +474,9 @@ async fn controller_request_contract_broker_heartbeat() {
 }
 
 #[tokio::test]
-async fn controller_request_contract_broker_heartbeat_rejects_missing_timeout_header() {
+async fn controller_request_contract_broker_heartbeat_rejects_invalid_timeout_header() {
     let mut harness = ProcessorHarness::new().await;
-    let header = BrokerHeartbeatRequestHeader {
+    let mut header = BrokerHeartbeatRequestHeader {
         cluster_name: CheetahString::from_static_str(CLUSTER_NAME),
         broker_addr: CheetahString::from_static_str(BROKER_ADDR_1),
         broker_name: CheetahString::from_static_str(BROKER_NAME),
@@ -489,18 +489,21 @@ async fn controller_request_contract_broker_heartbeat_rejects_missing_timeout_he
         election_priority: Some(1),
     };
 
-    let error = match harness
-        .send_result(RemotingCommand::create_request_command(
-            RequestCode::BrokerHeartbeat,
-            header,
-        ))
-        .await
-    {
-        Ok(_) => panic!("missing heartbeat timeout should be rejected"),
-        Err(error) => error,
-    };
+    for heartbeat_timeout_mills in [None, Some(-1)] {
+        header.heartbeat_timeout_mills = heartbeat_timeout_mills;
+        let error = match harness
+            .send_result(RemotingCommand::create_request_command(
+                RequestCode::BrokerHeartbeat,
+                header.clone(),
+            ))
+            .await
+        {
+            Ok(_) => panic!("heartbeat timeout {heartbeat_timeout_mills:?} should be rejected"),
+            Err(error) => error,
+        };
 
-    assert_eq!(error.kind(), ErrorKind::RequestHeaderError);
+        assert_eq!(error.kind(), ErrorKind::RequestHeaderError);
+    }
 
     harness.shutdown().await;
 }
