@@ -14,6 +14,7 @@
 
 mod authorized_dispatcher;
 mod deferred_admission;
+mod deferred_expiry;
 mod deferred_registry;
 mod deferred_responder;
 #[allow(
@@ -56,10 +57,17 @@ pub use deferred_admission::DeferredRetainedSize;
 pub use deferred_admission::DeferredRetainedSizeParts;
 pub use deferred_admission::DeferredWaitLimits;
 pub use deferred_admission::DeferredWaitPermit;
+pub use deferred_expiry::DeferredExpiry;
+pub use deferred_expiry::DeferredExpiryError;
+pub use deferred_expiry::DeferredExpiryErrorKind;
+pub use deferred_expiry::DeferredExpiryKind;
+pub use deferred_expiry::DeferredExpiryMargins;
 pub use deferred_registry::ClaimedDeferred;
 pub use deferred_registry::DeferredClaimError;
 pub use deferred_registry::DeferredClaimErrorKind;
 pub(crate) use deferred_registry::DeferredCommitError;
+pub use deferred_registry::DeferredExpiryBatch;
+pub use deferred_registry::DeferredExpiryBatchStats;
 pub use deferred_registry::DeferredId;
 pub use deferred_registry::DeferredParts;
 pub use deferred_registry::DeferredRegistration;
@@ -73,12 +81,13 @@ pub use deferred_registry::DeferredResumeError;
 pub use deferred_registry::DeferredResumeErrorKind;
 pub use deferred_registry::DeferredResumeRetainedSize;
 pub use deferred_registry::DeferredWakeReason;
-pub(crate) use deferred_responder::CanonicalDeferredDeadlineResponse;
+pub use deferred_responder::DeferredCancellationReason;
 pub use deferred_responder::DeferredResponder;
 pub use deferred_responder::DeferredResponseError;
 pub use deferred_responder::DeferredResponseErrorKind;
 pub(crate) use deferred_responder::DeferredResponseSeed;
 pub use deferred_responder::TakeDeferredResponderError;
+pub use deferred_response::DeferredTerminalReason;
 pub(crate) use deferred_response::DeferredTransportDropHandle;
 #[allow(
     unused_imports,

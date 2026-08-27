@@ -27,6 +27,8 @@ fn request_identity_span(identity: crate::dispatch::OriginalRequestIdentity) -> 
 type LegacyProcessorRequestCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, i32)>>>;
 #[cfg(test)]
 type LifecycleEventCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, &'static str)>>>;
+#[cfg(test)]
+type DeferredTerminalCapture = std::sync::Arc<parking_lot::Mutex<Vec<(&'static str, &'static str)>>>;
 
 /// Cloneable metrics and tracing capability for one transport composition.
 ///
@@ -43,6 +45,8 @@ pub struct TransportTelemetry {
     legacy_processor_requests: Option<LegacyProcessorRequestCapture>,
     #[cfg(test)]
     lifecycle_events: Option<LifecycleEventCapture>,
+    #[cfg(test)]
+    deferred_terminals: Option<DeferredTerminalCapture>,
 }
 
 impl TransportTelemetry {
@@ -66,6 +70,8 @@ impl TransportTelemetry {
             legacy_processor_requests: None,
             #[cfg(test)]
             lifecycle_events: None,
+            #[cfg(test)]
+            deferred_terminals: None,
         }
     }
 
@@ -81,6 +87,7 @@ impl TransportTelemetry {
             handle: None,
             legacy_processor_requests: Some(std::sync::Arc::clone(&capture)),
             lifecycle_events: None,
+            deferred_terminals: None,
         };
         (telemetry, capture)
     }
@@ -97,6 +104,24 @@ impl TransportTelemetry {
             handle: None,
             legacy_processor_requests: None,
             lifecycle_events: Some(std::sync::Arc::clone(&capture)),
+            deferred_terminals: None,
+        };
+        (telemetry, capture)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_deferred_terminal_capture() -> (Self, DeferredTerminalCapture) {
+        let capture = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let telemetry = Self {
+            #[cfg(feature = "observability")]
+            remoting: Default::default(),
+            #[cfg(feature = "observability")]
+            client: Default::default(),
+            #[cfg(any(feature = "observability", feature = "observability-traces"))]
+            handle: None,
+            legacy_processor_requests: None,
+            lifecycle_events: None,
+            deferred_terminals: Some(std::sync::Arc::clone(&capture)),
         };
         (telemetry, capture)
     }
@@ -164,6 +189,20 @@ impl TransportTelemetry {
 
         #[cfg(not(feature = "observability"))]
         let _ = (event, result);
+    }
+
+    #[inline]
+    pub(crate) fn record_deferred_terminal(&self, request_code_bucket: &'static str, reason: &'static str) {
+        #[cfg(test)]
+        if let Some(capture) = &self.deferred_terminals {
+            capture.lock().push((request_code_bucket, reason));
+        }
+
+        #[cfg(feature = "observability")]
+        self.remoting.record_deferred_terminal(request_code_bucket, reason);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = (request_code_bucket, reason);
     }
 
     #[inline]
@@ -393,6 +432,7 @@ mod tests {
         telemetry.record_outbound_accepted_plaintext_bytes(128);
         telemetry.record_outbound_written_plaintext_bytes(128);
         telemetry.record_lifecycle_event("connected", "queued");
+        telemetry.record_deferred_terminal("other", "abandoned");
         telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
         telemetry.record_legacy_processor_request("noop-legacy", 10);
         telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
@@ -407,6 +447,13 @@ mod tests {
         let mut guard = telemetry.request_guard(10, 64, false);
         guard.complete_response(0);
         guard.complete_legacy_ambiguous_none();
+    }
+
+    #[test]
+    fn lifecycle_capture_records_the_exact_low_cardinality_pair() {
+        let (telemetry, events) = TransportTelemetry::with_lifecycle_event_capture();
+        telemetry.record_lifecycle_event("connected", "queued");
+        assert_eq!(events.lock().as_slice(), [("connected", "queued")]);
     }
 
     #[test]

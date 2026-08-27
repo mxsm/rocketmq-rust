@@ -42,7 +42,6 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
-use crate::dispatch::CanonicalDeferredDeadlineResponse;
 use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseError;
@@ -235,7 +234,6 @@ impl SendFailure {
 #[derive(Clone, Copy)]
 enum RequestStopPolicy {
     All,
-    ParentOrSession,
 }
 
 fn current_request_stop(control: &RequestControlView, policy: RequestStopPolicy) -> Option<QueuedWriteCancellation> {
@@ -253,7 +251,6 @@ fn current_request_stop(control: &RequestControlView, policy: RequestStopPolicy)
 async fn wait_for_control_stop(control: &RequestControlView, policy: RequestStopPolicy) {
     match policy {
         RequestStopPolicy::All => control.cancelled().await,
-        RequestStopPolicy::ParentOrSession => control.parent_or_session_cancelled().await,
     }
 }
 
@@ -1256,33 +1253,6 @@ impl Connection {
             control.deadline(),
             Some(control),
             RequestStopPolicy::All,
-            Some(deferred_drop),
-            "transport-session-writer".to_string(),
-        )
-        .await
-        .map_err(SendFailure::into_response)
-    }
-
-    pub(crate) async fn send_prepared_deferred_deadline_response(
-        &mut self,
-        prepared: CanonicalDeferredDeadlineResponse<PreparedResponse>,
-        control: &RequestControlView,
-        deferred_drop: DeferredTransportDropHandle,
-    ) -> Result<(), ResponseError> {
-        if self.queued_writer().is_none() || self.response_plan_drop.is_none() {
-            return Err(ResponseError::SessionClosed);
-        }
-        let Some(class) = self.response_class() else {
-            return Err(ResponseError::SessionClosed);
-        };
-        let (_, payload) = prepared.into_inner().into_parts();
-        self.send_payload_inner(
-            payload,
-            class,
-            None,
-            None,
-            Some(control),
-            RequestStopPolicy::ParentOrSession,
             Some(deferred_drop),
             "transport-session-writer".to_string(),
         )

@@ -16,14 +16,22 @@
 
 use std::error::Error;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use super::deferred_expiry::DeferredExpiry;
+use super::deferred_expiry::DeferredExpiryError;
+use super::deferred_expiry::DeferredExpiryErrorKind;
+use super::deferred_expiry::DeferredExpiryMargins;
 use super::deferred_responder::DeferredResumeContext;
+use super::deferred_response::DeferredSystemCancellationReason;
+use super::deferred_response::DeferredSystemCloseReason;
 use super::DeferredAdmissionAcquireError;
 use super::DeferredResponder;
 use super::DeferredResponseError;
 use super::DeferredRetainedSize;
 use super::DeferredRetainedSizeParts;
+use super::DeferredTerminalReason;
 use super::DeferredWaitPermit;
 use super::RequestControlView;
 use super::RequestId;
@@ -31,6 +39,7 @@ use crate::session_view::SessionId;
 
 mod claim;
 mod errors;
+mod expiry;
 mod internal;
 
 pub(in crate::dispatch) use claim::ClaimExecutionParts;
@@ -49,7 +58,9 @@ use claim::TicketResolution;
 pub use errors::DeferredRegistryError;
 pub use errors::DeferredRegistryErrorKind;
 use errors::RegistryRecovery;
-use internal::lifecycle_stop;
+pub use expiry::DeferredExpiryBatch;
+pub use expiry::DeferredExpiryBatchStats;
+use internal::lifecycle_stop_with_expiry;
 use internal::registry_additional_bytes;
 use internal::validate_retained_floor;
 use internal::BuildTransaction;
@@ -70,7 +81,7 @@ use internal::TestRegistrationOwner;
 ///
 /// let forged = DeferredId(7);
 /// ```
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DeferredId(u64);
 
 impl DeferredId {
@@ -97,12 +108,46 @@ impl DeferredId {
 pub struct DeferredParts {
     responder: DeferredResponder,
     permit: DeferredWaitPermit,
+    expiry: Option<DeferredExpiry>,
 }
 
 impl DeferredParts {
     /// Joins the canonical response capability with its retained-byte permit.
     pub const fn new(responder: DeferredResponder, permit: DeferredWaitPermit) -> Self {
-        Self { responder, permit }
+        Self {
+            responder,
+            permit,
+            expiry: None,
+        }
+    }
+
+    /// Attaches a checked protocol expiry derived from this responder's canonical owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed, redacted error containing these exact affine parts when
+    /// the policy is already attached, either deadline has elapsed, or the
+    /// requested non-zero margins cannot fit the canonical owner budget.
+    pub fn try_with_expiry(
+        mut self,
+        protocol_at: tokio::time::Instant,
+        margins: DeferredExpiryMargins,
+    ) -> Result<Self, DeferredExpiryError> {
+        let request_id = self.request_id();
+        if self.expiry.is_some() {
+            return Err(DeferredExpiryError::new(
+                DeferredExpiryErrorKind::AlreadyAttached,
+                request_id,
+                self,
+            ));
+        }
+        match DeferredExpiry::try_from_control(self.control(), protocol_at, margins) {
+            Ok(expiry) => {
+                self.expiry = Some(expiry);
+                Ok(self)
+            }
+            Err(kind) => Err(DeferredExpiryError::new(kind, request_id, self)),
+        }
     }
 
     /// Returns the immutable request identity owned by the responder.
@@ -125,13 +170,21 @@ impl DeferredParts {
 
     /// Releases wait admission and returns the response capability for resume.
     pub fn into_responder(self) -> DeferredResponder {
-        let Self { responder, permit } = self;
+        let Self {
+            responder,
+            permit,
+            expiry: _,
+        } = self;
         permit.release();
         responder
     }
 
     const fn control(&self) -> &RequestControlView {
         self.responder.control()
+    }
+
+    pub(in crate::dispatch) const fn expiry(&self) -> Option<DeferredExpiry> {
+        self.expiry
     }
 
     fn response_state(&self) -> Arc<super::ResponseState> {
@@ -144,6 +197,26 @@ impl DeferredParts {
 
     fn clear_session_cleanup(&mut self) {
         drop(self.responder.take_session_cleanup());
+    }
+
+    fn cleanup_lifecycle(&mut self, kind: DeferredRegistryErrorKind) {
+        let _ = match kind {
+            DeferredRegistryErrorKind::ParentCancelled => self
+                .responder
+                .cleanup_cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED),
+            DeferredRegistryErrorKind::SessionClosed => self
+                .responder
+                .cleanup_close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED),
+            DeferredRegistryErrorKind::DeadlineExpired => self
+                .responder
+                .cleanup_cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE),
+            DeferredRegistryErrorKind::RetainedSizeOverflow
+            | DeferredRegistryErrorKind::RetainedSizeUnderreported
+            | DeferredRegistryErrorKind::DuplicateRequest
+            | DeferredRegistryErrorKind::IdentityExhausted
+            | DeferredRegistryErrorKind::Builder
+            | DeferredRegistryErrorKind::RegistryInvariant => return,
+        };
     }
 
     pub(crate) fn into_resume_parts(self) -> (DeferredResponder, DeferredWaitPermit) {
@@ -220,6 +293,10 @@ impl<R> DeferredRequest<R> {
 
     const fn control(&self) -> &RequestControlView {
         self.parts.control()
+    }
+
+    const fn expiry(&self) -> Option<DeferredExpiry> {
+        self.parts.expiry()
     }
 
     fn register_response(&self) -> Result<(), DeferredResponseError> {
@@ -396,11 +473,13 @@ where
                 RegistryRecovery::Request(Box::new(request)),
             ));
         }
-        if let Some(kind) = lifecycle_stop(request.control()) {
+        if let Some(kind) = lifecycle_stop_with_expiry(request.control(), request.expiry()) {
+            request.parts.cleanup_lifecycle(kind);
             drop(request);
             return Err(registry_error(kind, request_id, RegistryRecovery::None));
         }
         let request_control = request.control().clone();
+        let request_expiry = request.expiry();
         let response_state = request.parts.response_state();
         let id = match self.insert_shell(
             request_id,
@@ -408,6 +487,7 @@ where
             request_control.clone(),
             Arc::clone(&response_state),
             request.parts.session_cleanup(),
+            request_expiry,
         ) {
             Ok(id) => id,
             Err(kind) => {
@@ -415,6 +495,7 @@ where
                     kind,
                     DeferredRegistryErrorKind::ParentCancelled | DeferredRegistryErrorKind::SessionClosed
                 ) {
+                    request.parts.cleanup_lifecycle(kind);
                     drop(request);
                     return Err(registry_error(kind, request_id, RegistryRecovery::None));
                 }
@@ -428,7 +509,9 @@ where
         request.parts.clear_session_cleanup();
         if let Err(request) = self.inner.store_prepared_from_shell(id, request) {
             drop(self.inner.remove(id));
-            if let Some(kind) = registration_stop(request.control(), &response_state) {
+            if let Some(kind) = registration_stop(request.control(), request.expiry(), &response_state) {
+                let mut request = request;
+                request.parts.cleanup_lifecycle(kind);
                 drop(request);
                 return Err(registry_error(kind, request_id, RegistryRecovery::None));
             }
@@ -446,6 +529,7 @@ where
                 id,
                 control: request_control,
                 response_state,
+                expiry: request_expiry,
                 #[cfg(test)]
                 commit_checkpoint: None,
             }),
@@ -484,11 +568,13 @@ where
                 RegistryRecovery::Parts(Box::new(parts)),
             ));
         }
-        if let Some(kind) = lifecycle_stop(parts.control()) {
+        if let Some(kind) = lifecycle_stop_with_expiry(parts.control(), parts.expiry()) {
+            parts.cleanup_lifecycle(kind);
             drop(parts);
             return Err(registry_error(kind, request_id, RegistryRecovery::None));
         }
         let request_control = parts.control().clone();
+        let parts_expiry = parts.expiry();
         let response_state = parts.response_state();
         let id = match self.insert_shell(
             request_id,
@@ -496,6 +582,7 @@ where
             request_control.clone(),
             Arc::clone(&response_state),
             parts.session_cleanup(),
+            parts_expiry,
         ) {
             Ok(id) => id,
             Err(kind) => {
@@ -503,6 +590,7 @@ where
                     kind,
                     DeferredRegistryErrorKind::ParentCancelled | DeferredRegistryErrorKind::SessionClosed
                 ) {
+                    parts.cleanup_lifecycle(kind);
                     drop(parts);
                     return Err(registry_error(kind, request_id, RegistryRecovery::None));
                 }
@@ -516,7 +604,8 @@ where
         parts.clear_session_cleanup();
         if !self.inner.transition_to_building(id) {
             drop(self.inner.remove(id));
-            if let Some(kind) = registration_stop(parts.control(), &response_state) {
+            if let Some(kind) = registration_stop(parts.control(), parts_expiry, &response_state) {
+                parts.cleanup_lifecycle(kind);
                 drop(parts);
                 return Err(registry_error(kind, request_id, RegistryRecovery::None));
             }
@@ -529,9 +618,13 @@ where
         let mut transaction = BuildTransaction::new(Arc::clone(&self.inner), id, parts);
         match builder(id) {
             Ok(resume) => {
-                if let Some(kind) = lifecycle_stop(transaction.parts().control()) {
+                if let Some(kind) =
+                    lifecycle_stop_with_expiry(transaction.parts().control(), transaction.parts().expiry())
+                {
+                    let mut parts = transaction.rollback();
+                    parts.cleanup_lifecycle(kind);
                     drop(resume);
-                    drop(transaction.rollback());
+                    drop(parts);
                     return Err(registry_error(kind, request_id, RegistryRecovery::None));
                 }
                 let request = DeferredRequest::new(resume, transaction.take_parts());
@@ -539,7 +632,9 @@ where
                     Ok(()) => transaction.disarm(),
                     Err(request) => {
                         transaction.disarm_and_remove();
-                        if let Some(kind) = registration_stop(request.control(), &response_state) {
+                        if let Some(kind) = registration_stop(request.control(), request.expiry(), &response_state) {
+                            let mut request = request;
+                            request.parts.cleanup_lifecycle(kind);
                             drop(request);
                             return Err(registry_error(kind, request_id, RegistryRecovery::None));
                         }
@@ -552,9 +647,13 @@ where
                 }
             }
             Err(source) => {
-                if let Some(kind) = lifecycle_stop(transaction.parts().control()) {
+                if let Some(kind) =
+                    lifecycle_stop_with_expiry(transaction.parts().control(), transaction.parts().expiry())
+                {
+                    let mut parts = transaction.rollback();
+                    parts.cleanup_lifecycle(kind);
                     drop(source);
-                    drop(transaction.rollback());
+                    drop(parts);
                     return Err(registry_error(kind, request_id, RegistryRecovery::None));
                 }
                 let parts = transaction.rollback();
@@ -573,6 +672,7 @@ where
                 id,
                 control: request_control,
                 response_state,
+                expiry: parts_expiry,
                 #[cfg(test)]
                 commit_checkpoint: None,
             }),
@@ -619,25 +719,28 @@ where
                         None,
                         None,
                     )),
-                    TicketResolution::RemovedParentCancelled => Err(DeferredClaimError::new(
+                    TicketResolution::RemovedParentCancelled => Err(DeferredClaimError::new_with_reason(
                         DeferredClaimErrorKind::ParentCancelled,
                         id,
                         Some(waiter.request_id()),
                         None,
+                        Some(DeferredTerminalReason::ParentCancelled),
                         None,
                     )),
-                    TicketResolution::RemovedSessionClosed => Err(DeferredClaimError::new(
+                    TicketResolution::RemovedSessionClosed => Err(DeferredClaimError::new_with_reason(
                         DeferredClaimErrorKind::SessionClosed,
                         id,
                         Some(waiter.request_id()),
                         None,
+                        Some(DeferredTerminalReason::SessionClosed),
                         None,
                     )),
-                    TicketResolution::RemovedDeadlineExpired => Err(DeferredClaimError::new(
+                    TicketResolution::RemovedDeadlineExpired => Err(DeferredClaimError::new_with_reason(
                         DeferredClaimErrorKind::DeadlineExpired,
                         id,
                         Some(waiter.request_id()),
                         None,
+                        Some(DeferredTerminalReason::OwnerDeadline),
                         None,
                     )),
                     TicketResolution::RemovedInvariant | TicketResolution::Pending => Err(DeferredClaimError::new(
@@ -650,6 +753,15 @@ where
                 }
             }
         }
+    }
+
+    /// Examines at most `limit` due ordered entries using one frozen clock read.
+    ///
+    /// Long-poll expiry may return affine timeout claims. Owner expiry only
+    /// terminalizes and releases registry-owned state. A persistent cursor
+    /// prevents a provisional protocol wake from starving later active entries.
+    pub fn sweep_expired(&self, limit: NonZeroUsize) -> DeferredExpiryBatch<R> {
+        self.inner.sweep_expired(tokio::time::Instant::now(), limit)
     }
 
     /// Seals this registry and releases all state still owned by it.
@@ -678,6 +790,7 @@ where
         control: RequestControlView,
         response_state: Arc<super::ResponseState>,
         cleanup: Option<super::DeferredSessionCleanupRegistration>,
+        expiry: Option<DeferredExpiry>,
     ) -> Result<DeferredId, DeferredRegistryErrorKind> {
         match cleanup {
             Some(cleanup) => {
@@ -693,14 +806,14 @@ where
                     },
                     |enrollment| {
                         self.inner
-                            .insert_shell(request_id, session_id, control, response_state, enrollment)
+                            .insert_shell(request_id, session_id, control, response_state, expiry, enrollment)
                     },
                 )
             }
             None => {
                 let mut enrollment = None;
                 self.inner
-                    .insert_shell(request_id, session_id, control, response_state, &mut enrollment)
+                    .insert_shell(request_id, session_id, control, response_state, expiry, &mut enrollment)
             }
         }
     }
@@ -728,9 +841,10 @@ where
 
 fn registration_stop(
     control: &RequestControlView,
+    expiry: Option<DeferredExpiry>,
     response_state: &super::ResponseState,
 ) -> Option<DeferredRegistryErrorKind> {
-    lifecycle_stop(control).or_else(|| match response_state.terminal_state() {
+    lifecycle_stop_with_expiry(control, expiry).or_else(|| match response_state.terminal_state() {
         Some(super::ResponseTerminalState::Closed) => Some(DeferredRegistryErrorKind::SessionClosed),
         Some(super::ResponseTerminalState::Cancelled) => Some(DeferredRegistryErrorKind::ParentCancelled),
         Some(super::ResponseTerminalState::Completed | super::ResponseTerminalState::Failed { .. }) | None => None,

@@ -30,8 +30,16 @@ use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
 use rocketmq_transport::api::v2::ClaimedDeferred;
+use rocketmq_transport::api::v2::DeferredCancellationReason;
 use rocketmq_transport::api::v2::DeferredClaimError;
 use rocketmq_transport::api::v2::DeferredClaimErrorKind;
+use rocketmq_transport::api::v2::DeferredExpiry;
+use rocketmq_transport::api::v2::DeferredExpiryBatch;
+use rocketmq_transport::api::v2::DeferredExpiryBatchStats;
+use rocketmq_transport::api::v2::DeferredExpiryError;
+use rocketmq_transport::api::v2::DeferredExpiryErrorKind;
+use rocketmq_transport::api::v2::DeferredExpiryKind;
+use rocketmq_transport::api::v2::DeferredExpiryMargins;
 use rocketmq_transport::api::v2::DeferredId;
 use rocketmq_transport::api::v2::DeferredParts;
 use rocketmq_transport::api::v2::DeferredRegistration;
@@ -47,6 +55,7 @@ use rocketmq_transport::api::v2::DeferredResumeErrorKind;
 use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
 use rocketmq_transport::api::v2::DeferredRetainedSize;
 use rocketmq_transport::api::v2::DeferredRetainedSizeParts;
+use rocketmq_transport::api::v2::DeferredTerminalReason;
 use rocketmq_transport::api::v2::DeferredWaitPermit;
 use rocketmq_transport::api::v2::DeferredWakeReason;
 use rocketmq_transport::api::v2::EmbeddedCaller;
@@ -259,6 +268,11 @@ fn assert_deferred_registry_contract<R, E>(
     }
 
     let _: fn(DeferredResponder, DeferredWaitPermit) -> DeferredParts = DeferredParts::new;
+    let _: fn(
+        DeferredParts,
+        tokio::time::Instant,
+        DeferredExpiryMargins,
+    ) -> Result<DeferredParts, DeferredExpiryError> = DeferredParts::try_with_expiry;
     let _: fn(R, DeferredParts) -> DeferredRequest<R> = DeferredRequest::new;
     let _: fn(DeferredRetainedSizeParts) -> Result<DeferredRetainedSize, _> = DeferredRegistry::<R>::try_retained_size;
 }
@@ -305,6 +319,7 @@ fn assert_claim_resume_contract<R>(
         let _: DeferredId = error.deferred_id();
         let _: V2RequestId = error.request_id();
         let _ = error.prior_terminal_state();
+        let _: Option<DeferredTerminalReason> = error.prior_terminal_reason();
         let _: Option<WriteProgress> = error.write_progress();
     }
     let _: usize = DeferredResumeRetainedSize::default().dynamic_bytes();
@@ -508,6 +523,9 @@ fn v2_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_debug_contract::<DeferredRegistry<String>>();
     assert_debug_contract::<DeferredRegistryShutdownOutcome>();
     assert_debug_contract::<DeferredRegistryShutdownStats>();
+    assert_debug_contract::<DeferredExpiry>();
+    assert_debug_contract::<DeferredExpiryBatchStats>();
+    assert_error_contract::<DeferredExpiryError>();
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::detached_entries;
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::notified_tickets;
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::terminalized_responses;
@@ -520,6 +538,26 @@ fn v2_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_error_contract::<DeferredResumeError>();
     assert_eq!(DeferredClaimErrorKind::AlreadyClaimed.as_str(), "already_claimed");
     assert_eq!(DeferredResumeErrorKind::TaskTerminated.as_str(), "task_terminated");
+    let margins = DeferredExpiryMargins::new(Duration::from_millis(2), Duration::from_millis(3));
+    assert_eq!(margins.recovery(), Duration::from_millis(2));
+    assert_eq!(margins.write(), Duration::from_millis(3));
+    assert_eq!(DeferredExpiryKind::LongPollTimeout.as_str(), "long_poll_timeout");
+    assert_eq!(DeferredExpiryErrorKind::AlreadyAttached.as_str(), "already_attached");
+    assert_eq!(DeferredTerminalReason::OwnerDeadline.as_str(), "owner_deadline");
+    assert_eq!(
+        DeferredTerminalReason::SessionClosed.terminal_state(),
+        rocketmq_transport::api::v2::ResponseTerminalState::Closed
+    );
+    let _ = DeferredCancellationReason::ReceiverDropped;
+    let stats = DeferredExpiryBatchStats::default();
+    assert_eq!(stats.examined(), 0);
+    assert_eq!(stats.long_poll_claims(), 0);
+    assert_eq!(stats.pending_long_poll(), 0);
+    assert_eq!(stats.owner_expired(), 0);
+    assert_eq!(stats.invariant_failures(), 0);
+    fn assert_send<T: Send>() {}
+    assert_send::<DeferredExpiryBatch<String>>();
+    let _: fn(DeferredExpiryError) -> DeferredParts = DeferredExpiryError::into_parts;
 }
 
 #[test]

@@ -22,6 +22,7 @@ use std::time::Duration;
 use crate::metrics::remoting::RemotingMetrics;
 use crate::metrics::remoting::RequestMetricsGuard;
 use crate::metrics::remoting::RPC_LATENCY;
+use crate::metrics::remoting::TRANSPORT_DEFERRED_TERMINAL_TOTAL;
 use crate::metrics::remoting::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
 use crate::metrics::remoting::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUESTS_TOTAL;
@@ -152,7 +153,10 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     second.record_inbound_decoded_plaintext_bytes(17);
     first.record_legacy_processor_request("broker-send", 10);
     first.record_legacy_processor_request("broker-send", 10);
+    first.record_deferred_terminal("pull_message", "owner_deadline");
+    first.record_deferred_terminal("pull_message", "owner_deadline");
     second.record_legacy_processor_request("namesrv-route", 20);
+    second.record_deferred_terminal("other", "service_stopping");
 
     let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false);
     success.complete_response(0);
@@ -194,6 +198,42 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     );
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUEST_LATENCY), 1);
     assert_eq!(metric_value(&second_points, RPC_LATENCY), 1);
+
+    let first_deferred = first_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_DEFERRED_TERMINAL_TOTAL)
+        .collect::<Vec<_>>();
+    assert_eq!(first_deferred.len(), 1);
+    assert_eq!(first_deferred[0].value, 2);
+    assert_eq!(
+        first_deferred[0].attributes,
+        BTreeMap::from([
+            (
+                "request_code_bucket".to_owned(),
+                CapturedValue::String("pull_message".to_owned()),
+            ),
+            ("reason".to_owned(), CapturedValue::String("owner_deadline".to_owned()),),
+        ])
+    );
+    let second_deferred = second_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_DEFERRED_TERMINAL_TOTAL)
+        .collect::<Vec<_>>();
+    assert_eq!(second_deferred.len(), 1);
+    assert_eq!(second_deferred[0].value, 1);
+    assert_eq!(
+        second_deferred[0].attributes,
+        BTreeMap::from([
+            (
+                "request_code_bucket".to_owned(),
+                CapturedValue::String("other".to_owned()),
+            ),
+            (
+                "reason".to_owned(),
+                CapturedValue::String("service_stopping".to_owned()),
+            ),
+        ])
+    );
 
     let first_legacy = first_points
         .iter()
@@ -278,4 +318,5 @@ fn noop_handle_never_reads_global_meter_provider() {
     metrics.record_outbound_attempted_plaintext_bytes(256);
     metrics.record_outbound_accepted_plaintext_bytes(256);
     metrics.record_outbound_written_plaintext_bytes(256);
+    metrics.record_deferred_terminal("other", "abandoned");
 }

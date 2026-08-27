@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use crate::semantic::metrics::RPC_LATENCY;
+pub use crate::semantic::metrics::TRANSPORT_DEFERRED_TERMINAL_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
 pub use crate::semantic::metrics::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL;
@@ -162,6 +163,9 @@ impl RemotingMetrics {
     pub fn record_lifecycle_event(&self, _event: &'static str, _result: &'static str) {}
 
     #[inline]
+    pub fn record_deferred_terminal(&self, _request_code_bucket: &'static str, _reason: &'static str) {}
+
+    #[inline]
     pub fn record_lifecycle_listener_latency(&self, _latency_ms: u64, _event: &'static str) {}
 
     #[inline]
@@ -183,7 +187,7 @@ impl RemotingMetrics {
 #[derive(Clone, Default)]
 pub struct RemotingMetrics {
     telemetry: Option<crate::TelemetryHandle>,
-    instruments: Option<RemotingMetricInstruments>,
+    instruments: Option<std::sync::Arc<RemotingMetricInstruments>>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -196,6 +200,7 @@ struct RemotingMetricInstruments {
     outbound_written_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
     inbound_decoded_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
     lifecycle_events: opentelemetry::metrics::Counter<u64>,
+    deferred_terminals: opentelemetry::metrics::Counter<u64>,
     lifecycle_listener_latency: opentelemetry::metrics::Histogram<u64>,
     legacy_processor_requests: opentelemetry::metrics::Counter<u64>,
     rpc_latency: opentelemetry::metrics::Histogram<u64>,
@@ -220,7 +225,7 @@ impl RemotingMetrics {
         };
         Self {
             telemetry: Some(telemetry.clone()),
-            instruments: Some(RemotingMetricInstruments::new(&meter)),
+            instruments: Some(std::sync::Arc::new(RemotingMetricInstruments::new(&meter))),
         }
     }
 
@@ -230,7 +235,7 @@ impl RemotingMetrics {
     pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         Self {
             telemetry: None,
-            instruments: Some(RemotingMetricInstruments::new(meter)),
+            instruments: Some(std::sync::Arc::new(RemotingMetricInstruments::new(meter))),
         }
     }
 
@@ -304,6 +309,22 @@ impl RemotingMetrics {
                 &[
                     opentelemetry::KeyValue::new(crate::semantic::labels::EVENT, event),
                     opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result),
+                ],
+            );
+        }
+    }
+
+    #[inline]
+    pub fn record_deferred_terminal(&self, request_code_bucket: &'static str, reason: &'static str) {
+        if !self.is_active() {
+            return;
+        }
+        if let Some(instruments) = &self.instruments {
+            instruments.deferred_terminals.add(
+                1,
+                &[
+                    opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_CODE_BUCKET, request_code_bucket),
+                    opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
                 ],
             );
         }
@@ -406,6 +427,12 @@ impl RemotingMetricInstruments {
             .with_unit("{event}")
             .build();
 
+        let deferred_terminals = meter
+            .u64_counter(TRANSPORT_DEFERRED_TERMINAL_TOTAL)
+            .with_description("Deferred responses terminated without response delivery")
+            .with_unit("{response}")
+            .build();
+
         let lifecycle_listener_latency = meter
             .u64_histogram(TRANSPORT_LIFECYCLE_LISTENER_LATENCY)
             .with_description("Connection lifecycle listener callback latency")
@@ -432,6 +459,7 @@ impl RemotingMetricInstruments {
             outbound_written_plaintext_bytes,
             inbound_decoded_plaintext_bytes,
             lifecycle_events,
+            deferred_terminals,
             lifecycle_listener_latency,
             legacy_processor_requests,
             rpc_latency,
@@ -482,6 +510,7 @@ mod tests {
         metrics.record_outbound_written_plaintext_bytes(256);
         metrics.record_inbound_decoded_plaintext_bytes(256);
         metrics.record_lifecycle_event("connected", "queued");
+        metrics.record_deferred_terminal("pull_message", "owner_deadline");
         metrics.record_lifecycle_listener_latency(2, "connected");
         metrics.record_legacy_processor_request("test-processor", 10);
         metrics.record_rpc_latency(5, 10, 0, false, RESULT_SUCCESS);

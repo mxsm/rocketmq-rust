@@ -19,8 +19,11 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use rocketmq_protocol::code::request_code::RequestCode;
+
 use super::ResponseTerminalState;
 use super::WriteProgress;
+use crate::telemetry::TransportTelemetry;
 
 const OPEN: u8 = 0;
 const REGISTERED: u8 = 1;
@@ -29,8 +32,150 @@ const SENDING: u8 = 3;
 const COMPLETED: u8 = 4;
 const FAILED_NOT_STARTED: u8 = 5;
 const FAILED_POSSIBLY_PARTIAL: u8 = 6;
-const CANCELLED: u8 = 7;
-const CLOSED: u8 = 8;
+const CANCELLED_EXPLICIT: u8 = 7;
+const CLOSED_RECEIVER_DROPPED: u8 = 8;
+const CANCELLED_ABANDONED: u8 = 9;
+const CANCELLED_CLAIM_DROPPED: u8 = 10;
+const CANCELLED_OWNER_DEADLINE: u8 = 11;
+const CANCELLED_PARENT_CANCELLED: u8 = 12;
+const CANCELLED_PROCESSOR_UNAVAILABLE: u8 = 13;
+const CANCELLED_SERVICE_STOPPING: u8 = 14;
+const CLOSED_SESSION_CLOSED: u8 = 15;
+
+/// Stable reason that selected a non-response deferred terminal state.
+///
+/// The reason and its [`ResponseTerminalState`] projection are selected by one
+/// atomic transition. Successful and failed response delivery do not have a
+/// deferred terminal reason.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DeferredTerminalReason {
+    /// The response owner explicitly cancelled its capability.
+    Explicit,
+    /// The caller-owned response receiver was dropped.
+    ReceiverDropped,
+    /// An unfinished deferred responder was dropped.
+    Abandoned,
+    /// An affine deferred claim was dropped without being resumed.
+    ClaimDropped,
+    /// The trusted request owner deadline expired.
+    OwnerDeadline,
+    /// The request's parent lifecycle was cancelled.
+    ParentCancelled,
+    /// No processor remained available to resume the request.
+    ProcessorUnavailable,
+    /// The owning service stopped before response completion.
+    ServiceStopping,
+    /// The trusted request session closed.
+    SessionClosed,
+}
+
+impl DeferredTerminalReason {
+    /// Returns the stable low-cardinality metric label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::ReceiverDropped => "receiver_dropped",
+            Self::Abandoned => "abandoned",
+            Self::ClaimDropped => "claim_dropped",
+            Self::OwnerDeadline => "owner_deadline",
+            Self::ParentCancelled => "parent_cancelled",
+            Self::ProcessorUnavailable => "processor_unavailable",
+            Self::ServiceStopping => "service_stopping",
+            Self::SessionClosed => "session_closed",
+        }
+    }
+
+    /// Returns the existing public terminal-state projection for this reason.
+    #[must_use]
+    pub const fn terminal_state(self) -> ResponseTerminalState {
+        match self {
+            Self::ReceiverDropped | Self::SessionClosed => ResponseTerminalState::Closed,
+            Self::Explicit
+            | Self::Abandoned
+            | Self::ClaimDropped
+            | Self::OwnerDeadline
+            | Self::ParentCancelled
+            | Self::ProcessorUnavailable
+            | Self::ServiceStopping => ResponseTerminalState::Cancelled,
+        }
+    }
+}
+
+/// Sealed system-owned reasons that project to `Cancelled`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DeferredSystemCancellationReason(DeferredTerminalReason);
+
+impl DeferredSystemCancellationReason {
+    pub(crate) const CLAIM_DROPPED: Self = Self(DeferredTerminalReason::ClaimDropped);
+    pub(crate) const OWNER_DEADLINE: Self = Self(DeferredTerminalReason::OwnerDeadline);
+    pub(crate) const PARENT_CANCELLED: Self = Self(DeferredTerminalReason::ParentCancelled);
+    pub(crate) const PROCESSOR_UNAVAILABLE: Self = Self(DeferredTerminalReason::ProcessorUnavailable);
+    pub(crate) const SERVICE_STOPPING: Self = Self(DeferredTerminalReason::ServiceStopping);
+}
+
+/// Sealed system-owned reasons that project to `Closed`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DeferredSystemCloseReason(DeferredTerminalReason);
+
+impl DeferredSystemCloseReason {
+    pub(crate) const SESSION_CLOSED: Self = Self(DeferredTerminalReason::SessionClosed);
+}
+
+#[derive(Clone, Copy)]
+enum DeferredRequestCodeBucket {
+    PullMessage,
+    PopMessage,
+    Notification,
+    Other,
+}
+
+impl DeferredRequestCodeBucket {
+    fn from_request_code(request_code: i32) -> Self {
+        match RequestCode::from(request_code) {
+            RequestCode::PullMessage => Self::PullMessage,
+            RequestCode::PopMessage => Self::PopMessage,
+            RequestCode::Notification => Self::Notification,
+            _ => Self::Other,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PullMessage => "pull_message",
+            Self::PopMessage => "pop_message",
+            Self::Notification => "notification",
+            Self::Other => "other",
+        }
+    }
+}
+
+struct DeferredTerminalObserver {
+    telemetry: TransportTelemetry,
+    request_code: DeferredRequestCodeBucket,
+}
+
+impl DeferredTerminalObserver {
+    fn noop() -> Self {
+        Self {
+            telemetry: TransportTelemetry::noop(),
+            request_code: DeferredRequestCodeBucket::Other,
+        }
+    }
+
+    fn new(telemetry: TransportTelemetry, request_code: i32) -> Self {
+        Self {
+            telemetry,
+            request_code: DeferredRequestCodeBucket::from_request_code(request_code),
+        }
+    }
+
+    fn record(&self, reason: DeferredTerminalReason) {
+        self.telemetry
+            .record_deferred_terminal(self.request_code.as_str(), reason.as_str());
+    }
+}
 
 /// One atomic owner for a deferred response lifecycle.
 ///
@@ -38,6 +183,7 @@ const CLOSED: u8 = 8;
 /// responder. Inline responses continue to use their stack-owned slot.
 pub(crate) struct ResponseState {
     state: AtomicU8,
+    observer: DeferredTerminalObserver,
 }
 
 /// Stable internal view of the deferred response lifecycle.
@@ -67,7 +213,10 @@ pub(crate) enum ResponseTransition {
 pub(crate) enum ResponseStateError {
     /// A previous operation already selected the terminal state.
     #[error("deferred response already reached terminal state {state:?}")]
-    AlreadyCompleted { state: ResponseTerminalState },
+    AlreadyCompleted {
+        state: ResponseTerminalState,
+        reason: Option<DeferredTerminalReason>,
+    },
     /// The operation is not legal from the observed non-terminal state.
     #[error("deferred response cannot perform {transition:?} from {state:?}")]
     InvalidTransition {
@@ -107,9 +256,18 @@ impl DeferredTransportDropHandle {
 
 impl ResponseState {
     /// Creates the deferred-only state in `Open`.
-    pub(crate) const fn open() -> Self {
+    pub(crate) fn open() -> Self {
         Self {
             state: AtomicU8::new(OPEN),
+            observer: DeferredTerminalObserver::noop(),
+        }
+    }
+
+    /// Creates the deferred state with its one terminal observation owner.
+    pub(crate) fn observed(telemetry: TransportTelemetry, request_code: i32) -> Self {
+        Self {
+            state: AtomicU8::new(OPEN),
+            observer: DeferredTerminalObserver::new(telemetry, request_code),
         }
     }
 
@@ -127,6 +285,11 @@ impl ResponseState {
             | ResponseStateSnapshot::Claimed
             | ResponseStateSnapshot::Sending => None,
         }
+    }
+
+    /// Returns the exact non-response terminal reason selected by the atomic winner.
+    pub(crate) fn terminal_reason(&self) -> Option<DeferredTerminalReason> {
+        decode_terminal_reason(self.state.load(Ordering::Acquire))
     }
 
     /// Activates registry ownership of an open deferred response.
@@ -167,20 +330,44 @@ impl ResponseState {
 
     /// Cancels a response that has not begun delivery.
     pub(crate) fn cancel(&self) -> Result<(), ResponseStateError> {
-        self.stop_with(CANCELLED, ResponseTransition::Cancel, |_| {})
+        self.stop_with_reason(DeferredTerminalReason::Explicit, ResponseTransition::Cancel, |_| {})
     }
 
     /// Closes a response that has not begun delivery.
     pub(crate) fn close(&self) -> Result<(), ResponseStateError> {
-        self.stop_with(CLOSED, ResponseTransition::Close, |_| {})
+        self.stop_with_reason(DeferredTerminalReason::SessionClosed, ResponseTransition::Close, |_| {})
     }
 
-    fn stop_with(
+    pub(crate) fn cancel_with_reason(
         &self,
-        terminal: u8,
+        reason: DeferredSystemCancellationReason,
+    ) -> Result<(), ResponseStateError> {
+        self.stop_with_reason(reason.0, ResponseTransition::Cancel, |_| {})
+    }
+
+    pub(crate) fn close_with_reason(&self, reason: DeferredSystemCloseReason) -> Result<(), ResponseStateError> {
+        self.stop_with_reason(reason.0, ResponseTransition::Close, |_| {})
+    }
+
+    pub(super) fn cancel_receiver_dropped(&self) -> Result<(), ResponseStateError> {
+        self.stop_with_reason(
+            DeferredTerminalReason::ReceiverDropped,
+            ResponseTransition::Close,
+            |_| {},
+        )
+    }
+
+    pub(super) fn cancel_abandoned(&self) -> Result<(), ResponseStateError> {
+        self.stop_with_reason(DeferredTerminalReason::Abandoned, ResponseTransition::Cancel, |_| {})
+    }
+
+    fn stop_with_reason(
+        &self,
+        reason: DeferredTerminalReason,
         transition: ResponseTransition,
         mut before_compare: impl FnMut(u8),
     ) -> Result<(), ResponseStateError> {
+        let terminal = encode_terminal_reason(reason);
         let mut observed = self.state.load(Ordering::Acquire);
         loop {
             match observed {
@@ -190,7 +377,10 @@ impl ResponseState {
                         .state
                         .compare_exchange(observed, terminal, Ordering::AcqRel, Ordering::Acquire)
                     {
-                        Ok(_) => return Ok(()),
+                        Ok(_) => {
+                            self.observer.record(reason);
+                            return Ok(());
+                        }
                         Err(actual) => observed = actual,
                     }
                 }
@@ -279,7 +469,10 @@ impl Drop for ResponseSendClaim {
 
 fn transition_error(transition: ResponseTransition, actual: u8) -> ResponseStateError {
     match snapshot(actual) {
-        ResponseStateSnapshot::Terminal(state) => ResponseStateError::AlreadyCompleted { state },
+        ResponseStateSnapshot::Terminal(state) => ResponseStateError::AlreadyCompleted {
+            state,
+            reason: decode_terminal_reason(actual),
+        },
         state @ (ResponseStateSnapshot::Open
         | ResponseStateSnapshot::Registered
         | ResponseStateSnapshot::Claimed
@@ -300,8 +493,16 @@ fn snapshot(state: u8) -> ResponseStateSnapshot {
         FAILED_POSSIBLY_PARTIAL => ResponseStateSnapshot::Terminal(ResponseTerminalState::Failed {
             progress: WriteProgress::PossiblyPartial,
         }),
-        CANCELLED => ResponseStateSnapshot::Terminal(ResponseTerminalState::Cancelled),
-        CLOSED => ResponseStateSnapshot::Terminal(ResponseTerminalState::Closed),
+        CANCELLED_EXPLICIT
+        | CANCELLED_ABANDONED
+        | CANCELLED_CLAIM_DROPPED
+        | CANCELLED_OWNER_DEADLINE
+        | CANCELLED_PARENT_CANCELLED
+        | CANCELLED_PROCESSOR_UNAVAILABLE
+        | CANCELLED_SERVICE_STOPPING => ResponseStateSnapshot::Terminal(ResponseTerminalState::Cancelled),
+        CLOSED_RECEIVER_DROPPED | CLOSED_SESSION_CLOSED => {
+            ResponseStateSnapshot::Terminal(ResponseTerminalState::Closed)
+        }
         _ => unreachable!("ResponseState stores only module-owned monotonic state tags"),
     }
 }
@@ -315,8 +516,38 @@ const fn encode_terminal(state: ResponseTerminalState) -> u8 {
         ResponseTerminalState::Failed {
             progress: WriteProgress::PossiblyPartial,
         } => FAILED_POSSIBLY_PARTIAL,
-        ResponseTerminalState::Cancelled => CANCELLED,
-        ResponseTerminalState::Closed => CLOSED,
+        ResponseTerminalState::Cancelled => CANCELLED_EXPLICIT,
+        ResponseTerminalState::Closed => CLOSED_SESSION_CLOSED,
+    }
+}
+
+const fn encode_terminal_reason(reason: DeferredTerminalReason) -> u8 {
+    match reason {
+        DeferredTerminalReason::Explicit => CANCELLED_EXPLICIT,
+        DeferredTerminalReason::ReceiverDropped => CLOSED_RECEIVER_DROPPED,
+        DeferredTerminalReason::Abandoned => CANCELLED_ABANDONED,
+        DeferredTerminalReason::ClaimDropped => CANCELLED_CLAIM_DROPPED,
+        DeferredTerminalReason::OwnerDeadline => CANCELLED_OWNER_DEADLINE,
+        DeferredTerminalReason::ParentCancelled => CANCELLED_PARENT_CANCELLED,
+        DeferredTerminalReason::ProcessorUnavailable => CANCELLED_PROCESSOR_UNAVAILABLE,
+        DeferredTerminalReason::ServiceStopping => CANCELLED_SERVICE_STOPPING,
+        DeferredTerminalReason::SessionClosed => CLOSED_SESSION_CLOSED,
+    }
+}
+
+fn decode_terminal_reason(state: u8) -> Option<DeferredTerminalReason> {
+    match state {
+        CANCELLED_EXPLICIT => Some(DeferredTerminalReason::Explicit),
+        CLOSED_RECEIVER_DROPPED => Some(DeferredTerminalReason::ReceiverDropped),
+        CANCELLED_ABANDONED => Some(DeferredTerminalReason::Abandoned),
+        CANCELLED_CLAIM_DROPPED => Some(DeferredTerminalReason::ClaimDropped),
+        CANCELLED_OWNER_DEADLINE => Some(DeferredTerminalReason::OwnerDeadline),
+        CANCELLED_PARENT_CANCELLED => Some(DeferredTerminalReason::ParentCancelled),
+        CANCELLED_PROCESSOR_UNAVAILABLE => Some(DeferredTerminalReason::ProcessorUnavailable),
+        CANCELLED_SERVICE_STOPPING => Some(DeferredTerminalReason::ServiceStopping),
+        CLOSED_SESSION_CLOSED => Some(DeferredTerminalReason::SessionClosed),
+        OPEN | REGISTERED | CLAIMED | SENDING | COMPLETED | FAILED_NOT_STARTED | FAILED_POSSIBLY_PARTIAL => None,
+        _ => unreachable!("ResponseState stores only module-owned monotonic state tags"),
     }
 }
 

@@ -107,6 +107,7 @@ pub mod metrics {
     pub const TRANSPORT_LIFECYCLE_EVENTS_TOTAL: &str = "rocketmq_transport_lifecycle_events_total";
     pub const TRANSPORT_LIFECYCLE_LISTENER_LATENCY: &str = "rocketmq_transport_lifecycle_listener_latency";
     pub const TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL: &str = "rocketmq_transport_legacy_processor_requests_total";
+    pub const TRANSPORT_DEFERRED_TERMINAL_TOTAL: &str = "rocketmq_transport_deferred_terminal_total";
     pub const RPC_LATENCY: &str = "rocketmq_rpc_latency";
     pub const TIERED_STORE_MESSAGES_DISPATCH_TOTAL: &str = "rocketmq_tiered_store_messages_dispatch_total";
     pub const TIERED_STORE_MESSAGES_OUT_TOTAL: &str = "rocketmq_tiered_store_messages_out_total";
@@ -258,6 +259,7 @@ pub mod labels {
     pub const QUEUE_ID: &str = "queue_id";
     pub const PROTOCOL_TYPE: &str = "protocol_type";
     pub const REQUEST_CODE: &str = "request_code";
+    pub const REQUEST_CODE_BUCKET: &str = "request_code_bucket";
     pub const RESPONSE_CODE: &str = "response_code";
     pub const IS_LONG_POLLING: &str = "is_long_polling";
     pub const EVENT: &str = "event";
