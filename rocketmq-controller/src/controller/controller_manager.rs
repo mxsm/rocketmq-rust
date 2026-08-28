@@ -26,7 +26,8 @@ use super::raft_controller::RaftController;
 use crate::config::ControllerConfig;
 use crate::config::ControllerConfigHandle;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
-use crate::controller::broker_housekeeping_service::BrokerHousekeepingService;
+use crate::controller::broker_heartbeat_manager::BrokerSessionHeartbeatManager;
+use crate::controller::broker_heartbeat_manager::BrokerSessionId;
 use crate::controller::broker_role_notifier::BrokerRoleNotifier;
 use crate::controller::broker_role_notifier::NotifyKey;
 use crate::controller::broker_role_notifier::NotifySnapshot;
@@ -67,13 +68,14 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::api::v1::ChannelEventListener;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::RemotingClient;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
+use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::V2SessionEvent;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
@@ -83,6 +85,20 @@ use tracing::warn;
 
 struct BrokerInactiveListener {
     controller_manager: Weak<ControllerManager>,
+}
+
+struct PendingControllerRemotingServer {
+    config: Arc<ServerConfig>,
+    service_context: ChildServiceContext,
+    telemetry: TransportTelemetry,
+    session_registry: Arc<V2SessionRegistry>,
+}
+
+impl PendingControllerRemotingServer {
+    fn build(self, request_processor: ControllerRequestProcessor) -> TransportServerV2<ControllerRequestProcessor> {
+        TransportServerV2::new_with_telemetry(self.config, self.service_context, request_processor, self.telemetry)
+            .with_session_registry(self.session_registry)
+    }
 }
 
 impl BrokerInactiveListener {
@@ -344,7 +360,8 @@ pub struct ControllerManager {
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
 
     /// Remoting server for inbound RPC requests
-    remoting_server: Mutex<Option<TransportServer<ControllerRequestProcessor>>>,
+    remoting_server: Mutex<Option<PendingControllerRemotingServer>>,
+    session_registry: Arc<V2SessionRegistry>,
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
@@ -377,7 +394,6 @@ pub struct ControllerManager {
     #[cfg(test)]
     test_leadership_override: AtomicU8,
 
-    broker_housekeeping_service: Mutex<Option<Arc<BrokerHousekeepingService>>>,
     broker_role_notifier: BrokerRoleNotifier,
     service_context: ChildServiceContext,
 }
@@ -545,11 +561,13 @@ impl ControllerManager {
         let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "metrics", feature = "otel-traces")))]
         let transport_telemetry = TransportTelemetry::noop();
-        let remoting_server = Some(TransportServer::new_with_telemetry(
-            Arc::new(server_config),
-            service_context.component("controller.remoting-server"),
-            transport_telemetry.clone(),
-        ));
+        let session_registry = Arc::new(V2SessionRegistry::new());
+        let remoting_server = Some(PendingControllerRemotingServer {
+            config: Arc::new(server_config),
+            service_context: service_context.component("controller.remoting-server"),
+            telemetry: transport_telemetry.clone(),
+            session_registry: Arc::clone(&session_registry),
+        });
         info!("Remoting server created on port {}", listen_port);
 
         // Initialize remoting client for outbound RPC
@@ -580,6 +598,7 @@ impl ControllerManager {
             raft_controller: raft_arc,
             heartbeat_manager,
             remoting_server: Mutex::new(remoting_server),
+            session_registry,
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
             leadership_watch_tasks: Arc::new(Mutex::new(None)),
@@ -597,7 +616,6 @@ impl ControllerManager {
             }),
             #[cfg(test)]
             test_leadership_override: AtomicU8::new(0),
-            broker_housekeeping_service: Mutex::new(None),
             broker_role_notifier,
             service_context,
         })
@@ -620,6 +638,31 @@ impl ControllerManager {
 
     fn manager_task_group(&self) -> Option<TaskGroup> {
         self.manager_task_group.lock().clone()
+    }
+
+    fn start_broker_session_monitor(&self, task_group: &TaskGroup) -> Result<()> {
+        let mut events = self.session_registry.subscribe();
+        let heartbeat_manager = Arc::clone(&self.heartbeat_manager);
+        task_group
+            .spawn_cancellable_service("controller.broker-session-monitor", async move {
+                loop {
+                    match events.recv().await {
+                        Ok(V2SessionEvent::Connected(_)) => {}
+                        Ok(V2SessionEvent::Disconnected(session_id)) => {
+                            heartbeat_manager.on_broker_session_close(BrokerSessionId::from(session_id));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(
+                                skipped,
+                                "Controller broker session monitor lagged; heartbeat scan remains the backstop"
+                            );
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            })
+            .map(|_| ())
+            .map_err(|error| ControllerError::runtime_error(format!("Failed to start broker session monitor: {error}")))
     }
 
     async fn shutdown_manager_tasks(&self, deadline: ShutdownDeadline) -> bool {
@@ -687,21 +730,8 @@ impl ControllerManager {
             info!("Broker inactive listener registered");
         }
 
-        // Initialize broker housekeeping service
-        {
-            let housekeeping_service =
-                Arc::new(BrokerHousekeepingService::new_with_controller_manager(Arc::clone(self)));
-            *self.broker_housekeeping_service.lock() = Some(housekeeping_service);
-
-            info!("Broker housekeeping service initialized");
-        }
-
-        // Initialize processor manager (processors are already registered in new())
-        info!("Processor manager initialized with built-in processors");
-
-        // Register request processors to remoting server
-        self.register_processor();
-        info!("Request processors registered to remoting server");
+        // The V2 server takes exclusive ownership of its processor during start.
+        info!("Controller request processor wiring initialized");
 
         // Metrics manager is already initialized from the injected telemetry handle in new().
         #[cfg(feature = "metrics")]
@@ -710,31 +740,6 @@ impl ControllerManager {
         self.initialized.store(true, Ordering::Release);
         info!("Controller manager initialized successfully");
         Ok(true)
-    }
-
-    /// Register request processors to the remoting server
-    fn register_processor(&self) {
-        // Current implementation note:
-        // The remoting_server is started with a DefaultRequestProcessor in start().
-        // Once ControllerRequestProcessor is fully implemented and TransportServer
-        // supports dynamic processor registration, this method should register
-        // individual request code handlers.
-
-        info!("Processor registration placeholder - will be implemented once ControllerRequestProcessor is ready");
-
-        // When implemented, this should register:
-        // - ControllerAlterSyncStateSet
-        // - ControllerElectMaster
-        // - ControllerRegisterBroker
-        // - ControllerGetReplicaInfo
-        // - ControllerGetMetadataInfo
-        // - ControllerGetSyncStateData
-        // - BrokerHeartbeat
-        // - UpdateControllerConfig
-        // - GetControllerConfig
-        // - CleanBrokerData
-        // - ControllerGetNextBrokerId
-        // - ControllerApplyBrokerId
     }
 
     /// Initialize request processors
@@ -837,26 +842,23 @@ impl ControllerManager {
             Ok(task_group) => task_group,
             Err(error) => return Err(self.cleanup_after_start_failure(error).await),
         };
+        if let Err(error) = self.start_broker_session_monitor(&manager_task_group) {
+            return Err(self.cleanup_after_start_failure(error).await);
+        }
 
         // Start remoting server (for inbound RPC requests)
         // Reference: NameServerRuntime.start() - register processors then start server
         let remoting_server = self.remoting_server.lock().take();
-        if let Some(mut server) = remoting_server {
+        if let Some(pending_server) = remoting_server {
             // Create ControllerRequestProcessor using init_processors()
             let request_processor = Self::init_processors(Arc::clone(self));
-            let broker_housekeeping_service = self
-                .broker_housekeeping_service
-                .lock()
-                .take()
-                .map(|service| service as Arc<dyn ChannelEventListener>);
+            let server = pending_server.build(request_processor);
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             *self.remoting_server_shutdown_tx.lock() = Some(shutdown_tx);
             let (startup_tx, startup_rx) = oneshot::channel();
             if let Err(error) = manager_task_group.spawn_service("controller.remoting-server", async move {
                 let report = server
                     .try_run_with_shutdown_report_and_startup(
-                        request_processor,
-                        broker_housekeeping_service,
                         async move {
                             let _ = shutdown_rx.await;
                         },
@@ -1499,6 +1501,7 @@ mod tests {
 
         assert!(!source.contains(&full_config_log));
     }
+    use crate::metrics::RequestType as _;
     use crate::typ::Node;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
@@ -1509,10 +1512,6 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
     use rocketmq_protocol::protocol::SerializeType;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::api::v1::RequestProcessor;
-    use rocketmq_transport::test_support::Connection;
 
     fn test_telemetry_handle() -> TelemetryHandle {
         TelemetryHandle::noop()
@@ -1535,21 +1534,8 @@ mod tests {
         }
     }
 
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(
-            connection,
-            test_service_context().component("test-channel").task_group().clone(),
-        )
-        .addresses(local_addr, local_addr)
-        .build()
-        .expect("build test channel")
+    fn test_broker_session(id: u64) -> crate::controller::broker_heartbeat_manager::BrokerSession {
+        crate::controller::broker_heartbeat_manager::BrokerSession::for_test(id, Arc::new(AtomicBool::new(false)))
     }
 
     fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
@@ -1665,15 +1651,13 @@ mod tests {
         );
 
         async fn unsupported_response(manager: Arc<ControllerManager>) -> RemotingCommand {
-            let mut processor = ControllerRequestProcessor::new(manager);
-            let channel = create_test_channel().await;
-            let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+            let processor = ControllerRequestProcessor::new(manager);
             let mut request = RemotingCommand::create_remoting_command(-12345);
+            let dispatch = processor.handle_request(test_broker_session(1), "transport-session-1", &mut request);
             processor
-                .process_request(channel, ctx, &mut request)
+                .complete_request(None, dispatch)
                 .await
                 .expect("unsupported request dispatch")
-                .expect("unsupported request response")
         }
 
         let binary = unsupported_response(binary_manager).await;
@@ -1740,19 +1724,14 @@ mod tests {
         let (first, second) = tokio::join!(manager.initialize(), manager.initialize());
         let results = [first.expect("first initialize"), second.expect("second initialize")];
         assert_eq!(results.into_iter().filter(|initialized| *initialized).count(), 1);
-        assert!(manager.broker_housekeeping_service.lock().is_some());
-
         let processor = Arc::new(ControllerRequestProcessor::new(manager.clone()));
-        let wrapper =
-            crate::processor::ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor.clone());
-        let wrapper_clone = wrapper.clone();
-        assert_eq!(Arc::strong_count(&processor), 3);
+        let processor_clone = processor.clone();
+        assert_eq!(Arc::strong_count(&processor), 2);
         let weak_manager = Arc::downgrade(&manager);
         drop(manager);
 
         assert!(weak_manager.upgrade().is_none());
-        drop(wrapper_clone);
-        drop(wrapper);
+        drop(processor_clone);
         drop(processor);
     }
 
@@ -1774,6 +1753,18 @@ mod tests {
         first.expect("first start");
         second.expect("second start");
         assert!(manager.is_running());
+
+        let endpoint = CheetahString::from_string(remoting_addr.to_string());
+        let request = RemotingCommand::create_remoting_command(-12_345).set_opaque(73);
+        let response = manager
+            .remoting_client
+            .transport_client()
+            .invoke_request(Some(&endpoint), request, 3_000)
+            .await
+            .expect("production V2 Controller server should answer a canonical TCP request");
+        assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(response.opaque(), 73);
+        assert!(response.body().is_none());
 
         manager.shutdown().await.expect("shutdown manager");
         assert!(!manager.is_running());
@@ -2313,7 +2304,6 @@ mod tests {
             .expect("initialize cluster");
         wait_until(Duration::from_secs(5), || manager.is_leader(), "controller leader").await;
 
-        let channel = create_test_channel().await;
         for (broker_id, addr, check_code) in [
             (1_i64, "127.0.0.1:10911", "master-check"),
             (2_i64, "127.0.0.1:10912", "slave-check"),
@@ -2366,13 +2356,13 @@ mod tests {
                 .expect("record replicated heartbeat")
                 .expect("heartbeat response");
             assert_eq!(heartbeat_response.code(), ResponseCode::Success as i32);
-            manager.heartbeat_manager().on_broker_heartbeat(
+            manager.heartbeat_manager().on_broker_session_heartbeat(
                 "test-cluster",
                 "broker-a",
                 addr,
                 broker_id,
                 Some(60_000),
-                channel.clone(),
+                test_broker_session(broker_id as u64),
                 Some(1),
                 Some(100),
                 Some(80),
@@ -2418,18 +2408,20 @@ mod tests {
             "local heartbeat manager must consider target broker active for role-change notification"
         );
 
-        let mut processor = ControllerRequestProcessor::new(manager.clone());
-        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let processor = ControllerRequestProcessor::new(manager.clone());
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ControllerElectMaster,
             ElectMasterRequestHeader::new("test-cluster", "broker-a", 2, true, current_millis()),
         );
         request.make_custom_header_to_net();
+        let dispatch = processor.handle_request(test_broker_session(99), "transport-session-99", &mut request);
         let mut response = processor
-            .process_request(channel, ctx, &mut request)
+            .complete_request(
+                RequestCode::ControllerElectMaster.get_controller_request_name(),
+                dispatch,
+            )
             .await
-            .expect("processor elect request")
-            .expect("processor elect response");
+            .expect("processor elect request");
         response.make_custom_header_to_net();
         assert_eq!(response.code(), ResponseCode::Success as i32);
         let response_header = response

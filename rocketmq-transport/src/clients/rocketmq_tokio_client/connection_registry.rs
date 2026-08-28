@@ -21,7 +21,6 @@ use super::compatibility::CachedConnectionState;
 use super::connect_flight::ConnectFlight;
 use super::endpoint_state::EndpointLease;
 use crate::clients::TransportSession;
-use crate::runtime::processor::RequestProcessor;
 
 /// Session ownership separates direct broker sessions from nameserver sessions
 /// that happen to use the same socket address.
@@ -95,7 +94,7 @@ pub(super) struct ConnectionRegistry<PR> {
 
 impl<PR> ConnectionRegistry<PR>
 where
-    PR: RequestProcessor + Sync + Clone + Send + 'static,
+    PR: Sync + Clone + Send + 'static,
 {
     pub(super) fn new() -> Self {
         Self {
@@ -382,8 +381,8 @@ mod tests {
 
     use super::*;
     use crate::clients::rocketmq_tokio_client::TransportClient;
+    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
     use crate::deadline::RequestDeadline;
-    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
     use crate::runtime::config::client_config::TransportClientConfig;
 
     #[test]

@@ -44,6 +44,7 @@ use crate::authorization::model::resource::Resource;
 use crate::authorization::provider::AuthorizationError;
 use crate::authorization::provider::AuthorizationResult;
 use crate::config::AuthConfig;
+use crate::RemotingAuthContext;
 
 const ACCESS_KEY: &str = "AccessKey";
 const TOPIC: &str = "topic";
@@ -99,6 +100,10 @@ impl DefaultAuthorizationContextBuilder {
     }
 
     fn source_ip(&self, channel_context: &dyn Any) -> String {
+        if let Some(context) = channel_context.downcast_ref::<RemotingAuthContext>() {
+            return context.source_ip().unwrap_or("unknown").to_owned();
+        }
+
         if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
             return ctx.remote_address().ip().to_string();
         }

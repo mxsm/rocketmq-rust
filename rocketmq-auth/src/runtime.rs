@@ -62,6 +62,7 @@ use crate::project_authorization_error;
 use crate::project_authorization_result;
 use crate::AuthMetrics;
 use crate::AuthMetricsSnapshot;
+use crate::RemotingAuthContext;
 
 const ACCESS_KEY: &str = "AccessKey";
 
@@ -1162,6 +1163,9 @@ fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
 }
 
 fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
+    if let Some(context) = channel_context.downcast_ref::<RemotingAuthContext>() {
+        return context.source_ip().map(str::to_owned);
+    }
     if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
         return Some(ctx.remote_address().ip().to_string());
     }
@@ -1175,6 +1179,9 @@ fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + 
 }
 
 fn channel_id_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
+    if let Some(context) = channel_context.downcast_ref::<RemotingAuthContext>() {
+        return context.channel_id().map(str::to_owned);
+    }
     if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
         return Some(ctx.channel().channel_id().to_owned());
     }

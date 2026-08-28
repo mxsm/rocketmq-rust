@@ -8,12 +8,9 @@ use cheetah_string::CheetahString;
 use rocketmq_controller::BrokerHeartbeatManager;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
-use rocketmq_controller::ControllerRequestProcessor;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftPeer;
 use rocketmq_controller::StorageBackendType;
-use rocketmq_error::ErrorKind;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -38,11 +35,10 @@ use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbea
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-use rocketmq_transport::api::v1::RequestProcessor;
-use rocketmq_transport::test_support::Connection;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
+use rocketmq_transport::api::v1::RemotingClient;
+use rocketmq_transport::api::v1::TransportClientConfig;
 use tokio::time::sleep;
 
 const CLUSTER_NAME: &str = "contract-cluster";
@@ -52,9 +48,8 @@ const BROKER_ADDR_2: &str = "127.0.0.1:10912";
 
 struct ProcessorHarness {
     manager: Arc<ControllerManager>,
-    processor: ControllerRequestProcessor,
-    channel: Channel,
-    ctx: ConnectionHandlerContext,
+    client: Arc<RemotingClient>,
+    remoting_addr: SocketAddr,
 }
 
 #[derive(Clone, Copy)]
@@ -103,41 +98,46 @@ impl ProcessorHarness {
 
         wait_for_leader(&manager).await;
 
-        let channel = create_test_channel().await;
-        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let processor = ControllerRequestProcessor::new(manager.clone());
+        let client = Arc::new(
+            RemotingClient::builder(
+                Arc::new(TransportClientConfig::default()),
+                DefaultRequestProcessor,
+                runtime.service_context("contract-client"),
+            )
+            .build()
+            .expect("build contract client"),
+        );
+        client.start().await.expect("start contract client");
         Self {
             manager,
-            processor,
-            channel,
-            ctx,
+            client,
+            remoting_addr,
         }
     }
 
     async fn shutdown(self) {
+        let client_report = self
+            .client
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(3)))
+            .await
+            .expect("shutdown contract client");
+        assert!(client_report.is_healthy(), "client shutdown report: {client_report:?}");
         self.manager.shutdown().await.expect("shutdown controller manager");
-        let ProcessorHarness { manager, processor, .. } = self;
-        std::mem::forget(processor);
+        let ProcessorHarness { manager, .. } = self;
         std::mem::forget(manager);
     }
 
     async fn send(&mut self, mut request: RemotingCommand) -> RemotingCommand {
         request.make_custom_header_to_net();
+        let endpoint = CheetahString::from_string(self.remoting_addr.to_string());
         let mut response = self
-            .processor
-            .process_request(self.channel.clone(), self.ctx.clone(), &mut request)
+            .client
+            .transport_client()
+            .invoke_request(Some(&endpoint), request, 5_000)
             .await
-            .expect("processor request should succeed")
-            .expect("processor should return a response");
+            .expect("processor request should succeed");
         response.make_custom_header_to_net();
         response
-    }
-
-    async fn send_result(&mut self, mut request: RemotingCommand) -> RocketMQResult<Option<RemotingCommand>> {
-        request.make_custom_header_to_net();
-        self.processor
-            .process_request(self.channel.clone(), self.ctx.clone(), &mut request)
-            .await
     }
 
     async fn apply_broker_id(
@@ -299,24 +299,6 @@ fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
     );
     drop((remoting, raft));
     addresses
-}
-
-async fn create_test_channel() -> Channel {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-    let local_addr = listener.local_addr().expect("local listener addr");
-    let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-    std_stream.set_nonblocking(true).expect("set nonblocking");
-    drop(listener);
-    let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-    let connection = Connection::new(tcp_stream);
-    let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-processor-channel-test");
-    rocketmq_transport::test_support::TestChannelBuilder::new(
-        connection,
-        runtime.service_context("controller-channel").task_group().clone(),
-    )
-    .addresses(local_addr, local_addr)
-    .build()
-    .expect("build test channel")
 }
 
 async fn wait_for_leader(manager: &Arc<ControllerManager>) {
@@ -500,7 +482,27 @@ async fn controller_request_contract_broker_heartbeat() {
     )
     .await;
 
-    harness.shutdown().await;
+    let client_report = harness
+        .client
+        .shutdown_until(ShutdownDeadline::after(Duration::from_secs(2)))
+        .await
+        .expect("shutdown heartbeat client");
+    assert!(client_report.is_healthy(), "client shutdown report: {client_report:?}");
+    wait_until(
+        Duration::from_secs(2),
+        || {
+            harness
+                .manager
+                .heartbeat_manager()
+                .get_broker_live_info(CLUSTER_NAME, BROKER_NAME, broker_id)
+                .is_none()
+        },
+        "V2 session disconnect to remove the broker registration",
+    )
+    .await;
+    harness.manager.shutdown().await.expect("shutdown controller manager");
+    let ProcessorHarness { manager, .. } = harness;
+    std::mem::forget(manager);
 }
 
 #[tokio::test]
@@ -521,18 +523,18 @@ async fn controller_request_contract_broker_heartbeat_rejects_invalid_timeout_he
 
     for heartbeat_timeout_mills in [None, Some(-1)] {
         header.heartbeat_timeout_mills = heartbeat_timeout_mills;
-        let error = match harness
-            .send_result(RemotingCommand::create_request_command(
+        let response = harness
+            .send(RemotingCommand::create_request_command(
                 RequestCode::BrokerHeartbeat,
                 header.clone(),
             ))
-            .await
-        {
-            Ok(_) => panic!("heartbeat timeout {heartbeat_timeout_mills:?} should be rejected"),
-            Err(error) => error,
-        };
+            .await;
 
-        assert_eq!(error.kind(), ErrorKind::RequestHeaderError);
+        assert_eq!(response.code(), ResponseCode::InvalidParameter as i32);
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Request header is invalid")
+        );
     }
 
     harness.shutdown().await;

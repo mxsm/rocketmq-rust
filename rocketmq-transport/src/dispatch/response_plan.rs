@@ -195,15 +195,24 @@ impl ResponsePlan {
         Ok(Self::new(head, ResponseBody::Bytes(body), body_len, 1))
     }
 
-    /// Moves one legacy response command into the owned plan representation.
+    /// Moves a materialized response command into the owned plan representation.
     ///
     /// The body is detached before the head is validated, so a valid contiguous
     /// body retains its original `Bytes` allocation without cloning or decoding.
-    pub(crate) fn from_legacy_command(mut command: RemotingCommand) -> Result<Self, ResponsePlanError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResponsePlanError`] when the command is not a valid response
+    /// head or its body exceeds the protocol's representable length.
+    pub fn from_command(mut command: RemotingCommand) -> Result<Self, ResponsePlanError> {
         match command.take_body() {
             Some(body) => Self::bytes(command, body),
             None => Self::command(command),
         }
+    }
+
+    pub(crate) fn from_legacy_command(command: RemotingCommand) -> Result<Self, ResponsePlanError> {
+        Self::from_command(command)
     }
 
     /// Creates a response from ordered body-only byte segments.

@@ -55,38 +55,50 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::v2::SessionView;
 use tracing::debug;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::response_factory::NameServerResponseFactoryExt;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::route::types::BrokerSession;
 use crate::NamesrvConfig;
+
+mod compatibility;
 
 pub struct DefaultRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
     command_factory: RemotingCommandFactory,
 }
 
-impl RequestProcessor for DefaultRequestProcessor {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.handle_request(channel, request).await
+impl RequestProcessorV2 for DefaultRequestProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let response = self.handle_request(request).await?;
+        crate::processor::response_outcome(response)
     }
 }
 
 impl DefaultRequestProcessor {
     pub(crate) async fn handle_request(
         &self,
-        channel: Channel,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let broker_session = if request.command().code() == RequestCode::RegisterBroker as i32 {
+            Some(broker_session_from_request(request)?)
+        } else {
+            None
+        };
+        self.handle_command(request.command_mut(), broker_session).await
+    }
+
+    pub(crate) async fn handle_command(
+        &self,
         request: &mut RemotingCommand,
+        broker_session: Option<BrokerSession>,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let _runtime_guard = self.name_server_runtime_inner.upgrade().ok_or_else(|| {
             rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
@@ -96,14 +108,15 @@ impl DefaultRequestProcessor {
             "Name server DefaultRequestProcessor Received request code: {:?}",
             request_code
         );
-        self.process_request_inner(channel, request_code, request).await
+        self.process_request_inner_v2(broker_session, request_code, request)
+            .await
     }
 }
 
 impl DefaultRequestProcessor {
-    pub async fn process_request_inner(
+    pub(crate) async fn process_request_inner_v2(
         &self,
-        channel: Channel,
+        broker_session: Option<BrokerSession>,
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -113,7 +126,14 @@ impl DefaultRequestProcessor {
             RequestCode::DeleteKvConfig => self.delete_kv_config(request).await,
             RequestCode::QueryDataVersion => self.query_broker_topic_config(request),
             //handle register broker
-            RequestCode::RegisterBroker => self.process_register_broker(channel, request),
+            RequestCode::RegisterBroker => self.process_register_broker(
+                broker_session.ok_or_else(|| {
+                    rocketmq_error::RocketMQError::invariant_violated(
+                        "RegisterBroker session was not prepared before command dispatch",
+                    )
+                })?,
+                request,
+            ),
             RequestCode::UnregisterBroker => self.process_unregister_broker(request),
             RequestCode::BrokerHeartbeat => self.process_broker_heartbeat(request),
             RequestCode::GetBrokerMemberGroup => self.get_broker_member_group(request),
@@ -262,7 +282,7 @@ impl DefaultRequestProcessor {
 impl DefaultRequestProcessor {
     fn process_register_broker(
         &self,
-        channel: Channel,
+        broker_session: BrokerSession,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<RegisterBrokerRequestHeader>()?;
@@ -305,21 +325,24 @@ impl DefaultRequestProcessor {
                     "must be zero or a positive integer",
                 )
             })?;
-        let register_broker_result = self.name_server_runtime_inner.route_info_manager().register_broker(
-            request_header.cluster_name,
-            request_header.broker_addr,
-            request_header.broker_name,
-            request_header.broker_id,
-            request_header.ha_server_addr,
-            request
-                .ext_fields()
-                .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
-            heartbeat_timeout_millis,
-            request_header.enable_acting_master,
-            topic_config_wrapper,
-            filter_server_list,
-            channel,
-        )?;
+        let register_broker_result = self
+            .name_server_runtime_inner
+            .route_info_manager()
+            .register_broker_session(
+                request_header.cluster_name,
+                request_header.broker_addr,
+                request_header.broker_name,
+                request_header.broker_id,
+                request_header.ha_server_addr,
+                request
+                    .ext_fields()
+                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
+                heartbeat_timeout_millis,
+                request_header.enable_acting_master,
+                topic_config_wrapper,
+                filter_server_list,
+                broker_session,
+            )?;
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -358,6 +381,26 @@ impl DefaultRequestProcessor {
         }
         Ok(self.command_factory.create_success_response_command())
     }
+}
+
+pub(crate) fn broker_session_from_request(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<BrokerSession> {
+    let SessionView::Network {
+        id, remote_addr, state, ..
+    } = request.session()
+    else {
+        return Err(rocketmq_error::RocketMQError::invariant_violated(
+            "RegisterBroker requires a trusted network session",
+        ));
+    };
+    Ok(BrokerSession::new(
+        *id,
+        CheetahString::from_string(format!(
+            "transport-session-{}",
+            request.original_identity().request_id().owner_id()
+        )),
+        *remote_addr,
+        state.clone(),
+    ))
 }
 
 impl DefaultRequestProcessor {

@@ -26,6 +26,8 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::SessionStateView;
 
 use crate::route::tables::BrokerLiveInfo;
 pub use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -115,6 +117,53 @@ pub type SharedQueueData = Arc<QueueData>;
 
 /// Shared broker live info
 pub type SharedBrokerLiveInfo = Arc<BrokerLiveInfo>;
+
+/// Trusted, narrow session facts retained for one registered broker.
+///
+/// This value can observe lifecycle closure but cannot write, cancel, or close
+/// the underlying transport session.
+#[derive(Clone)]
+pub(crate) struct BrokerSession {
+    pub(crate) id: Option<SessionId>,
+    pub(crate) channel_id: CheetahString,
+    pub(crate) remote_addr: std::net::SocketAddr,
+    pub(crate) state: Option<SessionStateView>,
+}
+
+impl BrokerSession {
+    pub(crate) fn new(
+        id: SessionId,
+        channel_id: CheetahString,
+        remote_addr: std::net::SocketAddr,
+        state: SessionStateView,
+    ) -> Self {
+        Self {
+            id: Some(id),
+            channel_id,
+            remote_addr,
+            state: Some(state),
+        }
+    }
+
+    pub(crate) fn from_legacy_channel(channel: &rocketmq_transport::api::v1::Channel) -> Self {
+        Self {
+            id: None,
+            channel_id: channel.channel_id_owned(),
+            remote_addr: channel.remote_address(),
+            state: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn detached(channel_id: CheetahString, remote_addr: std::net::SocketAddr) -> Self {
+        Self {
+            id: None,
+            channel_id,
+            remote_addr,
+            state: None,
+        }
+    }
+}
 
 /// Shared topic queue mapping info
 pub type SharedTopicQueueMappingInfo = Arc<TopicQueueMappingInfo>;

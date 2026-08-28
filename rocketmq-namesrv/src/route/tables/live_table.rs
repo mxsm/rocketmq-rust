@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -27,11 +28,13 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelId;
+use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::SessionStateView;
 
 use crate::config::ExpiryIndexMode;
 use crate::route::types::BrokerGeneration;
+use crate::route::types::BrokerSession;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
 static NEXT_REGISTRATION_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -39,7 +42,6 @@ static NEXT_REGISTRATION_EPOCH: AtomicU64 = AtomicU64::new(1);
 /// Broker live information
 ///
 /// Contains heartbeat timestamp and data version for a live broker.
-#[derive(Debug)]
 pub struct BrokerLiveInfo {
     /// Last heartbeat timestamp (milliseconds since epoch)
     last_update_timestamp: AtomicU64,
@@ -60,8 +62,11 @@ pub struct BrokerLiveInfo {
     /// Channel ID for the broker connection
     pub channel_id: ChannelId,
 
-    /// Channel handle retained for lifecycle operations such as explicit close
-    pub channel: Option<Channel>,
+    /// Stable transport session identity, when registered through V2 ingress.
+    pub session_id: Option<SessionId>,
+
+    /// Read-only lifecycle observation for the registered V2 session.
+    pub session_state: Option<SessionStateView>,
 
     /// Broker name captured at registration for O(1) expiry cleanup.
     pub broker_name: Option<CheetahString>,
@@ -86,7 +91,8 @@ impl BrokerLiveInfo {
             ha_server_addr: None,
             remote_addr,
             channel_id,
-            channel: None,
+            session_id: None,
+            session_state: None,
             broker_name: None,
             broker_id: None,
         }
@@ -104,9 +110,10 @@ impl BrokerLiveInfo {
         self
     }
 
-    /// Attach the current broker channel so lifecycle cleanup can explicitly close it.
-    pub fn with_channel(mut self, channel: Channel) -> Self {
-        self.channel = Some(channel);
+    /// Attach the narrow V2 session facts used for lifecycle cleanup.
+    pub(crate) fn with_session(mut self, session: BrokerSession) -> Self {
+        self.session_id = session.id;
+        self.session_state = session.state;
         self
     }
 
@@ -168,10 +175,34 @@ impl Clone for BrokerLiveInfo {
             ha_server_addr: self.ha_server_addr.clone(),
             remote_addr: self.remote_addr,
             channel_id: self.channel_id.clone(),
-            channel: self.channel.clone(),
+            session_id: self.session_id,
+            session_state: self.session_state.clone(),
             broker_name: self.broker_name.clone(),
             broker_id: self.broker_id,
         }
+    }
+}
+
+impl fmt::Debug for BrokerLiveInfo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerLiveInfo")
+            .field("last_update_timestamp", &self.last_update_timestamp())
+            .field("heartbeat_generation", &self.heartbeat_generation())
+            .field("registration_epoch", &self.registration_epoch)
+            .field("heartbeat_timeout_millis", &self.heartbeat_timeout_millis)
+            .field("data_version", &self.data_version)
+            .field("ha_server_addr", &self.ha_server_addr)
+            .field("remote_addr", &self.remote_addr)
+            .field("channel_id", &self.channel_id)
+            .field("session_id", &self.session_id)
+            .field(
+                "session_closed",
+                &self.session_state.as_ref().map(SessionStateView::is_closed),
+            )
+            .field("broker_name", &self.broker_name)
+            .field("broker_id", &self.broker_id)
+            .finish()
     }
 }
 
@@ -206,6 +237,7 @@ impl Clone for BrokerLiveInfo {
 pub struct BrokerLiveTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>>,
     by_channel: DashMap<ChannelId, Arc<BrokerAddrInfo>>,
+    by_session: DashMap<SessionId, Arc<BrokerAddrInfo>>,
     by_remote_addr: DashMap<SocketAddr, Arc<BrokerAddrInfo>>,
     expiry_index: Arc<ExpiryIndex>,
 }
@@ -280,6 +312,7 @@ impl BrokerLiveTable {
         Self {
             inner: DashMap::new(),
             by_channel: DashMap::new(),
+            by_session: DashMap::new(),
             by_remote_addr: DashMap::new(),
             expiry_index: Arc::new(ExpiryIndex::new(ExpiryIndexMode::Off)),
         }
@@ -298,6 +331,7 @@ impl BrokerLiveTable {
         Self {
             inner: DashMap::with_capacity(capacity),
             by_channel: DashMap::with_capacity(capacity),
+            by_session: DashMap::with_capacity(capacity),
             by_remote_addr: DashMap::with_capacity(capacity),
             expiry_index: Arc::new(ExpiryIndex::new(expiry_index_mode)),
         }
@@ -317,14 +351,21 @@ impl BrokerLiveTable {
         live_info: BrokerLiveInfo,
     ) -> Option<Arc<BrokerLiveInfo>> {
         let channel_id = live_info.channel_id.clone();
+        let session_id = live_info.session_id;
         let remote_addr = live_info.remote_addr;
         let live_info = Arc::new(live_info);
         let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::clone(&live_info));
         if let Some(previous) = &previous {
             self.remove_channel_index_if_current(&previous.channel_id, &broker_addr_info);
+            if let Some(session_id) = previous.session_id {
+                self.remove_session_index_if_current(session_id, &broker_addr_info);
+            }
             self.remove_remote_index_if_current(previous.remote_addr, &broker_addr_info);
         }
         self.by_channel.insert(channel_id, Arc::clone(&broker_addr_info));
+        if let Some(session_id) = session_id {
+            self.by_session.insert(session_id, Arc::clone(&broker_addr_info));
+        }
         self.by_remote_addr.insert(remote_addr, Arc::clone(&broker_addr_info));
         self.expiry_index.schedule(broker_addr_info, &live_info);
         previous
@@ -375,6 +416,9 @@ impl BrokerLiveTable {
         let (key, live_info) = self.inner.remove(broker_addr_info)?;
         self.expiry_index.remove(&key);
         self.remove_channel_index_if_current(&live_info.channel_id, &key);
+        if let Some(session_id) = live_info.session_id {
+            self.remove_session_index_if_current(session_id, &key);
+        }
         self.remove_remote_index_if_current(live_info.remote_addr, &key);
         Some(live_info)
     }
@@ -402,7 +446,14 @@ impl BrokerLiveTable {
     pub fn get_expired_brokers(&self, current_time: u64) -> Vec<Arc<BrokerAddrInfo>> {
         self.inner
             .iter()
-            .filter(|entry| !entry.value().is_alive(current_time))
+            .filter(|entry| {
+                !entry.value().is_alive(current_time)
+                    || entry
+                        .value()
+                        .session_state
+                        .as_ref()
+                        .is_some_and(SessionStateView::is_closed)
+            })
             .map(|entry| Arc::clone(entry.key()))
             .collect()
     }
@@ -449,6 +500,7 @@ impl BrokerLiveTable {
     pub fn clear(&self) {
         self.inner.clear();
         self.by_channel.clear();
+        self.by_session.clear();
         self.by_remote_addr.clear();
         self.expiry_index.clear();
     }
@@ -504,22 +556,21 @@ impl BrokerLiveTable {
         None
     }
 
-    /// Retrieve broker address information by channel.
-    ///
-    /// This method iterates through the broker live table to find the broker
-    /// address information associated with the given channel.
-    ///
-    /// # Arguments
-    /// * `channel` - A reference to the `Channel` object to search for.
-    ///
-    /// # Returns
-    /// * `Some(Arc<BrokerAddrInfo>)` - If a matching broker address information is found.
-    /// * `None` - If no matching broker address information is found.
-    pub fn get_broker_info_by_channel(&self, channel: &Channel) -> Option<Arc<BrokerAddrInfo>> {
-        let broker_addr_info = self.by_channel.get(channel.channel_id())?.clone();
+    /// Retrieve broker address information by the compatibility channel ID.
+    pub fn get_broker_info_by_channel_id(&self, channel_id: &ChannelId) -> Option<Arc<BrokerAddrInfo>> {
+        let broker_addr_info = self.by_channel.get(channel_id)?.clone();
         self.inner
             .get(broker_addr_info.as_ref())
-            .filter(|live| live.channel_id.as_str() == channel.channel_id())
+            .filter(|live| &live.channel_id == channel_id)
+            .map(|_| broker_addr_info)
+    }
+
+    /// Retrieve broker address information by the stable V2 session identity.
+    pub fn get_broker_info_by_session_id(&self, session_id: SessionId) -> Option<Arc<BrokerAddrInfo>> {
+        let broker_addr_info = self.by_session.get(&session_id)?.clone();
+        self.inner
+            .get(broker_addr_info.as_ref())
+            .filter(|live| live.session_id == Some(session_id))
             .map(|_| broker_addr_info)
     }
 
@@ -571,6 +622,11 @@ impl BrokerLiveTable {
     fn remove_channel_index_if_current(&self, channel_id: &ChannelId, broker_addr_info: &BrokerAddrInfo) {
         self.by_channel
             .remove_if(channel_id, |_, indexed| indexed.as_ref() == broker_addr_info);
+    }
+
+    fn remove_session_index_if_current(&self, session_id: SessionId, broker_addr_info: &BrokerAddrInfo) {
+        self.by_session
+            .remove_if(&session_id, |_, indexed| indexed.as_ref() == broker_addr_info);
     }
 
     fn remove_remote_index_if_current(&self, remote_addr: SocketAddr, broker_addr_info: &BrokerAddrInfo) {

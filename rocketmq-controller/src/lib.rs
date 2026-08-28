@@ -98,6 +98,8 @@ pub use config::ControllerConfigReader;
 pub use config::RaftPeer;
 pub use config::StorageBackendType;
 pub use controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+pub use controller::broker_heartbeat_manager::BrokerSession;
+pub use controller::broker_heartbeat_manager::BrokerSessionId;
 pub use controller::membership::ConsensusMembership;
 pub use controller::membership::ConsensusNode;
 pub use controller::membership::MembershipAuditOutcome;

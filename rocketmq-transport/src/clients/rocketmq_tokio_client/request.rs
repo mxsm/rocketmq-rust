@@ -31,12 +31,11 @@ use super::SendReceipt;
 use super::TransportClient;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
-use crate::runtime::processor::RequestProcessor;
 use crate::telemetry::TransportGoAwayOutcome;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     pub(super) fn session_cache_identity(
         &self,
         requested_addr: Option<&CheetahString>,

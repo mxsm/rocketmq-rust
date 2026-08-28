@@ -1227,6 +1227,55 @@ pub async fn run_connected_session<H>(
     .await;
 }
 
+/// Runs an already-connected client socket through a statically selected V2
+/// route and its existing authorization boundary.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_connected_session_authorized<R>(
+    connection: Connection,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    task_group: TaskGroup,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
+    principal: Option<Principal>,
+    idle_timeout: Duration,
+    route: Arc<R>,
+) where
+    R: AuthorizedFrameRoute,
+{
+    let Some(session_id) = reserve_session_owner() else {
+        tracing::error!(
+            reason = "owner_exhausted",
+            "connected V2 transport session rejected because request owner allocation is exhausted"
+        );
+        return;
+    };
+    let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
+    let Ok(session_group) = task_group.try_child(format!("rocketmq.transport.session.{session_id}")) else {
+        return;
+    };
+    run_authorized_framed_session(
+        connection,
+        local_addr,
+        remote_addr,
+        remote_addr,
+        None,
+        session_id,
+        scope,
+        session_group,
+        dispatch,
+        principal,
+        false,
+        SessionIoPolicy {
+            idle_timeout,
+            ..SessionIoPolicy::default()
+        },
+        #[cfg(test)]
+        None,
+        route,
+    )
+    .await;
+}
+
 /// Runs an already-connected stream with explicit bounded I/O policy.
 pub async fn run_connected_session_with_io_policy<H>(
     connection: Connection,

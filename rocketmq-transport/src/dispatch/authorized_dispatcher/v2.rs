@@ -524,6 +524,14 @@ where
         self.rpc_hooks.register(hook);
     }
 
+    pub(crate) fn clear_rpc_hook(&self) {
+        self.rpc_hooks.clear();
+    }
+
+    pub(crate) fn hook_snapshot(&self) -> Option<Arc<crate::hook_registry::HookSnapshot>> {
+        self.rpc_hooks.snapshot()
+    }
+
     #[cfg(test)]
     async fn execute_admitted(
         &self,

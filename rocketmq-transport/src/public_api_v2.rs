@@ -19,6 +19,8 @@
 //! model. It does not expose legacy channels, session handles, operation
 //! contexts, raw cancellation authority, response bodies, or encoded frames.
 
+pub use crate::clients::rocketmq_tokio_client::RemotingClientV2Builder;
+pub use crate::clients::rocketmq_tokio_client::TransportClientV2Builder;
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
 pub use crate::dispatch::AuthorizedCommandDispatcherV2;
@@ -89,6 +91,7 @@ pub use crate::file_region::FileRegionSequence;
 pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;
+pub use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 pub use crate::runtime::processor_v2::LocalRequestProcessorV2;
 pub use crate::runtime::processor_v2::RejectRequestDecision;
 pub use crate::runtime::processor_v2::RequestProcessorV2;
@@ -99,3 +102,23 @@ pub use crate::session_view::ProxyInfoSnapshot;
 pub use crate::session_view::SessionId;
 pub use crate::session_view::SessionStateView;
 pub use crate::session_view::SessionView;
+pub use crate::v2_session_registry::V2SessionEvent;
+pub use crate::v2_session_registry::V2SessionRegistry;
+
+/// Persistent endpoint client whose omitted processor parameter is V2-native.
+///
+/// ```compile_fail
+/// use rocketmq_transport::api::v1::RequestProcessor;
+/// use rocketmq_transport::api::v2::TransportClient;
+///
+/// fn v1_registration_is_not_on_the_v2_default(
+///     client: &TransportClient,
+///     processor: impl RequestProcessor + Sync,
+/// ) {
+///     client.register_processor(processor);
+/// }
+/// ```
+pub type TransportClient<PR = DefaultRequestProcessor> = crate::clients::rocketmq_tokio_client::TransportClient<PR>;
+
+/// Nameserver-aware client whose omitted processor parameter is V2-native.
+pub type RemotingClient<PR = DefaultRequestProcessor> = crate::clients::rocketmq_tokio_client::RemotingClient<PR>;

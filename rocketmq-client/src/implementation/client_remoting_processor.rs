@@ -43,10 +43,12 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RejectRequestResponse;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::ProtocolNoResponseReason;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::v2::SessionView;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -77,39 +79,77 @@ impl ClientRemotingProcessor {
     }
 }
 
-impl RequestProcessor for ClientRemotingProcessor {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
+impl RequestProcessorV2 for ClientRemotingProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let remote_address = match request.session() {
+            SessionView::Network { remote_addr, .. } => *remote_addr,
+            SessionView::Embedded { .. } => SocketAddr::from(([127, 0, 0, 1], 0)),
+            _ => SocketAddr::from(([127, 0, 0, 1], 0)),
+        };
+        let request_code = RequestCode::from(request.command().code());
         info!("process_request: {:?}", request_code);
-        match request_code {
-            RequestCode::CheckTransactionState => self.check_transaction_state(channel, ctx, request).await,
-            RequestCode::ResetConsumerClientOffset => self.reset_consumer_client_offset(channel, request).await,
-            RequestCode::GetConsumerStatusFromClient => self.get_consumer_status_from_client(request).await,
-            RequestCode::GetConsumerRunningInfo => self.get_consumer_running_info(request).await,
-            RequestCode::ConsumeMessageDirectly => self.consume_message_directly(channel, ctx, request).await,
-            //RPC message handle code
-            RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
-            RequestCode::NotifyUnsubscribeLite => self.notify_unsubscribe_lite(channel, request),
-            RequestCode::NotifyConsumerIdsChanged => self.notify_consumer_ids_changed(channel, ctx, request),
+        let response = self.process_command(remote_address, request.command_mut()).await?;
 
-            _ => {
-                info!("Unknown request code: {:?}", request_code);
-                Ok(None)
-            }
+        if let Some(response) = response {
+            return Ok(HandlerOutcome::Reply(Self::response_plan(response)?));
         }
-    }
-
-    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
-        (false, None)
+        if request.original_identity().is_one_way() {
+            let response = self.remoting_command_factory.create_success_response_command();
+            return Ok(HandlerOutcome::Reply(Self::response_plan(response)?));
+        }
+        let reason = match request_code {
+            RequestCode::CheckTransactionState | RequestCode::ResetConsumerClientOffset => {
+                ProtocolNoResponseReason::CallbackHandled
+            }
+            RequestCode::NotifyUnsubscribeLite | RequestCode::NotifyConsumerIdsChanged => {
+                ProtocolNoResponseReason::NotificationHandled
+            }
+            _ => {
+                return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                    "client inbound request code {} did not produce a terminal outcome",
+                    request.command().code()
+                )));
+            }
+        };
+        Ok(HandlerOutcome::NoReply(request.protocol_no_response(reason)?))
     }
 }
 
 impl ClientRemotingProcessor {
+    fn response_plan(response: RemotingCommand) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+        ResponsePlan::from_command(response).map_err(|error| {
+            rocketmq_error::RocketMQError::response_process_failed(
+                "client_remoting_processor.response_plan",
+                error.to_string(),
+            )
+        })
+    }
+
+    async fn process_command(
+        &mut self,
+        remote_address: SocketAddr,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        match request_code {
+            RequestCode::CheckTransactionState => self.check_transaction_state(remote_address, request).await,
+            RequestCode::ResetConsumerClientOffset => self.reset_consumer_client_offset(remote_address, request).await,
+            RequestCode::GetConsumerStatusFromClient => self.get_consumer_status_from_client(request).await,
+            RequestCode::GetConsumerRunningInfo => self.get_consumer_running_info(request).await,
+            RequestCode::ConsumeMessageDirectly => self.consume_message_directly(remote_address, request).await,
+            RequestCode::PushReplyMessageToClient => self.receive_reply_message(request).await,
+            RequestCode::NotifyUnsubscribeLite => self.notify_unsubscribe_lite(remote_address, request),
+            RequestCode::NotifyConsumerIdsChanged => self.notify_consumer_ids_changed(remote_address, request),
+            _ => {
+                info!("Unknown request code: {:?}", request_code);
+                Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                    "unsupported client inbound request code {}",
+                    request.code()
+                )))
+            }
+        }
+    }
+
     fn capture_rust_jstack() -> String {
         let current_thread = std::thread::current();
         let thread_name = current_thread.name().unwrap_or("<unnamed>");
@@ -132,24 +172,20 @@ impl ClientRemotingProcessor {
 
     fn notify_unsubscribe_lite(
         &mut self,
-        channel: Channel,
+        remote_address: SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request.decode_command_custom_header::<NotifyUnsubscribeLiteRequestHeader>() {
             Ok(header) => {
                 info!(
                     "receive broker's notify unsubscribe lite callback from {}; liteTopic={}, group={}, clientId={}",
-                    channel.remote_address(),
-                    header.lite_topic,
-                    header.consumer_group,
-                    header.client_id
+                    remote_address, header.lite_topic, header.consumer_group, header.client_id
                 );
             }
             Err(error) => {
                 warn!(
                     "decode notify unsubscribe lite callback header failed from {}; error={:?}",
-                    channel.remote_address(),
-                    error
+                    remote_address, error
                 );
             }
         }
@@ -158,7 +194,6 @@ impl ClientRemotingProcessor {
 
     async fn receive_reply_message(
         &mut self,
-        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let receive_time = current_millis();
@@ -278,8 +313,7 @@ impl ClientRemotingProcessor {
 
     fn notify_consumer_ids_changed(
         &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        remote_address: SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>() {
@@ -287,8 +321,7 @@ impl ClientRemotingProcessor {
             Err(error) => {
                 warn!(
                     "ignore malformed NotifyConsumerIdsChanged callback from {}: {}",
-                    channel.remote_address(),
-                    error
+                    remote_address, error
                 );
                 return Ok(None);
             }
@@ -296,8 +329,7 @@ impl ClientRemotingProcessor {
 
         info!(
             "receive broker's notification[{}], the consumer group: {} changed, rebalance immediately",
-            channel.remote_address(),
-            request_header.consumer_group
+            remote_address, request_header.consumer_group
         );
 
         self.client_instance()?.re_balance_immediately();
@@ -307,7 +339,7 @@ impl ClientRemotingProcessor {
 
     async fn reset_consumer_client_offset(
         &mut self,
-        channel: Channel,
+        remote_address: SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<ResetOffsetRequestHeader>() {
@@ -315,8 +347,7 @@ impl ClientRemotingProcessor {
             Err(error) => {
                 warn!(
                     "ignore malformed ResetConsumerClientOffset callback from {}: {}",
-                    channel.remote_address(),
-                    error
+                    remote_address, error
                 );
                 return Ok(None);
             }
@@ -326,9 +357,7 @@ impl ClientRemotingProcessor {
                 let Some(reset_body) = ResetOffsetBody::decode(body) else {
                     warn!(
                         "ignore ResetConsumerClientOffset callback with malformed body from {}; topic={}, group={}",
-                        channel.remote_address(),
-                        request_header.topic,
-                        request_header.group
+                        remote_address, request_header.topic, request_header.group
                     );
                     return Ok(None);
                 };
@@ -338,9 +367,7 @@ impl ClientRemotingProcessor {
                 debug!(
                     "ResetConsumerClientOffset callback has no body from {}; topic={}, group={}, using empty offset \
                      table like Java client",
-                    channel.remote_address(),
-                    request_header.topic,
-                    request_header.group
+                    remote_address, request_header.topic, request_header.group
                 );
                 HashMap::new()
             }
@@ -445,8 +472,7 @@ impl ClientRemotingProcessor {
 
     async fn check_transaction_state(
         &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        remote_address: SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<CheckTransactionStateRequestHeader>() {
@@ -454,8 +480,7 @@ impl ClientRemotingProcessor {
             Err(error) => {
                 warn!(
                     "ignore malformed CheckTransactionState callback from {}: {}",
-                    channel.remote_address(),
-                    error
+                    remote_address, error
                 );
                 return Ok(None);
             }
@@ -463,7 +488,7 @@ impl ClientRemotingProcessor {
         let Some(body) = request.get_body_mut() else {
             warn!(
                 "ignore CheckTransactionState callback with missing body from {}",
-                channel.remote_address()
+                remote_address
             );
             return Ok(None);
         };
@@ -490,7 +515,7 @@ impl ClientRemotingProcessor {
             if let Some(group) = group {
                 let producer = client_instance.select_producer(&group).await;
                 if let Some(producer) = producer {
-                    let addr = CheetahString::from_string(channel.remote_address().to_string());
+                    let addr = CheetahString::from_string(remote_address.to_string());
                     producer.check_transaction_state(&addr, message_ext, request_header);
                 } else {
                     warn!("checkTransactionState, pick producer group failed");
@@ -506,8 +531,7 @@ impl ClientRemotingProcessor {
 
     async fn consume_message_directly(
         &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        remote_address: SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = self
@@ -519,8 +543,7 @@ impl ClientRemotingProcessor {
             Err(error) => {
                 warn!(
                     "decode ConsumeMessageDirectly request header failed from {}: {}",
-                    channel.remote_address(),
-                    error
+                    remote_address, error
                 );
                 return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
                     "decode ConsumeMessageDirectly request header failed: {error}"
@@ -530,8 +553,7 @@ impl ClientRemotingProcessor {
         let Some(body) = request.get_body_mut() else {
             warn!(
                 "ConsumeMessageDirectly request body is empty from {}; group={}",
-                channel.remote_address(),
-                request_header.consumer_group
+                remote_address, request_header.consumer_group
             );
             return Ok(Some(
                 response
@@ -542,8 +564,7 @@ impl ClientRemotingProcessor {
         let Some(msg) = MessageDecoder::decode(body, true, true, false, false, false) else {
             warn!(
                 "decode ConsumeMessageDirectly message body failed from {}; group={}",
-                channel.remote_address(),
-                request_header.consumer_group
+                remote_address, request_header.consumer_group
             );
             return Ok(Some(
                 response
@@ -567,9 +588,7 @@ impl ClientRemotingProcessor {
                 Err(error) => {
                     warn!(
                         "encode ConsumeMessageDirectly result failed from {}; group={}: {:?}",
-                        channel.remote_address(),
-                        request_header.consumer_group,
-                        error
+                        remote_address, request_header.consumer_group, error
                     );
                     Ok(Some(
                         response
@@ -592,13 +611,22 @@ impl ClientRemotingProcessor {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use bytes::Bytes;
+    use bytes::BytesMut;
     use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::SerializeType;
-    use rocketmq_transport::test_support::LocalRequestHarness;
+    use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::v1::TransportClientConfig;
+    use rocketmq_transport::api::v2::TransportClient;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
 
     use super::*;
     use crate::base::client_config::ClientConfig;
@@ -610,11 +638,33 @@ mod tests {
     use crate::consumer::store::read_offset_type::ReadOffsetType;
     use crate::producer::request_response_future::RequestResponseFuture;
 
-    fn test_task_group() -> rocketmq_runtime::TaskGroup {
-        crate::runtime::test_service_context("client-remoting-processor-test")
-            .component("local-request-harness")
-            .task_group()
-            .clone()
+    fn test_remote_address() -> SocketAddr {
+        "127.0.0.1:10911".parse().expect("test remote address")
+    }
+
+    async fn write_wire_command(stream: &mut TcpStream, command: RemotingCommand) {
+        let frame = EncodedFrame::from_command(command).expect("encode remoting frame");
+        stream
+            .write_all(frame.into_bytes().as_ref())
+            .await
+            .expect("write remoting frame");
+    }
+
+    async fn read_wire_command(stream: &mut TcpStream) -> RemotingCommand {
+        let mut length = [0_u8; 4];
+        stream.read_exact(&mut length).await.expect("read frame length");
+        let announced = i32::from_be_bytes(length);
+        let announced = usize::try_from(announced).expect("non-negative frame length");
+        assert!(announced >= 4, "frame must contain a serialization marker");
+        assert!(announced <= 16 * 1024 * 1024, "test frame must stay bounded");
+        let mut payload = vec![0_u8; announced];
+        stream.read_exact(&mut payload).await.expect("read frame payload");
+        let mut frame = BytesMut::with_capacity(announced + length.len());
+        frame.extend_from_slice(&length);
+        frame.extend_from_slice(&payload);
+        RemotingCommand::decode_with_max_frame_bytes(&mut frame, 16 * 1024 * 1024 + length.len())
+            .expect("decode remoting frame")
+            .expect("complete remoting frame")
     }
 
     fn test_client_instance(client_config: ClientConfig, client_id: impl Into<CheetahString>) -> Arc<MQClientInstance> {
@@ -698,11 +748,96 @@ mod tests {
         let client_instance = test_client_instance(client_config, "reject-request-test");
         let processor = ClientRemotingProcessor::new(&client_instance);
 
-        let (rejected, response) =
-            RequestProcessor::reject_request(&processor, RequestCode::CheckTransactionState as i32);
+        assert!(matches!(
+            RequestProcessorV2::reject_request(&processor, RequestCode::CheckTransactionState as i32),
+            rocketmq_transport::api::v2::RejectRequestDecision::Proceed
+        ));
+    }
 
-        assert!(!rejected);
-        assert!(response.is_none());
+    #[tokio::test]
+    async fn v2_transport_round_trip_uses_client_processor_and_drops_oneway_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind broker peer");
+        let target = CheetahString::from_string(listener.local_addr().expect("broker peer address").to_string());
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept client connection");
+
+            let bootstrap = read_wire_command(&mut socket).await;
+            assert_eq!(bootstrap.code(), RequestCode::GetBrokerClusterInfo.to_i32());
+            write_wire_command(
+                &mut socket,
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                    .set_opaque(bootstrap.opaque()),
+            )
+            .await;
+
+            let inbound_opaque = 451;
+            write_wire_command(
+                &mut socket,
+                RemotingCommand::create_request_command(
+                    RequestCode::GetConsumerStatusFromClient,
+                    GetConsumerStatusRequestHeader::new(
+                        CheetahString::from_static_str("network-topic"),
+                        CheetahString::from_static_str("missing-network-group"),
+                    ),
+                )
+                .set_opaque(inbound_opaque),
+            )
+            .await;
+            let inbound_response = tokio::time::timeout(Duration::from_secs(1), read_wire_command(&mut socket))
+                .await
+                .expect("client inbound response deadline");
+            assert!(inbound_response.is_response_type());
+            assert_eq!(inbound_response.opaque(), inbound_opaque);
+            assert_eq!(inbound_response.code(), ResponseCode::Success.to_i32());
+            let status = GetConsumerStatusBody::decode(inbound_response.body().expect("consumer status body"))
+                .expect("decode consumer status body");
+            assert!(status.message_queue_table.is_empty());
+
+            write_wire_command(
+                &mut socket,
+                RemotingCommand::create_request_command(
+                    RequestCode::NotifyConsumerIdsChanged,
+                    NotifyConsumerIdsChangedRequestHeader {
+                        consumer_group: CheetahString::from_static_str("network-group"),
+                        rpc_request_header: None,
+                    },
+                )
+                .set_opaque(452)
+                .mark_oneway_rpc(),
+            )
+            .await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), read_wire_command(&mut socket))
+                    .await
+                    .is_err(),
+                "a one-way inbound callback must not emit a response frame"
+            );
+        });
+
+        let client_instance = test_client_instance(ClientConfig::default(), "v2-network-ingress-client");
+        let processor = ClientRemotingProcessor::new(&client_instance);
+        let client = TransportClient::builder_v2(
+            Arc::new(TransportClientConfig::default()),
+            processor,
+            crate::runtime::test_service_context("client-remoting-v2-network-ingress"),
+        )
+        .build()
+        .expect("build V2 transport client");
+        let bootstrap_response = client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("bootstrap transport request");
+        assert_eq!(bootstrap_response.code(), ResponseCode::Success.to_i32());
+
+        peer.await.expect("broker peer task");
+        let report = client
+            .shutdown_graceful(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(report.is_healthy(), "{report:?}");
     }
 
     fn valid_reply_message_header(correlation_id: Option<CheetahString>, sys_flag: i32) -> ReplyMessageRequestHeader {
@@ -741,9 +876,6 @@ mod tests {
         let (client_instance, consumer_impl) =
             client_with_push_consumer(group.clone(), "reset-consumer-offset-test").await;
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mq = MessageQueue::from_parts(topic.clone(), "broker-a", 0);
         let process_queue = std::sync::Arc::new(ProcessQueue::new());
         consumer_impl.set_consume_orderly(true);
@@ -772,7 +904,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("reset offset callback should not fail");
 
@@ -801,9 +933,6 @@ mod tests {
         let group = CheetahString::from_static_str("reset-missing-body-group");
         let (client_instance, _) = client_with_push_consumer(group.clone(), "reset-missing-body-test").await;
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ResetConsumerClientOffset,
             ResetOffsetRequestHeader {
@@ -819,7 +948,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("missing-body reset offset callback should not fail");
 
@@ -842,9 +971,6 @@ mod tests {
             .await;
 
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetConsumerStatusFromClient,
             GetConsumerStatusRequestHeader {
@@ -857,7 +983,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("consumer status callback should not fail")
             .expect("consumer status callback should return a response");
@@ -872,9 +998,6 @@ mod tests {
     async fn get_consumer_status_from_client_missing_group_returns_empty_success_like_java() {
         let client_instance = test_client_instance(ClientConfig::default(), "consumer-status-missing-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetConsumerStatusFromClient,
             GetConsumerStatusRequestHeader {
@@ -887,7 +1010,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("missing-group consumer status callback should not fail")
             .expect("missing-group consumer status callback should return a response");
@@ -902,13 +1025,10 @@ mod tests {
     async fn consume_message_directly_with_malformed_header_returns_system_error() {
         let client_instance = test_client_instance(ClientConfig::default(), "consume-direct-malformed-header-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::ConsumeMessageDirectly);
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("malformed consume-direct callback should not fail")
             .expect("malformed consume-direct callback should return an error response");
@@ -924,9 +1044,6 @@ mod tests {
     async fn consume_message_directly_with_missing_body_returns_system_error() {
         let client_instance = test_client_instance(ClientConfig::default(), "consume-direct-missing-body-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ConsumeMessageDirectly,
             ConsumeMessageDirectlyResultRequestHeader {
@@ -937,7 +1054,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("missing-body consume-direct callback should not fail")
             .expect("missing-body consume-direct callback should return an error response");
@@ -953,9 +1070,6 @@ mod tests {
     async fn consume_message_directly_with_malformed_body_returns_system_error() {
         let client_instance = test_client_instance(ClientConfig::default(), "consume-direct-malformed-body-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ConsumeMessageDirectly,
             ConsumeMessageDirectlyResultRequestHeader {
@@ -967,7 +1081,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("malformed-body consume-direct callback should not fail")
             .expect("malformed-body consume-direct callback should return an error response");
@@ -1011,13 +1125,10 @@ mod tests {
     async fn push_reply_message_with_malformed_header_returns_system_error() {
         let client_instance = test_client_instance(ClientConfig::default(), "reply-malformed-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::PushReplyMessageToClient);
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("malformed reply callback should not fail")
             .expect("malformed reply callback should return an error response");
@@ -1034,13 +1145,10 @@ mod tests {
         let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(947, SerializeType::ROCKETMQ));
         let client_instance = test_client_instance_with_factory(ClientConfig::default(), "reply-factory-test", factory);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::PushReplyMessageToClient);
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("malformed reply callback should not fail")
             .expect("malformed reply callback should return an error response");
@@ -1053,9 +1161,6 @@ mod tests {
     async fn push_reply_message_with_compressed_missing_body_returns_system_error() {
         let client_instance = test_client_instance(ClientConfig::default(), "reply-missing-body-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::PushReplyMessageToClient,
             valid_reply_message_header(None, MessageSysFlag::COMPRESSED_FLAG),
@@ -1063,7 +1168,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("missing body reply callback should not fail")
             .expect("missing body reply callback should return an error response");
@@ -1086,9 +1191,6 @@ mod tests {
             .await;
 
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::PushReplyMessageToClient,
             valid_reply_message_header(
@@ -1100,7 +1202,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("unknown compression type should not fail request processing")
             .expect("reply callback should return success response");
@@ -1135,9 +1237,6 @@ mod tests {
             .await;
 
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::PushReplyMessageToClient,
             valid_reply_message_header(Some(correlation_id.clone()), 0),
@@ -1146,7 +1245,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("reply callback should not fail")
             .expect("reply callback should return success response");
@@ -1168,13 +1267,10 @@ mod tests {
     async fn notify_unsubscribe_lite_callback_is_explicit_oneway_noop() {
         let client_instance = test_client_instance(ClientConfig::default(), "notify-lite-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::NotifyUnsubscribeLite);
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("notify unsubscribe lite callback should not fail");
 
@@ -1185,9 +1281,6 @@ mod tests {
     async fn notify_unsubscribe_lite_callback_with_valid_header_is_oneway_noop() {
         let client_instance = test_client_instance(ClientConfig::default(), "notify-lite-valid-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::NotifyUnsubscribeLite,
             NotifyUnsubscribeLiteRequestHeader {
@@ -1200,7 +1293,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("notify unsubscribe lite callback should not fail");
 
@@ -1211,13 +1304,10 @@ mod tests {
     async fn notify_consumer_ids_changed_with_malformed_header_is_oneway_noop() {
         let client_instance = test_client_instance(ClientConfig::default(), "notify-consumer-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::NotifyConsumerIdsChanged);
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("malformed notify callback should not fail");
 
@@ -1231,13 +1321,10 @@ mod tests {
     async fn check_transaction_state_with_malformed_header_is_oneway_noop() {
         let client_instance = test_client_instance(ClientConfig::default(), "tx-malformed-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckTransactionState);
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("malformed transaction callback should not fail");
 
@@ -1251,9 +1338,6 @@ mod tests {
     async fn check_transaction_state_with_missing_body_is_oneway_noop() {
         let client_instance = test_client_instance(ClientConfig::default(), "tx-missing-body-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::CheckTransactionState,
             CheckTransactionStateRequestHeader {
@@ -1269,7 +1353,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("missing body transaction callback should not fail");
 
@@ -1302,9 +1386,6 @@ mod tests {
         let group = CheetahString::from_static_str("running-info-group");
         let (client_instance, _consumer_impl) = client_with_push_consumer(group.clone(), "running-info-client").await;
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetConsumerRunningInfo,
             GetConsumerRunningInfoRequestHeader {
@@ -1317,7 +1398,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("consumer running info callback should not fail")
             .expect("consumer running info callback should return a response");
@@ -1342,9 +1423,6 @@ mod tests {
     async fn get_consumer_running_info_missing_group_returns_system_error() {
         let client_instance = test_client_instance(ClientConfig::default(), "running-info-missing-test");
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new(test_task_group())
-            .await
-            .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetConsumerRunningInfo,
             GetConsumerRunningInfoRequestHeader {
@@ -1357,7 +1435,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .process_command(test_remote_address(), &mut request)
             .await
             .expect("missing-group running info callback should not fail")
             .expect("missing-group running info callback should return a response");
