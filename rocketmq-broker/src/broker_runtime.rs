@@ -261,12 +261,15 @@ use crate::transaction::transactional_message_check_service::TransactionalMessag
 mod composition;
 mod control_plane;
 mod data_plane;
+mod deferred;
+pub(crate) mod deferred_producer;
 mod lifecycle;
 mod metadata;
 mod request_pipeline;
 mod shutdown_report;
 
 use composition::BrokerComposition;
+use deferred::BrokerDeferredResourceSnapshot;
 use lifecycle::BrokerLifecycle;
 #[cfg(test)]
 use shutdown_report::record_message_store_shutdown_outcome;

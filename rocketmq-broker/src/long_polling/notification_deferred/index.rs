@@ -85,6 +85,21 @@ impl NotificationCriteriaKey {
     pub(crate) fn from_parts(topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> Self {
         Self::new(topic.clone(), consumer_group.clone(), queue_id)
     }
+
+    #[must_use]
+    pub(crate) const fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    #[must_use]
+    pub(crate) const fn consumer_group(&self) -> &CheetahString {
+        &self.consumer_group
+    }
+
+    #[must_use]
+    pub(crate) const fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
 }
 
 /// Borrowed message-arrival metadata. It cannot escape the producer callback.
@@ -96,6 +111,7 @@ pub(crate) struct NotificationArrivalView<'a> {
     pub(super) msg_store_time: i64,
     pub(super) filter_bit_map: Option<&'a [u8]>,
     pub(super) properties: Option<&'a HashMap<CheetahString, CheetahString>>,
+    pub(super) forced: bool,
 }
 
 impl<'a> NotificationArrivalView<'a> {
@@ -107,6 +123,7 @@ impl<'a> NotificationArrivalView<'a> {
             msg_store_time: 0,
             filter_bit_map: None,
             properties: None,
+            forced: false,
         }
     }
 
@@ -122,6 +139,12 @@ impl<'a> NotificationArrivalView<'a> {
         self.msg_store_time = msg_store_time;
         self.filter_bit_map = filter_bit_map;
         self.properties = properties;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn forced(mut self) -> Self {
+        self.forced = true;
         self
     }
 
@@ -166,6 +189,9 @@ impl NotificationMatchCriteria {
     }
 
     pub(super) fn matches(&self, arrival: &NotificationArrivalView<'_>, cq: &CqExtUnit) -> bool {
+        if arrival.forced {
+            return true;
+        }
         let Some(filter) = self.filter.as_ref() else {
             return true;
         };
@@ -187,6 +213,14 @@ pub(crate) struct NotificationScanCursor {
 }
 
 impl NotificationScanCursor {
+    pub(super) const fn empty() -> Self {
+        Self {
+            keys: Vec::new(),
+            key_position: 0,
+            conflicts_spent: 0,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(remaining_keys: usize) -> Self {
         let key = NotificationCriteriaKey::new(
@@ -211,6 +245,14 @@ impl NotificationScanCursor {
         self.key_position >= self.keys.len()
     }
 
+    pub(crate) fn retain_remaining_targets(&mut self, mut retain: impl FnMut(&NotificationCriteriaKey) -> bool) {
+        if self.key_position > 0 {
+            self.keys.drain(..self.key_position);
+            self.key_position = 0;
+        }
+        self.keys.retain(|key| retain(&key.key));
+    }
+
     pub(super) fn try_retained_bytes(&self) -> Option<usize> {
         let mut bytes = self
             .keys
@@ -222,6 +264,14 @@ impl NotificationScanCursor {
                 .checked_add(cursor.key.consumer_group.len())?;
         }
         Some(bytes)
+    }
+
+    pub(super) fn restart_for_refresh(&mut self) {
+        self.key_position = 0;
+        self.conflicts_spent = 0;
+        for key in &mut self.keys {
+            key.before_sequence = u64::MAX;
+        }
     }
 
     fn current(&self) -> Option<&NotificationKeyCursor> {
@@ -391,6 +441,20 @@ where
             key_position: 0,
             conflicts_spent: 0,
         }
+    }
+
+    pub(crate) fn has_arrival_target(&self, topic: &CheetahString, queue_id: i32) -> bool {
+        let normalized = if KeyBuilder::is_pop_retry_topic_v2(topic.as_str()) {
+            topic
+                .as_str()
+                .split_once(POP_RETRY_SEPARATOR_V2)
+                .map_or_else(|| topic.clone(), |(_, normal)| CheetahString::from_slice(normal))
+        } else {
+            topic.clone()
+        };
+        self.inner.state.lock().buckets.iter().any(|(key, bucket)| {
+            key.topic == normalized && (key.queue_id == -1 || key.queue_id == queue_id) && !bucket.records.is_empty()
+        })
     }
 
     /// Reserves one newest candidate without retaining arrival payload.
@@ -690,6 +754,11 @@ where
     #[must_use]
     pub(crate) fn criteria(&self) -> &Arc<NotificationMatchCriteria> {
         &self.record.as_ref().expect("candidate owns its record").criteria
+    }
+
+    #[must_use]
+    pub(crate) const fn key(&self) -> &NotificationCriteriaKey {
+        &self.key
     }
 }
 

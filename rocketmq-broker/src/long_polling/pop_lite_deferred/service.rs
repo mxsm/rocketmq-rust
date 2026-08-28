@@ -128,7 +128,7 @@ pub(crate) struct PopLiteDeferredService {
     pub(super) max_age: Duration,
     sweep_limit: NonZeroUsize,
     pub(super) closed: Arc<AtomicBool>,
-    pub(super) pending_replays: Arc<Mutex<HashSet<CheetahString>>>,
+    replay_state: Arc<Mutex<PopLiteReplayState>>,
     pub(super) observations: Arc<PopLiteServiceObservations>,
     #[cfg(test)]
     replay_insert_hook: Arc<Mutex<Option<ReplayInsertHook>>>,
@@ -159,7 +159,7 @@ impl PopLiteDeferredService {
             max_age,
             sweep_limit,
             closed: Arc::new(AtomicBool::new(false)),
-            pending_replays: Arc::new(Mutex::new(HashSet::new())),
+            replay_state: Arc::new(Mutex::new(PopLiteReplayState::default())),
             observations: Arc::new(PopLiteServiceObservations::default()),
             #[cfg(test)]
             replay_insert_hook: Arc::new(Mutex::new(None)),
@@ -173,9 +173,9 @@ impl PopLiteDeferredService {
     }
 
     pub(crate) fn observe_pending_event(&self, client_id: &CheetahString) -> bool {
-        observe_replay(
+        queue_replay(
             &self.closed,
-            &self.pending_replays,
+            &self.replay_state,
             &self.dispatcher,
             client_id,
             #[cfg(test)]
@@ -183,11 +183,19 @@ impl PopLiteDeferredService {
         )
     }
 
+    pub(crate) fn observe_pending_replay(&self, client_id: &CheetahString) -> PopLiteReplayObservation {
+        observe_event_producer(&self.closed, &self.replay_state, &self.dispatcher, client_id)
+    }
+
+    pub(crate) fn finish_event_producer(&self, client_id: &CheetahString) {
+        let _ = self.observe_pending_event(client_id);
+    }
+
     pub(crate) fn take_pending_replays(&self, limit: NonZeroUsize) -> Vec<CheetahString> {
-        let mut pending = self.pending_replays.lock();
-        let clients = pending.iter().take(limit.get()).cloned().collect::<Vec<_>>();
+        let mut state = self.replay_state.lock();
+        let clients = state.pending.iter().take(limit.get()).cloned().collect::<Vec<_>>();
         for client in &clients {
-            pending.remove(client);
+            state.pending.remove(client);
         }
         clients
     }
@@ -209,7 +217,6 @@ impl PopLiteDeferredService {
             drop(gate);
             return Ok(None);
         };
-        self.pending_replays.lock().remove(client_id);
         let id = candidate.id();
         match self.registry.claim(id, DeferredWakeReason::MessageArrived).await {
             Ok(mut claimed) => {
@@ -256,7 +263,7 @@ impl PopLiteDeferredService {
             gate: Some(gate),
             client_id,
             dispatcher: self.dispatcher.clone(),
-            pending_replays: Arc::clone(&self.pending_replays),
+            replay_state: Arc::clone(&self.replay_state),
             closed: Arc::clone(&self.closed),
             accepted: None,
             #[cfg(test)]
@@ -296,11 +303,75 @@ impl PopLiteDeferredService {
             .await
     }
 
+    /// Transfers an event claim to the canonical session executor without
+    /// making the event producer wait for handler/write terminal.
+    pub(crate) fn submit_event_claim<F, Fut>(
+        &self,
+        event_claim: PopLiteEventClaim,
+        handler_retained: DeferredResumeRetainedSize,
+        handler: F,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+    {
+        let PopLiteEventClaim {
+            claimed,
+            gate,
+            events,
+            client_id,
+        } = event_claim;
+        let retained = handler_retained.dynamic_bytes().saturating_add(events.retained_bytes());
+        let (event_execution, event_terminal) = events.into_terminal_ownership();
+        let terminal = PopLiteEventTerminal {
+            events: Some(event_terminal),
+            gate: Some(gate),
+            client_id,
+            dispatcher: self.dispatcher.clone(),
+            replay_state: Arc::clone(&self.replay_state),
+            closed: Arc::clone(&self.closed),
+            accepted: Some(ObservationGuard::accepted(Arc::clone(&self.observations), retained)),
+            #[cfg(test)]
+            replay_insert_hook: Arc::clone(&self.replay_insert_hook),
+            #[cfg(test)]
+            terminal_ready_hook: Arc::clone(&self.terminal_ready_hook),
+        };
+        claimed.submit(
+            DeferredResumeRetainedSize::new(retained),
+            move |resume, reason| PopLiteEventTerminalFuture {
+                inner: handler(resume, reason, event_execution),
+                _terminal: terminal,
+            },
+            |_| {},
+        )
+    }
+
+    /// Transfers a timeout claim to the canonical session executor without
+    /// waiting for handler/write terminal.
+    pub(crate) fn submit_claimed<F, Fut>(
+        &self,
+        claimed: ClaimedDeferred<ResumePopLite>,
+        handler_retained: DeferredResumeRetainedSize,
+        handler: F,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+    {
+        let retained = handler_retained.dynamic_bytes();
+        let accepted = ObservationGuard::accepted(Arc::clone(&self.observations), retained);
+        claimed.submit(handler_retained, handler, move |_| drop(accepted))
+    }
+
     pub(crate) fn sweep_expired(&self) -> PopLiteDeferredSweepBatch {
         PopLiteDeferredSweepBatch::from_transport(self.registry.sweep_expired(self.sweep_limit))
     }
 
     pub(crate) fn resource_snapshot(&self) -> PopLiteDeferredResourceSnapshot {
+        let replay_state = self.replay_state.lock();
+        let pending_replays = replay_state.pending.len();
+        let active_event_producers = replay_state.active.len();
+        drop(replay_state);
         PopLiteDeferredResourceSnapshot {
             admission: self.admission.snapshot(),
             index: self.index.snapshot(),
@@ -311,13 +382,20 @@ impl PopLiteDeferredService {
             accepted_resumes: self.observations.accepted_resumes.load(Ordering::Acquire),
             resume_execution_count: self.observations.accepted_resumes.load(Ordering::Acquire),
             resume_execution_bytes: self.observations.resume_execution_bytes.load(Ordering::Acquire),
-            pending_replays: self.pending_replays.lock().len(),
+            pending_replays,
+            active_event_producers,
         }
     }
 
-    pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub(crate) fn seal(&self) {
         self.closed.store(true, Ordering::Release);
-        self.pending_replays.lock().clear();
+        let mut state = self.replay_state.lock();
+        state.pending.clear();
+        state.active.clear();
+    }
+
+    pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+        self.seal();
         self.registry.shutdown()
     }
 
@@ -363,7 +441,7 @@ struct PopLiteEventTerminal {
     gate: Option<PopLiteEventGateReservation>,
     client_id: CheetahString,
     dispatcher: LiteEventDispatcher,
-    pending_replays: Arc<Mutex<HashSet<CheetahString>>>,
+    replay_state: Arc<Mutex<PopLiteReplayState>>,
     closed: Arc<AtomicBool>,
     accepted: Option<ObservationGuard>,
     #[cfg(test)]
@@ -376,9 +454,9 @@ impl Drop for PopLiteEventTerminal {
     fn drop(&mut self) {
         drop(self.events.take());
         drop(self.gate.take());
-        observe_replay(
+        queue_replay(
             &self.closed,
-            &self.pending_replays,
+            &self.replay_state,
             &self.dispatcher,
             &self.client_id,
             #[cfg(test)]
@@ -388,27 +466,62 @@ impl Drop for PopLiteEventTerminal {
     }
 }
 
-fn observe_replay(
+#[derive(Default)]
+struct PopLiteReplayState {
+    pending: HashSet<CheetahString>,
+    active: HashSet<CheetahString>,
+}
+
+fn observe_event_producer(
     closed: &AtomicBool,
-    pending_replays: &Mutex<HashSet<CheetahString>>,
+    replay_state: &Mutex<PopLiteReplayState>,
+    dispatcher: &LiteEventDispatcher,
+    client_id: &CheetahString,
+) -> PopLiteReplayObservation {
+    if closed.load(Ordering::Acquire) || dispatcher.pending_events(client_id).is_empty() {
+        return PopLiteReplayObservation::NoEvent;
+    }
+    let mut state = replay_state.lock();
+    if closed.load(Ordering::Acquire) || dispatcher.pending_events(client_id).is_empty() {
+        return PopLiteReplayObservation::NoEvent;
+    }
+    if state.active.contains(client_id) || state.pending.contains(client_id) {
+        PopLiteReplayObservation::AlreadyObserved
+    } else {
+        state.active.insert(client_id.clone());
+        PopLiteReplayObservation::NewlyObserved
+    }
+}
+
+fn queue_replay(
+    closed: &AtomicBool,
+    replay_state: &Mutex<PopLiteReplayState>,
     dispatcher: &LiteEventDispatcher,
     client_id: &CheetahString,
     #[cfg(test)] replay_insert_hook: &Mutex<Option<ReplayInsertHook>>,
 ) -> bool {
-    if closed.load(Ordering::Acquire) || dispatcher.pending_events(client_id).is_empty() {
-        return false;
-    }
     #[cfg(test)]
-    if let Some(hook) = replay_insert_hook.lock().take() {
-        hook.checked.wait();
-        hook.resume.wait();
+    if !closed.load(Ordering::Acquire) && !dispatcher.pending_events(client_id).is_empty() {
+        if let Some(hook) = replay_insert_hook.lock().take() {
+            hook.checked.wait();
+            hook.resume.wait();
+        }
     }
-    let mut pending = pending_replays.lock();
+    let mut state = replay_state.lock();
+    state.active.remove(client_id);
     if closed.load(Ordering::Acquire) || dispatcher.pending_events(client_id).is_empty() {
+        state.pending.remove(client_id);
         return false;
     }
-    pending.insert(client_id.clone());
+    state.pending.insert(client_id.clone());
     true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PopLiteReplayObservation {
+    NoEvent,
+    AlreadyObserved,
+    NewlyObserved,
 }
 
 #[cfg(test)]
@@ -487,6 +600,7 @@ pub(crate) struct PopLiteDeferredResourceSnapshot {
     pub(crate) resume_execution_count: usize,
     pub(crate) resume_execution_bytes: usize,
     pub(crate) pending_replays: usize,
+    pub(crate) active_event_producers: usize,
 }
 
 #[must_use]

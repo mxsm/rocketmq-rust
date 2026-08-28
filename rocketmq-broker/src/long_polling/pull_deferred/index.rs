@@ -59,6 +59,16 @@ impl PullCriteriaKey {
     pub(super) fn from_criteria(criteria: &PullMatchCriteria) -> Self {
         Self::new(criteria.physical_topic().clone(), criteria.physical_queue_id())
     }
+
+    #[must_use]
+    pub(crate) const fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    #[must_use]
+    pub(crate) const fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
 }
 
 /// Borrowed listener metadata. Nothing in this view may cross an async boundary.
@@ -111,6 +121,38 @@ impl<'a> PullArrivalView<'a> {
     pub(crate) const fn forced(mut self) -> Self {
         self.forced = true;
         self
+    }
+
+    pub(crate) const fn topic(self) -> &'a CheetahString {
+        self.topic
+    }
+
+    pub(crate) const fn queue_id(self) -> i32 {
+        self.queue_id
+    }
+
+    pub(crate) const fn max_offset(self) -> i64 {
+        self.max_offset
+    }
+
+    pub(crate) const fn tags_code(self) -> Option<i64> {
+        self.tags_code
+    }
+
+    pub(crate) const fn message_store_time(self) -> i64 {
+        self.message_store_time
+    }
+
+    pub(crate) const fn filter_bitmap(self) -> Option<&'a [u8]> {
+        self.filter_bitmap
+    }
+
+    pub(crate) const fn properties(self) -> Option<&'a HashMap<CheetahString, CheetahString>> {
+        self.properties
+    }
+
+    pub(crate) const fn is_forced(self) -> bool {
+        self.forced
     }
 }
 
@@ -282,6 +324,44 @@ where
         })
     }
 
+    /// Returns a bounded round-robin batch of live topic/queue targets for the
+    /// current-max-offset producer.
+    pub(crate) fn target_batch(&self, limit: NonZeroUsize) -> Vec<PullCriteriaKey> {
+        let mut state = self.inner.state.lock();
+        let mut keys = state
+            .buckets
+            .iter()
+            .filter(|(_, bucket)| !bucket.is_empty())
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| {
+            left.topic
+                .as_str()
+                .cmp(right.topic.as_str())
+                .then_with(|| left.queue_id.cmp(&right.queue_id))
+        });
+        if keys.is_empty() {
+            state.target_cursor = 0;
+            return keys;
+        }
+        let start = state.target_cursor % keys.len();
+        let take = limit.get().min(keys.len());
+        let selected = (0..take)
+            .map(|offset| keys[(start + offset) % keys.len()].clone())
+            .collect();
+        state.target_cursor = (start + take) % keys.len();
+        selected
+    }
+
+    pub(crate) fn has_target(&self, key: &PullCriteriaKey) -> bool {
+        self.inner
+            .state
+            .lock()
+            .buckets
+            .get(key)
+            .is_some_and(|bucket| !bucket.is_empty())
+    }
+
     pub(crate) fn reserve_forced_batch(
         &self,
         cursor: &mut PullScanCursor,
@@ -388,6 +468,14 @@ impl<I> PullCandidateBatch<I>
 where
     I: Copy + Eq,
 {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            candidates: Vec::new(),
+            inspected: 0,
+            exhausted: true,
+        }
+    }
+
     pub(crate) const fn inspected(&self) -> usize {
         self.inspected
     }
@@ -436,6 +524,7 @@ struct PullCriteriaIndexState<I> {
     reserved: usize,
     candidates: usize,
     next_sequence: u64,
+    target_cursor: usize,
 }
 
 impl<I> Default for PullCriteriaIndexState<I> {
@@ -447,6 +536,7 @@ impl<I> Default for PullCriteriaIndexState<I> {
             reserved: 0,
             candidates: 0,
             next_sequence: 0,
+            target_cursor: 0,
         }
     }
 }
@@ -557,6 +647,15 @@ where
     #[must_use]
     pub(crate) fn id(&self) -> I {
         self.record.as_ref().expect("candidate owns its record").id
+    }
+
+    #[must_use]
+    pub(crate) const fn key(&self) -> &PullCriteriaKey {
+        &self.key
+    }
+
+    pub(crate) fn criteria(&self) -> &Arc<PullMatchCriteria> {
+        &self.record.as_ref().expect("candidate owns its record").criteria
     }
 
     /// Permanently hides a candidate after the registry accepts its single claim.

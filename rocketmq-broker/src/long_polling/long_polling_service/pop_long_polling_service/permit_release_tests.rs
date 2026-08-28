@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -130,11 +131,14 @@ async fn arrival_and_duplicate_terminals_release_shared_permit_while_node_stays_
     let (request, retained_bytes) = budgeted_request(&budget, current_millis().saturating_add(30_000)).await;
     let queue = SkipSet::new();
     queue.insert(request);
+    let key = CheetahString::from_static_str("permit-arrival");
+    service.polling_map.insert(key.clone(), queue);
     service.total_polling_num.store(1, std::sync::atomic::Ordering::Release);
+    let queue = service.polling_map.get(&key).expect("suspended request queue");
     let pinned_node = queue.front().expect("suspended request node");
 
-    let request = service
-        .poll_remoting_commands(&queue)
+    let (request, _route) = service
+        .poll_remoting_commands(&key)
         .expect("arrival claims suspended request");
     let duplicate = Arc::clone(&request);
     assert!(!service.wake_up(request));
@@ -152,10 +156,13 @@ async fn timeout_terminal_releases_shared_permit_while_node_stays_pinned() {
     let (request, retained_bytes) = budgeted_request(&budget, 0).await;
     let queue = SkipSet::new();
     queue.insert(request);
+    let key = CheetahString::from_static_str("permit-timeout");
+    service.polling_map.insert(key.clone(), queue);
     service.total_polling_num.store(1, std::sync::atomic::Ordering::Release);
+    let queue = service.polling_map.get(&key).expect("suspended request queue");
     let pinned_node = queue.front().expect("suspended request node");
 
-    service.wake_up_expired_requests(&queue);
+    service.wake_up_expired_requests(&key);
 
     assert_released_and_readmits(&budget, retained_bytes);
     assert!(pinned_node.is_removed(), "entry guard must still pin the removed node");
@@ -187,10 +194,13 @@ async fn inactive_terminal_releases_shared_permit_while_node_stays_pinned() {
     request.get_channel().connection_ref().close();
     let queue = SkipSet::new();
     queue.insert(request);
+    let key = CheetahString::from_static_str("permit-inactive");
+    service.polling_map.insert(key.clone(), queue);
     service.total_polling_num.store(1, std::sync::atomic::Ordering::Release);
+    let queue = service.polling_map.get(&key).expect("suspended request queue");
     let pinned_node = queue.front().expect("suspended request node");
 
-    assert!(service.poll_remoting_commands(&queue).is_none());
+    assert!(service.poll_remoting_commands(&key).is_none());
 
     assert_released_and_readmits(&budget, retained_bytes);
     assert!(pinned_node.is_removed(), "entry guard must still pin the removed node");

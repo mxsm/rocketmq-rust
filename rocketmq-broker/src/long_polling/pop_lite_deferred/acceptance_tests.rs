@@ -60,9 +60,62 @@ use tokio::sync::oneshot;
 use super::index::PopLiteIndexLimits;
 use super::prepare::PopLiteRetainedEstimate;
 use super::service::PopLiteDeferredService;
+use super::service::PopLiteReplayObservation;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 
 const ORIGINAL_OPAQUE: i32 = 9_833;
+
+#[test]
+fn pending_replay_observation_distinguishes_singleflight_ownership() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let dispatcher = LiteEventDispatcher::default();
+    let service = service(&controller, dispatcher.clone());
+    let client_id = CheetahString::from_static_str("singleflight-client");
+    dispatcher.do_full_dispatch(
+        &client_id,
+        &CheetahString::from_static_str("group-a"),
+        &HashSet::from([CheetahString::from_static_str("%LMQ%$parent-topic$child")]),
+    );
+
+    assert_eq!(
+        service.observe_pending_replay(&client_id),
+        PopLiteReplayObservation::NewlyObserved
+    );
+    assert_eq!(
+        service.observe_pending_replay(&client_id),
+        PopLiteReplayObservation::AlreadyObserved
+    );
+    assert!(service.take_pending_replays(nonzero(1)).is_empty());
+    service.finish_event_producer(&client_id);
+    assert_eq!(service.take_pending_replays(nonzero(1)), [client_id]);
+}
+
+#[test]
+fn replay_resource_snapshot_reads_pending_and_active_under_one_lock() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let dispatcher = LiteEventDispatcher::default();
+    let service = service(&controller, dispatcher.clone());
+    let group = CheetahString::from_static_str("group-a");
+    let event = HashSet::from([CheetahString::from_static_str("%LMQ%$parent-topic$child")]);
+    let active = CheetahString::from_static_str("active-client");
+    let pending = CheetahString::from_static_str("pending-client");
+    dispatcher.do_full_dispatch(&active, &group, &event);
+    dispatcher.do_full_dispatch(&pending, &group, &event);
+
+    assert_eq!(
+        service.observe_pending_replay(&active),
+        PopLiteReplayObservation::NewlyObserved
+    );
+    assert_eq!(
+        service.observe_pending_replay(&pending),
+        PopLiteReplayObservation::NewlyObserved
+    );
+    service.finish_event_producer(&pending);
+
+    let snapshot = service.resource_snapshot();
+    assert_eq!(snapshot.active_event_producers, 1);
+    assert_eq!(snapshot.pending_replays, 1);
+}
 
 struct CountingBodyOwner {
     body: Vec<u8>,

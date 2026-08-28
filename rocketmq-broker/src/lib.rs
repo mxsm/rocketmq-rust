@@ -1212,6 +1212,7 @@ pub(crate) mod client;
 pub(crate) mod coldctr;
 pub mod config;
 pub(crate) mod controller;
+pub(crate) mod deferred_generation_handoff;
 pub(crate) mod failover;
 pub(crate) mod filter;
 pub(crate) mod hook;

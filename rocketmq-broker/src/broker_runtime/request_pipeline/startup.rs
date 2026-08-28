@@ -35,6 +35,7 @@ impl BrokerRuntime {
                 detail: "request processors require an initialized transactional message service".to_owned(),
             });
         }
+        self.initialize_deferred_lifecycle()?;
         let (request_processor, fast_request_processor) = self.init_processor_checked()?;
         self.initialize_consumer_lag_observability();
         let service_context =
@@ -46,16 +47,14 @@ impl BrokerRuntime {
                     component: "service_context",
                     detail: "broker remoting servers require an injected service context".to_owned(),
                 })?;
-        let admission = Arc::new(
-            rocketmq_transport::api::v1::AdmissionController::try_new_with_budget(
-                rocketmq_transport::api::v1::AdmissionLimits::default(),
-                &service_context.process_budget(),
-            )
-            .map_err(|error| BrokerStartupError::Initialization {
+        let admission = self
+            .composition
+            .request_pipeline
+            .admission_controller()
+            .ok_or_else(|| BrokerStartupError::Initialization {
                 component: "authorized_dispatcher",
-                detail: format!("failed to create shared Broker admission boundary: {error}"),
-            })?,
-        );
+                detail: "shared Broker admission boundary was not initialized".to_owned(),
+            })?;
         let authorized_dispatcher = Arc::new(
             rocketmq_transport::api::v1::AuthorizedCommandDispatcher::try_new(
                 request_processor.clone(),

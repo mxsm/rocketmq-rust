@@ -79,6 +79,98 @@ impl RequestProcessor for CorrelatingV1Processor {
     }
 }
 
+struct ProductionV1DeferredWaiter {
+    execution: crate::dispatch::LegacySessionExecutionEnrollment,
+    context: ConnectionHandlerContext,
+}
+
+struct ProductionV1DeferredState {
+    waiters: std::sync::Mutex<std::collections::HashMap<i32, ProductionV1DeferredWaiter>>,
+    installed: tokio::sync::mpsc::UnboundedSender<i32>,
+    cleaned: tokio::sync::mpsc::UnboundedSender<i32>,
+}
+
+impl ProductionV1DeferredState {
+    fn contains(&self, opaque: i32) -> bool {
+        self.waiters
+            .lock()
+            .expect("production V1 deferred waiter lock")
+            .contains_key(&opaque)
+    }
+
+    fn wake(&self, opaque: i32) -> Result<(), crate::dispatch::LegacySessionExecutionSubmitError> {
+        let waiter = self
+            .waiters
+            .lock()
+            .expect("production V1 deferred waiter lock")
+            .remove(&opaque)
+            .expect("registered production V1 waiter");
+        let ProductionV1DeferredWaiter { execution, context } = waiter;
+        execution.try_execute(async move {
+            let _ = context
+                .try_write_response(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(opaque)
+                        .set_body(b"session-owned-resume".to_vec()),
+                )
+                .await;
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ProductionV1DeferredProcessor {
+    state: Arc<ProductionV1DeferredState>,
+}
+
+impl RequestProcessor for ProductionV1DeferredProcessor {
+    async fn process_request(
+        &mut self,
+        _channel: Channel,
+        context: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let opaque = request.opaque();
+        let cleanup_state = Arc::downgrade(&self.state);
+        let install_state = Arc::clone(&self.state);
+        let waiter_context = context.clone();
+        context
+            .install_legacy_session_execution(
+                move || {
+                    let Some(state) = cleanup_state.upgrade() else {
+                        return;
+                    };
+                    let removed = state
+                        .waiters
+                        .lock()
+                        .expect("production V1 deferred waiter lock")
+                        .remove(&opaque);
+                    if removed.is_some() {
+                        let _ = state.cleaned.send(opaque);
+                    }
+                },
+                move |execution| {
+                    let previous = install_state
+                        .waiters
+                        .lock()
+                        .expect("production V1 deferred waiter lock")
+                        .insert(
+                            opaque,
+                            ProductionV1DeferredWaiter {
+                                execution,
+                                context: waiter_context,
+                            },
+                        );
+                    assert!(previous.is_none(), "test opaque must identify one waiter");
+                    Ok::<(), ((), crate::dispatch::LegacySessionExecutionEnrollment)>(())
+                },
+            )
+            .expect("production V1 bridge must provide canonical session execution");
+        let _ = self.state.installed.send(opaque);
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod runtime_test_support {
     use super::*;
@@ -1516,5 +1608,116 @@ async fn v1_network_response_frames_complete_the_exact_session_owner() {
         .expect("owner close releases pending waiter before drain")
         .expect("join V1 correlation server")
         .expect("V1 correlation shutdown report");
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn production_v1_session_close_removes_only_its_waiter_and_resume_uses_session_execution() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind production V1 deferred listener");
+    let address = listener.local_addr().expect("production V1 deferred address");
+    let (installed_tx, mut installed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (cleaned_tx, mut cleaned_rx) = tokio::sync::mpsc::unbounded_channel();
+    let state = Arc::new(ProductionV1DeferredState {
+        waiters: std::sync::Mutex::new(std::collections::HashMap::new()),
+        installed: installed_tx,
+        cleaned: cleaned_tx,
+    });
+    let processor = ProductionV1DeferredProcessor {
+        state: Arc::clone(&state),
+    };
+    let mut server = TransportServer::new(
+        Arc::new(ServerConfig::default()),
+        test_service_context("remoting-server-production-v1-deferred"),
+    );
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (startup_tx, startup_rx) = oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        server
+            .try_serve_bound_listener_until_with_startup(
+                listener,
+                processor,
+                None,
+                None,
+                async {
+                    let _ = shutdown_rx.await;
+                },
+                startup_tx,
+            )
+            .await
+    });
+    assert_eq!(
+        startup_rx
+            .await
+            .expect("production V1 startup channel")
+            .expect("production V1 startup succeeds"),
+        address
+    );
+
+    let mut first =
+        crate::connection::Connection::new(TcpStream::connect(address).await.expect("first production V1 client"));
+    let mut second =
+        crate::connection::Connection::new(TcpStream::connect(address).await.expect("second production V1 client"));
+    first
+        .send_command(RemotingCommand::create_remoting_command(8_820).set_opaque(301))
+        .await
+        .expect("register first production V1 waiter");
+    second
+        .send_command(RemotingCommand::create_remoting_command(8_820).set_opaque(302))
+        .await
+        .expect("register second production V1 waiter");
+
+    let mut installed = Vec::new();
+    for _ in 0..2 {
+        installed.push(
+            tokio::time::timeout(Duration::from_secs(1), installed_rx.recv())
+                .await
+                .expect("production V1 install deadline")
+                .expect("production V1 install event"),
+        );
+    }
+    installed.sort_unstable();
+    assert_eq!(installed, vec![301, 302]);
+    assert!(state.contains(301));
+    assert!(state.contains(302));
+
+    drop(first);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), cleaned_rx.recv())
+            .await
+            .expect("first session cleanup deadline")
+            .expect("first session cleanup event"),
+        301
+    );
+    assert!(!state.contains(301));
+    assert!(
+        state.contains(302),
+        "closing one session must preserve another session's waiter"
+    );
+
+    state
+        .wake(302)
+        .expect("live production V1 session must accept its deferred resume");
+    let response = tokio::time::timeout(Duration::from_secs(1), second.receive_command())
+        .await
+        .expect("session-owned resume response deadline")
+        .expect("second production V1 connection")
+        .expect("session-owned resume response");
+    assert_eq!(response.code(), ResponseCode::Success as i32);
+    assert_eq!(response.opaque(), 302);
+    assert_eq!(
+        response.body(),
+        Some(&bytes::Bytes::from_static(b"session-owned-resume"))
+    );
+    assert!(!state.contains(302));
+
+    drop(second);
+    let _ = shutdown_tx.send(());
+    let report = tokio::time::timeout(Duration::from_secs(2), server_task)
+        .await
+        .expect("production V1 deferred server shutdown deadline")
+        .expect("join production V1 deferred server")
+        .expect("production V1 deferred shutdown report");
     assert!(report.is_healthy(), "{}", report.to_json());
 }

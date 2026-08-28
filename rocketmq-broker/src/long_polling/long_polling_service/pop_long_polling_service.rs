@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
@@ -29,15 +30,21 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+#[cfg(test)]
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::CqExtUnit;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::LegacySessionCleanupInstallError;
+use rocketmq_transport::api::v1::LegacySessionExecutionEnrollment;
 use tokio::select;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -46,6 +53,16 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::broker_task_group_or_current;
+use crate::deferred_generation_handoff::DeferredGeneration;
+use crate::deferred_generation_handoff::DeferredGenerationHandoff;
+use crate::deferred_generation_handoff::DeferredGenerationLegacyEnrollmentError;
+use crate::deferred_generation_handoff::DeferredGenerationTarget;
+use crate::deferred_generation_handoff::LegacyWakeLease;
+use crate::deferred_generation_handoff::RoutePermit;
+use crate::long_polling::long_polling_service::LegacyExecutionTracker;
+use crate::long_polling::long_polling_service::LegacyServiceFinalization;
+use crate::long_polling::long_polling_service::LegacyServiceResourceSnapshot;
+use crate::long_polling::long_polling_service::LegacyServiceShutdownReport;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
@@ -54,6 +71,46 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub(crate) trait PollingCountProvider: Send + Sync {
     fn polling_count(&self, key: &str) -> i32;
+}
+
+fn remove_session_pop_waiter(
+    polling_map: &DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,
+    total_polling_num: &AtomicU64,
+    key: &CheetahString,
+    request: &Weak<PopRequest>,
+) {
+    let Some(request) = request.upgrade() else {
+        return;
+    };
+    request.mark_legacy_session_closed();
+    let removed = polling_map
+        .get(key)
+        .is_some_and(|queue| queue.remove(&request).is_some());
+    if removed {
+        release_published_polling_count(total_polling_num);
+        request.release_resource_permit();
+        request.release_legacy_wait();
+    }
+}
+
+fn reserve_published_polling_count(total_polling_num: &AtomicU64) -> bool {
+    total_polling_num
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| count.checked_add(1))
+        .is_ok()
+}
+
+fn release_published_polling_count(total_polling_num: &AtomicU64) {
+    let released = total_polling_num
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| count.checked_sub(1))
+        .is_ok();
+    assert!(released, "a published POP waiter owns one total-polling count");
+}
+
+fn restore_published_polling_count(total_polling_num: &AtomicU64) {
+    assert!(
+        reserve_published_polling_count(total_polling_num),
+        "a requeued POP waiter must restore its released count"
+    );
 }
 
 #[cfg(test)]
@@ -105,14 +162,25 @@ impl PopLongPollingServiceContext {
 pub(crate) struct PopLongPollingService<RP> {
     context: PopLongPollingServiceContext,
     topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
-    polling_map: DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,
+    polling_map: Arc<DashMap<CheetahString, SkipSet<Arc<PopRequest>>>>,
     last_clean_time: AtomicU64,
-    total_polling_num: AtomicU64,
+    total_polling_num: Arc<AtomicU64>,
     notify_last: bool,
     processor: Weak<RP>,
     running: AtomicBool,
     lifecycle: AsyncMutex<()>,
+    polling_admission: Mutex<()>,
+    handoff: OnceLock<Arc<DeferredGenerationHandoff>>,
+    producer_task_group: Mutex<Option<TaskGroup>>,
     task_group: Mutex<Option<TaskGroup>>,
+    execution_tracker: Arc<LegacyExecutionTracker>,
+    shutdown_wake_failures: AtomicU64,
+}
+
+struct PopWakeupClaim {
+    request: Arc<PopRequest>,
+    wake: Option<LegacyWakeLease>,
+    execution: Option<LegacySessionExecutionEnrollment>,
 }
 
 #[trait_variant::make(PopLongPollingRequestProcessor: Send)]
@@ -167,16 +235,42 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         Self {
             // 100000 topic default,  100000 lru topic + cid + qid
             topic_cid_map: DashMap::with_capacity(context.policy.pop_polling_map_size),
-            polling_map: DashMap::with_capacity(context.policy.pop_polling_map_size),
+            polling_map: Arc::new(DashMap::with_capacity(context.policy.pop_polling_map_size)),
             last_clean_time: AtomicU64::new(0),
-            total_polling_num: AtomicU64::new(0),
+            total_polling_num: Arc::new(AtomicU64::new(0)),
             notify_last,
             context,
             processor,
             running: AtomicBool::new(false),
             lifecycle: AsyncMutex::new(()),
+            polling_admission: Mutex::new(()),
+            handoff: OnceLock::new(),
+            producer_task_group: Mutex::new(None),
             task_group: Mutex::new(None),
+            execution_tracker: Arc::new(LegacyExecutionTracker::default()),
+            shutdown_wake_failures: AtomicU64::new(0),
         }
+    }
+
+    /// Installs the single Broker-owned generation coordinator before this
+    /// service accepts any legacy request. Reinstalling the same identity is
+    /// idempotent; replacing it or attaching after occupancy exists fails.
+    pub(crate) fn install_handoff(
+        &self,
+        handoff: Arc<DeferredGenerationHandoff>,
+    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
+        let _admission = self.polling_admission.lock();
+        if let Some(installed) = self.handoff.get() {
+            return if Arc::ptr_eq(installed, &handoff) {
+                Ok(())
+            } else {
+                Err(handoff)
+            };
+        }
+        if self.total_polling_num.load(Ordering::Acquire) != 0 {
+            return Err(handoff);
+        }
+        self.handoff.set(handoff)
     }
 
     pub async fn start(this: &Arc<Self>) {
@@ -189,19 +283,29 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             return;
         }
 
-        let Some(task_group) = broker_task_group_or_current(
+        let Some(producer_task_group) = broker_task_group_or_current(
             this.context.service_context.as_ref(),
-            "rocketmq-broker.long-polling.pop",
+            "rocketmq-broker.long-polling.pop.producer",
             "failed to start PopLongPollingService outside Tokio runtime",
         ) else {
             this.running.store(false, Ordering::Release);
             return;
         };
-        let cancellation_token = task_group.cancellation_token();
+        let Some(execution_task_group) = broker_task_group_or_current(
+            this.context.service_context.as_ref(),
+            "rocketmq-broker.long-polling.pop.executions",
+            "failed to start PopLongPollingService execution owner outside Tokio runtime",
+        ) else {
+            this.running.store(false, Ordering::Release);
+            return;
+        };
+        let cancellation_token = producer_task_group.cancellation_token();
         let service = Arc::downgrade(this);
-        *this.task_group.lock() = Some(task_group.clone());
+        *this.producer_task_group.lock() = Some(producer_task_group.clone());
+        *this.task_group.lock() = Some(execution_task_group);
+        this.shutdown_wake_failures.store(0, Ordering::Release);
 
-        let spawn_result = task_group.spawn_service("broker.long-polling.pop.scan", async move {
+        let spawn_result = producer_task_group.spawn_service("broker.long-polling.pop.scan", async move {
             loop {
                 select! {
                     _ = cancellation_token.cancelled() => {break;}
@@ -215,12 +319,13 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                 if service.polling_map.is_empty() {
                     continue;
                 }
-                for entry in service.polling_map.iter() {
-                    let value = entry.value();
-                    if value.is_empty() {
-                        continue;
-                    }
-                    service.wake_up_expired_requests(value);
+                let polling_keys = service
+                    .polling_map
+                    .iter()
+                    .map(|entry| entry.key().clone())
+                    .collect::<Vec<_>>();
+                for key in polling_keys {
+                    service.wake_up_expired_requests(&key);
                 }
 
                 let last_clean_time = service.last_clean_time.load(Ordering::Acquire);
@@ -230,34 +335,93 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             }
 
             if let Some(service) = service.upgrade() {
-                // Clean all suspended requests before the owned scan task exits.
-                for entry in service.polling_map.iter() {
-                    service.drain_polling_queue(entry.value());
-                }
                 service.running.store(false, Ordering::Release);
             }
         });
 
         if let Err(error) = spawn_result {
+            this.producer_task_group.lock().take();
             this.task_group.lock().take();
             this.running.store(false, Ordering::Release);
             warn!(?error, "failed to spawn PopLongPollingService scan task");
         }
     }
 
-    pub async fn shutdown(&self) {
+    pub(crate) async fn stop_producer_until(&self, deadline: ShutdownDeadline) -> Option<ShutdownReport> {
+        let _lifecycle = self.lifecycle.lock().await;
+        {
+            let _admission = self.polling_admission.lock();
+            self.running.store(false, Ordering::Release);
+        }
+        let task_group = self.producer_task_group.lock().take();
+        match task_group {
+            Some(task_group) => Some(task_group.shutdown_until(deadline).await),
+            None => None,
+        }
+    }
+
+    pub(crate) async fn drain_executions_until(&self, deadline: ShutdownDeadline) -> Option<ShutdownReport> {
         let _lifecycle = self.lifecycle.lock().await;
         let task_group = self.task_group.lock().take();
-        if let Some(task_group) = task_group {
-            let report = task_group.shutdown(Duration::from_secs(5)).await;
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "PopLongPollingService shutdown report is unhealthy"
-                );
-            }
+        match task_group {
+            Some(task_group) => Some(task_group.shutdown_until(deadline).await),
+            None => None,
+        }
+    }
+
+    pub(crate) async fn finalize_shutdown(&self) -> LegacyServiceFinalization {
+        let _lifecycle = self.lifecycle.lock().await;
+        let observed_after_session_drain = self.legacy_resource_snapshot();
+        let keys = self
+            .polling_map
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        let retired = keys
+            .into_iter()
+            .filter_map(|key| self.polling_map.remove(&key).map(|(_, queue)| queue))
+            .collect::<Vec<_>>();
+        // Drop request cleanup enrollments only after every DashMap shard
+        // guard has been released. Registration publishes cleanup -> table,
+        // so fallback retirement must not hold table -> cleanup.
+        for queue in retired {
+            self.drain_polling_queue(&queue);
         }
         self.running.store(false, Ordering::Release);
+        LegacyServiceFinalization {
+            observed_after_session_drain,
+            terminal: self.legacy_resource_snapshot(),
+        }
+    }
+
+    pub async fn shutdown(&self) -> LegacyServiceShutdownReport {
+        let deadline = ShutdownDeadline::after(Duration::from_secs(5));
+        let producer = self.stop_producer_until(deadline).await;
+        let executions = self.drain_executions_until(deadline).await;
+        let finalization = self.finalize_shutdown().await;
+        LegacyServiceShutdownReport {
+            name: "pop_long_polling",
+            producer,
+            executions,
+            observed_after_session_drain: finalization.observed_after_session_drain,
+            resources: finalization.terminal,
+        }
+    }
+
+    pub(crate) fn legacy_resource_snapshot(&self) -> LegacyServiceResourceSnapshot {
+        LegacyServiceResourceSnapshot {
+            table_entries: self.polling_map.iter().map(|queue| queue.value().len()).sum(),
+            tracked_waiters: self.total_polling_num.load(Ordering::Acquire),
+            active_executions: self.execution_tracker.active(),
+            task_count: self
+                .producer_task_group
+                .lock()
+                .as_ref()
+                .map_or(0, TaskGroup::task_count),
+            wake_task_count: self.task_group.lock().as_ref().map_or(0, TaskGroup::task_count),
+            shutdown_wake_failures: self.shutdown_wake_failures.load(Ordering::Acquire),
+            ..Default::default()
+        }
     }
 
     fn clean_unused_resource(&self) {
@@ -358,7 +522,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             filter_bit_map,
             properties,
         )
-        .is_some_and(|pop_request| self.wake_up(pop_request))
+        .is_some_and(|claim| self.wake_up_claim(claim, None))
     }
 
     pub(crate) fn notify_message_arriving_before_lag(
@@ -367,7 +531,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         cid: &CheetahString,
     ) -> Option<PopWakeupCompletion> {
         self.take_matching_request(topic, -1, cid, true, None, 0, None, None)
-            .map(|pop_request| self.wake_up_with_completion(pop_request))
+            .map(|claim| self.wake_up_claim_with_completion(claim))
     }
 
     #[allow(
@@ -384,42 +548,53 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
-    ) -> Option<Arc<PopRequest>> {
+    ) -> Option<PopWakeupClaim> {
+        let _admission = self.polling_admission.lock();
+        if !self.running.load(Ordering::Acquire) {
+            return None;
+        }
         let key = CheetahString::from_string(KeyBuilder::build_polling_key(topic, cid, queue_id));
-        if let Some(remoting_commands) = self.polling_map.get(&key) {
-            let value_ = remoting_commands.value();
-            if value_.is_empty() {
-                return None;
-            }
+        if let Some((pop_request, route)) = self.poll_remoting_commands(&key) {
+            let (message_filter, subscription_data) =
+                (pop_request.get_message_filter(), pop_request.get_subscription_data());
 
-            if let Some(pop_request) = self.poll_remoting_commands(value_) {
-                let (message_filter, subscription_data) =
-                    (pop_request.get_message_filter(), pop_request.get_subscription_data());
-
-                if !force {
-                    if let (Some(message_filter), Some(_subscription_data)) = (message_filter, subscription_data) {
-                        let mut match_result = message_filter.is_matched_by_consume_queue(
-                            tags_code,
-                            Some(&CqExtUnit::new(
-                                tags_code.unwrap_or_default(),
-                                msg_store_time,
-                                filter_bit_map,
-                            )),
-                        );
-                        if match_result {
-                            if let Some(props) = properties {
-                                match_result = message_filter.is_matched_by_commit_log(None, Some(props));
-                            }
-                        }
-                        if !match_result {
-                            remoting_commands.value().insert(pop_request);
-                            self.total_polling_num.fetch_add(1, Ordering::AcqRel);
-                            return None;
+            if !force {
+                if let (Some(message_filter), Some(_subscription_data)) = (message_filter, subscription_data) {
+                    let mut match_result = message_filter.is_matched_by_consume_queue(
+                        tags_code,
+                        Some(&CqExtUnit::new(
+                            tags_code.unwrap_or_default(),
+                            msg_store_time,
+                            filter_bit_map,
+                        )),
+                    );
+                    if match_result {
+                        if let Some(props) = properties {
+                            match_result = message_filter.is_matched_by_commit_log(None, Some(props));
                         }
                     }
+                    if !match_result {
+                        if pop_request.legacy_session_closed() {
+                            pop_request.release_resource_permit();
+                            pop_request.release_legacy_wait();
+                        } else {
+                            self.polling_map.entry(key).or_default().insert(pop_request);
+                            restore_published_polling_count(&self.total_polling_num);
+                        }
+                        return None;
+                    }
                 }
+            }
 
-                return Some(pop_request);
+            if let Some(claim) = self.begin_wake(Arc::clone(&pop_request), route) {
+                return Some(claim);
+            }
+            if pop_request.legacy_session_closed() {
+                pop_request.release_resource_permit();
+                pop_request.release_legacy_wait();
+            } else {
+                self.polling_map.entry(key).or_default().insert(pop_request);
+                restore_published_polling_count(&self.total_polling_num);
             }
         }
         None
@@ -545,12 +720,19 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             return PollingResult::NotPolling;
         }
 
-        let cids = self
-            .topic_cid_map
-            .entry(request_header.get_topic().clone())
-            .or_default();
-        cids.entry(request_header.get_consumer_group().clone())
-            .or_insert(u8::MIN);
+        let _admission = self.polling_admission.lock();
+        if !self.running.load(Ordering::Acquire) {
+            return PollingResult::PollingTimeout;
+        }
+
+        {
+            let cids = self
+                .topic_cid_map
+                .entry(request_header.get_topic().clone())
+                .or_default();
+            cids.entry(request_header.get_consumer_group().clone())
+                .or_insert(u8::MIN);
+        }
 
         let expired = request_header.get_born_time() + request_header.get_poll_time();
         let request = Arc::new(PopRequest::new(
@@ -574,30 +756,157 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             request_header.get_consumer_group(),
             request_header.get_queue_id(),
         ));
-        let queue = self.polling_map.entry(key).or_default();
-        if queue.len() > self.context.policy.pop_polling_size {
-            return PollingResult::PollingFull;
+        if let Some(handoff) = self.handoff.get() {
+            let target = match RequestCode::from(remoting_command.code()) {
+                RequestCode::Notification => DeferredGenerationTarget::notification(
+                    request_header.get_topic().clone(),
+                    request_header.get_consumer_group().clone(),
+                    request_header.get_queue_id(),
+                ),
+                _ => DeferredGenerationTarget::pop(
+                    request_header.get_topic().clone(),
+                    request_header.get_consumer_group().clone(),
+                    request_header.get_queue_id(),
+                ),
+            };
+            let rollback_map = Arc::clone(&self.polling_map);
+            let rollback_total = Arc::clone(&self.total_polling_num);
+            let rollback_key = key.clone();
+            let rollback_request = Arc::downgrade(&request);
+            let enrollment = handoff.arrival_adapter().install_legacy_wait(
+                target.clone(),
+                |lease| {
+                    let queue = self.polling_map.entry(key.clone()).or_default();
+                    if queue.len() > self.context.policy.pop_polling_size {
+                        return Err((PollingResult::PollingFull, lease));
+                    }
+                    if self.total_polling_num.load(Ordering::SeqCst) >= self.context.policy.max_pop_polling_size {
+                        return Err((PollingResult::PollingFull, lease));
+                    }
+                    request
+                        .install_legacy_handoff(&target, lease)
+                        .map_err(|lease| (PollingResult::PollingTimeout, lease))?;
+                    let cleanup_map = Arc::clone(&self.polling_map);
+                    let cleanup_total = Arc::clone(&self.total_polling_num);
+                    let cleanup_key = key.clone();
+                    let cleanup_request = Arc::downgrade(&request);
+                    match request.get_ctx().install_legacy_session_execution(
+                        move || {
+                            remove_session_pop_waiter(&cleanup_map, &cleanup_total, &cleanup_key, &cleanup_request);
+                        },
+                        |cleanup| {
+                            if !reserve_published_polling_count(&self.total_polling_num) {
+                                return Err((PollingResult::PollingFull, cleanup));
+                            }
+                            if let Err(cleanup) = request.install_legacy_session_cleanup(cleanup) {
+                                release_published_polling_count(&self.total_polling_num);
+                                return Err((PollingResult::PollingTimeout, cleanup));
+                            }
+                            remoting_command.set_suspended_ref(true);
+                            queue.insert(Arc::clone(&request));
+                            Ok(())
+                        },
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(LegacySessionCleanupInstallError::Unavailable) => {
+                            #[cfg(test)]
+                            {
+                                if !reserve_published_polling_count(&self.total_polling_num) {
+                                    let lease = request
+                                        .take_legacy_wait()
+                                        .expect("unavailable cleanup retains the fresh wait lease");
+                                    return Err((PollingResult::PollingFull, lease));
+                                }
+                                remoting_command.set_suspended_ref(true);
+                                queue.insert(Arc::clone(&request));
+                                Ok(())
+                            }
+                            #[cfg(not(test))]
+                            {
+                                let lease = request
+                                    .take_legacy_wait()
+                                    .expect("unavailable cleanup retains the fresh wait lease");
+                                Err((PollingResult::PollingTimeout, lease))
+                            }
+                        }
+                        Err(_) => {
+                            let lease = request
+                                .take_legacy_wait()
+                                .expect("failed cleanup installation retains the fresh wait lease");
+                            Err((PollingResult::PollingTimeout, lease))
+                        }
+                    }
+                },
+                move || {
+                    remove_session_pop_waiter(&rollback_map, &rollback_total, &rollback_key, &rollback_request);
+                },
+            );
+            match enrollment {
+                Ok(()) => {}
+                Err(DeferredGenerationLegacyEnrollmentError::Enrollment(result)) => return result,
+                Err(_) => return PollingResult::PollingTimeout,
+            }
+        } else {
+            let queue = self.polling_map.entry(key).or_default();
+            if queue.len() > self.context.policy.pop_polling_size {
+                return PollingResult::PollingFull;
+            }
+            if !reserve_published_polling_count(&self.total_polling_num) {
+                return PollingResult::PollingFull;
+            }
+            remoting_command.set_suspended_ref(true);
+            queue.insert(request);
         }
-
-        queue.insert(request);
-
-        remoting_command.set_suspended_ref(true);
-        self.total_polling_num.fetch_add(1, Ordering::SeqCst);
         PollingResult::PollingSuc
     }
 
     // wake up and try process request
     pub fn wake_up(&self, pop_request: Arc<PopRequest>) -> bool {
-        self.wake_up_inner(pop_request, None)
+        let _admission = self.polling_admission.lock();
+        if !self.running.load(Ordering::Acquire) {
+            return false;
+        }
+        let Some(route) = self.acquire_route_for(&pop_request) else {
+            return false;
+        };
+        let Some(claim) = self.begin_wake(pop_request, route) else {
+            return false;
+        };
+        self.wake_up_claim(claim, None)
     }
 
     pub(crate) fn wake_up_with_completion(&self, pop_request: Arc<PopRequest>) -> PopWakeupCompletion {
         let (sender, receiver) = oneshot::channel();
-        self.wake_up_inner(pop_request, Some(PopWakeupObserver::new(sender)));
+        let completion = PopWakeupObserver::new(sender);
+        let _admission = self.polling_admission.lock();
+        if !self.running.load(Ordering::Acquire) {
+            completion.complete(PopWakeupOutcome::ServiceNotRunning);
+            return receiver;
+        }
+        let Some(route) = self.acquire_route_for(&pop_request) else {
+            completion.complete(PopWakeupOutcome::ServiceNotRunning);
+            return receiver;
+        };
+        let Some(claim) = self.begin_wake(pop_request, route) else {
+            completion.complete(PopWakeupOutcome::AlreadyCompleted);
+            return receiver;
+        };
+        self.wake_up_claim(claim, Some(completion));
         receiver
     }
 
-    fn wake_up_inner(&self, pop_request: Arc<PopRequest>, completion: Option<PopWakeupObserver>) -> bool {
+    fn wake_up_claim_with_completion(&self, claim: PopWakeupClaim) -> PopWakeupCompletion {
+        let (sender, receiver) = oneshot::channel();
+        self.wake_up_claim(claim, Some(PopWakeupObserver::new(sender)));
+        receiver
+    }
+
+    fn wake_up_claim(&self, claim: PopWakeupClaim, completion: Option<PopWakeupObserver>) -> bool {
+        let PopWakeupClaim {
+            request: pop_request,
+            wake,
+            execution,
+        } = claim;
         pop_request.release_resource_permit();
         if !pop_request.complete() {
             if let Some(completion) = completion {
@@ -605,7 +914,8 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             }
             return false;
         }
-        if !pop_request.get_channel().connection_ref().is_healthy() {
+        #[cfg(test)]
+        if execution.is_none() && !pop_request.get_channel().connection_ref().is_healthy() {
             if let Some(completion) = completion {
                 completion.complete(PopWakeupOutcome::InactiveChannel);
             }
@@ -613,22 +923,18 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         }
         match self.processor.upgrade() {
             None => {
+                self.shutdown_wake_failures.fetch_add(1, Ordering::AcqRel);
                 if let Some(completion) = completion {
                     completion.complete(PopWakeupOutcome::ProcessorUnavailable);
                 }
                 false
             }
             Some(processor) => {
-                let task_group = self.task_group.lock().as_ref().cloned();
-                let Some(task_group) = task_group else {
-                    warn!("PopLongPollingService wake-up skipped because task group is not running");
-                    if let Some(completion) = completion {
-                        completion.complete(PopWakeupOutcome::ServiceNotRunning);
-                    }
-                    return false;
-                };
-
-                let spawn_result = task_group.spawn("broker.long-polling.pop.wake-up", TaskKind::Worker, async move {
+                let continuation = wake.map(LegacyWakeLease::into_continuation);
+                let execution_guard = self.execution_tracker.enter();
+                let task = async move {
+                    let _execution_guard = execution_guard;
+                    let _continuation = continuation;
                     let channel = pop_request.get_channel().clone();
                     let ctx = pop_request.get_ctx().clone();
                     let opaque = pop_request.get_remoting_command().opaque();
@@ -636,14 +942,21 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                         .process_request_when_wakeup(channel, ctx, pop_request.get_remoting_command().clone())
                         .await;
                     match response {
-                        Ok(result) => {
+                        Ok(None) => {
                             if let Some(completion) = completion {
                                 completion.complete(PopWakeupOutcome::ProcessingCompleted);
                             }
-                            if let Some(mut response) = result {
-                                let channel = pop_request.get_channel();
-                                response.set_opaque_mut(opaque);
-                                let _ = channel.channel_inner().send_oneway(response, 1000).await;
+                        }
+                        Ok(Some(mut response)) => {
+                            let channel = pop_request.get_channel();
+                            response.set_opaque_mut(opaque);
+                            let outcome = if channel.channel_inner().send_oneway(response, 1000).await.is_ok() {
+                                PopWakeupOutcome::ProcessingCompleted
+                            } else {
+                                PopWakeupOutcome::ProcessingFailed
+                            };
+                            if let Some(completion) = completion {
+                                completion.complete(outcome);
                             }
                         }
                         Err(e) => {
@@ -653,64 +966,206 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                             }
                         }
                     }
-                });
-                if let Err(error) = spawn_result {
-                    warn!(?error, "failed to spawn PopLongPollingService wake-up task");
-                    return false;
+                };
+
+                if let Some(execution) = execution {
+                    if let Err(error) = execution.try_execute(task) {
+                        self.shutdown_wake_failures.fetch_add(1, Ordering::AcqRel);
+                        warn!(?error, "canonical session rejected PopLongPollingService wake-up");
+                        return false;
+                    }
+                    return true;
                 }
-                true
+
+                #[cfg(test)]
+                {
+                    let task_group = self.task_group.lock().as_ref().cloned();
+                    let Some(task_group) = task_group else {
+                        self.shutdown_wake_failures.fetch_add(1, Ordering::AcqRel);
+                        warn!("PopLongPollingService test wake-up owner is not running");
+                        return false;
+                    };
+                    if let Err(error) = task_group.spawn("broker.long-polling.pop.test-wake-up", TaskKind::Worker, task)
+                    {
+                        self.shutdown_wake_failures.fetch_add(1, Ordering::AcqRel);
+                        warn!(?error, "failed to spawn PopLongPollingService test wake-up task");
+                        return false;
+                    }
+                    true
+                }
+                #[cfg(not(test))]
+                {
+                    self.shutdown_wake_failures.fetch_add(1, Ordering::AcqRel);
+                    warn!("PopLongPollingService wake-up has no canonical session owner");
+                    false
+                }
             }
         }
     }
 
-    fn poll_remoting_commands(&self, remoting_commands: &SkipSet<Arc<PopRequest>>) -> Option<Arc<PopRequest>> {
-        if remoting_commands.is_empty() {
+    fn acquire_route_for(&self, request: &PopRequest) -> Option<Option<RoutePermit>> {
+        let Some(handoff) = self.handoff.get() else {
+            return Some(None);
+        };
+        let target = request.legacy_handoff_target()?;
+        let route = handoff.acquire_route(target).ok()?;
+        if route.generation() != DeferredGeneration::Legacy {
             return None;
         }
+        Some(Some(route))
+    }
 
-        //maybe need to optimize
-        loop {
-            let pop_request = if self.notify_last {
-                remoting_commands.pop_back().map(|entry| entry.value().clone())
-            } else {
-                remoting_commands.pop_front().map(|entry| entry.value().clone())
-            }?;
-
-            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-            if !pop_request.get_channel().connection_ref().is_healthy() {
-                pop_request.release_resource_permit();
-                continue;
+    fn begin_wake(&self, request: Arc<PopRequest>, route: Option<RoutePermit>) -> Option<PopWakeupClaim> {
+        let Some(route) = route else {
+            return Some(PopWakeupClaim {
+                request,
+                wake: None,
+                execution: None,
+            });
+        };
+        let wait = request.take_legacy_wait()?;
+        match wait.begin_wake(route) {
+            Ok(wake) => {
+                let execution = request.take_legacy_session_execution();
+                #[cfg(not(test))]
+                execution.as_ref()?;
+                Some(PopWakeupClaim {
+                    request,
+                    wake: Some(wake),
+                    execution,
+                })
             }
-            return Some(pop_request);
+            Err(error) => {
+                let (wait, _route) = error.into_wait_and_route();
+                if let Err(wait) = request.restore_legacy_wait(wait) {
+                    drop(wait);
+                }
+                None
+            }
         }
     }
 
-    fn wake_up_expired_requests(&self, queue: &SkipSet<Arc<PopRequest>>) {
+    fn poll_remoting_commands(&self, key: &CheetahString) -> Option<(Arc<PopRequest>, Option<RoutePermit>)> {
+        self.claim_remoting_command(key, None)
+    }
+
+    fn claim_remoting_command(
+        &self,
+        key: &CheetahString,
+        expected: Option<&Arc<PopRequest>>,
+    ) -> Option<(Arc<PopRequest>, Option<RoutePermit>)> {
         loop {
-            let Some(first) = queue.pop_front() else {
+            let candidate = match expected {
+                Some(request) => Arc::clone(request),
+                None => {
+                    let remoting_commands = self.polling_map.get(key)?;
+                    if self.notify_last {
+                        remoting_commands.back().map(|entry| entry.value().clone())
+                    } else {
+                        remoting_commands.front().map(|entry| entry.value().clone())
+                    }?
+                }
+            };
+            let (pop_request, route) = if let Some(handoff) = self.handoff.get() {
+                let target = candidate.legacy_handoff_target()?;
+                let mut claimed = handoff
+                    .arrival_adapter()
+                    .claim_legacy_table(
+                        target,
+                        |claimed| {
+                            let Some(remoting_commands) = self.polling_map.get(key) else {
+                                return;
+                            };
+                            if remoting_commands.remove(&candidate).is_some() {
+                                claimed.push(Arc::clone(&candidate));
+                            }
+                        },
+                        |requests| {
+                            let queue = self.polling_map.entry(key.clone()).or_default();
+                            for request in requests {
+                                queue.insert(request);
+                            }
+                        },
+                    )
+                    .ok()?;
+                let (request, route) = claimed.pop()?;
+                (request, Some(route))
+            } else {
+                let remoting_commands = self.polling_map.get(key)?;
+                let request = if expected.is_some() {
+                    remoting_commands
+                        .remove(&candidate)
+                        .map(|entry| entry.value().clone())?
+                } else {
+                    if self.notify_last {
+                        remoting_commands.pop_back().map(|entry| entry.value().clone())
+                    } else {
+                        remoting_commands.pop_front().map(|entry| entry.value().clone())
+                    }?
+                };
+                (request, None)
+            };
+
+            release_published_polling_count(&self.total_polling_num);
+            if !pop_request.get_channel().connection_ref().is_healthy() {
+                pop_request.release_resource_permit();
+                pop_request.release_legacy_wait();
+                if expected.is_some() {
+                    return None;
+                }
+                continue;
+            }
+            return Some((pop_request, route));
+        }
+    }
+
+    fn wake_up_expired_requests(&self, key: &CheetahString) {
+        let _admission = self.polling_admission.lock();
+        if !self.running.load(Ordering::Acquire) {
+            return;
+        }
+        loop {
+            let Some(candidate) = self
+                .polling_map
+                .get(key)
+                .and_then(|queue| queue.front().map(|entry| entry.value().clone()))
+            else {
                 break;
             };
-            let first = first.value().clone();
-            if !first.is_timeout() {
-                queue.insert(first);
+            if !candidate.is_timeout() {
                 break;
             }
-            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-            self.wake_up(first);
+            let Some((first, route)) = self.claim_remoting_command(key, Some(&candidate)) else {
+                continue;
+            };
+            if let Some(claim) = self.begin_wake(Arc::clone(&first), route) {
+                self.wake_up_claim(claim, None);
+            } else if !first.legacy_session_closed() {
+                self.polling_map.entry(key.clone()).or_default().insert(first);
+                restore_published_polling_count(&self.total_polling_num);
+            } else {
+                first.release_resource_permit();
+                first.release_legacy_wait();
+            }
         }
     }
 
     fn drain_polling_queue(&self, queue: &SkipSet<Arc<PopRequest>>) {
         while let Some(first) = queue.pop_front() {
-            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-            self.wake_up(first.value().clone());
+            release_published_polling_count(&self.total_polling_num);
+            let request = first.value().clone();
+            request.release_resource_permit();
+            request.release_legacy_session_cleanup();
+            request.release_legacy_wait();
         }
     }
 
     fn discard_polling_queue(&self, queue: &SkipSet<Arc<PopRequest>>) {
         while let Some(first) = queue.pop_front() {
-            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            release_published_polling_count(&self.total_polling_num);
             first.value().release_resource_permit();
+            first.value().release_legacy_session_cleanup();
+            first.value().release_legacy_wait();
         }
     }
 
@@ -748,6 +1203,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -755,13 +1211,17 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_model::common::key_builder::KeyBuilder;
+    use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::common::time_utils::current_millis;
+    use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_store::MessageFilter;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::api::v1::Channel;
     use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::test_support::LegacySessionExecutionHarness;
+    use rocketmq_transport::test_support::TestChannelBuilder;
     use tokio::sync::Notify;
 
     use super::PopLongPollingRequestProcessor;
@@ -770,8 +1230,12 @@ mod tests {
     use super::PopWakeupOutcome;
     use crate::broker_runtime::BrokerRuntime;
     use crate::config::broker_config::BrokerConfig;
+    use crate::deferred_generation_handoff::DeferredGenerationHandoff;
+    use crate::deferred_generation_handoff::DeferredGenerationTarget;
+    use crate::deferred_generation_handoff::DeferredGenerationV2Publisher;
     use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
     use crate::long_polling::polling_header::PollingHeader;
+    use crate::long_polling::polling_result::PollingResult;
     use crate::long_polling::pop_request::PopRequest;
 
     struct RejectAllFilter;
@@ -824,6 +1288,15 @@ mod tests {
         release: Notify,
     }
 
+    struct ControlledResponseProcessor {
+        started: Notify,
+        release: Notify,
+    }
+
+    struct ImmediateResponseProcessor {
+        calls: AtomicUsize,
+    }
+
     impl PopLongPollingRequestProcessor for FailingProcessor {
         async fn process_request_when_wakeup(
             &self,
@@ -849,6 +1322,31 @@ mod tests {
             self.started.notify_one();
             self.release.notified().await;
             Ok(None)
+        }
+    }
+
+    impl PopLongPollingRequestProcessor for ControlledResponseProcessor {
+        async fn process_request_when_wakeup(
+            &self,
+            _channel: Channel,
+            _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
+            _request: RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(Some(RemotingCommand::create_remoting_command(0).mark_response_type()))
+        }
+    }
+
+    impl PopLongPollingRequestProcessor for ImmediateResponseProcessor {
+        async fn process_request_when_wakeup(
+            &self,
+            _channel: Channel,
+            _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
+            _request: RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Ok(Some(RemotingCommand::create_remoting_command(0).mark_response_type()))
         }
     }
 
@@ -898,6 +1396,482 @@ mod tests {
         test_pop_request().await.get_ctx().clone()
     }
 
+    async fn session_execution_test_context(
+        owner_id: u64,
+        request_code: RequestCode,
+        writer_barrier: Option<(Arc<Notify>, Arc<Notify>)>,
+    ) -> (
+        LegacySessionExecutionHarness,
+        rocketmq_runtime::TaskGroup,
+        rocketmq_transport::api::v1::ConnectionHandlerContext,
+        std::net::TcpStream,
+    ) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind legacy session listener");
+        let local_addr = listener.local_addr().expect("legacy session listener address");
+        let stream = std::net::TcpStream::connect(local_addr).expect("connect legacy session peer");
+        let (peer, _) = listener.accept().expect("accept legacy session peer");
+        peer.set_nonblocking(true).expect("set legacy session peer nonblocking");
+        stream
+            .set_nonblocking(true)
+            .expect("set legacy session stream nonblocking");
+        let stream = tokio::net::TcpStream::from_std(stream).expect("convert legacy session stream");
+        let connection = Connection::new(stream);
+        let mut builder = TestChannelBuilder::new(
+            connection,
+            crate::test_task_group(format!("legacy-session-channel-{owner_id}")),
+        )
+        .addresses(local_addr, local_addr);
+        if let Some((entered, release)) = writer_barrier {
+            builder = builder.write_preflight_barrier(entered, release);
+        }
+        let channel = builder.build().expect("build legacy session channel");
+        let session_group = crate::test_task_group(format!("legacy-session-execution-{owner_id}"));
+        let harness = LegacySessionExecutionHarness::new(owner_id, &session_group);
+        let context = harness.context(channel, 4 * 1024, request_code.to_i32());
+        (harness, session_group, context, peer)
+    }
+
+    fn session_polling_header(topic: &CheetahString, group: &CheetahString) -> PollingHeader {
+        let header = rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 60_000,
+            born_time: current_millis(),
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        };
+        PollingHeader::new_from_pop_message_request_header(&header)
+    }
+
+    fn register_session_waiter<RP>(
+        service: &PopLongPollingService<RP>,
+        context: rocketmq_transport::api::v1::ConnectionHandlerContext,
+        request_code: RequestCode,
+        topic: &CheetahString,
+        group: &CheetahString,
+    ) -> (CheetahString, Arc<PopRequest>)
+    where
+        RP: PopLongPollingRequestProcessor + Sync + 'static,
+    {
+        let mut command = RemotingCommand::create_remoting_command(request_code);
+        assert_eq!(
+            service.polling(context, &mut command, session_polling_header(topic, group), None, None,),
+            PollingResult::PollingSuc
+        );
+        let key = CheetahString::from_string(KeyBuilder::build_polling_key(topic, group, 0));
+        let request = service
+            .polling_map
+            .get(&key)
+            .and_then(|queue| queue.front().map(|entry| Arc::clone(entry.value())))
+            .expect("registered legacy session waiter");
+        (key, request)
+    }
+
+    fn assert_peer_received_no_bytes(peer: &mut std::net::TcpStream) {
+        let mut byte = [0_u8; 1];
+        let error = peer
+            .read(&mut byte)
+            .expect_err("cancelled legacy session wrote no response bytes");
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    async fn assert_session_close_after_claim_is_fail_closed(request_code: RequestCode, owner_id: u64) {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install session claim coordinator");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_string(format!("session-claim-topic-{owner_id}"));
+        let group = CheetahString::from_string(format!("session-claim-group-{owner_id}"));
+        let (session, session_group, context, mut peer) =
+            session_execution_test_context(owner_id, request_code, None).await;
+        let (key, registered) = register_session_waiter(&service, context, request_code, &topic, &group);
+        let (request, route) = service
+            .claim_remoting_command(&key, Some(&registered))
+            .expect("claim exact session-owned waiter");
+        assert_eq!(service.get_polling_num(&key), 0);
+
+        session.close();
+        let claim = service
+            .begin_wake(request, route)
+            .expect("closed session claim retains its affine execution enrollment");
+        assert!(!service.wake_up_claim(claim, None));
+        assert_eq!(processor.calls.load(Ordering::Acquire), 0);
+        assert_peer_received_no_bytes(&mut peer);
+        assert!(handoff.zero_report().is_zero());
+
+        let session_report = session_group
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(session_report.is_healthy(), "{}", session_report.to_json());
+        service.shutdown().await;
+    }
+
+    async fn assert_session_close_before_first_handler_poll_is_fail_closed(request_code: RequestCode, owner_id: u64) {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install first-poll coordinator");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_string(format!("session-first-poll-topic-{owner_id}"));
+        let group = CheetahString::from_string(format!("session-first-poll-group-{owner_id}"));
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let (session, session_group, context, mut peer) =
+            session_execution_test_context(owner_id, request_code, None).await;
+        session.set_first_poll_gate(Arc::clone(&entered), Arc::clone(&release));
+        register_session_waiter(&service, context, request_code, &topic, &group);
+
+        assert!(service.notify_message_arriving(&topic, 0, &group, None, 0, None, None));
+        tokio::time::timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .expect("session executor accepted the legacy wake before handler poll");
+        session.close();
+        release.notify_one();
+        let session_report = session_group
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(session_report.is_healthy(), "{}", session_report.to_json());
+        assert_eq!(processor.calls.load(Ordering::Acquire), 0);
+        assert_peer_received_no_bytes(&mut peer);
+        assert!(handoff.zero_report().is_zero());
+        service.shutdown().await;
+    }
+
+    async fn assert_session_close_at_writer_preflight_writes_nothing(request_code: RequestCode, owner_id: u64) {
+        let processor = Arc::new(ImmediateResponseProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install writer coordinator");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_string(format!("session-writer-topic-{owner_id}"));
+        let group = CheetahString::from_string(format!("session-writer-group-{owner_id}"));
+        let writer_entered = Arc::new(Notify::new());
+        let writer_release = Arc::new(Notify::new());
+        let (session, session_group, context, mut peer) = session_execution_test_context(
+            owner_id,
+            request_code,
+            Some((Arc::clone(&writer_entered), Arc::clone(&writer_release))),
+        )
+        .await;
+        register_session_waiter(&service, context, request_code, &topic, &group);
+
+        assert!(service.notify_message_arriving(&topic, 0, &group, None, 0, None, None));
+        tokio::time::timeout(Duration::from_secs(1), writer_entered.notified())
+            .await
+            .expect("legacy response reached the canonical writer preflight");
+        assert_eq!(processor.calls.load(Ordering::Acquire), 1);
+        session.close();
+        let session_report = session_group
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(session_report.is_healthy(), "{}", session_report.to_json());
+        writer_release.notify_one();
+        assert_peer_received_no_bytes(&mut peer);
+        assert!(handoff.zero_report().is_zero());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn pop_session_close_after_claim_runs_no_handler_or_writer() {
+        assert_session_close_after_claim_is_fail_closed(RequestCode::PopMessage, 8_301).await;
+    }
+
+    #[tokio::test]
+    async fn notification_session_close_after_claim_runs_no_handler_or_writer() {
+        assert_session_close_after_claim_is_fail_closed(RequestCode::Notification, 8_302).await;
+    }
+
+    #[tokio::test]
+    async fn pop_session_close_before_first_handler_poll_runs_no_handler_or_writer() {
+        assert_session_close_before_first_handler_poll_is_fail_closed(RequestCode::PopMessage, 8_303).await;
+    }
+
+    #[tokio::test]
+    async fn notification_session_close_before_first_handler_poll_runs_no_handler_or_writer() {
+        assert_session_close_before_first_handler_poll_is_fail_closed(RequestCode::Notification, 8_304).await;
+    }
+
+    #[tokio::test]
+    async fn pop_session_close_at_writer_preflight_writes_no_bytes() {
+        assert_session_close_at_writer_preflight_writes_nothing(RequestCode::PopMessage, 8_305).await;
+    }
+
+    #[tokio::test]
+    async fn notification_session_close_at_writer_preflight_writes_no_bytes() {
+        assert_session_close_at_writer_preflight_writes_nothing(RequestCode::Notification, 8_306).await;
+    }
+
+    async fn registration_and_transition_share_gate_before_pop_table(request_code: RequestCode) {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install the Broker coordinator");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("gate-order-topic");
+        let group = CheetahString::from_static_str("gate-order-group");
+        let header = rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 60_000,
+            born_time: current_millis(),
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        };
+        let execution_group = crate::test_task_group("gate-order-pop-session");
+        let session =
+            LegacySessionExecutionHarness::new(8_150 + u64::from(request_code as i32 as u32), &execution_group);
+        let base_context = test_context().await;
+        let context = session.context(base_context.channel().clone(), 0, request_code as i32);
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let checkpoint_entered = Arc::clone(&entered);
+        let checkpoint_release = Arc::clone(&release);
+        session.set_insert_checkpoint(move |state_locked| {
+            assert!(state_locked);
+            checkpoint_entered.wait();
+            checkpoint_release.wait();
+        });
+
+        let registering_service = Arc::clone(&service);
+        let registering = std::thread::spawn(move || {
+            let mut command = RemotingCommand::create_remoting_command(request_code);
+            registering_service.polling(
+                context,
+                &mut command,
+                PollingHeader::new_from_pop_message_request_header(&header),
+                None,
+                None,
+            )
+        });
+        entered.wait();
+
+        let cutover_handoff = Arc::clone(&handoff);
+        let (cutover_started_tx, cutover_started_rx) = std::sync::mpsc::channel();
+        let cutover = std::thread::spawn(move || {
+            cutover_started_tx.send(()).expect("signal cutover attempt");
+            let mut transaction = cutover_handoff.cutover_transaction().expect("cutover transaction");
+            transaction.seal_legacy_acceptance().expect("seal legacy acceptance");
+            transaction
+                .publish_v2_aggregate(DeferredGenerationV2Publisher::nonblocking_atomic(|| Ok::<_, ()>(())))
+                .expect("publish aggregate");
+            transaction.publish_default_new().expect("publish New default");
+        });
+        cutover_started_rx.recv().expect("cutover started");
+        assert!(!cutover.is_finished(), "cutover must wait behind registration's gate");
+        release.wait();
+        assert_eq!(
+            registering.join().expect("registration thread"),
+            PollingResult::PollingSuc
+        );
+        cutover.join().expect("cutover thread");
+
+        let target = match request_code {
+            RequestCode::Notification => DeferredGenerationTarget::notification(topic.clone(), group.clone(), 0),
+            _ => DeferredGenerationTarget::pop(topic.clone(), group.clone(), 0),
+        };
+        let key = CheetahString::from_string(KeyBuilder::build_polling_key(&topic, &group, 0));
+        assert!(matches!(
+            handoff.try_transition_target_to_new(target.clone(), |_| {
+                service.polling_map.get(&key).is_some_and(|queue| !queue.is_empty())
+            }),
+            Err(crate::deferred_generation_handoff::DeferredGenerationTargetTransitionError::Draining(_))
+                | Err(crate::deferred_generation_handoff::DeferredGenerationTargetTransitionError::LegacyTableOccupied)
+        ));
+        session.close();
+        let replay = handoff
+            .try_transition_target_to_new(target, |_| {
+                service.polling_map.get(&key).is_some_and(|queue| !queue.is_empty())
+            })
+            .expect("closed session leaves target drained");
+        replay.complete_after_replay_accepted();
+        assert!(handoff.zero_report().is_zero());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn pop_registration_and_transition_use_gate_then_table_order() {
+        registration_and_transition_share_gate_before_pop_table(RequestCode::PopMessage).await;
+    }
+
+    #[tokio::test]
+    async fn notification_registration_and_transition_use_gate_then_table_order() {
+        registration_and_transition_share_gate_before_pop_table(RequestCode::Notification).await;
+    }
+
+    #[tokio::test]
+    async fn session_close_removes_only_its_exact_pop_waiter() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install the Broker coordinator");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("cleanup-pop-topic");
+        let group = CheetahString::from_static_str("cleanup-pop-group");
+        let header = rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 60_000,
+            born_time: current_millis(),
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        };
+        let (first_session, _first_group, first_context, _first_peer) =
+            session_execution_test_context(8_101, RequestCode::PopMessage, None).await;
+        let (second_session, _second_group, second_context, _second_peer) =
+            session_execution_test_context(8_102, RequestCode::PopMessage, None).await;
+        for context in [first_context, second_context] {
+            let mut command = RemotingCommand::create_remoting_command(RequestCode::PopMessage);
+            assert_eq!(
+                service.polling(
+                    context,
+                    &mut command,
+                    PollingHeader::new_from_pop_message_request_header(&header),
+                    None,
+                    None,
+                ),
+                crate::long_polling::polling_result::PollingResult::PollingSuc
+            );
+        }
+        let key = KeyBuilder::build_polling_key(&topic, &group, 0);
+        assert_eq!(service.get_polling_num(&key), 2);
+        assert_eq!(handoff.snapshot().occupancy, 2);
+
+        first_session.close();
+        assert_eq!(service.get_polling_num(&key), 1);
+        assert_eq!(handoff.snapshot().occupancy, 1);
+
+        second_session.close();
+        assert_eq!(service.get_polling_num(&key), 0);
+        assert!(handoff.zero_report().is_zero());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn session_close_cannot_observe_a_half_published_pop_waiter() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install the Broker coordinator");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("atomic-cleanup-pop-topic");
+        let group = CheetahString::from_static_str("atomic-cleanup-pop-group");
+        let header = rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 60_000,
+            born_time: current_millis(),
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        };
+        let (session, _session_group, context, _peer) =
+            session_execution_test_context(8_103, RequestCode::PopMessage, None).await;
+        let session = Arc::new(session);
+        let checkpoint = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let insert_checkpoint = Arc::clone(&checkpoint);
+        let insert_release = Arc::clone(&release);
+        session.set_insert_checkpoint(move |state_locked| {
+            assert!(state_locked, "cleanup enrollment must hold its publication gate");
+            insert_checkpoint.wait();
+            insert_release.wait();
+        });
+
+        let polling_service = Arc::clone(&service);
+        let polling = std::thread::spawn(move || {
+            let mut command = RemotingCommand::create_remoting_command(RequestCode::PopMessage);
+            let result = polling_service.polling(
+                context,
+                &mut command,
+                PollingHeader::new_from_pop_message_request_header(&header),
+                None,
+                None,
+            );
+            (result, command.suspended())
+        });
+        checkpoint.wait();
+
+        let (close_started_tx, close_started_rx) = std::sync::mpsc::channel();
+        let (close_done_tx, close_done_rx) = std::sync::mpsc::channel();
+        let closing_session = Arc::clone(&session);
+        let closing = std::thread::spawn(move || {
+            close_started_tx.send(()).expect("signal POP close attempt");
+            closing_session.close();
+            close_done_tx.send(()).expect("signal POP close completion");
+        });
+        close_started_rx.recv().expect("POP close thread started");
+        assert!(
+            close_done_rx.try_recv().is_err(),
+            "close cannot pass an in-progress POP publication"
+        );
+        release.wait();
+
+        let (result, suspended) = polling.join().expect("POP polling thread");
+        closing.join().expect("POP close thread");
+        assert_eq!(result, crate::long_polling::polling_result::PollingResult::PollingSuc);
+        assert!(suspended, "accepted POP waiter must publish suspended=true");
+        let key = KeyBuilder::build_polling_key(&topic, &group, 0);
+        assert_eq!(service.get_polling_num(&key), 0);
+        assert_eq!(service.total_polling_num.load(Ordering::Acquire), 0);
+        let resources = service.legacy_resource_snapshot();
+        assert_eq!(resources.table_entries, 0);
+        assert_eq!(resources.tracked_waiters, 0);
+        assert!(handoff.zero_report().is_zero());
+        service.shutdown().await;
+    }
+
     #[tokio::test]
     async fn observed_wakeup_reports_processing_failure_exactly_once() {
         let processor = Arc::new(FailingProcessor {
@@ -917,6 +1891,35 @@ mod tests {
             PopWakeupOutcome::ProcessingFailed
         );
         assert_eq!(processor.calls.load(Ordering::Acquire), 1);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn observed_wakeup_reports_failure_when_canonical_write_fails() {
+        let processor = Arc::new(ControlledResponseProcessor {
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+
+        let request = test_pop_request().await;
+        let connection = request.get_channel().connection_ref().clone();
+        let completion = service.wake_up_with_completion(request);
+        tokio::time::timeout(Duration::from_secs(1), processor.started.notified())
+            .await
+            .expect("handler must start");
+        connection.close();
+        processor.release.notify_one();
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), completion)
+                .await
+                .expect("completion must be bounded")
+                .expect("completion sender must stay owned"),
+            PopWakeupOutcome::ProcessingFailed
+        );
 
         service.shutdown().await;
     }
@@ -971,6 +1974,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn installed_handoff_keeps_filter_miss_registered_until_terminal() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install the Broker coordinator before acceptance");
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("handoff-filter-topic");
+        let group = CheetahString::from_static_str("handoff-filter-group");
+        let header = rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 60_000,
+            born_time: current_millis(),
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        };
+        let mut command = RemotingCommand::create_remoting_command(RequestCode::PopMessage);
+        assert_eq!(
+            service.polling(
+                test_context().await,
+                &mut command,
+                PollingHeader::new_from_pop_message_request_header(&header),
+                Some(rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData::default()),
+                Some(Arc::new(RejectAllFilter)),
+            ),
+            crate::long_polling::polling_result::PollingResult::PollingSuc
+        );
+        assert_eq!(handoff.snapshot().occupancy, 1);
+
+        assert!(!service.notify_message_arriving(&topic, 0, &group, Some(7), 0, None, None));
+        let snapshot = handoff.snapshot();
+        assert_eq!(snapshot.occupancy, 1);
+        assert_eq!(snapshot.candidates, 0);
+        assert_eq!(snapshot.active_wakes, 0);
+
+        service.shutdown().await;
+        assert!(handoff.zero_report().is_zero());
+    }
+
+    #[tokio::test]
+    async fn wake_continuation_is_owned_until_handler_terminal() {
+        let processor = Arc::new(ControlledProcessor {
+            calls: AtomicUsize::new(0),
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install the Broker coordinator");
+        PopLongPollingService::start(&service).await;
+        let target = DeferredGenerationTarget::pop(
+            CheetahString::from_static_str("continuation-topic"),
+            CheetahString::from_static_str("continuation-group"),
+            0,
+        );
+        let request = test_pop_request().await;
+        handoff
+            .arrival_adapter()
+            .install_legacy_wait(
+                target.clone(),
+                |lease| {
+                    request
+                        .install_legacy_handoff(&target, lease)
+                        .map_err(|lease| ((), lease))
+                },
+                || request.release_legacy_wait(),
+            )
+            .expect("register exact request node");
+
+        assert!(service.wake_up(Arc::clone(&request)));
+        tokio::time::timeout(Duration::from_secs(1), processor.started.notified())
+            .await
+            .expect("handler must start");
+        let active = handoff.snapshot();
+        assert_eq!(active.occupancy, 0);
+        assert_eq!(active.active_wakes, 1);
+        assert_eq!(active.continuations, 1);
+
+        let deadline = ShutdownDeadline::after(Duration::from_secs(1));
+        let producer_report = service
+            .stop_producer_until(deadline)
+            .await
+            .expect("started service owns its producer group");
+        assert!(producer_report.is_healthy(), "{}", producer_report.to_json());
+        let mut execution_drain = Box::pin(service.drain_executions_until(deadline));
+        tokio::select! {
+            biased;
+            _ = &mut execution_drain => panic!("accepted POP handler completed before its barrier was released"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(service.legacy_resource_snapshot().active_executions, 1);
+
+        processor.release.notify_one();
+        let execution_report = execution_drain.await.expect("started service owns its execution group");
+        assert!(execution_report.is_healthy(), "{}", execution_report.to_json());
+        assert!(handoff.zero_report().is_zero());
+        assert!(service.finalize_shutdown().await.terminal.is_zero());
+    }
+
+    #[tokio::test]
+    async fn spawn_failure_releases_legacy_wake_fail_closed() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install the Broker coordinator");
+        let stopped_group = crate::test_task_group("pop-legacy-spawn-failure");
+        stopped_group.cancel();
+        *service.task_group.lock() = Some(stopped_group);
+        let target = DeferredGenerationTarget::pop(
+            CheetahString::from_static_str("spawn-failure-topic"),
+            CheetahString::from_static_str("spawn-failure-group"),
+            0,
+        );
+        let request = test_pop_request().await;
+        handoff
+            .arrival_adapter()
+            .install_legacy_wait(
+                target.clone(),
+                |lease| {
+                    request
+                        .install_legacy_handoff(&target, lease)
+                        .map_err(|lease| ((), lease))
+                },
+                || request.release_legacy_wait(),
+            )
+            .expect("register exact request node");
+
+        assert!(!service.wake_up(request));
+        assert_eq!(processor.calls.load(Ordering::Acquire), 0);
+        assert!(handoff.zero_report().is_zero());
+    }
+
+    #[tokio::test]
     async fn notification_v1_wake_compatibility_filter_requeues_a_miss_then_wakes_on_a_match() {
         let processor = Arc::new(FailingProcessor {
             calls: AtomicUsize::new(0),
@@ -1017,6 +2170,67 @@ mod tests {
         .expect("matching notification should wake without sleeping");
 
         service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_accepted_notification_execution_after_handler_terminal() {
+        let processor = Arc::new(ControlledProcessor {
+            calls: AtomicUsize::new(0),
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("notification-shutdown-barrier-topic");
+        let group = CheetahString::from_static_str("notification-shutdown-barrier-group");
+        let header = rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            born_time: i64::try_from(current_millis()).expect("test clock fits i64"),
+            order: false,
+            attempt_id: None,
+            exp_type: None,
+            exp: None,
+            is_lite_consumer: false,
+            client_id: None,
+            poll_time: 60_000,
+            topic_request_header: None,
+        };
+        let mut command = RemotingCommand::create_remoting_command(RequestCode::Notification);
+        assert_eq!(
+            service.polling(
+                test_context().await,
+                &mut command,
+                PollingHeader::new_from_notification_request_header(&header),
+                None,
+                None,
+            ),
+            crate::long_polling::polling_result::PollingResult::PollingSuc
+        );
+        assert!(service.notify_message_arriving(&topic, 0, &group, None, 0, None, None));
+        tokio::time::timeout(Duration::from_secs(1), processor.started.notified())
+            .await
+            .expect("accepted Notification handler must start");
+
+        let deadline = ShutdownDeadline::after(Duration::from_secs(1));
+        let producer_report = service
+            .stop_producer_until(deadline)
+            .await
+            .expect("started service owns its producer group");
+        assert!(producer_report.is_healthy(), "{}", producer_report.to_json());
+        let mut execution_drain = Box::pin(service.drain_executions_until(deadline));
+        tokio::select! {
+            biased;
+            _ = &mut execution_drain => panic!("Notification execution drained before the accepted handler barrier"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(service.legacy_resource_snapshot().active_executions, 1);
+
+        processor.release.notify_one();
+        let execution_report = execution_drain.await.expect("started service owns its execution group");
+        assert!(execution_report.is_healthy(), "{}", execution_report.to_json());
+        assert!(service.finalize_shutdown().await.terminal.is_zero());
     }
 
     #[tokio::test]

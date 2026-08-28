@@ -117,6 +117,7 @@ pub struct RemotingRequest {
     control: RequestControlView,
     extensions: LazyExtensions,
     inline_response: InlineResponseSlot,
+    legacy_session_execution: Option<crate::dispatch::LegacySessionExecutionSeed>,
     command: RemotingCommand,
 }
 
@@ -233,6 +234,10 @@ impl RemotingRequest {
     )]
     pub(crate) fn legacy_command_mut(&mut self) -> &mut RemotingCommand {
         &mut self.command
+    }
+
+    pub(crate) fn take_legacy_session_execution(&mut self) -> Option<crate::dispatch::LegacySessionExecutionSeed> {
+        self.legacy_session_execution.take()
     }
 
     /// Returns the request-local extension of type `T`, when one was inserted.

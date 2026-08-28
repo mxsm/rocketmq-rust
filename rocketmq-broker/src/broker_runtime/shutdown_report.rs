@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::deferred::BrokerDeferredRegistryShutdownReport;
 use super::*;
+use crate::long_polling::long_polling_service::LegacyServiceShutdownReport;
 pub(super) struct BrokerRemotingServerReportReceiver {
     pub(super) name: &'static str,
     pub(super) receiver: oneshot::Receiver<Option<ShutdownReport>>,
@@ -60,6 +62,11 @@ pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) observability: BrokerShutdownComponentReport,
     pub(crate) scheduled_tasks: BrokerShutdownComponentReport,
     pub(crate) message_store: BrokerShutdownComponentReport,
+    pub(crate) deferred_services: BrokerShutdownComponentReport,
+    pub(crate) deferred_producer_tasks: Option<ShutdownReport>,
+    pub(crate) deferred_registry_shutdown: Option<BrokerDeferredRegistryShutdownReport>,
+    pub(crate) deferred_resources: Option<BrokerDeferredResourceSnapshot>,
+    pub(crate) legacy_service_shutdown: Vec<LegacyServiceShutdownReport>,
     pub(crate) pull_request_hold: BrokerShutdownComponentReport,
     pub(crate) pop_services: BrokerShutdownComponentReport,
     pub(crate) transaction_services: BrokerShutdownComponentReport,
@@ -82,7 +89,7 @@ impl BrokerShutdownProgress {
     pub(super) fn new() -> Self {
         Self {
             unfinished: Arc::new(StdMutex::new(
-                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..18].to_vec(),
+                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..19].to_vec(),
             )),
             message_store_report: Arc::new(StdMutex::new(None)),
         }
@@ -209,6 +216,28 @@ impl BrokerShutdownComponentReport {
         }
     }
 
+    pub(crate) fn from_legacy_reports(
+        name: &'static str,
+        reports: &[LegacyServiceShutdownReport],
+        elapsed: Duration,
+    ) -> Self {
+        if reports.is_empty() {
+            return Self::skipped(name);
+        }
+        let detail = format!("{reports:?}");
+        if reports.iter().any(LegacyServiceShutdownReport::has_timed_out) {
+            return Self {
+                detail: Some(detail),
+                ..Self::timed_out(name, elapsed)
+            };
+        }
+        if reports.iter().all(LegacyServiceShutdownReport::is_healthy) {
+            Self::completed_with_detail(name, elapsed, detail)
+        } else {
+            Self::unhealthy(name, elapsed, detail)
+        }
+    }
+
     pub(crate) fn from_telemetry_shutdown_report(
         report: &rocketmq_observability::TelemetryShutdownReport,
         elapsed: Duration,
@@ -263,7 +292,7 @@ pub(super) fn record_message_store_shutdown_outcome(
 }
 
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 19] = [
+    const COMPONENT_NAMES: [&'static str; 20] = [
         "remoting",
         "request_processor",
         "topic_config",
@@ -274,6 +303,7 @@ impl BrokerBasicServiceShutdownReport {
         "observability",
         "scheduled_tasks",
         "message_store",
+        "deferred_services",
         "pull_request_hold",
         "pop_services",
         "transaction_services",
@@ -296,6 +326,10 @@ impl BrokerBasicServiceShutdownReport {
                 .topic_config
                 .as_ref()
                 .is_none_or(TopicConfigCoordinatorShutdownReport::is_healthy)
+            && self
+                .legacy_service_shutdown
+                .iter()
+                .all(LegacyServiceShutdownReport::is_healthy)
             && self.component_reports().into_iter().all(|component| component.healthy)
     }
 
@@ -373,6 +407,7 @@ impl BrokerBasicServiceShutdownReport {
             &self.observability,
             &self.scheduled_tasks,
             &self.message_store,
+            &self.deferred_services,
             &self.pull_request_hold,
             &self.pop_services,
             &self.transaction_services,
@@ -388,4 +423,72 @@ impl BrokerBasicServiceShutdownReport {
 
 pub(super) fn shutdown_report_has_timed_out(report: &ShutdownReport) -> bool {
     report.timed_out > 0 || report.children.iter().any(shutdown_report_has_timed_out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::long_polling::long_polling_service::LegacyServiceResourceSnapshot;
+    use crate::long_polling::long_polling_service::LegacyServiceShutdownReport;
+
+    #[test]
+    fn nonzero_legacy_terminal_resources_make_component_unhealthy() {
+        let report = LegacyServiceShutdownReport {
+            name: "pop_long_polling",
+            producer: None,
+            executions: None,
+            observed_after_session_drain: LegacyServiceResourceSnapshot {
+                active_executions: 1,
+                ..Default::default()
+            },
+            resources: LegacyServiceResourceSnapshot::default(),
+        };
+
+        let component = BrokerShutdownComponentReport::from_legacy_reports("pop_services", &[report], Duration::ZERO);
+
+        assert!(component.present);
+        assert!(!component.healthy);
+        assert!(!component.timed_out);
+        assert!(component
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("active_executions: 1")));
+    }
+
+    #[test]
+    fn legacy_execution_timeout_propagates_to_component_timeout() {
+        let producer = ShutdownReport::new("legacy-producer", Duration::ZERO);
+        let mut executions = ShutdownReport::new("legacy-executions", Duration::ZERO);
+        executions.timed_out = 1;
+        let report = LegacyServiceShutdownReport {
+            name: "pop_lite_long_polling",
+            producer: Some(producer),
+            executions: Some(executions),
+            observed_after_session_drain: LegacyServiceResourceSnapshot::default(),
+            resources: LegacyServiceResourceSnapshot::default(),
+        };
+
+        let component = BrokerShutdownComponentReport::from_legacy_reports("pop_services", &[report], Duration::ZERO);
+
+        assert!(component.present);
+        assert!(!component.healthy);
+        assert!(component.timed_out);
+    }
+
+    #[test]
+    fn basic_report_cannot_mask_unhealthy_legacy_resources() {
+        let mut report = BrokerBasicServiceShutdownReport::default();
+        report.legacy_service_shutdown.push(LegacyServiceShutdownReport {
+            name: "pull_request_hold",
+            producer: Some(ShutdownReport::new("pull-producer", Duration::ZERO)),
+            executions: Some(ShutdownReport::new("pull-executions", Duration::ZERO)),
+            observed_after_session_drain: LegacyServiceResourceSnapshot {
+                table_entries: 1,
+                ..Default::default()
+            },
+            resources: LegacyServiceResourceSnapshot::default(),
+        });
+
+        assert!(!report.is_healthy());
+    }
 }

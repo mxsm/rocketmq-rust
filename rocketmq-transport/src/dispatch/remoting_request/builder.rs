@@ -21,6 +21,7 @@ use super::IngressRequestView;
 use super::RemotingRequest;
 use crate::dispatch::DeferredResponseSeed;
 use crate::dispatch::InlineResponseSlot;
+use crate::dispatch::LegacySessionExecutionSeed;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
@@ -135,6 +136,7 @@ pub(crate) struct RemotingRequestBuilder {
     session: SessionView,
     control: RequestControlView,
     inline_response: InlineResponseSlot,
+    legacy_session_execution: Option<LegacySessionExecutionSeed>,
     command: RemotingCommand,
 }
 
@@ -162,12 +164,18 @@ impl RemotingRequestBuilder {
             session: lifecycle.session,
             control,
             inline_response: InlineResponseSlot::disabled(),
+            legacy_session_execution: None,
             command,
         }
     }
 
     pub(crate) fn with_deferred_response_seed(mut self, seed: DeferredResponseSeed) -> Self {
         self.inline_response = InlineResponseSlot::with_deferred_seed(seed);
+        self
+    }
+
+    pub(crate) fn with_legacy_session_execution(mut self, execution: LegacySessionExecutionSeed) -> Self {
+        self.legacy_session_execution = Some(execution);
         self
     }
 
@@ -254,6 +262,7 @@ impl RemotingRequestBuilder {
             control: self.control,
             extensions: Default::default(),
             inline_response: self.inline_response,
+            legacy_session_execution: self.legacy_session_execution,
             command: self.command,
         })
     }

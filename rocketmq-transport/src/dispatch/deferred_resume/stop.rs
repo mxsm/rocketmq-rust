@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use tokio::time::Instant;
 
+use crate::admission::AdmissionError;
+
 use super::ResumeResult;
 use crate::dispatch::deferred_registry::ClaimExecutionParts;
 use crate::dispatch::deferred_registry::ClaimMarker;
@@ -229,6 +231,49 @@ where
     }
     drop(resume);
     result
+}
+
+pub(super) fn finish_parts_admission<R>(parts: ClaimExecutionParts<R>, source: AdmissionError) -> ResumeResult
+where
+    R: Send + 'static,
+{
+    let ClaimExecutionParts {
+        id,
+        request_id,
+        resume,
+        responder,
+        mut permit,
+        marker,
+        ..
+    } = parts;
+    let terminal = responder.cancel_with_system_reason(DeferredSystemCancellationReason::PROCESSOR_UNAVAILABLE);
+    drop(marker);
+    if let Some(permit) = permit.take() {
+        permit.release();
+    }
+    drop(resume);
+    match terminal {
+        Ok(()) => Err(DeferredResumeError::new_with_reason(
+            DeferredResumeErrorKind::Admission,
+            id,
+            request_id,
+            None,
+            Some(DeferredTerminalReason::ProcessorUnavailable),
+            None,
+            Some(Box::new(source)),
+        )),
+        Err(terminal) => Err(DeferredResumeError::new_with_reason(
+            terminal
+                .prior_terminal_reason()
+                .map_or(DeferredResumeErrorKind::Admission, resume_error_kind_for_reason),
+            id,
+            request_id,
+            terminal.prior_terminal_state(),
+            terminal.prior_terminal_reason(),
+            terminal.write_progress(),
+            Some(Box::new(terminal)),
+        )),
+    }
 }
 
 pub(super) fn finish_claimed_stop<R>(

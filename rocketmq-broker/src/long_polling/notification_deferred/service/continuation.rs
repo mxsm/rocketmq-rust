@@ -23,6 +23,7 @@ use cheetah_string::CheetahString;
 use super::NotificationContinuationError;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
 use crate::long_polling::notification_deferred::index::NotificationScanCursor;
+use crate::long_polling::pending_arrival_latch::PendingArrivalValue;
 
 pub(super) struct OwnedNotificationArrival {
     topic: CheetahString,
@@ -124,6 +125,61 @@ impl OwnedNotificationArrival {
             self.filter_bit_map.as_deref(),
             self.properties.as_ref(),
         )
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct NotificationPendingArrivalKey {
+    sequence: u64,
+    topic: CheetahString,
+    queue_id: i32,
+}
+
+impl NotificationPendingArrivalKey {
+    pub(crate) fn new(sequence: u64, topic: CheetahString, queue_id: i32) -> Self {
+        Self {
+            sequence,
+            topic,
+            queue_id,
+        }
+    }
+}
+
+pub(crate) struct NotificationPendingArrival {
+    pub(super) owned: OwnedNotificationArrival,
+    pub(super) cursor: NotificationScanCursor,
+    pub(super) remaining_conflicts: usize,
+    max_conflicts: usize,
+    retained_bytes: usize,
+}
+
+impl NotificationPendingArrival {
+    pub(super) fn new(
+        arrival: NotificationArrivalView<'_>,
+        cursor: NotificationScanCursor,
+        remaining_conflicts: usize,
+        max_conflicts: usize,
+    ) -> Result<Self, NotificationContinuationError> {
+        let retained_bytes = OwnedNotificationArrival::retained_bytes(arrival, &cursor)?;
+        let owned = OwnedNotificationArrival::try_from_view(arrival)?;
+        Ok(Self {
+            owned,
+            cursor,
+            remaining_conflicts,
+            max_conflicts,
+            retained_bytes,
+        })
+    }
+}
+
+impl PendingArrivalValue for NotificationPendingArrival {
+    fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+
+    fn coalesce_refresh(&mut self) {
+        self.cursor.restart_for_refresh();
+        self.remaining_conflicts = self.max_conflicts;
     }
 }
 

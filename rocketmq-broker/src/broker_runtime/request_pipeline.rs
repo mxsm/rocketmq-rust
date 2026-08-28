@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::deferred_producer::BrokerDeferredProducer;
 use super::*;
 
 mod startup;
 
 pub(super) struct BrokerRequestPipeline {
+    admission_controller: Option<Arc<rocketmq_transport::api::v1::AdmissionController>>,
     pub(super) proxy_request_processor: Option<DefaultServerProcessor>,
     pub(super) authorized_dispatcher:
         Option<Arc<rocketmq_transport::api::v1::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
@@ -34,6 +36,7 @@ impl BrokerRequestPipeline {
         consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     ) -> Self {
         Self {
+            admission_controller: None,
             proxy_request_processor: None,
             authorized_dispatcher: None,
             auth_runtime: None,
@@ -44,6 +47,27 @@ impl BrokerRequestPipeline {
             #[cfg(test)]
             pull_message_processor_for_test: None,
         }
+    }
+
+    pub(super) fn install_admission_controller(
+        &mut self,
+        admission_controller: Arc<rocketmq_transport::api::v1::AdmissionController>,
+    ) -> Result<(), BrokerStartupError> {
+        match self.admission_controller.as_ref() {
+            Some(installed) if Arc::ptr_eq(installed, &admission_controller) => Ok(()),
+            Some(_) => Err(BrokerStartupError::Initialization {
+                component: "authorized_dispatcher",
+                detail: "Broker admission boundary was initialized with a different owner".to_owned(),
+            }),
+            None => {
+                self.admission_controller = Some(admission_controller);
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn admission_controller(&self) -> Option<Arc<rocketmq_transport::api::v1::AdmissionController>> {
+        self.admission_controller.as_ref().cloned()
     }
 }
 
@@ -69,6 +93,7 @@ impl BrokerRuntime {
         &mut self,
     ) -> Result<(DefaultServerProcessor, FasterServerProcessor), BrokerStartupError> {
         self.composition.request_pipeline.processor_wiring_complete = false;
+        self.initialize_deferred_lifecycle()?;
         let transactional_message_service = self
             .composition
             .state
@@ -143,6 +168,26 @@ impl BrokerRuntime {
             pull_message_result_handler,
             Arc::clone(&pull_message_context),
         ));
+        let deferred =
+            self.composition
+                .data_plane
+                .deferred
+                .as_ref()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "deferred_services",
+                    detail: "Broker deferred lifecycle must be initialized before request processors".to_owned(),
+                })?;
+        let pop_deferred = Arc::clone(&deferred.pop);
+        let pull_deferred = Arc::clone(&deferred.pull);
+        let notification_deferred = Arc::clone(&deferred.notification);
+        let pop_lite_deferred = Arc::clone(&deferred.pop_lite);
+        let deferred_handoff =
+            self.composition
+                .deferred_generation_handoff()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "deferred_generation_handoff",
+                    detail: "Broker deferred handoff must be initialized before request processors".to_owned(),
+                })?;
         let session_client_lookup: Arc<dyn crate::long_polling::pull_deferred::PullSessionClientLookup> =
             Arc::new(self.composition.state.consumer_manager().session_registry());
         pull_message_processor
@@ -150,6 +195,12 @@ impl BrokerRuntime {
             .map_err(|_| BrokerStartupError::Initialization {
                 component: "pull_session_client_lookup",
                 detail: "Pull session client lookup was already installed".to_owned(),
+            })?;
+        pull_message_processor
+            .install_pull_deferred_service(Arc::clone(&pull_deferred))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pull_deferred_service",
+                detail: "Pull deferred service was already installed".to_owned(),
             })?;
         #[cfg(test)]
         {
@@ -162,6 +213,12 @@ impl BrokerRuntime {
         if !pull_message_context.install_pull_request_hold_service(Arc::clone(&pull_request_hold_service)) {
             warn!("Pull request hold service is already installed in the pull processor context");
         }
+        pull_message_processor
+            .install_deferred_generation_handoff(Arc::clone(&deferred_handoff))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pull_deferred_generation_handoff",
+                detail: "Pull legacy deferred service rejected the Broker generation handoff".to_owned(),
+            })?;
         self.composition.state.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
         let pop_message_processor = self.composition.state.build_pop_message_processor().map_err(|error| {
@@ -170,6 +227,18 @@ impl BrokerRuntime {
                 detail: error.to_string(),
             }
         })?;
+        pop_message_processor
+            .install_pop_deferred_service(Arc::clone(&pop_deferred))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pop_deferred_service",
+                detail: "POP deferred service was already installed".to_owned(),
+            })?;
+        pop_message_processor
+            .install_deferred_generation_handoff(Arc::clone(&deferred_handoff))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pop_deferred_generation_handoff",
+                detail: "POP legacy deferred service rejected the Broker generation handoff".to_owned(),
+            })?;
         let polling_count_provider = pop_message_processor.polling_count_provider();
         self.composition.state.pop_message_processor = Some(pop_message_processor.clone());
         let pop_lite_topic_config_manager = self.composition.state.topic_config_manager_handle();
@@ -205,6 +274,18 @@ impl BrokerRuntime {
             )
             .with_command_factory(self.composition.state.command_factory()),
         );
+        pop_lite_message_processor
+            .install_pop_lite_deferred_service(Arc::clone(&pop_lite_deferred))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pop_lite_deferred_service",
+                detail: "PopLite deferred service was already installed".to_owned(),
+            })?;
+        pop_lite_message_processor
+            .install_deferred_generation_handoff(Arc::clone(&deferred_handoff))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pop_lite_deferred_generation_handoff",
+                detail: "PopLite legacy deferred service rejected the Broker generation handoff".to_owned(),
+            })?;
         let pop_lite_message_processor_provider = Arc::downgrade(&pop_lite_message_processor);
         self.composition.state.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_policy = AckMessagePolicy::from_config(
@@ -289,8 +370,64 @@ impl BrokerRuntime {
             )
             .with_command_factory(self.composition.state.command_factory()),
         );
+        notification_processor
+            .install_notification_deferred_service(Arc::clone(&notification_deferred))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "notification_deferred_service",
+                detail: "Notification deferred service was already installed".to_owned(),
+            })?;
+        notification_processor
+            .install_deferred_generation_handoff(Arc::clone(&deferred_handoff))
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "notification_deferred_generation_handoff",
+                detail: "Notification legacy deferred service rejected the Broker generation handoff".to_owned(),
+            })?;
         self.composition.state.notification_processor = Some(notification_processor.clone());
+        let deferred_producer_context = self
+            .composition
+            .state
+            .service_context
+            .as_ref()
+            .ok_or_else(|| BrokerStartupError::Initialization {
+                component: "deferred_producers",
+                detail: "Broker deferred producers require an injected service context".to_owned(),
+            })?
+            .try_component("broker.deferred-producers")
+            .map_err(|error| BrokerStartupError::Initialization {
+                component: "deferred_producers",
+                detail: error.to_string(),
+            })?;
+        let deferred_producer_task_group = deferred_producer_context.task_group().clone();
+        let deferred_producer = BrokerDeferredProducer::new(
+            deferred_handoff,
+            pop_deferred,
+            pull_deferred,
+            notification_deferred,
+            pop_lite_deferred,
+            self.composition.state.lite_event_dispatcher().clone(),
+            &pull_request_hold_service,
+            &pull_message_processor,
+            &pop_message_processor,
+            &notification_processor,
+            &pop_lite_message_processor,
+            deferred_producer_task_group.clone(),
+            Duration::from_millis(self.composition.state.broker_config().short_polling_time_mills),
+        )
+        .map_err(|error| BrokerStartupError::Initialization {
+            component: "deferred_producers",
+            detail: error.to_string(),
+        })?;
+        self.composition
+            .data_plane
+            .deferred
+            .as_mut()
+            .ok_or_else(|| BrokerStartupError::Initialization {
+                component: "deferred_producers",
+                detail: "Broker deferred lifecycle must outlive its producers".to_owned(),
+            })?
+            .install_producer(Arc::clone(&deferred_producer), deferred_producer_task_group)?;
         let message_arriving_listener = NotifyMessageArrivingListener::new(
+            Arc::clone(&deferred_producer),
             &pull_request_hold_service,
             &pop_message_processor,
             &notification_processor,
@@ -307,11 +444,38 @@ impl BrokerRuntime {
                 .broker_config()
                 .lite_event_full_dispatch_delay_time_for_wildcard_group,
         );
-        if let Some(message_store) = self.composition.state.message_store_exclusive_mut() {
-            message_store.set_message_arriving_listener(Some(Arc::new(Box::new(message_arriving_listener))));
+        let listener_installed = match self.composition.state.message_store_exclusive_mut() {
+            Some(message_store) => {
+                message_store.set_message_arriving_listener(Some(Arc::new(Box::new(message_arriving_listener))));
+                true
+            }
+            None => {
+                error!("Message store is not exclusively owned while installing request processors");
+                false
+            }
+        };
+        if listener_installed {
+            let deferred_replay_store =
+                self.composition
+                    .state
+                    .message_store_weak()
+                    .ok_or_else(|| BrokerStartupError::Initialization {
+                        component: "deferred_producers",
+                        detail: "Broker deferred replay requires the Broker-owned Store".to_owned(),
+                    })?;
+            deferred_producer
+                .bind_message_store(deferred_replay_store)
+                .map_err(|_| BrokerStartupError::Initialization {
+                    component: "deferred_producers",
+                    detail: "Broker deferred replay Store was already bound or unavailable".to_owned(),
+                })?;
+            deferred_producer
+                .start()
+                .map_err(|error| BrokerStartupError::Initialization {
+                    component: "deferred_producers",
+                    detail: error.to_string(),
+                })?;
             self.composition.request_pipeline.processor_wiring_complete = true;
-        } else {
-            error!("Message store is not exclusively owned while installing request processors");
         }
         let mut broker_request_processor =
             BrokerRequestProcessor::new_with_factory(self.composition.state.command_factory());

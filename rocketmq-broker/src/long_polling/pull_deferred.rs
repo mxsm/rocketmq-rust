@@ -39,6 +39,7 @@ pub(crate) use deadline::PullWaitDeadline;
     reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
 )]
 pub(crate) use index::PullArrivalView;
+pub(crate) use index::PullCandidateReservation;
 #[allow(
     unused_imports,
     reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
@@ -49,6 +50,11 @@ pub(crate) use index::PullCriteriaLimits;
     reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
 )]
 pub(crate) use service::PreparedPullRegistration;
+#[allow(
+    unused_imports,
+    reason = "broker-private Pull continuation seam remains available to focused acceptance tests"
+)]
+pub(crate) use service::PullArrivalContinuation;
 #[allow(
     unused_imports,
     reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
@@ -64,6 +70,8 @@ pub(crate) use service::PullDeferredRegisterError;
     reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
 )]
 pub(crate) use service::PullDeferredService;
+pub(crate) use service::PullPendingArrivalReservation;
+pub(crate) use service::PullPendingOffsetReservation;
 #[allow(
     unused_imports,
     reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"

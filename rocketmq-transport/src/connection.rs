@@ -857,7 +857,7 @@ impl Connection {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_write_preflight_barrier(&mut self, barrier: crate::write_strategy::WritePreflightBarrier) {
         if let ConnectionWriter::Direct(writer) = &mut self.outbound {
             writer.set_write_preflight_barrier(barrier);

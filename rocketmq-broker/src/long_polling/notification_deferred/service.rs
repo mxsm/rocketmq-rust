@@ -19,6 +19,7 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 #[cfg(test)]
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
@@ -26,6 +27,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -74,12 +76,21 @@ use super::index::NotificationIndexError;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
+use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
+use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
+use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
+use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 
 mod continuation;
 mod data;
 
 use continuation::ContinuationAdmission;
+use continuation::ContinuationPermit;
 pub(crate) use continuation::NotificationArrivalContinuation;
+use continuation::NotificationPendingArrival;
+use continuation::NotificationPendingArrivalKey;
 use continuation::OwnedNotificationArrival;
 use data::CounterObservation;
 pub(crate) use data::NotificationRequestData;
@@ -97,6 +108,9 @@ pub(crate) struct NotificationDeferredService {
     scan_limit: NonZeroUsize,
     conflict_limit: NonZeroUsize,
     continuation_admission: Arc<ContinuationAdmission>,
+    pending_arrivals: Arc<PendingArrivalLatch<NotificationPendingArrivalKey, NotificationPendingArrival>>,
+    pending_offsets: Arc<PendingOffsetRangeLatch<NotificationPendingOffsetTarget>>,
+    pending_arrival_sequence: AtomicU64,
     prepared: Arc<AtomicUsize>,
     pending_claims: Arc<AtomicUsize>,
     resume_executions: Arc<AtomicUsize>,
@@ -120,6 +134,7 @@ impl NotificationDeferredService {
         continuation_count: NonZeroUsize,
         continuation_bytes: NonZeroUsize,
     ) -> Self {
+        let limits = admission.limits();
         Self {
             admission,
             registry: DeferredRegistry::new(),
@@ -131,6 +146,12 @@ impl NotificationDeferredService {
                 continuation_count.get(),
                 continuation_bytes.get(),
             )),
+            pending_arrivals: PendingArrivalLatch::new(limits.max_waiters(), limits.max_retained_bytes()),
+            pending_offsets: PendingOffsetRangeLatch::new(
+                combined_budget(limits.max_waiters(), continuation_count.get()),
+                combined_budget(limits.max_retained_bytes(), continuation_bytes.get()),
+            ),
+            pending_arrival_sequence: AtomicU64::new(0),
             prepared: Arc::new(AtomicUsize::new(0)),
             pending_claims: Arc::new(AtomicUsize::new(0)),
             resume_executions: Arc::new(AtomicUsize::new(0)),
@@ -333,6 +354,10 @@ impl NotificationDeferredService {
         )
     }
 
+    pub(crate) fn arrival_cursor(&self, arrival: NotificationArrivalView<'_>) -> NotificationScanCursor {
+        self.index.scan_cursor(&arrival)
+    }
+
     fn prepare_arrival_batch_with_conflict_budget<'a>(
         &self,
         arrival: NotificationArrivalView<'a>,
@@ -408,6 +433,15 @@ impl NotificationDeferredService {
         Ok(claimed)
     }
 
+    pub(crate) async fn claim_arrival_candidate(
+        &self,
+        candidate: NotificationCandidateReservation,
+    ) -> Result<ClaimedDeferred<ResumeNotification>, DeferredClaimError> {
+        let result = self.claim(candidate.id(), DeferredWakeReason::MessageArrived).await;
+        drop(candidate);
+        result
+    }
+
     pub(crate) fn admit_continuation(
         &self,
         arrival: NotificationArrivalView<'_>,
@@ -429,6 +463,106 @@ impl NotificationDeferredService {
             remaining_conflicts,
             _permit: permit,
         })
+    }
+
+    pub(crate) fn latch_arrival(
+        &self,
+        arrival: NotificationArrivalView<'_>,
+        cursor: NotificationScanCursor,
+    ) -> Result<(), NotificationPendingArrivalError> {
+        if cursor.is_complete() {
+            return Ok(());
+        }
+        let key = NotificationPendingArrivalKey::new(
+            self.pending_arrival_sequence.fetch_add(1, Ordering::Relaxed),
+            arrival.topic().clone(),
+            arrival.queue_id(),
+        );
+        let remaining_conflicts = self.conflict_limit.get().saturating_sub(cursor.conflicts_spent());
+        if remaining_conflicts == 0 {
+            return Ok(());
+        }
+        let pending = NotificationPendingArrival::new(arrival, cursor, remaining_conflicts, self.conflict_limit.get())
+            .map_err(NotificationPendingArrivalError::Continuation)?;
+        self.pending_arrivals
+            .insert(key, pending)
+            .map_err(NotificationPendingArrivalError::Latch)
+    }
+
+    pub(crate) fn pending_arrival_reservations(&self) -> Vec<NotificationPendingArrivalReservation> {
+        self.pending_arrivals.reserve_batch(self.scan_limit.get())
+    }
+
+    pub(crate) fn latch_offset(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        logical_offset: i64,
+    ) -> Result<(), PendingArrivalInsertError> {
+        if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
+            return Ok(());
+        }
+        self.pending_offsets
+            .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));
+        self.pending_offsets.merge(
+            NotificationPendingOffsetTarget::new(topic.clone(), queue_id),
+            logical_offset - 1,
+        )
+    }
+
+    pub(crate) fn pending_offset_reservations(&self) -> Vec<NotificationPendingOffsetReservation> {
+        self.pending_offsets
+            .reserve_batch(self.scan_limit.get())
+            .into_iter()
+            .filter_map(|reservation| {
+                let permit = self.continuation_admission.reserve(reservation.retained_bytes()).ok()?;
+                Some(NotificationPendingOffsetReservation {
+                    reservation,
+                    _permit: permit,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn reserve_pending_arrival_batch(
+        &self,
+        pending: &mut NotificationPendingArrival,
+    ) -> NotificationPendingCandidateBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return NotificationPendingCandidateBatch {
+                candidates: Vec::new(),
+                exhausted: true,
+            };
+        }
+        let prepared = {
+            let view = pending.owned.view();
+            let batch_conflicts = pending.remaining_conflicts.min(self.scan_limit.get());
+            self.prepare_arrival_batch_with_conflict_budget(
+                view,
+                Some(std::mem::replace(&mut pending.cursor, NotificationScanCursor::empty())),
+                batch_conflicts,
+            )
+        };
+        pending.remaining_conflicts = pending.remaining_conflicts.saturating_sub(prepared.conflicts());
+        let (candidates, cursor) = prepared.into_parts();
+        pending.cursor = cursor;
+        NotificationPendingCandidateBatch {
+            exhausted: pending.cursor.is_complete() || pending.remaining_conflicts == 0,
+            candidates,
+        }
+    }
+
+    pub(crate) fn reserve_offset_replay_batch(
+        &self,
+        target: &NotificationPendingOffsetTarget,
+        cursor: Option<NotificationScanCursor>,
+    ) -> NotificationPreparedArrivalBatch {
+        let arrival = NotificationArrivalView::new(target.topic(), target.queue_id()).forced();
+        self.prepare_arrival_batch(arrival, cursor)
+    }
+
+    pub(crate) fn replay_read_limit(&self) -> i32 {
+        i32::try_from(self.scan_limit.get()).unwrap_or(i32::MAX)
     }
 
     /// Runs all post-callback batches in one injected, lifecycle-owned task.
@@ -454,6 +588,42 @@ impl NotificationDeferredService {
                 continuation.remaining_conflicts = continuation.remaining_conflicts.saturating_sub(batch.conflicts());
                 let (claims, cursor) = batch.into_parts();
                 handle_claims(claims).await;
+                continuation.cursor = cursor;
+                if continuation.cursor.is_complete()
+                    || continuation.remaining_conflicts == 0
+                    || service.closed.load(Ordering::Acquire)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+    }
+
+    /// Runs post-callback filtering batches while the caller retains routing
+    /// ownership for each bounded candidate batch.
+    pub(crate) fn spawn_candidate_continuation<F, Fut>(
+        self: &Arc<Self>,
+        task_group: &TaskGroup,
+        mut continuation: NotificationArrivalContinuation,
+        handle_candidates: Arc<F>,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Fn(Vec<NotificationCandidateReservation>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let service = Arc::clone(self);
+        task_group.spawn_service("broker.notification-deferred.arrival", async move {
+            loop {
+                let prepared = {
+                    let view = continuation.owned.view();
+                    let batch_conflicts = continuation.remaining_conflicts.min(service.scan_limit.get());
+                    service.prepare_arrival_batch_with_conflict_budget(view, Some(continuation.cursor), batch_conflicts)
+                };
+                continuation.remaining_conflicts =
+                    continuation.remaining_conflicts.saturating_sub(prepared.conflicts());
+                let (candidates, cursor) = prepared.into_parts();
+                handle_candidates(candidates).await;
                 continuation.cursor = cursor;
                 if continuation.cursor.is_complete()
                     || continuation.remaining_conflicts == 0
@@ -521,9 +691,30 @@ impl NotificationDeferredService {
         result
     }
 
+    /// Transfers one claimed Notification execution to its canonical session
+    /// owner and returns after bounded admission, before response terminal.
+    pub(crate) fn submit_claimed<F, Fut>(
+        &self,
+        claimed: ClaimedDeferred<ResumeNotification>,
+        handler_retained: DeferredResumeRetainedSize,
+        handler: F,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+    {
+        let resume_executions = Arc::clone(&self.resume_executions);
+        let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
+        let dynamic_bytes = handler_retained.dynamic_bytes();
+        let observation = CounterObservation::new_with_bytes(resume_executions, resume_execution_bytes, dynamic_bytes);
+        claimed.submit(handler_retained, handler, move |_| drop(observation))
+    }
+
     #[must_use]
     pub(crate) fn snapshot(&self) -> NotificationDeferredSnapshot {
         let continuation = self.continuation_admission.snapshot();
+        let pending = self.pending_arrivals.snapshot();
+        let offsets = self.pending_offsets.snapshot();
         NotificationDeferredSnapshot {
             admission: self.admission.snapshot(),
             index: self.index.snapshot(),
@@ -534,12 +725,22 @@ impl NotificationDeferredService {
             active_continuations: continuation.count,
             continuation_bytes: continuation.bytes,
             continuation_rejected: continuation.rejected,
+            pending_arrivals: pending.count.saturating_add(offsets.count),
+            pending_arrival_bytes: pending.bytes.saturating_add(offsets.bytes),
+            pending_arrival_rejected: pending.rejected.saturating_add(offsets.rejected),
+            pending_offset_invariant_failures: offsets.rejected,
         }
+    }
+
+    pub(crate) fn seal(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.pending_arrivals.seal();
+        self.pending_offsets.seal();
     }
 
     #[must_use]
     pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
-        self.closed.store(true, Ordering::Release);
+        self.seal();
         self.registry.shutdown()
     }
 
@@ -592,6 +793,10 @@ impl NotificationPreparedArrivalBatch {
     pub(crate) const fn cursor(&self) -> &NotificationScanCursor {
         &self.cursor
     }
+
+    pub(crate) fn into_parts(self) -> (Vec<NotificationCandidateReservation>, NotificationScanCursor) {
+        (self.candidates, self.cursor)
+    }
 }
 
 #[must_use]
@@ -629,6 +834,10 @@ pub(crate) struct NotificationDeferredSnapshot {
     active_continuations: usize,
     continuation_bytes: usize,
     continuation_rejected: usize,
+    pending_arrivals: usize,
+    pending_arrival_bytes: usize,
+    pending_arrival_rejected: usize,
+    pending_offset_invariant_failures: usize,
 }
 
 impl NotificationDeferredSnapshot {
@@ -675,6 +884,103 @@ impl NotificationDeferredSnapshot {
     #[must_use]
     pub(crate) const fn continuation_rejected(self) -> usize {
         self.continuation_rejected
+    }
+
+    #[must_use]
+    pub(crate) const fn pending_arrivals(self) -> usize {
+        self.pending_arrivals
+    }
+
+    #[must_use]
+    pub(crate) const fn pending_arrival_bytes(self) -> usize {
+        self.pending_arrival_bytes
+    }
+
+    #[must_use]
+    pub(crate) const fn pending_arrival_rejected(self) -> usize {
+        self.pending_arrival_rejected
+    }
+
+    #[must_use]
+    pub(crate) const fn pending_offset_invariant_failures(self) -> usize {
+        self.pending_offset_invariant_failures
+    }
+}
+
+pub(crate) type NotificationPendingArrivalReservation =
+    PendingArrivalReservation<NotificationPendingArrivalKey, NotificationPendingArrival>;
+pub(crate) struct NotificationPendingOffsetReservation {
+    reservation: PendingOffsetRangeReservation<NotificationPendingOffsetTarget>,
+    _permit: ContinuationPermit,
+}
+
+impl NotificationPendingOffsetReservation {
+    pub(crate) fn key(&self) -> &NotificationPendingOffsetTarget {
+        self.reservation.key()
+    }
+
+    pub(crate) const fn range(&self) -> crate::long_polling::pending_arrival_latch::PendingOffsetRange {
+        self.reservation.range()
+    }
+
+    pub(crate) fn finish_or_updated(
+        &mut self,
+    ) -> Option<crate::long_polling::pending_arrival_latch::PendingOffsetRange> {
+        self.reservation.finish_or_updated()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct NotificationPendingOffsetTarget {
+    topic: CheetahString,
+    queue_id: i32,
+}
+
+impl NotificationPendingOffsetTarget {
+    fn new(topic: CheetahString, queue_id: i32) -> Self {
+        Self { topic, queue_id }
+    }
+
+    pub(crate) const fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub(crate) const fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
+}
+
+impl PendingOffsetTarget for NotificationPendingOffsetTarget {
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.topic.len().saturating_mul(2))
+    }
+}
+
+const fn combined_budget(left: usize, right: usize) -> usize {
+    match left.checked_add(right) {
+        Some(combined) => combined,
+        None => usize::MAX,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NotificationPendingArrivalError {
+    Continuation(NotificationContinuationError),
+    Latch(PendingArrivalInsertError),
+}
+
+pub(crate) struct NotificationPendingCandidateBatch {
+    candidates: Vec<NotificationCandidateReservation>,
+    exhausted: bool,
+}
+
+impl NotificationPendingCandidateBatch {
+    pub(crate) const fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    pub(crate) fn into_candidates(self) -> Vec<NotificationCandidateReservation> {
+        self.candidates
     }
 }
 

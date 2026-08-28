@@ -450,6 +450,7 @@ where
         received_at: Instant,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
+        session_cleanup: crate::dispatch::DeferredSessionCleanupRegistration,
     ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
         self.network
             .dispatch_network(
@@ -461,7 +462,7 @@ where
                 received_at,
                 retained_bytes,
                 partial_frame_permit,
-                None,
+                Some(session_cleanup),
             )
             .await
     }

@@ -12,11 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::Weak;
+
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::LegacySessionExecutionEnrollment;
+
+use crate::deferred_generation_handoff::DeferredGenerationTarget;
+use crate::deferred_generation_handoff::LegacyWaitHandoff;
+use crate::deferred_generation_handoff::LegacyWaitLease;
 
 #[derive(Clone)]
 pub struct PullRequest {
@@ -28,6 +36,7 @@ pub struct PullRequest {
     pull_from_this_offset: i64,
     subscription_data: SubscriptionData,
     message_filter: ArcMessageFilter,
+    legacy_handoff: Arc<LegacyWaitHandoff>,
 }
 
 impl PullRequest {
@@ -50,6 +59,7 @@ impl PullRequest {
             pull_from_this_offset,
             subscription_data,
             message_filter,
+            legacy_handoff: Arc::new(LegacyWaitHandoff::default()),
         }
     }
 
@@ -91,5 +101,61 @@ impl PullRequest {
 
     pub fn connection_handler_context(&self) -> &ConnectionHandlerContext {
         &self.ctx
+    }
+
+    pub(crate) fn install_legacy_handoff(
+        &self,
+        expected_target: &DeferredGenerationTarget,
+        lease: LegacyWaitLease,
+    ) -> Result<(), LegacyWaitLease> {
+        self.legacy_handoff.install(expected_target, lease)
+    }
+
+    #[must_use]
+    pub(crate) fn legacy_handoff_target(&self) -> Option<DeferredGenerationTarget> {
+        self.legacy_handoff.target()
+    }
+
+    pub(crate) fn take_legacy_wait(&self) -> Option<LegacyWaitLease> {
+        self.legacy_handoff.take()
+    }
+
+    pub(crate) fn restore_legacy_wait(&self, lease: LegacyWaitLease) -> Result<(), LegacyWaitLease> {
+        self.legacy_handoff.restore(lease)
+    }
+
+    pub(crate) fn install_legacy_session_cleanup(
+        &self,
+        cleanup: LegacySessionExecutionEnrollment,
+    ) -> Result<(), LegacySessionExecutionEnrollment> {
+        self.legacy_handoff.install_session_cleanup(cleanup)
+    }
+
+    pub(crate) fn take_legacy_session_execution(&self) -> Option<LegacySessionExecutionEnrollment> {
+        self.legacy_handoff.take_session_execution()
+    }
+
+    pub(crate) fn release_legacy_session_cleanup(&self) {
+        self.legacy_handoff.release_session_cleanup();
+    }
+
+    pub(crate) fn mark_legacy_session_closed(&self) {
+        self.legacy_handoff.mark_session_closed();
+    }
+
+    pub(crate) fn legacy_session_closed(&self) -> bool {
+        self.legacy_handoff.session_closed()
+    }
+
+    pub(crate) fn legacy_handoff_identity(&self) -> u64 {
+        self.legacy_handoff.identity()
+    }
+
+    pub(crate) fn legacy_handoff_weak(&self) -> Weak<LegacyWaitHandoff> {
+        Arc::downgrade(&self.legacy_handoff)
+    }
+
+    pub(crate) fn release_legacy_wait(&self) {
+        self.legacy_handoff.release();
     }
 }

@@ -73,6 +73,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
@@ -99,6 +100,9 @@ const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(feature = "rocksdb_store")]
 const POP_CONSUMER_PROFILE_CAPACITY: usize = 100_000;
 
+pub(crate) type PopLagRefreshProducer =
+    dyn Fn(&CheetahString, &CheetahString) -> Option<PopWakeupCompletion> + Send + Sync + 'static;
+
 pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     ck_message_number: AtomicI64,
     pop_long_polling_service: Arc<PopLongPollingService<PopMessageProcessor<MS>>>,
@@ -107,6 +111,7 @@ pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     revive_topic: CheetahString,
     context: Arc<PopMessageProcessorContext<MS>>,
     pop_deferred_service: OnceLock<Arc<PopDeferredService>>,
+    lag_refresh_producer: Mutex<Option<Arc<PopLagRefreshProducer>>>,
     #[cfg(feature = "rocksdb_store")]
     profile_store: Option<Arc<PopConsumerProfileStore>>,
     lifecycle: AsyncMutex<()>,
@@ -170,6 +175,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
             revive_topic,
             context,
             pop_deferred_service: OnceLock::new(),
+            lag_refresh_producer: Mutex::new(None),
             #[cfg(feature = "rocksdb_store")]
             profile_store,
             lifecycle: AsyncMutex::new(()),
@@ -185,6 +191,11 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         service: Arc<PopDeferredService>,
     ) -> Result<(), Arc<PopDeferredService>> {
         self.pop_deferred_service.set(service)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pop_deferred_service_is_installed_for_test(&self) -> bool {
+        self.pop_deferred_service.get().is_some()
     }
 
     fn retry_policy_for_group(&self, group: &CheetahString) -> PopRetryPolicy {
@@ -979,12 +990,56 @@ where
         Some(&self.pop_long_polling_service)
     }
 
+    pub(crate) fn install_deferred_generation_handoff(
+        &self,
+        handoff: Arc<DeferredGenerationHandoff>,
+    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
+        self.pop_long_polling_service.install_handoff(handoff)
+    }
+
     pub(crate) fn polling_count_provider(&self) -> Weak<dyn PollingCountProvider> {
         let provider: Arc<dyn PollingCountProvider> = self.pop_long_polling_service.clone();
         Arc::downgrade(&provider)
     }
 
     pub(crate) fn notify_message_arriving_before_lag(
+        &self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+    ) -> Option<PopWakeupCompletion> {
+        let producer = self.lag_refresh_producer.lock().clone();
+        if let Some(producer) = producer {
+            return producer(topic, consumer_group);
+        }
+        self.notify_message_arriving_before_lag_legacy(topic, consumer_group)
+    }
+
+    pub(crate) fn install_lag_refresh_producer(
+        &self,
+        producer: Arc<PopLagRefreshProducer>,
+    ) -> Result<(), Arc<PopLagRefreshProducer>> {
+        let mut installed = self.lag_refresh_producer.lock();
+        if installed.is_some() {
+            return Err(producer);
+        }
+        *installed = Some(producer);
+        Ok(())
+    }
+
+    pub(crate) fn has_lag_refresh_producer(&self) -> bool {
+        self.lag_refresh_producer.lock().is_some()
+    }
+
+    pub(crate) fn uninstall_lag_refresh_producer(&self, producer: &Arc<PopLagRefreshProducer>) -> bool {
+        let mut installed = self.lag_refresh_producer.lock();
+        if installed.as_ref().is_some_and(|current| Arc::ptr_eq(current, producer)) {
+            installed.take();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn notify_message_arriving_before_lag_legacy(
         &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
@@ -1062,9 +1117,28 @@ where
         Some(bytes_mut.freeze())
     }
 
-    pub async fn shutdown(&self) {
+    pub(crate) async fn stop_legacy_producer_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.pop_long_polling_service.stop_producer_until(deadline).await
+    }
+
+    pub(crate) async fn drain_legacy_executions_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.pop_long_polling_service.drain_executions_until(deadline).await
+    }
+
+    pub(crate) async fn finalize_legacy_shutdown(
+        &self,
+    ) -> crate::long_polling::long_polling_service::LegacyServiceFinalization {
+        self.pop_long_polling_service.finalize_shutdown().await
+    }
+
+    pub(crate) async fn shutdown_auxiliary(&self) {
         let _lifecycle = self.lifecycle.lock().await;
-        self.pop_long_polling_service.shutdown().await;
         self.pop_buffer_merge_service.shutdown();
         if let Err(error) = self
             .pop_buffer_merge_service
@@ -1074,6 +1148,21 @@ where
             warn!(?error, "failed to gracefully shutdown PopBufferMergeService");
         }
         self.queue_lock_manager.shutdown().await;
+    }
+
+    pub async fn shutdown(&self) -> crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
+        let deadline = rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(5));
+        let producer = self.stop_legacy_producer_until(deadline).await;
+        let executions = self.drain_legacy_executions_until(deadline).await;
+        let finalization = self.finalize_legacy_shutdown().await;
+        self.shutdown_auxiliary().await;
+        crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
+            name: "pop_long_polling",
+            producer,
+            executions,
+            observed_after_session_drain: finalization.observed_after_session_drain,
+            resources: finalization.terminal,
+        }
     }
 }
 

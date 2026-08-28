@@ -72,6 +72,7 @@ pub(crate) struct V1NetworkRouteState {
     )]
     context: ConnectionHandlerContext,
     endpoint: LegacyNetworkSession,
+    deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner,
 }
 
 pub(super) struct V2ConnectionHandler<P> {
@@ -124,7 +125,11 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                 warn!(?outcome, event = "connected", "Remoting lifecycle event was not queued");
             }
         }
-        Some(V1NetworkRouteState { context, endpoint })
+        Some(V1NetworkRouteState {
+            context,
+            endpoint,
+            deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id()),
+        })
     }
 
     async fn request(
@@ -160,6 +165,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                 received_at,
                 retained_bytes,
                 partial_frame_permit,
+                state.deferred_cleanup.registration(),
             )
             .await
             .is_ok()
@@ -243,6 +249,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for Con
     }
 
     fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+        let _ = state.deferred_cleanup.close();
         self.dispatcher.close_network_session(&state.endpoint);
     }
 
@@ -363,6 +370,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for Int
     }
 
     fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+        let _ = state.deferred_cleanup.close();
         self.inner.dispatcher.close_network_session(&state.endpoint);
     }
 

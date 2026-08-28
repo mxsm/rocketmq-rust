@@ -58,6 +58,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Notify;
 
 use super::super::*;
+use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
 
 const SENTINEL_CODE: i32 = 98_281;
@@ -379,7 +380,7 @@ async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
             let result = service_for_resume
                 .resume_claimed_observed(
                     claim,
-                    rocketmq_transport::api::v2::DeferredResumeRetainedSize::default(),
+                    rocketmq_transport::api::v2::DeferredResumeRetainedSize::new(257),
                     observer,
                     move |resume, reason| async move {
                         started.notify_one();
@@ -398,6 +399,9 @@ async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
         })
         .expect("spawn owned POP resume assertion");
     handler_started.notified().await;
+    let active_resume = service.resource_snapshot();
+    assert_eq!(active_resume.resume_executions, 1);
+    assert_eq!(active_resume.resume_execution_bytes, 257);
     assert_eq!(
         service.admission_snapshot().waiting_count(),
         0,
@@ -426,6 +430,9 @@ async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
     assert_eq!(response.opaque(), ORIGINAL_OPAQUE);
     assert_eq!(response.code(), ResponseCode::PollingTimeout as i32);
     assert_eq!(rereads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let terminal_resume = service.resource_snapshot();
+    assert_eq!(terminal_resume.resume_executions, 0);
+    assert_eq!(terminal_resume.resume_execution_bytes, 0);
     assert_released(&service);
     running.finish().await;
     assert!(
@@ -681,11 +688,21 @@ async fn topic_fanout_and_forced_refresh_bypass_filter_then_cleanup() {
         .await
         .expect("normal filter miss")
         .is_none());
+    let target = service
+        .forced_target_batch(&"TopicA".into(), &"GroupA".into())
+        .into_iter()
+        .next()
+        .expect("bounded lag producer finds the exact queue target");
+    let topic = CheetahString::from_static_str("TopicA");
+    let consumer_group = CheetahString::from_static_str("GroupA");
+    let forced_arrival = PopArrivalView::new(&topic, &consumer_group, target.queue_id()).forced();
+    let candidate = service
+        .reserve_target_arrival_candidate(&target, forced_arrival, PopSelectionOrder::Oldest)
+        .expect("forced target bypasses the filter");
     let forced = service
-        .claim_forced(arrival, PopSelectionOrder::Oldest)
+        .claim_forced_candidate(candidate)
         .await
-        .expect("forced refresh claim")
-        .expect("forced refresh bypasses the filter");
+        .expect("forced refresh claim");
     assert_eq!(forced.deferred_id(), registered.id);
     assert_eq!(forced.reason(), DeferredWakeReason::ForcedRefresh);
     drop(forced);

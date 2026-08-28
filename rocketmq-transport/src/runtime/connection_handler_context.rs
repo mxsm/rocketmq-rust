@@ -12,12 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tracing::error;
 
 use crate::connection::ConnectionStateHandle;
+use crate::dispatch::LegacySessionCleanupCapability;
+pub use crate::dispatch::LegacySessionCleanupEnrollment;
+pub use crate::dispatch::LegacySessionCleanupInstallError;
+use crate::dispatch::LegacySessionExecutionCapability;
+pub use crate::dispatch::LegacySessionExecutionEnrollment;
+use crate::dispatch::LegacySessionExecutionSeed;
+pub use crate::dispatch::LegacySessionExecutionSubmitError;
 use crate::dispatch::ResponseError;
 use crate::dispatch::ResponseReceipt;
 use crate::net::channel::Channel;
@@ -49,7 +58,6 @@ pub type ConnectionHandlerContext = Arc<ConnectionHandlerContextWrapper>;
 /// The "Wrapper" suffix indicates this is the concrete type wrapped by the
 /// `ConnectionHandlerContext` type alias. It's rarely used directly - prefer
 /// using the type alias in function signatures.
-#[derive(Hash, Eq, PartialEq)]
 pub struct ConnectionHandlerContextWrapper {
     // === Core State ===
     /// The channel associated with this request handler context.
@@ -59,6 +67,8 @@ pub struct ConnectionHandlerContextWrapper {
     /// - Address information (local/remote)
     /// - Channel identity (ID)
     pub(crate) channel: Channel,
+    legacy_session_cleanup: Option<LegacySessionCleanupCapability>,
+    legacy_session_execution: Option<LegacySessionExecutionCapability>,
 }
 
 impl ConnectionHandlerContextWrapper {
@@ -72,7 +82,80 @@ impl ConnectionHandlerContextWrapper {
     ///
     /// A new context ready for use by request processors
     pub fn new(channel: Channel) -> Self {
-        Self { channel }
+        Self {
+            channel,
+            legacy_session_cleanup: None,
+            legacy_session_execution: None,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn new_with_legacy_session_cleanup(
+        channel: Channel,
+        session_cleanup: crate::dispatch::DeferredSessionCleanupRegistration,
+    ) -> Self {
+        Self {
+            channel,
+            legacy_session_cleanup: Some(LegacySessionCleanupCapability::new(session_cleanup)),
+            legacy_session_execution: None,
+        }
+    }
+
+    pub(crate) fn new_with_legacy_session_execution(channel: Channel, seed: LegacySessionExecutionSeed) -> Self {
+        let execution = LegacySessionExecutionCapability::new(seed);
+        Self {
+            channel,
+            legacy_session_cleanup: Some(execution.cleanup_capability()),
+            legacy_session_execution: Some(execution),
+        }
+    }
+
+    /// Atomically installs one identity-keyed session-close callback with a
+    /// legacy waiter node.
+    ///
+    /// The callback is invoked at most once and receives no request or session
+    /// data. The returned enrollment is affine: the waiter must retain it until
+    /// it leaves the real legacy wait table. Dropping it deregisters the
+    /// callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LegacySessionCleanupInstallError::Unavailable`] for contexts
+    /// that were not created by an admitted network request, or a typed closed,
+    /// caller-install, or invariant failure.
+    pub fn install_legacy_session_cleanup<T, E>(
+        &self,
+        cleanup: impl Fn() + Send + Sync + 'static,
+        install: impl FnOnce(LegacySessionCleanupEnrollment) -> Result<T, (E, LegacySessionCleanupEnrollment)>,
+    ) -> Result<T, LegacySessionCleanupInstallError<E>> {
+        let Some(capability) = &self.legacy_session_cleanup else {
+            return Err(LegacySessionCleanupInstallError::Unavailable);
+        };
+        capability.install(cleanup, install)
+    }
+
+    /// Atomically installs one identity-keyed session execution owner with a
+    /// legacy waiter node.
+    ///
+    /// The affine enrollment must move from the waiter into its exact wake
+    /// claim and then into the submitted handler. Its future runs through the
+    /// original canonical session executor and remains cancellable by session
+    /// close through handler and writer completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LegacySessionCleanupInstallError::Unavailable`] for embedded
+    /// or compatibility contexts without a canonical network session owner,
+    /// or a typed closed, caller-install, or invariant failure.
+    pub fn install_legacy_session_execution<T, E>(
+        &self,
+        cleanup: impl Fn() + Send + Sync + 'static,
+        install: impl FnOnce(LegacySessionExecutionEnrollment) -> Result<T, (E, LegacySessionExecutionEnrollment)>,
+    ) -> Result<T, LegacySessionCleanupInstallError<E>> {
+        let Some(capability) = &self.legacy_session_execution else {
+            return Err(LegacySessionCleanupInstallError::Unavailable);
+        };
+        capability.install(cleanup, install)
     }
 
     // === Connection Access ===
@@ -247,6 +330,20 @@ impl ConnectionHandlerContextWrapper {
     }
 }
 
+impl PartialEq for ConnectionHandlerContextWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.channel == other.channel
+    }
+}
+
+impl Eq for ConnectionHandlerContextWrapper {}
+
+impl Hash for ConnectionHandlerContextWrapper {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.channel.hash(state);
+    }
+}
+
 impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
     fn as_ref(&self) -> &ConnectionHandlerContextWrapper {
         self
@@ -256,6 +353,8 @@ impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper 
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use tokio::net::TcpListener;
@@ -269,6 +368,7 @@ mod tests {
     use crate::dispatch::ResponseDisposition;
     use crate::dispatch::ResponseSink;
     use crate::net::channel::ChannelInner;
+    use crate::session_view::SessionId;
 
     fn embedded_context(
         runtime: &rocketmq_runtime::RuntimeContext,
@@ -398,5 +498,77 @@ mod tests {
         closed_context
             .write_response(RemotingCommand::create_remoting_command(4))
             .await;
+    }
+
+    #[tokio::test]
+    async fn legacy_cleanup_is_affine_and_isolated_between_two_sessions() {
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("legacy-context-cleanup-test");
+        let (base, _receiver) = embedded_context(&runtime, "legacy-context-cleanup-service");
+        let first_owner = crate::dispatch::DeferredSessionCleanupOwner::new(SessionId::from_session_owner(701));
+        let second_owner = crate::dispatch::DeferredSessionCleanupOwner::new(SessionId::from_session_owner(702));
+        let first_context = ConnectionHandlerContextWrapper::new_with_legacy_session_cleanup(
+            base.channel.clone(),
+            first_owner.registration(),
+        );
+        let second_context = ConnectionHandlerContextWrapper::new_with_legacy_session_cleanup(
+            base.channel.clone(),
+            second_owner.registration(),
+        );
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let mut first_enrollment = None;
+        let mut second_enrollment = None;
+
+        first_context
+            .install_legacy_session_cleanup(
+                {
+                    let calls = Arc::clone(&first_calls);
+                    move || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                    }
+                },
+                |enrollment| {
+                    first_enrollment = Some(enrollment);
+                    Ok::<_, ((), LegacySessionCleanupEnrollment)>(())
+                },
+            )
+            .expect("first cleanup enrollment");
+        second_context
+            .install_legacy_session_cleanup(
+                {
+                    let calls = Arc::clone(&second_calls);
+                    move || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                    }
+                },
+                |enrollment| {
+                    second_enrollment = Some(enrollment);
+                    Ok::<_, ((), LegacySessionCleanupEnrollment)>(())
+                },
+            )
+            .expect("second cleanup enrollment");
+
+        assert_eq!(
+            first_owner.close(),
+            crate::dispatch::DeferredSessionCleanupCloseOutcome::Completed
+        );
+        assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(second_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            first_owner.close(),
+            crate::dispatch::DeferredSessionCleanupCloseOutcome::AlreadyClosed
+        );
+        assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+
+        drop(first_enrollment.take());
+        assert_eq!(first_owner.target_counts(), (0, 0));
+        assert_eq!(second_owner.target_counts(), (1, 1));
+        assert_eq!(
+            second_owner.close(),
+            crate::dispatch::DeferredSessionCleanupCloseOutcome::Completed
+        );
+        assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+        drop(second_enrollment.take());
+        assert_eq!(second_owner.target_counts(), (0, 0));
     }
 }
