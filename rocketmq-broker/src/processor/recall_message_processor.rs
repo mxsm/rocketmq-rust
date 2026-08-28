@@ -46,9 +46,10 @@ use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::info;
 use tracing::warn;
 
@@ -207,22 +208,52 @@ impl<MS: BrokerWriteStore> Clone for RecallMessageProcessor<MS> {
     }
 }
 
-impl<MS> RequestProcessor for RecallMessageProcessor<MS>
+impl<MS> RequestProcessorV2 for RecallMessageProcessor<MS>
+where
+    MS: BrokerWriteStore + 'static,
+{
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.context.command_factory;
+        let remote_address = recall_remote_address(request.origin())?;
+        let result = self.process_command(request.command_mut(), remote_address).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "RecallMessageProcessor V2 command dispatch completed without a response",
+        )
+    }
+}
+
+fn recall_remote_address(origin: &RequestOrigin) -> rocketmq_error::RocketMQResult<std::net::SocketAddr> {
+    match origin {
+        RequestOrigin::Network { peer } => Ok(peer.address()),
+        RequestOrigin::Embedded { .. } => Err(rocketmq_error::RocketMQError::illegal_argument(
+            "RecallMessage requires a trusted network origin for the persisted born host",
+        )),
+        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+            "RecallMessage received an unrecognized request origin",
+        )),
+    }
+}
+
+impl<MS> RecallMessageProcessor<MS>
 where
     MS: BrokerWriteStore,
 {
-    async fn process_request(
+    /// V2 leaf business contract; it uses only trusted origin metadata to construct the message birth address.
+    async fn process_command(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
+        remote_address: std::net::SocketAddr,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("RecallMessageProcessor received request code: {:?}", request_code);
 
         match request_code {
             RequestCode::RecallMessage => {
-                let response = self.process_recall_message(&channel, &ctx, request).await?;
+                let response = self.process_recall_message(remote_address, request).await?;
                 Ok(Some(response))
             }
             _ => {
@@ -243,26 +274,19 @@ where
             }
         }
     }
-}
 
-impl<MS> RecallMessageProcessor<MS>
-where
-    MS: BrokerWriteStore,
-{
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut processor = self.clone();
-        processor.process_request(channel, ctx, request).await
+        processor.process_command(request, remote_address).await
     }
 
     async fn process_recall_message(
         &mut self,
-        _channel: &Channel,
-        ctx: &ConnectionHandlerContext,
+        remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let mut response = self
@@ -405,7 +429,7 @@ where
         }
 
         let msg_inner = self.build_message(
-            ctx,
+            remote_address,
             &request_header,
             handle_topic,
             handle_timestamp_str,
@@ -435,7 +459,7 @@ where
 
     fn build_message(
         &self,
-        ctx: &ConnectionHandlerContext,
+        born_host: std::net::SocketAddr,
         request_header: &RecallMessageRequestHeader,
         handle_topic: &str,
         handle_timestamp_str: &str,
@@ -504,7 +528,6 @@ where
 
         let properties_string = MessageDecoder::message_properties_to_string(&properties);
 
-        let born_host = ctx.remote_address();
         let store_host = self.context.policy.store_host;
 
         let mut message = Message::builder()
@@ -620,8 +643,72 @@ fn recall_response_header_missing() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::SerializeType;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
+    use rocketmq_store::StoreRuntimeConfig;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedCaller;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    fn v2_test_processor() -> RecallMessageProcessor<StorePorts> {
+        let broker_config = BrokerConfig::default();
+        let message_store_config = MessageStoreConfig::default();
+        let topic_config_manager = Arc::new(TopicConfigManager::new(
+            &broker_config,
+            &message_store_config,
+            true,
+            None,
+        ));
+        let stats_context = crate::test_service_context("recall-message-v2-stats");
+        let broker_stats_manager = Arc::new(BrokerStatsManager::new(
+            Arc::new(StoreRuntimeConfig::default()),
+            stats_context.task_group().clone(),
+        ));
+        let context = RecallMessageProcessorContext::new(
+            RecallMessagePolicy::from_configs(
+                &broker_config,
+                &message_store_config,
+                "127.0.0.1:10911".parse().expect("valid store host"),
+            ),
+            topic_config_manager,
+            RecallMessageStoreCapability {
+                escape_bridge: Weak::new(),
+            },
+            broker_stats_manager,
+        );
+        RecallMessageProcessor::new(context)
+    }
+
+    #[test]
+    fn embedded_recall_cannot_forge_a_persisted_network_born_host() {
+        let origin = RequestOrigin::Embedded {
+            caller: EmbeddedCaller::BrokerProxy,
+        };
+
+        assert!(recall_remote_address(&origin).is_err());
+    }
 
     #[test]
     fn recall_response_keeps_region_field() {
@@ -701,6 +788,42 @@ mod tests {
             capability.put_message(MessageExtBrokerInner::default()).await,
             Err(MessageStoreUnavailable)
         ));
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_recall_fails_closed_before_business_processing() {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("recall-message-v2-test"))
+            .expect("RecallMessage V2 test runtime");
+        let context = owner.root_context().component("recall-message-v2-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            v2_test_processor(),
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let harness = EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            context.task_group().clone(),
+            Principal::new("recall-message-v2-test"),
+        );
+
+        let outcome = harness
+            .dispatch(None, RemotingCommand::create_remoting_command(-98_454).set_opaque(321))
+            .await
+            .expect("embedded RecallMessage rejection must produce a typed response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("embedded RecallMessage request must fail closed with a reply plan");
+        };
+        assert_eq!(plan.response_code(), ResponseCode::InvalidParameter as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+
+        drop(harness);
+        drop(context);
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
     }
 
     #[test]

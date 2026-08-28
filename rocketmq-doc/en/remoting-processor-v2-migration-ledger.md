@@ -88,19 +88,19 @@ outcome and no longer receives a raw context solely for dispatch compatibility.
 
 | Production implementation | Current state | Notable migration responsibility |
 |---|---|---|
-| `rocketmq-broker/src/processor/ack_message_processor.rs` — `AckMessageProcessor<MS>` | `V1` generic leaf | Use typed origin/session facts only where required. |
-| `rocketmq-broker/src/processor/change_invisible_time_processor.rs` — `ChangeInvisibleTimeProcessor<MS>` | `V1` generic leaf | Preserve response mapping without direct response writes. |
-| `rocketmq-broker/src/processor/client_manage_processor.rs` — `ClientManageProcessor<MS>` | `V1` generic leaf | Move client identity and registry operations to stable session identities/narrow push handles. |
-| `rocketmq-broker/src/processor/consumer_manage_processor.rs` — `ConsumerManageProcessor<MS>` | `V1` generic leaf | Move consumer registry operations to stable session identities/narrow push handles. |
-| `rocketmq-broker/src/processor/end_transaction_processor.rs` — `EndTransactionProcessor<TM, MS>` | `V1` generic leaf | Return a typed reply/error plan. |
-| `rocketmq-broker/src/processor/lite_manager_processor.rs` — `LiteManagerProcessor<MS>` | `V1` generic leaf | Remove unused transport context and retain protocol behavior. |
-| `rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs` — `LiteSubscriptionCtlProcessor<MS>` | `V1` generic leaf | Remove unused transport context and retain protocol behavior. |
-| `rocketmq-broker/src/processor/maintenance_request_processor.rs` — `MaintenanceRequestProcessor` | `V1` leaf | Replace raw session access with the narrow typed view actually required. |
-| `rocketmq-broker/src/processor/peek_message_processor.rs` — `PeekMessageProcessor<MS>` | `V1` generic leaf | Return a typed response plan. |
-| `rocketmq-broker/src/processor/polling_info_processor.rs` — `PollingInfoProcessor` | `V1` leaf | Remove unused context and return a typed reply. |
-| `rocketmq-broker/src/processor/query_assignment_processor.rs` — `QueryAssignmentProcessor` | `V1` leaf | Remove unused context and return a typed reply. |
-| `rocketmq-broker/src/processor/recall_message_processor.rs` — `RecallMessageProcessor<MS>` | `V1` generic leaf | Preserve typed error mapping and response semantics. |
-| `rocketmq-broker/src/client/manager/producer_manager.rs` | Registry/context consumer | Stores/indexes raw `Channel` values and accepts `ConnectionHandlerContext`. | Establish the canonical `SessionId` to client identity read seam needed by Pull, and retain only an explicit server-push capability where writes are required. |
+| `rocketmq-broker/src/processor/ack_message_processor.rs` — `AckMessageProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Uses a typed network/embedded source label; the core receives no transport handle. |
+| `rocketmq-broker/src/processor/change_invisible_time_processor.rs` — `ChangeInvisibleTimeProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Returns a typed response plan without direct response writes. |
+| `rocketmq-broker/src/processor/client_manage_processor.rs` — `ClientManageProcessor<MS>` | `Dual`: V2 leaf + isolated V1 wrapper | V2 registration uses canonical `SessionId`; raw `Channel` remains confined to `LegacyClientManageProcessor`. |
+| `rocketmq-broker/src/processor/consumer_manage_processor.rs` — `ConsumerManageProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Uses typed request-source metadata and the live SessionId registry. |
+| `rocketmq-broker/src/processor/end_transaction_processor.rs` — `EndTransactionProcessor<TM, MS>` | `Dual`: V2 leaf + V1 aggregate projection | Returns a typed reply/error plan and makes the legacy no-response branch explicit. |
+| `rocketmq-broker/src/processor/lite_manager_processor.rs` — `LiteManagerProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Has no transport-context dependency and preserves protocol behavior. |
+| `rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs` — `LiteSubscriptionCtlProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Removed the unused Channel cache from `LiteSubscriptionRegistry`. |
+| `rocketmq-broker/src/processor/maintenance_request_processor.rs` — `MaintenanceRequestProcessor` | `Dual`: V2 leaf + isolated V1 wrapper | V2 authorization uses the authenticated principal; legacy channel authentication stays in the wrapper. |
+| `rocketmq-broker/src/processor/peek_message_processor.rs` — `PeekMessageProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Uses typed source metadata and returns a typed response plan. |
+| `rocketmq-broker/src/processor/polling_info_processor.rs` — `PollingInfoProcessor` | `Dual`: V2 leaf + V1 aggregate projection | Embedded callers are labeled explicitly rather than assigned a synthetic address. |
+| `rocketmq-broker/src/processor/query_assignment_processor.rs` — `QueryAssignmentProcessor` | `Dual`: V2 leaf + V1 aggregate projection | The core receives only a diagnostic source label and returns a typed reply. |
+| `rocketmq-broker/src/processor/recall_message_processor.rs` — `RecallMessageProcessor<MS>` | `Dual`: V2 leaf + V1 aggregate projection | Requires a trusted network origin for the persisted born host and fails closed for embedded calls. |
+| `rocketmq-broker/src/client/manager/producer_manager.rs` and `consumer_manager.rs` | Dual registries: V1 `Channel` + V2 `SessionId` | Stable SessionId tables, reverse indexes, ordered typed consumer-member notifications, merged snapshots, and the live Pull client-identity seam coexist with V1 drain tables until Broker cutover. |
 
 The manager migration must not retain `RemotingRequest` or `SessionView` as an
 arbitrary send handle. Existing source-text assertions are not completion

@@ -20,7 +20,6 @@ use dashmap::DashMap;
 use rocketmq_model::common::lite::get_parent_topic;
 use rocketmq_model::common::lite::LiteSubscription;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::Channel;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct LiteSubscriptionKey {
@@ -42,7 +41,6 @@ impl LiteSubscriptionKey {
 #[derive(Clone, Default)]
 pub(crate) struct LiteSubscriptionRegistry {
     subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscription>>,
-    client_channels: Arc<DashMap<CheetahString, Channel>>,
     wildcard_groups: Arc<DashMap<CheetahString, HashSet<CheetahString>>>,
     wildcard_clients: Arc<DashMap<WildcardGroupKey, HashSet<CheetahString>>>,
 }
@@ -73,10 +71,6 @@ pub(crate) struct LiteSubscriptionRecord {
 }
 
 impl LiteSubscriptionRegistry {
-    pub(crate) fn update_client_channel(&self, client_id: &CheetahString, channel: Channel) {
-        self.client_channels.insert(client_id.clone(), channel);
-    }
-
     pub(crate) fn add_partial_subscription(
         &self,
         client_id: &CheetahString,
@@ -117,7 +111,6 @@ impl LiteSubscriptionRegistry {
 
         if empty {
             self.subscriptions.remove(&key);
-            self.cleanup_client_channel_if_unused(client_id);
             None
         } else {
             Some(snapshot)
@@ -153,7 +146,6 @@ impl LiteSubscriptionRegistry {
         self.set_wildcard_client(client_id, group, topic, wildcard);
         if effective_topics.is_empty() {
             self.subscriptions.remove(&key);
-            self.cleanup_client_channel_if_unused(client_id);
         } else {
             self.subscriptions.insert(key, subscription.clone());
         }
@@ -173,7 +165,6 @@ impl LiteSubscriptionRegistry {
             self.set_wildcard_client(&key.client_id, &key.group, &key.topic, false);
             self.subscriptions.remove(&key);
         }
-        self.cleanup_client_channel_if_unused(client_id);
         removed
     }
 
@@ -290,16 +281,6 @@ impl LiteSubscriptionRegistry {
             if remove_topic_entry {
                 self.wildcard_groups.remove(topic);
             }
-        }
-    }
-
-    fn cleanup_client_channel_if_unused(&self, client_id: &CheetahString) {
-        if self
-            .subscriptions
-            .iter()
-            .all(|entry| entry.key().client_id != *client_id)
-        {
-            self.client_channels.remove(client_id);
         }
     }
 }

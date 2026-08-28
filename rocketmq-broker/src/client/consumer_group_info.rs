@@ -24,17 +24,21 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v2::SessionId;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::client_channel_info::ClientSessionInfo;
+use crate::client::consumer_ids_change_listener::ConsumerConnectionIdentity;
 
 #[derive(Clone)]
 pub struct ConsumerGroupInfo {
     group_name: CheetahString,
     subscription_table: Arc<DashMap<CheetahString, Arc<SubscriptionData>>>,
     channel_info_table: Arc<DashMap<Channel, ClientChannelInfo>>,
+    session_info_table: Arc<DashMap<SessionId, ClientSessionInfo>>,
     consume_type: ConsumeType,
     message_model: MessageModel,
     consume_from_where: ConsumeFromWhere,
@@ -52,6 +56,7 @@ impl ConsumerGroupInfo {
             group_name: group_name.into(),
             subscription_table: Arc::new(DashMap::new()),
             channel_info_table: Arc::new(DashMap::new()),
+            session_info_table: Arc::new(DashMap::new()),
             consume_type,
             message_model,
             consume_from_where,
@@ -64,6 +69,7 @@ impl ConsumerGroupInfo {
             group_name: group_name.into(),
             subscription_table: Arc::new(DashMap::new()),
             channel_info_table: Arc::new(DashMap::new()),
+            session_info_table: Arc::new(DashMap::new()),
             consume_type: ConsumeType::ConsumePassively,
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
@@ -142,9 +148,9 @@ impl ConsumerGroupInfo {
         self.channel_info_table.len()
     }
 
-    /// Returns whether the group has no registered channels.
+    /// Returns whether the group has neither legacy channels nor V2 sessions.
     pub fn channels_is_empty(&self) -> bool {
-        self.channel_info_table.is_empty()
+        self.channel_info_table.is_empty() && self.session_info_table.is_empty()
     }
 
     /// Inserts or replaces one channel registration using its channel identity as the key.
@@ -174,9 +180,113 @@ impl ConsumerGroupInfo {
     }
 
     pub fn get_all_client_ids(&self) -> Vec<CheetahString> {
-        self.channel_info_table
+        let mut client_ids = self
+            .channel_info_table
             .iter()
             .map(|info| info.value().client_id().clone())
+            .collect::<HashSet<_>>();
+        client_ids.extend(
+            self.session_info_table
+                .iter()
+                .map(|info| info.value().client_id().clone()),
+        );
+        client_ids.into_iter().collect()
+    }
+
+    pub(crate) fn session_client_id(&self, session_id: SessionId) -> Option<CheetahString> {
+        self.session_info_table
+            .get(&session_id)
+            .map(|info| info.client_id().clone())
+    }
+
+    pub(crate) fn session_info_snapshot(&self) -> Vec<ClientSessionInfo> {
+        self.session_info_table
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
+    }
+
+    pub(crate) fn connection_identity_snapshot(&self) -> Vec<ConsumerConnectionIdentity> {
+        let mut identities = self
+            .channel_info_table
+            .iter()
+            .map(|entry| ConsumerConnectionIdentity::Legacy {
+                client_id: entry.client_id().clone(),
+            })
+            .collect::<Vec<_>>();
+        identities.extend(
+            self.session_info_table
+                .iter()
+                .map(|entry| ConsumerConnectionIdentity::Session {
+                    session_id: *entry.key(),
+                    client_id: entry.client_id().clone(),
+                }),
+        );
+        identities
+    }
+
+    pub(crate) fn update_session(
+        &mut self,
+        info_new: ClientSessionInfo,
+        consume_type: ConsumeType,
+        message_model: MessageModel,
+        consume_from_where: ConsumeFromWhere,
+    ) -> bool {
+        self.consume_type = consume_type;
+        self.message_model = message_model;
+        self.consume_from_where = consume_from_where;
+
+        let is_new = if let Some(mut info_old) = self.session_info_table.get_mut(&info_new.session_id()) {
+            info_old.refresh_from(&info_new);
+            false
+        } else {
+            self.session_info_table.insert(info_new.session_id(), info_new);
+            true
+        };
+        self.last_update_timestamp = current_millis();
+        is_new
+    }
+
+    pub(crate) fn unregister_session(&self, session_id: SessionId) -> Option<ClientSessionInfo> {
+        self.session_info_table.remove(&session_id).map(|(_, info)| info)
+    }
+
+    pub(crate) fn unregister_session_if_expired(
+        &self,
+        session_id: SessionId,
+        now: u64,
+        timeout: u64,
+    ) -> Option<ClientSessionInfo> {
+        self.session_info_table
+            .remove_if(&session_id, |_, info| {
+                now.saturating_sub(info.last_update_timestamp()) > timeout
+            })
+            .map(|(_, info)| info)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_session_last_update_timestamp_for_test(&self, session_id: SessionId, timestamp: u64) {
+        if let Some(mut info) = self.session_info_table.get_mut(&session_id) {
+            info.set_last_update_timestamp_for_test(timestamp);
+        }
+    }
+
+    pub(crate) fn remove_expired_sessions(&self, now: u64, timeout: u64) -> Vec<ClientSessionInfo> {
+        let expired = self
+            .session_info_table
+            .iter()
+            .filter(|entry| now.saturating_sub(entry.last_update_timestamp()) > timeout)
+            .map(|entry| entry.session_id())
+            .collect::<Vec<_>>();
+        expired
+            .into_iter()
+            .filter_map(|session_id| {
+                self.session_info_table
+                    .remove_if(&session_id, |_, info| {
+                        now.saturating_sub(info.last_update_timestamp()) > timeout
+                    })
+                    .map(|(_, info)| info)
+            })
             .collect()
     }
 

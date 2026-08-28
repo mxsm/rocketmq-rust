@@ -49,9 +49,9 @@ use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -290,10 +290,16 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
 }
 
 impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
-    pub(crate) async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_command(request).await
+    }
+
+    /// V2 leaf business contract: it only builds a response command and never uses a transport handle.
+    async fn process_command(
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match RequestCode::from(request.code()) {
@@ -316,14 +322,17 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: BrokerReadWriteStore> RequestProcessor for LiteManagerProcessor<MS> {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
+impl<MS: BrokerReadWriteStore + 'static> RequestProcessorV2 for LiteManagerProcessor<MS> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.context.command_factory;
+        let result = self.process_command(request.command_mut()).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "LiteManagerProcessor V2 command dispatch completed without a response",
+        )
     }
 }
 
@@ -952,17 +961,135 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::HandlerOutcome;
+    use rocketmq_transport::api::v2::RemotingRequest;
+    use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
 
+    use super::LiteManagerContext;
     use super::LiteManagerOffsetCapability;
     use super::LiteManagerPolicy;
+    use super::LiteManagerProcessor;
     use super::LiteManagerStoreCapability;
+    use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
     use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+    use crate::lite::lite_sharding::LiteShardingView;
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedLiteManagerProcessor {
+        inner: Arc<tokio::sync::Mutex<LiteManagerProcessor<BrokerMessageStore>>>,
+    }
+
+    impl RequestProcessorV2 for SharedLiteManagerProcessor {
+        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+            self.inner.lock().await.process(request).await
+        }
+    }
+
+    fn temp_test_root(label: &str) -> PathBuf {
+        let unique = format!(
+            "rocketmq-broker-lite-manager-{label}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    async fn new_test_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = temp_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await.is_ok());
+        runtime
+    }
+
+    fn lite_manager_processor_for_test(runtime: &mut BrokerRuntime) -> LiteManagerProcessor<BrokerMessageStore> {
+        let inner = runtime.runtime_state_mut();
+        let consumer_offset_manager = inner.consumer_offset_manager_handle();
+        let escape_bridge = inner.escape_bridge();
+        let pop_lite_message_processor = inner
+            .pop_lite_message_processor()
+            .map(Arc::downgrade)
+            .unwrap_or_default();
+        LiteManagerProcessor::new(LiteManagerContext::new(
+            LiteManagerPolicy::from_configs(&inner.broker_config(), &inner.message_store_config()),
+            inner.topic_config_manager_handle(),
+            inner.subscription_group_manager().clone(),
+            inner.lite_subscription_registry().clone(),
+            inner.lite_event_dispatcher().clone(),
+            inner.lite_lifecycle_manager().clone(),
+            LiteShardingView::new(
+                inner.broker_config().broker_name().clone(),
+                inner.topic_route_info_manager(),
+            ),
+            LiteManagerOffsetCapability::new(&consumer_offset_manager),
+            LiteManagerStoreCapability::new(&escape_bridge),
+            pop_lite_message_processor,
+        ))
+    }
+
+    async fn dispatch_v2(
+        processor: LiteManagerProcessor<BrokerMessageStore>,
+        command: RemotingCommand,
+    ) -> EmbeddedDispatchOutcome {
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            SharedLiteManagerProcessor {
+                inner: Arc::new(tokio::sync::Mutex::new(processor)),
+            },
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            crate::test_task_group("lite-manager-v2"),
+            Principal::new("lite-manager-v2-test"),
+        )
+        .dispatch(None, command)
+        .await
+        .expect("Lite manager V2 dispatch should complete")
+    }
 
     #[test]
     fn lite_manager_policy_captures_only_required_startup_values() {
@@ -983,6 +1110,23 @@ mod tests {
         assert_eq!(policy.broker_name, *broker_config.broker_name());
         assert_eq!(policy.max_client_event_count, 17);
         assert_eq!(policy.dispatch_delay_millis, 29);
+    }
+
+    #[tokio::test]
+    async fn lite_manager_v2_returns_broker_info_as_an_owned_body_plan() {
+        let mut runtime = new_test_runtime("v2-broker-info").await;
+        let processor = lite_manager_processor_for_test(&mut runtime);
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {}).set_opaque(8_808);
+
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
+            panic!("Lite manager V2 must return an inline response plan");
+        };
+
+        assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
+        assert!(plan.body_len() > 0);
+        assert_eq!(plan.body_part_count(), 1);
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[test]

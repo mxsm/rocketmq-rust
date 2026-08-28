@@ -20,12 +20,15 @@ use std::fs::File;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::FileRangeTransferHandle;
 use rocketmq_store::SelectMappedBufferResult;
+use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::FileRegionLease;
 use rocketmq_transport::api::v2::FileRegion;
@@ -90,6 +93,19 @@ impl FileRegionLease for StoreFileRegionLease {
 }
 
 impl BrokerResponseParts {
+    /// Splits a legacy response command into the body-free head and affine byte owner required by
+    /// the V2 response contract.
+    ///
+    /// Ordinary processor migrations use this boundary while their V1 compatibility shell still
+    /// returns a command. It prevents each leaf from open-coding body extraction or accidentally
+    /// placing a body-bearing head in a [`ResponsePlan`].
+    pub(crate) fn from_command(mut command: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
+        match command.take_body() {
+            Some(body) => Self::bytes(command, body),
+            None => Self::command(command),
+        }
+    }
+
     pub(crate) fn command(head: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
         Self::new(head, BrokerResponseBodyOwner::Empty)
     }
@@ -164,6 +180,25 @@ impl BrokerResponseParts {
     fn body(&self) -> &BrokerResponseBodyOwner {
         &self.body
     }
+}
+
+/// Converts an ordinary Broker leaf result into its immediate V2 outcome while preserving the
+/// Broker-owned wire factory for typed request-header failures.
+pub(crate) fn immediate_outcome_from_command_result(
+    command_factory: &RemotingCommandFactory,
+    result: RocketMQResult<Option<RemotingCommand>>,
+    original_opaque: i32,
+    missing_response: &'static str,
+) -> RocketMQResult<HandlerOutcome> {
+    let command = match result {
+        Ok(Some(command)) => command,
+        Ok(None) => return Err(RocketMQError::invariant_violated(missing_response)),
+        Err(error) if error.kind() == ErrorKind::RequestHeaderError => {
+            command_from_error_with_factory_and_opaque(command_factory, &error, original_opaque)
+        }
+        Err(error) => return Err(error),
+    };
+    BrokerResponseParts::from_command(command)?.into_handler_outcome()
 }
 
 fn validate_head(head: &RemotingCommand) -> Result<(), BrokerResponseBuildError> {

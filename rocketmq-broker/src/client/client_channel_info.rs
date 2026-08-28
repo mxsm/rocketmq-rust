@@ -16,6 +16,81 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v2::SessionId;
+
+/// Client identity retained for a V2 transport session.
+///
+/// This value contains no transport writer, request, session view, or connection
+/// context. The stable session identifier is the only link back to transport
+/// lifecycle state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClientSessionInfo {
+    session_id: SessionId,
+    client_id: CheetahString,
+    remote_address: Option<CheetahString>,
+    language: LanguageCode,
+    version: i32,
+    last_update_timestamp: u64,
+}
+
+impl ClientSessionInfo {
+    pub(crate) fn new(
+        session_id: SessionId,
+        client_id: CheetahString,
+        remote_address: Option<CheetahString>,
+        language: LanguageCode,
+        version: i32,
+    ) -> Self {
+        Self {
+            session_id,
+            client_id,
+            remote_address,
+            language,
+            version,
+            last_update_timestamp: current_millis(),
+        }
+    }
+
+    pub(crate) const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub(crate) const fn client_id(&self) -> &CheetahString {
+        &self.client_id
+    }
+
+    pub(crate) fn remote_address(&self) -> Option<&str> {
+        self.remote_address.as_deref()
+    }
+
+    pub(crate) const fn language(&self) -> LanguageCode {
+        self.language
+    }
+
+    pub(crate) const fn version(&self) -> i32 {
+        self.version
+    }
+
+    pub(crate) const fn last_update_timestamp(&self) -> u64 {
+        self.last_update_timestamp
+    }
+
+    pub(crate) fn refresh_from(&mut self, current: &Self) {
+        debug_assert_eq!(
+            self.client_id, current.client_id,
+            "a live SessionId cannot change client identity"
+        );
+        self.remote_address.clone_from(&current.remote_address);
+        self.language = current.language;
+        self.version = current.version;
+        self.last_update_timestamp = current_millis();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_update_timestamp_for_test(&mut self, timestamp: u64) {
+        self.last_update_timestamp = timestamp;
+    }
+}
 
 #[derive(Clone, Hash, PartialEq)]
 pub struct ClientChannelInfo {

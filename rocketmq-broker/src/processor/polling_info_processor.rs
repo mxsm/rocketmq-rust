@@ -24,9 +24,10 @@ use rocketmq_protocol::protocol::header::polling_info_response_header::PollingIn
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::error;
 use tracing::warn;
 
@@ -98,31 +99,35 @@ impl Clone for PollingInfoProcessor {
     }
 }
 
-impl RequestProcessor for PollingInfoProcessor {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_internal(channel, request).await
+impl RequestProcessorV2 for PollingInfoProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.command_factory;
+        let peer_label = request_peer_label(request.origin());
+        let result = self.process_command(&peer_label, request.command_mut()).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "PollingInfoProcessor V2 command dispatch completed without a response",
+        )
     }
 }
 
 impl PollingInfoProcessor {
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        peer_label: String,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut processor = self.clone();
-        processor.process_request(channel, ctx, request).await
+        processor.process_command(&peer_label, request).await
     }
 
-    async fn process_request_internal(
+    /// V2 leaf business contract; the trusted peer label is diagnostic metadata only.
+    async fn process_command(
         &mut self,
-        channel: Channel,
+        peer_label: &str,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = self.command_factory.create_java_default_error_response_command();
@@ -133,8 +138,7 @@ impl PollingInfoProcessor {
             .map_err(|e| {
                 error!(
                     "Failed to decode PollingInfoRequestHeader: {:?}, channel: {}",
-                    e,
-                    channel.remote_address()
+                    e, peer_label
                 );
                 e
             })?;
@@ -154,11 +158,7 @@ impl PollingInfoProcessor {
         let topic_config = self.topic_config_manager.select_topic_config(&request_header.topic);
 
         if topic_config.is_none() {
-            error!(
-                "The topic {} not exist, consumer: {}",
-                request_header.topic,
-                channel.remote_address()
-            );
+            error!("The topic {} not exist, consumer: {}", request_header.topic, peer_label);
             let response = response.set_code(ResponseCode::TopicNotExist).set_remark(format!(
                 "topic[{}] not exist, apply first please! {}",
                 request_header.topic, "https://rocketmq.apache.org/docs/bestPractice/06FAQ"
@@ -179,10 +179,7 @@ impl PollingInfoProcessor {
         if request_header.queue_id >= topic_config.read_queue_nums as i32 {
             let error_info = format!(
                 "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{}]",
-                request_header.queue_id,
-                request_header.topic,
-                topic_config.read_queue_nums,
-                channel.remote_address()
+                request_header.queue_id, request_header.topic, topic_config.read_queue_nums, peer_label
             );
             warn!("{}", error_info);
             let response = response.set_code(ResponseCode::SystemError).set_remark(error_info);
@@ -247,15 +244,48 @@ impl PollingInfoProcessor {
     }
 }
 
+fn request_peer_label(origin: &RequestOrigin) -> String {
+    match origin {
+        RequestOrigin::Network { peer } => peer.address().to_string(),
+        RequestOrigin::Embedded { .. } => "embedded".to_owned(),
+        _ => "unrecognized-origin".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::key_builder::KeyBuilder;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+    use rocketmq_protocol::protocol::SerializeType;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StateMachineVersionView;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::ServerConfig;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use tokio::net::TcpStream;
+    use tokio::sync::oneshot;
 
     use super::PollingCountProvider;
     use super::PollingInfoProcessor;
@@ -268,6 +298,54 @@ mod tests {
     impl PollingCountProvider for FixedPollingCount {
         fn polling_count(&self, _key: &str) -> i32 {
             self.0
+        }
+    }
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    struct EmbeddedV2Fixture {
+        owner: RuntimeOwner,
+        context: rocketmq_runtime::ChildServiceContext,
+        harness: EmbeddedRequestHarnessV2<PollingInfoProcessor>,
+    }
+
+    impl EmbeddedV2Fixture {
+        fn new(processor: PollingInfoProcessor) -> Self {
+            let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-v2-test"))
+                .expect("PollingInfo V2 test runtime");
+            let context = owner.root_context().component("polling-info-v2-test.request");
+            let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+                processor,
+                Vec::new(),
+                Arc::new(TransportSecurity::secure_enforced(
+                    Some(Arc::new(AllowEmbeddedPolicy)),
+                    None,
+                )),
+                Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            ));
+            let harness = EmbeddedRequestHarnessV2::new(
+                dispatcher,
+                context.task_group().clone(),
+                Principal::new("polling-info-v2-test"),
+            );
+            Self {
+                owner,
+                context,
+                harness,
+            }
+        }
+
+        async fn finish(self) {
+            drop(self.harness);
+            drop(self.context);
+            assert!(self.owner.shutdown_tasks().await.is_healthy());
+            assert!(self.owner.shutdown_background().is_healthy());
         }
     }
 
@@ -314,6 +392,101 @@ mod tests {
         assert_eq!(processor.get_polling_num("topic@group@0"), 7);
         drop(provider);
         assert_eq!(processor.get_polling_num("topic@group@0"), 0);
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_header_error_is_an_empty_reply_plan() {
+        let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(0));
+        let fixture = EmbeddedV2Fixture::new(test_processor(Arc::downgrade(&provider)));
+        let request = RemotingCommand::create_remoting_command(RequestCode::PollingInfo).set_opaque(711);
+
+        let outcome = fixture
+            .harness
+            .dispatch(None, request)
+            .await
+            .expect("embedded PollingInfo V2 header-error response");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("PollingInfo V2 header error must return a reply plan");
+        };
+
+        assert_eq!(plan.response_code(), ResponseCode::SystemError as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+        assert_eq!(plan.body_len(), 0);
+        fixture.finish().await;
+    }
+
+    #[tokio::test]
+    async fn v2_network_header_error_preserves_request_identity_and_wire_metadata() {
+        const ORIGINAL_OPAQUE: i32 = 9_013;
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-v2-network-test"))
+            .expect("PollingInfo V2 network test runtime");
+        let server_context = owner.root_context().component("polling-info-v2-network-test.server");
+        let runner_context = owner.root_context().component("polling-info-v2-network-test.runner");
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(4_201, SerializeType::ROCKETMQ));
+        let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(0));
+        let mut processor = test_processor(Arc::downgrade(&provider));
+        processor.command_factory = factory;
+        let server = TransportServerV2::new(
+            Arc::new(ServerConfig {
+                bind_address: "127.0.0.1".to_owned(),
+                listen_port: 0,
+                ..ServerConfig::default()
+            }),
+            server_context,
+            processor,
+        );
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        let (startup_sender, startup_receiver) = oneshot::channel();
+        let (result_sender, result_receiver) = oneshot::channel();
+        runner_context
+            .spawn_service("polling-info-v2-server", async move {
+                let result = server
+                    .try_run_with_shutdown_report_and_startup(
+                        async move {
+                            let _ = shutdown_receiver.await;
+                        },
+                        startup_sender,
+                    )
+                    .await;
+                let _ = result_sender.send(result);
+            })
+            .expect("spawn PollingInfo V2 server");
+
+        let address = startup_receiver
+            .await
+            .expect("PollingInfo V2 startup channel")
+            .expect("PollingInfo V2 server startup");
+        let mut client = Connection::new(
+            TcpStream::connect(address)
+                .await
+                .expect("connect PollingInfo V2 client"),
+        );
+        let request = RemotingCommand::create_remoting_command(RequestCode::PollingInfo).set_opaque(ORIGINAL_OPAQUE);
+        let request_version = request.version();
+        let request_serialize_type = request.serialize_type();
+        assert_ne!(request_version, factory.defaults().version());
+        client.send_command(request).await.expect("send PollingInfo V2 request");
+
+        let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+            .await
+            .expect("PollingInfo V2 response deadline")
+            .expect("PollingInfo V2 connection remains open")
+            .expect("PollingInfo V2 response frame");
+        assert_eq!(response.opaque(), ORIGINAL_OPAQUE);
+        assert_eq!(response.code(), ResponseCode::SystemError as i32);
+        assert_eq!(response.version(), request_version);
+        assert_eq!(response.serialize_type(), request_serialize_type);
+
+        client.shutdown().await.expect("shutdown PollingInfo V2 client");
+        let _ = shutdown_sender.send(());
+        let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
+            .await
+            .expect("PollingInfo V2 shutdown deadline")
+            .expect("PollingInfo V2 shutdown result channel")
+            .expect("PollingInfo V2 shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
     }
 
     #[test]

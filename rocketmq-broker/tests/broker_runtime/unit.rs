@@ -3162,6 +3162,97 @@ async fn phase3_broker_production_request_codes_dispatch_to_expected_processors(
 }
 
 #[tokio::test]
+async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pipeline() {
+    let mut runtime = new_phase3_test_runtime("pull-session-client-lookup").await;
+    let _ = runtime.init_processor();
+    let pull_processor = runtime
+        .composition
+        .request_pipeline
+        .pull_message_processor_for_test
+        .as_ref()
+        .cloned()
+        .expect("request pipeline should retain the test Pull processor handle");
+    let registration = runtime.composition.state.consumer_manager().client_registration();
+    let session_id = rocketmq_transport::test_support::session_id_for_test(9_845);
+    let replacement_session_id = rocketmq_transport::test_support::session_id_for_test(9_846);
+    let group = CheetahString::from_static_str("pull-session-group");
+
+    assert!(registration.register_consumer_session(
+        &group,
+        crate::client::client_channel_info::ClientSessionInfo::new(
+            session_id,
+            "pull-session-client".into(),
+            None,
+            rocketmq_protocol::protocol::LanguageCode::RUST,
+            1,
+        ),
+        rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively,
+        rocketmq_protocol::protocol::heartbeat::message_model::MessageModel::Clustering,
+        rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
+        HashSet::new(),
+        false,
+    ));
+    assert_eq!(
+        pull_processor.session_client_id_for_test(session_id, &group),
+        Some(CheetahString::from_static_str("pull-session-client"))
+    );
+
+    assert!(!registration.register_consumer_session(
+        &group,
+        crate::client::client_channel_info::ClientSessionInfo::new(
+            session_id,
+            "pull-session-client".into(),
+            None,
+            rocketmq_protocol::protocol::LanguageCode::RUST,
+            2,
+        ),
+        rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively,
+        rocketmq_protocol::protocol::heartbeat::message_model::MessageModel::Clustering,
+        rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
+        HashSet::new(),
+        false,
+    ));
+    assert_eq!(
+        pull_processor.session_client_id_for_test(session_id, &group),
+        Some(CheetahString::from_static_str("pull-session-client"))
+    );
+
+    assert!(registration.register_consumer_session(
+        &group,
+        crate::client::client_channel_info::ClientSessionInfo::new(
+            replacement_session_id,
+            "pull-session-client".into(),
+            None,
+            rocketmq_protocol::protocol::LanguageCode::RUST,
+            3,
+        ),
+        rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively,
+        rocketmq_protocol::protocol::heartbeat::message_model::MessageModel::Clustering,
+        rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
+        HashSet::new(),
+        false,
+    ));
+    assert_eq!(pull_processor.session_client_id_for_test(session_id, &group), None);
+    assert_eq!(
+        pull_processor.session_client_id_for_test(replacement_session_id, &group),
+        Some(CheetahString::from_static_str("pull-session-client"))
+    );
+
+    // A delayed close for the replaced transport session must not remove the live replacement.
+    registration.unregister_consumer_session(group.as_str(), session_id, false);
+    assert_eq!(
+        pull_processor.session_client_id_for_test(replacement_session_id, &group),
+        Some(CheetahString::from_static_str("pull-session-client"))
+    );
+    registration.unregister_consumer_session(group.as_str(), replacement_session_id, false);
+    assert_eq!(
+        pull_processor.session_client_id_for_test(replacement_session_id, &group),
+        None
+    );
+    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+}
+
+#[tokio::test]
 async fn phase3_send_message_processor_writes_to_local_store() {
     let mut runtime = new_phase3_test_runtime("phase3-send").await;
     let topic = CheetahString::from_static_str("phase3-send-topic");

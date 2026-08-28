@@ -44,9 +44,10 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -75,18 +76,33 @@ pub struct QueryAssignmentProcessor {
     metadata_io: Option<MetadataIoActor>,
 }
 
-impl RequestProcessor for QueryAssignmentProcessor {
-    async fn process_request(
+impl RequestProcessorV2 for QueryAssignmentProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.command_factory;
+        let peer_label = request_peer_label(request.origin());
+        let result = self.process_command(request.command_mut(), &peer_label).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "QueryAssignmentProcessor V2 command dispatch completed without a response",
+        )
+    }
+}
+
+impl QueryAssignmentProcessor {
+    /// V2 leaf business contract; the peer label is retained only for diagnostics.
+    async fn process_command(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
+        peer_label: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("QueryAssignmentProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::QueryAssignment | RequestCode::SetMessageRequestMode => {
-                self.process_request_inner(channel, ctx, request_code, request).await
+                self.process_command_inner(request_code, request, peer_label).await
             }
             _ => {
                 warn!(
@@ -103,9 +119,7 @@ impl RequestProcessor for QueryAssignmentProcessor {
             }
         }
     }
-}
 
-impl QueryAssignmentProcessor {
     pub(crate) fn new(
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
@@ -176,14 +190,13 @@ impl QueryAssignmentProcessor {
         &self.message_request_mode_manager
     }
 
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        peer_label: String,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut processor = self.clone();
-        processor.process_request(channel, ctx, request).await
+        processor.process_command(request, &peer_label).await
     }
 }
 
@@ -202,16 +215,15 @@ impl Clone for QueryAssignmentProcessor {
 }
 
 impl QueryAssignmentProcessor {
-    pub async fn process_request_inner(
+    async fn process_command_inner(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
+        peer_label: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
-            RequestCode::QueryAssignment => self.query_assignment(channel, ctx, request).await,
-            RequestCode::SetMessageRequestMode => self.set_message_request_mode(channel, ctx, request).await,
+            RequestCode::QueryAssignment => self.query_assignment(request, peer_label).await,
+            RequestCode::SetMessageRequestMode => self.set_message_request_mode(request).await,
             _ => Ok(None),
         }
     }
@@ -223,8 +235,6 @@ impl QueryAssignmentProcessor {
     ///
     /// # Arguments
     ///
-    /// * `channel` - The network channel
-    /// * `_ctx` - Connection handler context (unused)
     /// * `request` - The remoting command containing QueryAssignmentRequestBody
     ///
     /// # Returns
@@ -232,9 +242,8 @@ impl QueryAssignmentProcessor {
     /// A RemotingCommand response containing QueryAssignmentResponseBody with assigned queues
     async fn query_assignment(
         &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
+        peer_label: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
@@ -309,7 +318,7 @@ impl QueryAssignmentProcessor {
                 request_body.message_model,
                 &request_body.strategy_name,
                 set_message_request_mode_request_body,
-                channel,
+                peer_label,
             )
             .await;
         let assignments = if let Some(message_queues) = message_queues {
@@ -362,7 +371,7 @@ impl QueryAssignmentProcessor {
     ///   balancing strategy.
     /// * `set_message_request_mode_request_body` - A `SetMessageRequestModeRequestBody` containing
     ///   the message request mode settings.
-    /// * `channel` - A `Channel` representing the network channel.
+    /// * `peer_label` - Trusted ingress metadata used only in diagnostics.
     ///
     /// # Returns
     ///
@@ -376,7 +385,7 @@ impl QueryAssignmentProcessor {
         message_model: MessageModel,
         strategy_name: &CheetahString,
         set_message_request_mode_request_body: SetMessageRequestModeRequestBody,
-        channel: Channel,
+        peer_label: &str,
     ) -> Option<HashSet<MessageQueue>> {
         match message_model {
             // handle broadcasting consumer, this mode returns all message queues
@@ -436,11 +445,7 @@ impl QueryAssignmentProcessor {
 
                 let strategy = self.load_strategy.get(strategy_name);
                 if strategy.is_none() {
-                    warn!(
-                        "QueryLoad: unsupported strategy [{}],  {}",
-                        strategy_name,
-                        channel.remote_address()
-                    );
+                    warn!("QueryLoad: unsupported strategy [{}],  {}", strategy_name, peer_label);
                     return None;
                 }
                 // Safe to unwrap here: already checked strategy.is_none() above
@@ -506,8 +511,6 @@ impl QueryAssignmentProcessor {
 
     async fn set_message_request_mode(
         &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
@@ -551,6 +554,14 @@ impl QueryAssignmentProcessor {
     }
 }
 
+fn request_peer_label(origin: &RequestOrigin) -> String {
+    match origin {
+        RequestOrigin::Network { peer } => peer.address().to_string(),
+        RequestOrigin::Embedded { .. } => "embedded".to_owned(),
+        _ => "unrecognized-origin".to_owned(),
+    }
+}
+
 fn allocate(
     consumer_group: &CheetahString,
     current_cid: &CheetahString,
@@ -589,15 +600,91 @@ fn allocate(
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use cheetah_string::CheetahString;
     use rocketmq_model::allocation::AllocateMessageQueueAveragely;
     use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
     use rocketmq_model::allocation::AllocateMessageQueueStrategy;
     use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::ServerConfig;
+    use rocketmq_transport::api::v1::TransportClientConfig;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v1::TransportTelemetry;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use tokio::net::TcpStream;
+    use tokio::sync::oneshot;
 
     use super::allocate;
+    use super::QueryAssignmentProcessor;
+    use crate::client::consumer_group_event::ConsumerGroupEvent;
+    use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
+    use crate::client::manager::consumer_manager::ConsumerManager;
+    use crate::config::broker_config::BrokerConfig;
+    use crate::out_api::broker_outer_api::BrokerOuterAPI;
+    use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
+
+    struct NoopConsumerListener;
+
+    impl ConsumerIdsChangeListener for NoopConsumerListener {
+        fn handle(&self, _event: ConsumerGroupEvent, _group: &str, _args: &[&dyn Any]) {}
+
+        fn shutdown(&self) {}
+    }
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    fn v2_test_processor(owner: &RuntimeOwner) -> QueryAssignmentProcessor {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let broker_outer_api = BrokerOuterAPI::new(
+            Arc::new(TransportClientConfig::default()),
+            owner.root_context().component("query-assignment-v2-test.outer-api"),
+            TransportTelemetry::noop(),
+        );
+        let topic_route_info_manager = TopicRouteInfoManager::new(broker_outer_api, 60_000, None);
+        topic_route_info_manager.topic_subscribe_info_table.insert(
+            CheetahString::from_static_str("v2-assignment-topic"),
+            [MessageQueue::from_parts("v2-assignment-topic", "broker-a", 0)]
+                .into_iter()
+                .collect(),
+        );
+        let consumer_assignment_view = ConsumerManager::new(Arc::new(NoopConsumerListener), 60_000).assignment_view();
+        QueryAssignmentProcessor::new(
+            broker_config,
+            message_store_config,
+            topic_route_info_manager,
+            consumer_assignment_view,
+        )
+    }
 
     #[test]
     fn allocate_returns_error_when_current_cid_is_empty() {
@@ -731,5 +818,178 @@ mod tests {
             .unwrap();
         // With round-robin, consumer1 should get queue 0 and 2
         assert_eq!(result.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_unknown_request_returns_a_reply_plan() {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-v2-test"))
+            .expect("QueryAssignment V2 test runtime");
+        let context = owner.root_context().component("query-assignment-v2-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            v2_test_processor(&owner),
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let harness = EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            context.task_group().clone(),
+            Principal::new("query-assignment-v2-test"),
+        );
+
+        let outcome = harness
+            .dispatch(None, RemotingCommand::create_remoting_command(-98_453).set_opaque(320))
+            .await
+            .expect("embedded QueryAssignment V2 response");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("QueryAssignment V2 unknown request must return a reply plan");
+        };
+
+        assert_eq!(plan.response_code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+
+        drop(harness);
+        drop(context);
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_query_success_returns_an_owned_body_plan() {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-v2-body-test"))
+            .expect("QueryAssignment V2 body test runtime");
+        let context = owner.root_context().component("query-assignment-v2-body-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            v2_test_processor(&owner),
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let harness = EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            context.task_group().clone(),
+            Principal::new("query-assignment-v2-body-test"),
+        );
+        let body = QueryAssignmentRequestBody {
+            topic: CheetahString::from_static_str("v2-assignment-topic"),
+            consumer_group: CheetahString::from_static_str("v2-assignment-group"),
+            client_id: CheetahString::from_static_str("v2-assignment-client"),
+            strategy_name: CheetahString::from_static_str("AVG"),
+            message_model: MessageModel::Broadcasting,
+        }
+        .encode()
+        .expect("encode QueryAssignment request body");
+        let request = RemotingCommand::create_remoting_command(RequestCode::QueryAssignment)
+            .set_body(body)
+            .set_opaque(322);
+
+        let outcome = harness
+            .dispatch(None, request)
+            .await
+            .expect("embedded QueryAssignment V2 success response");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("QueryAssignment V2 success must return a reply plan");
+        };
+
+        assert_eq!(plan.response_code(), ResponseCode::Success as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
+        assert!(plan.body_len() > 0);
+        assert_eq!(plan.body_part_count(), 1);
+
+        drop(harness);
+        drop(context);
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+    }
+
+    #[tokio::test]
+    async fn v2_network_query_success_preserves_opaque_and_body() {
+        const ORIGINAL_OPAQUE: i32 = 9_014;
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-v2-network-test"))
+            .expect("QueryAssignment V2 network test runtime");
+        let server_context = owner
+            .root_context()
+            .component("query-assignment-v2-network-test.server");
+        let runner_context = owner
+            .root_context()
+            .component("query-assignment-v2-network-test.runner");
+        let server = TransportServerV2::new(
+            Arc::new(ServerConfig {
+                bind_address: "127.0.0.1".to_owned(),
+                listen_port: 0,
+                ..ServerConfig::default()
+            }),
+            server_context,
+            v2_test_processor(&owner),
+        );
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        let (startup_sender, startup_receiver) = oneshot::channel();
+        let (result_sender, result_receiver) = oneshot::channel();
+        runner_context
+            .spawn_service("query-assignment-v2-server", async move {
+                let result = server
+                    .try_run_with_shutdown_report_and_startup(
+                        async move {
+                            let _ = shutdown_receiver.await;
+                        },
+                        startup_sender,
+                    )
+                    .await;
+                let _ = result_sender.send(result);
+            })
+            .expect("spawn QueryAssignment V2 server");
+
+        let address = startup_receiver
+            .await
+            .expect("QueryAssignment V2 startup channel")
+            .expect("QueryAssignment V2 server startup");
+        let body = QueryAssignmentRequestBody {
+            topic: CheetahString::from_static_str("v2-assignment-topic"),
+            consumer_group: CheetahString::from_static_str("v2-assignment-group"),
+            client_id: CheetahString::from_static_str("v2-assignment-client"),
+            strategy_name: CheetahString::from_static_str("AVG"),
+            message_model: MessageModel::Broadcasting,
+        }
+        .encode()
+        .expect("encode QueryAssignment network request body");
+        let mut client = Connection::new(
+            TcpStream::connect(address)
+                .await
+                .expect("connect QueryAssignment V2 client"),
+        );
+        client
+            .send_command(
+                RemotingCommand::create_remoting_command(RequestCode::QueryAssignment)
+                    .set_body(body)
+                    .set_opaque(ORIGINAL_OPAQUE),
+            )
+            .await
+            .expect("send QueryAssignment V2 request");
+
+        let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+            .await
+            .expect("QueryAssignment V2 response deadline")
+            .expect("QueryAssignment V2 connection remains open")
+            .expect("QueryAssignment V2 response frame");
+        assert_eq!(response.opaque(), ORIGINAL_OPAQUE);
+        assert_eq!(response.code(), ResponseCode::Success as i32);
+        assert!(response.body().is_some_and(|body| !body.is_empty()));
+
+        client.shutdown().await.expect("shutdown QueryAssignment V2 client");
+        let _ = shutdown_sender.send(());
+        let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
+            .await
+            .expect("QueryAssignment V2 shutdown deadline")
+            .expect("QueryAssignment V2 shutdown result channel")
+            .expect("QueryAssignment V2 shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
     }
 }

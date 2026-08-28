@@ -47,9 +47,10 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -276,17 +277,29 @@ pub struct AckMessageProcessor<MS: BrokerReadWriteStore> {
     context: AckMessageProcessorContext<MS>,
 }
 
-impl<MS> RequestProcessor for AckMessageProcessor<MS>
+impl<MS> RequestProcessorV2 for AckMessageProcessor<MS>
 where
-    MS: BrokerReadWriteStore,
+    MS: BrokerReadWriteStore + 'static,
 {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.context.command_factory;
+        let request_source = request_origin_label(request.origin());
+        let result = self.process_command(request.command_mut(), &request_source).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "AckMessageProcessor V2 command dispatch completed without a response",
+        )
+    }
+}
+
+fn request_origin_label(origin: &RequestOrigin) -> CheetahString {
+    match origin {
+        RequestOrigin::Network { peer } => CheetahString::from_string(peer.address().to_string()),
+        RequestOrigin::Embedded { .. } => CheetahString::from_static_str("embedded"),
+        _ => CheetahString::from_static_str("unrecognized-origin"),
     }
 }
 
@@ -294,17 +307,26 @@ impl<MS> AckMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        request_source: String,
         request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_source = CheetahString::from_string(request_source);
+        self.process_command(request, &request_source).await
+    }
+
+    /// V2 leaf business contract; the typed origin is reduced to a diagnostic/offset source label.
+    async fn process_command(
+        &self,
+        request: &mut RemotingCommand,
+        request_source: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("AckMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::AckMessage | RequestCode::BatchAckMessage => {
-                self.process_request_inner(channel, ctx, request_code, request).await
+                self.process_command_inner(request_code, request, request_source).await
             }
             _ => {
                 warn!("AckMessageProcessor received unknown request code: {:?}", request_code);
@@ -327,21 +349,20 @@ where
         AckMessageProcessor { context }
     }
 
-    pub async fn process_request_inner(
+    async fn process_command_inner(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
+        request_source: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
-            RequestCode::AckMessage => self.process_ack(channel, ctx, request, true).await,
-            RequestCode::BatchAckMessage => self.process_batch_ack(channel, ctx, request, true).await,
+            RequestCode::AckMessage => self.process_ack(request, request_source).await,
+            RequestCode::BatchAckMessage => self.process_batch_ack(request, request_source).await,
             _ => {
                 error!(
                     "AckMessageProcessor failed to process RequestCode: {}, consumer: {} ",
                     request_code.to_i32(),
-                    channel.remote_address()
+                    request_source
                 );
                 Ok(Some(
                     self.context.command_factory.create_response_command_with_code_remark(
@@ -386,10 +407,8 @@ where
 {
     async fn process_ack(
         &self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-        _broker_allow_suspend: bool,
+        request_source: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<AckMessageRequestHeader>()?;
         let topic_config = self
@@ -400,7 +419,7 @@ where
             error!(
                 "topic[{}] not exist, consumer: {},apply first please! {}",
                 request_header.topic,
-                channel.remote_address(),
+                request_source,
                 FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
             );
             return Ok(Some(
@@ -418,10 +437,7 @@ where
         if request_header.queue_id >= topic_config.read_queue_nums as i32 || request_header.queue_id < 0 {
             let error_msg = format!(
                 "queueId{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{}]",
-                request_header.queue_id,
-                request_header.topic,
-                topic_config.read_queue_nums,
-                channel.remote_address()
+                request_header.queue_id, request_header.topic, topic_config.read_queue_nums, request_source
             );
             warn!("{}", error_msg);
 
@@ -457,17 +473,15 @@ where
             ));
         }
         let mut response = self.context.command_factory.create_success_response_command();
-        self.append_ack(Some(request_header), &mut response, None, &channel, None)
+        self.append_ack(Some(request_header), &mut response, None, request_source, None)
             .await?;
         Ok(Some(response))
     }
 
     async fn process_batch_ack(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-        _broker_allow_suspend: bool,
+        request_source: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(
@@ -487,7 +501,7 @@ where
         let mut response = self.context.command_factory.create_success_response_command();
         let broker_name = &req_body.broker_name;
         for ack in req_body.acks {
-            self.append_ack(None, &mut response, Some(ack), &_channel, Some(broker_name))
+            self.append_ack(None, &mut response, Some(ack), request_source, Some(broker_name))
                 .await?;
         }
         Ok(Some(response))
@@ -498,7 +512,7 @@ where
         request_header: Option<AckMessageRequestHeader>,
         response: &mut RemotingCommand,
         batch_ack: Option<BatchAck>,
-        channel: &Channel,
+        request_source: &CheetahString,
         broker_name: Option<&CheetahString>,
     ) -> RocketMQResult<()> {
         //handle single ack
@@ -533,7 +547,7 @@ where
                     ack_offset,
                     pop_time,
                     invisible_time,
-                    channel,
+                    request_source,
                     response,
                 )
                 .await;
@@ -598,7 +612,7 @@ where
                         offset,
                         pop_time,
                         invisible_time,
-                        channel,
+                        request_source,
                         response,
                     )
                     .await;
@@ -707,7 +721,7 @@ where
         ack_offset: i64,
         pop_time: i64,
         invisible_time: i64,
-        channel: &Channel,
+        request_source: &CheetahString,
         response: &mut RemotingCommand,
     ) {
         let lock_key = CheetahString::from_string(QueueLockManager::build_lock_key(&topic, &consume_group, q_id));
@@ -755,11 +769,7 @@ where
             Ordering::Equal => {
                 let error_info = format!(
                     "offset is illegal, key:{}, old:{}, commit:{}, next:{}, {}",
-                    lock_key,
-                    old_offset,
-                    ack_offset,
-                    next_offset,
-                    channel.remote_address()
+                    lock_key, old_offset, ack_offset, next_offset, request_source
                 );
                 response.set_code_ref(ResponseCode::MessageIllegal);
                 response.set_remark_mut(error_info);
@@ -779,7 +789,7 @@ where
                 };
                 if !has_offset_reset
                     && !self.context.consumer_offset.commit_offset(
-                        channel.remote_address().to_string().into(),
+                        request_source.clone(),
                         &consume_group,
                         &topic,
                         q_id,
@@ -831,8 +841,127 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU64;
+
     use super::*;
+    use rocketmq_error::RocketMQResult;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchError;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+
+    struct TestLeafProcessor<P> {
+        processor: Arc<tokio::sync::Mutex<P>>,
+    }
+
+    impl<P> Clone for TestLeafProcessor<P> {
+        fn clone(&self) -> Self {
+            Self {
+                processor: Arc::clone(&self.processor),
+            }
+        }
+    }
+
+    impl<P> TestLeafProcessor<P> {
+        fn new(processor: P) -> Self {
+            Self {
+                processor: Arc::new(tokio::sync::Mutex::new(processor)),
+            }
+        }
+    }
+
+    impl<P> RequestProcessorV2 for TestLeafProcessor<P>
+    where
+        P: RequestProcessorV2 + Send,
+    {
+        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+            self.processor.lock().await.process(request).await
+        }
+    }
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    async fn dispatch_embedded_v2<P>(
+        processor: P,
+        command: RemotingCommand,
+    ) -> Result<EmbeddedDispatchOutcome, EmbeddedDispatchError>
+    where
+        P: RequestProcessorV2 + Send + 'static,
+    {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("ack-message-v2-test"))
+            .expect("AckMessage V2 test runtime");
+        let context = owner.root_context().component("ack-message-v2-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            TestLeafProcessor::new(processor),
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let harness = EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            context.task_group().clone(),
+            Principal::new("ack-message-v2-test"),
+        );
+        let outcome = harness.dispatch(None, command).await;
+
+        drop(harness);
+        drop(context);
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+        outcome
+    }
+
+    fn v2_test_processor() -> AckMessageProcessor<StorePorts> {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = MessageStoreConfig::default();
+        let topic_config_manager = Arc::new(TopicConfigManager::new(
+            broker_config.as_ref(),
+            &message_store_config,
+            true,
+            None,
+        ));
+        let store_host = "127.0.0.1:10911".parse().expect("valid store host");
+        let context = AckMessageProcessorContext::new(
+            AckMessagePolicy::from_config(broker_config.as_ref(), store_host),
+            topic_config_manager,
+            AckMessageOffsetCapability { manager: Weak::new() },
+            AckMessageOrderCapability { manager: Weak::new() },
+            AckMessageStoreCapability {
+                escape_bridge: Weak::new(),
+            },
+            PopInflightMessageCounter::new(Arc::new(AtomicU64::new(0))),
+            AckMessagePopCapability {
+                merge_service: Weak::new(),
+                notification_service: Weak::new(),
+                queue_lock_manager: QueueLockManager::new(),
+            },
+            Vec::new(),
+        );
+        AckMessageProcessor::new(context)
+    }
 
     #[test]
     fn ack_message_policy_captures_only_required_startup_values() {
@@ -873,5 +1002,21 @@ mod tests {
         assert!(!pop.notify_message_arriving(&topic, 0, &group));
         assert_eq!(order.commit_and_next(&group, &topic, 0, 0, 0), None);
         assert_eq!(order.check_block(&CheetahString::empty(), &group, &topic, 0, 1), None);
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_unknown_request_returns_a_reply_plan() {
+        let outcome = dispatch_embedded_v2(
+            v2_test_processor(),
+            RemotingCommand::create_remoting_command(-98_451).set_opaque(317),
+        )
+        .await
+        .expect("embedded AckMessage V2 response");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("AckMessage V2 unknown request must return a reply plan");
+        };
+
+        assert_eq!(plan.response_code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
     }
 }

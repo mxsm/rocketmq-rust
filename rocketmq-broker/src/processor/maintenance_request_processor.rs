@@ -50,12 +50,15 @@ use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_remark;
 use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::processor::response_plan::immediate_outcome_from_command_result;
 
 /// Broker endpoint for release-checkpoint operations.
+#[derive(Clone)]
 pub struct MaintenanceRequestProcessor {
     command_factory: RemotingCommandFactory,
     broker_config: Arc<BrokerConfig>,
@@ -96,43 +99,51 @@ impl MaintenanceRequestProcessor {
         }
     }
 
-    pub(crate) async fn process_request_shared(
+    pub(crate) fn legacy_adapter(&self) -> LegacyMaintenanceRequestProcessor {
+        LegacyMaintenanceRequestProcessor {
+            processor: self.clone(),
+        }
+    }
+
+    async fn process_authorized(
         &self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        grant: &MaintenanceAuthorizationGrant,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
-        let grant = self.authorize(&channel, request).await?;
+    ) -> RocketMQResult<RemotingCommand> {
         let response = match RequestCode::from(request.code()) {
-            RequestCode::MaintenanceGetCapabilities => self.capabilities(&grant).await?,
-            RequestCode::MaintenanceCreateStoreCheckpoint => self.create_store_checkpoint(&grant, request).await?,
+            RequestCode::MaintenanceGetCapabilities => self.capabilities(grant).await?,
+            RequestCode::MaintenanceCreateStoreCheckpoint => self.create_store_checkpoint(grant, request).await?,
             RequestCode::MaintenanceVerifyCheckpoint => self.verify_store_checkpoint(request)?,
-            RequestCode::MaintenanceRestoreVerify => self.restore_verify(&grant, request).await?,
+            RequestCode::MaintenanceRestoreVerify => self.restore_verify(grant, request).await?,
             _ => {
-                return Ok(Some(request_code_not_supported_with_factory_and_remark(
+                return Ok(request_code_not_supported_with_factory_and_remark(
                     &self.command_factory,
                     request.code(),
                     format!("request type {} is not a Broker maintenance operation", request.code()),
-                )));
+                ));
             }
         };
-        Ok(Some(response.set_opaque(request.opaque())))
+        Ok(response.set_opaque(request.opaque()))
     }
 
-    async fn authorize(
-        &self,
-        channel: &Channel,
-        request: &RemotingCommand,
-    ) -> RocketMQResult<MaintenanceAuthorizationGrant> {
+    fn authorize_v2(&self, request: &RemotingRequest) -> RocketMQResult<MaintenanceAuthorizationGrant> {
         if !self.broker_config.maintenance_enabled {
             return Err(RocketMQError::authentication_failed(
                 "Broker maintenance API is disabled",
             ));
         }
-        let principal = self
-            .auth_runtime
-            .authenticate_maintenance_principal(request, Some(channel.channel_id()))
-            .await?;
+        let principal = request
+            .authentication()
+            .principal()
+            .ok_or_else(|| RocketMQError::authentication_failed("maintenance request is anonymous"))?;
+        self.authorize_principal(principal.id(), request.command())
+    }
+
+    fn authorize_principal(
+        &self,
+        principal: &str,
+        request: &RemotingCommand,
+    ) -> RocketMQResult<MaintenanceAuthorizationGrant> {
         let header = request
             .decode_command_custom_header::<MaintenanceRequestHeader>()
             .map_err(|source| RocketMQError::request_header_source("decode privileged maintenance header", source))?;
@@ -248,14 +259,44 @@ impl MaintenanceRequestProcessor {
     }
 }
 
-impl RequestProcessor for MaintenanceRequestProcessor {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+pub(crate) struct LegacyMaintenanceRequestProcessor {
+    processor: MaintenanceRequestProcessor,
+}
+
+impl LegacyMaintenanceRequestProcessor {
+    pub(crate) async fn process_legacy(
+        &self,
+        channel: &Channel,
         request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
+        if !self.processor.broker_config.maintenance_enabled {
+            return Err(RocketMQError::authentication_failed(
+                "Broker maintenance API is disabled",
+            ));
+        }
+        let principal = self
+            .processor
+            .auth_runtime
+            .authenticate_maintenance_principal(request, Some(channel.channel_id()))
+            .await?;
+        let grant = self.processor.authorize_principal(principal.as_str(), request)?;
+        self.processor.process_authorized(&grant, request).await.map(Some)
+    }
+}
+
+impl RequestProcessorV2 for MaintenanceRequestProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let result = match self.authorize_v2(request) {
+            Ok(grant) => self.process_authorized(&grant, request.command_mut()).await.map(Some),
+            Err(error) => Err(error),
+        };
+        immediate_outcome_from_command_result(
+            &self.command_factory,
+            result,
+            original_opaque,
+            "maintenance processor returned no response",
+        )
     }
 }
 
@@ -406,7 +447,117 @@ fn checkpoint_verification_to_wire(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+    use std::sync::Weak;
+
+    use rocketmq_auth::AuthConfig;
+    use rocketmq_auth::AuthRuntimeBuilder;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::MaintenancePolicy;
+    use rocketmq_security_api::MaintenancePrincipalBinding;
+    use rocketmq_security_api::MaintenanceResourceBudget;
+    use rocketmq_security_api::MaintenanceRole;
+    use rocketmq_security_api::MaintenanceRoleGrant;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
+    use rocketmq_store::StorePorts;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+
     use super::*;
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    fn maintenance_policy() -> MaintenancePolicy {
+        MaintenancePolicy {
+            schema_version: MAINTENANCE_POLICY_SCHEMA_VERSION,
+            policy_id: "broker-maintenance-v2-test".to_string(),
+            policy_version: 7,
+            require_authentication: true,
+            require_authorization: true,
+            require_fencing_token: true,
+            max_request_lifetime_millis: 30_000,
+            resource_budget: MaintenanceResourceBudget {
+                max_checkpoint_bytes: 4_096,
+                max_store_members: 1,
+                max_concurrent_operations: 1,
+            },
+            principal_bindings: vec![MaintenancePrincipalBinding {
+                principal: "release-operator".to_string(),
+                roles: BTreeSet::from([MaintenanceRole::ReleaseOperator]),
+            }],
+            role_grants: vec![MaintenanceRoleGrant {
+                role: MaintenanceRole::ReleaseOperator,
+                capabilities: BTreeSet::from([MaintenanceCapability::ReleaseCheckpoint]),
+            }],
+        }
+    }
+
+    async fn maintenance_processor_for_test() -> MaintenanceRequestProcessor {
+        let service_context = crate::test_service_context("maintenance-v2");
+        let auth_runtime = Arc::new(
+            AuthRuntimeBuilder::new(AuthConfig::default(), service_context.component("auth"))
+                .build()
+                .await
+                .expect("build maintenance auth runtime"),
+        );
+        let authorizer = Arc::new(MaintenanceAuthorizer::new(
+            maintenance_policy().into_validated().expect("valid maintenance policy"),
+        ));
+        let checkpoint_service = Arc::new(StoreReleaseCheckpointService::new(
+            Weak::<StorePorts>::new(),
+            PathBuf::from("maintenance-v2-unused"),
+            service_context.component("checkpoint"),
+        ));
+        MaintenanceRequestProcessor::new(
+            Arc::new(BrokerConfig {
+                maintenance_enabled: true,
+                authentication_enabled: true,
+                authorization_enabled: true,
+                ..BrokerConfig::default()
+            }),
+            auth_runtime,
+            authorizer,
+            checkpoint_service,
+        )
+    }
+
+    async fn dispatch_v2(
+        processor: MaintenanceRequestProcessor,
+        principal: &'static str,
+        command: RemotingCommand,
+    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::v2::EmbeddedDispatchError> {
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            processor,
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            crate::test_task_group("maintenance-request-v2"),
+            Principal::new(principal),
+        )
+        .dispatch(None, command)
+        .await
+    }
 
     fn wire_manifest(backend: ReleaseCheckpointBackend) -> StoreReleaseCheckpointManifest {
         StoreReleaseCheckpointManifest {
@@ -436,6 +587,48 @@ mod tests {
             wal_retained: true,
             persistent_volume_retained: true,
         }
+    }
+
+    fn verify_request(opaque: i32) -> RemotingCommand {
+        let deadline_unix_millis = rocketmq_runtime::common::time_utils::current_millis() + 20_000;
+        RemotingCommand::create_request_command(
+            RequestCode::MaintenanceVerifyCheckpoint,
+            MaintenanceRequestHeader {
+                operation_id: "verify-checkpoint-7".into(),
+                policy_version: 7,
+                deadline_unix_millis,
+                fencing_token: 42,
+            },
+        )
+        .set_body(
+            serde_json::to_vec(&wire_manifest(ReleaseCheckpointBackend::Local))
+                .expect("serialize maintenance manifest"),
+        )
+        .set_opaque(opaque)
+    }
+
+    #[tokio::test]
+    async fn maintenance_v2_uses_authenticated_principal_for_authorization() {
+        let processor = maintenance_processor_for_test().await;
+
+        let EmbeddedDispatchOutcome::Reply(plan) =
+            dispatch_v2(processor.clone(), "release-operator", verify_request(5_505))
+                .await
+                .expect("bound maintenance principal should be authorized")
+        else {
+            panic!("authorized maintenance V2 must return an inline response plan");
+        };
+        assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
+        assert!(plan.body_len() > 0);
+
+        let EmbeddedDispatchOutcome::Reply(denied) = dispatch_v2(processor, "ordinary-admin", verify_request(5_506))
+            .await
+            .expect("authorization failures should become typed response plans")
+        else {
+            panic!("denied maintenance V2 must return an inline response plan");
+        };
+        assert_eq!(ResponseCode::from(denied.response_code()), ResponseCode::NoPermission);
+        assert_eq!(denied.body_len(), 0);
     }
 
     #[test]
