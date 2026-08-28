@@ -162,6 +162,10 @@ use tokio::time::sleep;
 
 use super::*;
 
+mod pop_lite_core_causality_tests;
+mod pop_lite_deferred_wire_tests;
+mod pop_lite_v1_compatibility_tests;
+
 impl BrokerRuntime {
     pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<BrokerMessageStore>> {
         self.composition.state.build_pull_message_context()
@@ -1642,7 +1646,11 @@ async fn new_lite_test_runtime(label: &str) -> BrokerRuntime {
         read_uncommitted: true,
         ..MessageStoreConfig::default()
     });
-    let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+    let mut runtime = BrokerRuntime::new_with_service_context(
+        broker_config,
+        message_store_config,
+        crate::test_service_context(format!("broker-runtime.{label}")),
+    );
     assert!(runtime.initialize().await.is_ok());
     runtime
 }
@@ -4911,108 +4919,6 @@ async fn pop_lite_message_without_events_suspends_when_polling_enabled() {
             .get_polling_num("client-1"),
         1
     );
-
-    runtime
-        .composition
-        .state
-        .pop_lite_message_processor
-        .as_ref()
-        .expect("pop lite processor should be initialized")
-        .shutdown()
-        .await;
-    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
-}
-
-#[tokio::test]
-async fn trigger_lite_dispatch_wakes_suspended_pop_lite_request_and_advances_offset() {
-    let mut runtime = new_lite_test_runtime("pop-lite-trigger-wakeup").await;
-    seed_lite_query_state(&mut runtime);
-    seed_lmq_message(&mut runtime, "child-a", b"lite-body").await;
-    let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
-
-    let (mut processor, _) = runtime.init_processor();
-    runtime
-        .composition
-        .state
-        .pop_lite_message_processor
-        .as_ref()
-        .expect("pop lite processor should be initialized")
-        .start()
-        .await;
-
-    let pop_channel = create_test_channel().await;
-    let pop_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
-    let pop_header = PopLiteMessageRequestHeader {
-        client_id: CheetahString::from_static_str("client-1"),
-        consumer_group: CheetahString::from_static_str("group-a"),
-        topic: CheetahString::from_static_str("parent-topic"),
-        max_msg_num: 1,
-        invisible_time: 60_000,
-        poll_time: 3_000,
-        born_time: current_millis() as i64,
-        attempt_id: None,
-        rpc: None,
-    };
-    let mut pop_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, pop_header);
-    pop_request.make_custom_header_to_net();
-    let response = processor
-        .process_request(pop_channel, pop_ctx, &mut pop_request)
-        .await
-        .expect("pop lite should suspend cleanly");
-    assert!(
-        response.is_none(),
-        "suspended pop-lite should not produce an immediate response"
-    );
-
-    let trigger_channel = create_test_channel().await;
-    let trigger_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(trigger_channel.clone()));
-    let trigger_header = TriggerLiteDispatchRequestHeader {
-        group: CheetahString::from_static_str("group-a"),
-        client_id: Some(CheetahString::from_static_str("client-1")),
-    };
-    let mut trigger_request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, trigger_header);
-    trigger_request.make_custom_header_to_net();
-    let trigger_response = processor
-        .process_request(trigger_channel, trigger_ctx, &mut trigger_request)
-        .await
-        .expect("trigger lite dispatch should succeed")
-        .expect("trigger lite dispatch should return a response");
-    assert_eq!(ResponseCode::from(trigger_response.code()), ResponseCode::Success);
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if runtime.composition.state.consumer_offset_manager().query_offset(
-            &CheetahString::from_static_str("group-a"),
-            &lmq_name,
-            0,
-        ) == 1
-        {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "suspended pop-lite request should be woken and advance offset"
-        );
-        sleep(Duration::from_millis(20)).await;
-    }
-
-    assert_eq!(
-        runtime
-            .composition
-            .state
-            .pop_lite_message_processor
-            .as_ref()
-            .expect("pop lite processor should be initialized")
-            .pop_lite_long_polling_service()
-            .get_polling_num("client-1"),
-        0
-    );
-    assert!(runtime
-        .composition
-        .state
-        .lite_event_dispatcher()
-        .pending_events(&CheetahString::from_static_str("client-1"))
-        .is_empty());
 
     runtime
         .composition

@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -34,6 +35,16 @@ use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 use tokio::sync::Notify;
 
+pub(crate) use self::reservation::LiteEventBatch;
+pub(crate) use self::reservation::LiteEventBatchExecution;
+pub(crate) use self::reservation::LiteEventBatchReservation;
+pub(crate) use self::reservation::LiteEventBatchTerminal;
+use self::reservation::LiteEventReservationMetrics;
+pub(crate) use self::reservation::LiteEventReservationSnapshot;
+use self::reservation::ReservedEventBatch;
+
+mod reservation;
+
 const DEFAULT_CLIENT_EVENT_LIMIT: usize = 10_000;
 const DEFAULT_EVENT_MEMORY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EVENT_AGE: Duration = Duration::from_secs(30);
@@ -51,9 +62,12 @@ struct ClientEventState {
     group: CheetahString,
     events: VecDeque<CheetahString>,
     event_set: HashSet<CheetahString>,
+    committed_events: HashSet<CheetahString>,
+    committed_redispatches: HashSet<CheetahString>,
     permits: HashMap<CheetahString, Arc<ResourcePermit>>,
     enqueued_at: HashMap<CheetahString, Duration>,
     max_event_count: usize,
+    reserved: Option<ReservedEventBatch>,
 }
 
 impl Default for ClientEventState {
@@ -62,9 +76,12 @@ impl Default for ClientEventState {
             group: CheetahString::new(),
             events: VecDeque::new(),
             event_set: HashSet::new(),
+            committed_events: HashSet::new(),
+            committed_redispatches: HashSet::new(),
             permits: HashMap::new(),
             enqueued_at: HashMap::new(),
             max_event_count: DEFAULT_CLIENT_EVENT_LIMIT,
+            reserved: None,
         }
     }
 }
@@ -78,7 +95,7 @@ impl ClientEventState {
         if self.event_set.contains(&event) {
             return true;
         }
-        if self.events.len() >= self.max_event_count {
+        if self.event_set.len() >= self.max_event_count {
             return false;
         }
         self.event_set.insert(event.clone());
@@ -88,20 +105,19 @@ impl ClientEventState {
         true
     }
 
-    fn drain(&mut self) -> Vec<CheetahString> {
-        let drained = self.events.drain(..).collect::<Vec<_>>();
-        self.event_set.clear();
-        self.permits.clear();
-        self.enqueued_at.clear();
-        drained
-    }
-
     fn pending_events(&self) -> Vec<CheetahString> {
         self.events.iter().cloned().collect()
     }
 
     fn is_empty(&self) -> bool {
         self.events.is_empty()
+    }
+
+    fn is_fully_empty(&self) -> bool {
+        self.events.is_empty()
+            && self.reserved.is_none()
+            && self.committed_events.is_empty()
+            && self.committed_redispatches.is_empty()
     }
 
     fn drop_stale(&mut self, now: Duration, max_age: Duration) -> usize {
@@ -184,6 +200,8 @@ pub(crate) struct LiteEventDispatcher {
     wakeup_notify: Arc<Mutex<Option<Arc<Notify>>>>,
     event_budget: ResourceBudget,
     client_access_budget: ResourceBudget,
+    next_reservation_id: Arc<AtomicU64>,
+    reservation_metrics: Arc<LiteEventReservationMetrics>,
 }
 
 impl Default for LiteEventDispatcher {
@@ -240,6 +258,8 @@ impl LiteEventDispatcher {
             wakeup_notify: Arc::new(Mutex::new(None)),
             event_budget,
             client_access_budget,
+            next_reservation_id: Arc::new(AtomicU64::new(1)),
+            reservation_metrics: Arc::new(LiteEventReservationMetrics::default()),
         })
     }
 
@@ -346,6 +366,9 @@ impl LiteEventDispatcher {
             let original_len = entry.events.len();
             for lmq_name in ordered_lmq_names {
                 if entry.event_set.contains(&lmq_name) || deferred_snapshot.contains(&lmq_name) {
+                    if entry.committed_events.contains(&lmq_name) {
+                        entry.committed_redispatches.insert(lmq_name);
+                    }
                     self.event_budget.record_coalesced(1);
                     continue;
                 }
@@ -425,16 +448,13 @@ impl LiteEventDispatcher {
     }
 
     pub(crate) fn take_pending_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
-        let now = current_millis();
-        self.scan(now);
-        self.touch_client(client_id);
-
-        let mut drained = self.drain_client_events(client_id);
-        if self.promote_deferred_events(client_id, now, true) > 0 {
-            drained.extend(self.drain_client_events(client_id));
-        }
-        self.cleanup_client_state(client_id);
-        drained
+        let Some(reservation) = self.reserve_pending_events(client_id) else {
+            return Vec::new();
+        };
+        let batch = reservation.commit();
+        let events = batch.event_names();
+        batch.complete(&HashSet::new());
+        events
     }
 
     fn scan(&self, now: u64) {
@@ -475,11 +495,12 @@ impl LiteEventDispatcher {
         let empty_clients = self
             .client_events
             .iter()
-            .filter(|entry| entry.is_empty() && !self.deferred_dispatches.contains_key(entry.key()))
+            .filter(|entry| entry.is_fully_empty() && !self.deferred_dispatches.contains_key(entry.key()))
             .map(|entry| entry.key().clone())
             .collect::<Vec<_>>();
         for client_id in empty_clients {
-            self.client_events.remove_if(&client_id, |_, state| state.is_empty());
+            self.client_events
+                .remove_if(&client_id, |_, state| state.is_fully_empty());
         }
         if dropped > 0 {
             self.event_budget.record_dropped(dropped);
@@ -510,13 +531,6 @@ impl LiteEventDispatcher {
         self.client_access_budget.record_dropped(removed);
     }
 
-    fn drain_client_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
-        self.client_events
-            .get_mut(client_id)
-            .map(|mut entry| entry.drain())
-            .unwrap_or_default()
-    }
-
     fn promote_deferred_events(&self, client_id: &CheetahString, now: u64, force: bool) -> usize {
         let Some(mut state) = self.deferred_dispatches.get_mut(client_id) else {
             return 0;
@@ -533,6 +547,9 @@ impl LiteEventDispatcher {
             let candidates = state.events.iter().cloned().collect::<Vec<_>>();
             for lmq_name in candidates {
                 if entry.event_set.contains(&lmq_name) {
+                    if entry.committed_events.contains(&lmq_name) {
+                        entry.committed_redispatches.insert(lmq_name.clone());
+                    }
                     state.events.remove(&lmq_name);
                     state.permits.remove(&lmq_name);
                     state.enqueued_at.remove(&lmq_name);
@@ -597,11 +614,14 @@ impl LiteEventDispatcher {
         let mut retained = 0;
         let mut coalesced = 0;
         for (lmq_name, permit) in lmq_names {
-            let already_pending = entry.events.contains(lmq_name)
-                || self
-                    .client_events
-                    .get(client_id)
-                    .is_some_and(|state| state.event_set.contains(lmq_name));
+            let pending_in_client = self.client_events.get_mut(client_id).is_some_and(|mut state| {
+                let pending = state.event_set.contains(lmq_name);
+                if pending && state.committed_events.contains(lmq_name) {
+                    state.committed_redispatches.insert(lmq_name.clone());
+                }
+                pending
+            });
+            let already_pending = entry.events.contains(lmq_name) || pending_in_client;
             if already_pending {
                 coalesced += 1;
                 continue;
@@ -628,9 +648,10 @@ impl LiteEventDispatcher {
         let should_remove = self
             .client_events
             .get(client_id)
-            .is_some_and(|entry| entry.is_empty() && !has_deferred);
+            .is_some_and(|entry| entry.is_fully_empty() && !has_deferred);
         if should_remove {
-            self.client_events.remove_if(client_id, |_, state| state.is_empty());
+            self.client_events
+                .remove_if(client_id, |_, state| state.is_fully_empty());
         }
     }
 

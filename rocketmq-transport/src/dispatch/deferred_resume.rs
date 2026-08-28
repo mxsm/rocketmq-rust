@@ -482,33 +482,34 @@ where
         Completed(RocketMQResult<T>),
         Stopped(ResumeResult),
     }
-    let outcome = {
-        let handler_future = handler(resume, reason);
-        tokio::pin!(handler_future);
-        tokio::select! {
-            biased;
-            stop = stop_view.wait_before_write() => HandlerOutcome::Stopped(finish_lifecycle(
-                id,
-                request_id,
-                responder.take().expect("stopped handler responder"),
-                marker.take().expect("stopped handler marker"),
-                stop,
-                None,
-            )),
-            result = &mut handler_future => {
-                match stop_view.current_before_write() {
-                    Some(stop) => HandlerOutcome::Stopped(finish_lifecycle(
-                        id,
-                        request_id,
-                        responder.take().expect("post-handler responder"),
-                        marker.take().expect("post-handler marker"),
-                        stop,
-                        None,
-                    )),
-                    None => HandlerOutcome::Completed(result),
-                }
-            },
-        }
+    // Keep the completed handler future alive until response delivery reaches
+    // its canonical terminal. Broker-private handlers use this ownership seam
+    // for affine resources that must span business execution and socket I/O.
+    let handler_future = handler(resume, reason);
+    tokio::pin!(handler_future);
+    let outcome = tokio::select! {
+        biased;
+        stop = stop_view.wait_before_write() => HandlerOutcome::Stopped(finish_lifecycle(
+            id,
+            request_id,
+            responder.take().expect("stopped handler responder"),
+            marker.take().expect("stopped handler marker"),
+            stop,
+            None,
+        )),
+        result = &mut handler_future => {
+            match stop_view.current_before_write() {
+                Some(stop) => HandlerOutcome::Stopped(finish_lifecycle(
+                    id,
+                    request_id,
+                    responder.take().expect("post-handler responder"),
+                    marker.take().expect("post-handler marker"),
+                    stop,
+                    None,
+                )),
+                None => HandlerOutcome::Completed(result),
+            }
+        },
     };
     let result = match outcome {
         HandlerOutcome::Stopped(result) => result,
@@ -695,6 +696,10 @@ impl ResumeCompletion {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "deferred_resume/terminal_ownership_tests.rs"]
+mod terminal_ownership_tests;
 
 #[cfg(test)]
 mod tests {

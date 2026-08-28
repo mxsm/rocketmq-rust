@@ -208,29 +208,14 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
                     if queue.is_empty() {
                         continue;
                     }
-                    loop {
-                        let Some(first) = queue.pop_front() else {
-                            break;
-                        };
-                        let first = first.value().clone();
-                        if !first.is_timeout() {
-                            queue.insert(first);
-                            break;
-                        }
-                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                        service.wake_up(first);
-                    }
+                    service.wake_up_expired_requests(queue);
                 }
                 prune_empty_polling_queues(&service.polling_map);
             }
 
             if let Some(service) = service.upgrade() {
                 for entry in service.polling_map.iter() {
-                    let queue = entry.value();
-                    while let Some(first) = queue.pop_front() {
-                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                        service.wake_up(first.value().clone());
-                    }
+                    service.drain_polling_queue(entry.value());
                 }
                 service.polling_map.clear();
                 service.running.store(false, Ordering::Release);
@@ -353,6 +338,7 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
     }
 
     fn wake_up_with_claim(&self, pop_request: Arc<PopRequest>, client_wakeup_claim: Option<ClientWakeupClaim>) -> bool {
+        pop_request.release_resource_permit();
         if !pop_request.complete() {
             return false;
         }
@@ -405,9 +391,32 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             let pop_request = remoting_commands.pop_front().map(|entry| entry.value().clone())?;
             self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
             if !pop_request.get_channel().connection_ref().is_healthy() {
+                pop_request.release_resource_permit();
                 continue;
             }
             return Some(pop_request);
+        }
+    }
+
+    fn wake_up_expired_requests(&self, queue: &SkipSet<Arc<PopRequest>>) {
+        loop {
+            let Some(first) = queue.pop_front() else {
+                break;
+            };
+            let first = first.value().clone();
+            if !first.is_timeout() {
+                queue.insert(first);
+                break;
+            }
+            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            self.wake_up(first);
+        }
+    }
+
+    fn drain_polling_queue(&self, queue: &SkipSet<Arc<PopRequest>>) {
+        while let Some(first) = queue.pop_front() {
+            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            self.wake_up(first.value().clone());
         }
     }
 
@@ -443,7 +452,202 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_runtime::MonotonicClock;
+    use rocketmq_runtime::ResourceBudgetTree;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
+
     use super::*;
+
+    #[derive(Default)]
+    struct ManualClock {
+        millis: AtomicU64,
+    }
+
+    impl ManualClock {
+        fn advance(&self, duration: Duration) {
+            self.millis.fetch_add(
+                duration.as_millis().try_into().expect("test duration fits u64"),
+                Ordering::AcqRel,
+            );
+        }
+    }
+
+    impl MonotonicClock for ManualClock {
+        fn now(&self) -> Duration {
+            Duration::from_millis(self.millis.load(Ordering::Acquire))
+        }
+    }
+
+    struct TestProcessor;
+
+    impl PopLiteLongPollingRequestProcessor for TestProcessor {
+        async fn process_request_when_wakeup(
+            &self,
+            _channel: Channel,
+            _ctx: ConnectionHandlerContext,
+            _request: RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+            Ok(None)
+        }
+    }
+
+    fn budgeted_service() -> (PopLiteLongPollingService<TestProcessor>, Arc<ManualClock>) {
+        let clock = Arc::new(ManualClock::default());
+        let tree = ResourceBudgetTree::with_clock(
+            "pop-lite-pinned-node",
+            BudgetLimit::new(1, 64 * 1024, FullPolicy::Reject),
+            clock.clone(),
+        )
+        .expect("root budget");
+        let context = PopLiteLongPollingServiceContext::try_with_resource_budget(
+            PopLiteLongPollingPolicy {
+                pop_polling_map_size: 1,
+                max_pop_polling_size: 1,
+                pop_polling_size: 1,
+            },
+            LiteEventDispatcher::default(),
+            None,
+            &tree.root(),
+        )
+        .expect("PopLite request budget");
+        let service = PopLiteLongPollingService::new(context, Weak::new());
+        service.running.store(true, Ordering::Release);
+        (service, clock)
+    }
+
+    async fn test_context() -> ConnectionHandlerContext {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener address");
+        let stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        stream.set_nonblocking(true).expect("set nonblocking");
+        let stream = tokio::net::TcpStream::from_std(stream).expect("convert TCP stream");
+        let connection = Connection::new(stream);
+        let channel = rocketmq_transport::test_support::TestChannelBuilder::new(
+            connection,
+            crate::test_task_group("pop-lite-pinned-node-channel"),
+        )
+        .addresses(local_addr, local_addr)
+        .build()
+        .expect("build test channel");
+        Arc::new(ConnectionHandlerContextWrapper::new(channel))
+    }
+
+    async fn insert_budgeted_request(
+        service: &PopLiteLongPollingService<TestProcessor>,
+        client_id: &CheetahString,
+        expired: u64,
+    ) -> usize {
+        let command = RemotingCommand::create_remoting_command(0);
+        let retained_bytes = PopRequest::estimated_retained_bytes(&command);
+        let permit = service
+            .context
+            .request_budget
+            .try_acquire_data(retained_bytes)
+            .expect("first suspended request should fit");
+        let request = Arc::new(PopRequest::new_with_resource_permit(
+            command,
+            test_context().await,
+            expired,
+            None,
+            None,
+            permit,
+        ));
+        service
+            .polling_map
+            .entry(client_id.clone())
+            .or_default()
+            .insert(request);
+        service.total_polling_num.fetch_add(1, Ordering::AcqRel);
+        retained_bytes
+    }
+
+    fn assert_budget_released_and_readmits(
+        service: &PopLiteLongPollingService<TestProcessor>,
+        clock: &ManualClock,
+        retained_bytes: usize,
+    ) {
+        let terminal = service.resource_snapshot().requests;
+        assert_eq!(terminal.current_count, 0);
+        assert_eq!(terminal.current_bytes, 0);
+
+        clock.advance(Duration::from_secs(1));
+        let readmitted = service
+            .context
+            .request_budget
+            .try_acquire_data(retained_bytes)
+            .expect("terminal request must immediately return its capacity");
+        let admitted = service.resource_snapshot().requests;
+        assert_eq!(admitted.current_count, 1);
+        assert_eq!(admitted.current_bytes, retained_bytes);
+        drop(readmitted);
+        assert_eq!(service.resource_snapshot().requests.current_count, 0);
+        assert_eq!(service.resource_snapshot().requests.current_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn arrival_terminal_releases_budget_while_removed_skipset_node_stays_pinned() {
+        let (service, clock) = budgeted_service();
+        let client_id = CheetahString::from_static_str("arrival-client");
+        let mut command = RemotingCommand::create_remoting_command(0);
+        let retained_bytes = PopRequest::estimated_retained_bytes(&command);
+
+        assert_eq!(
+            service.polling(
+                test_context().await,
+                &mut command,
+                &client_id,
+                i64::try_from(current_millis()).expect("test clock fits i64"),
+                30_000,
+            ),
+            PollingResult::PollingSuc
+        );
+        let queue = service.polling_map.get(&client_id).expect("client queue");
+        let pinned_node = queue.value().front().expect("suspended request node");
+        assert_eq!(service.resource_snapshot().requests.current_count, 1);
+        assert_eq!(service.resource_snapshot().requests.current_bytes, retained_bytes);
+
+        let request = service.poll_request(queue.value()).expect("arrival claims request");
+        let duplicate = Arc::clone(&request);
+        assert!(!service.wake_up(request));
+        assert!(!service.wake_up(duplicate));
+
+        assert_budget_released_and_readmits(&service, clock.as_ref(), retained_bytes);
+        assert!(pinned_node.is_removed(), "guard must still pin the removed node");
+    }
+
+    #[tokio::test]
+    async fn timeout_terminal_releases_budget_while_removed_skipset_node_stays_pinned() {
+        let (service, clock) = budgeted_service();
+        let client_id = CheetahString::from_static_str("timeout-client");
+        let retained_bytes = insert_budgeted_request(&service, &client_id, 0).await;
+        let queue = service.polling_map.get(&client_id).expect("client queue");
+        let pinned_node = queue.value().front().expect("suspended request node");
+
+        service.wake_up_expired_requests(queue.value());
+
+        assert_eq!(service.total_polling_num.load(Ordering::Acquire), 0);
+        assert_budget_released_and_readmits(&service, clock.as_ref(), retained_bytes);
+        assert!(pinned_node.is_removed(), "guard must still pin the removed node");
+    }
+
+    #[tokio::test]
+    async fn cancellation_drain_releases_budget_while_removed_skipset_node_stays_pinned() {
+        let (service, clock) = budgeted_service();
+        let client_id = CheetahString::from_static_str("cancel-client");
+        let retained_bytes =
+            insert_budgeted_request(&service, &client_id, current_millis().saturating_add(30_000)).await;
+        let queue = service.polling_map.get(&client_id).expect("client queue");
+        let pinned_node = queue.value().front().expect("suspended request node");
+        service.running.store(false, Ordering::Release);
+
+        service.drain_polling_queue(queue.value());
+
+        assert_eq!(service.total_polling_num.load(Ordering::Acquire), 0);
+        assert_budget_released_and_readmits(&service, clock.as_ref(), retained_bytes);
+        assert!(pinned_node.is_removed(), "guard must still pin the removed node");
+    }
 
     #[test]
     fn overload_rejects_excess_long_poll_requests_and_releases_permits() {

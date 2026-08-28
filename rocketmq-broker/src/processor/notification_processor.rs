@@ -12,23 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod core;
+mod response;
+mod resume;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rand::RngExt;
 use rocketmq_model::common::config::TopicConfig;
-use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 #[cfg(any(test, feature = "test-support"))]
 use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
-use rocketmq_model::common::FAQUrl;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
-use rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
@@ -40,8 +39,6 @@ use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::error;
-use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
@@ -530,164 +527,26 @@ where
         }
         let channel = ctx.channel();
 
-        let mut response = self
-            .context
-            .command_factory
-            .create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<NotificationRequestHeader>()?;
-
-        response.set_opaque_mut(request.opaque());
-
-        if !PermName::is_readable(self.context.policy.broker_permission) {
-            response.set_code_ref(ResponseCode::NoPermission);
-            response.set_remark_mut(format!(
-                "the broker[{}] peeking message is forbidden",
-                self.context.policy.broker_ip1
-            ));
-            return Ok(Some(response));
-        }
-
-        let topic_config = self
-            .context
-            .topic_config_manager
-            .select_topic_config(&request_header.topic);
-        if topic_config.is_none() {
-            error!(
-                "The topic {} not exist, consumer: {}",
-                request_header.topic,
-                channel.remote_address()
-            );
-            response.set_code_ref(ResponseCode::TopicNotExist);
-            response.set_remark_mut(format!(
-                "topic[{}] not exist, apply first please! {}",
-                request_header.topic,
-                FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-            ));
-            return Ok(Some(response));
-        }
-        let topic_config = topic_config.unwrap();
-
-        if !PermName::is_readable(topic_config.perm) {
-            response.set_code_ref(ResponseCode::NoPermission);
-            response.set_remark_mut(format!(
-                "the topic[{}] peeking message is forbidden",
-                request_header.topic
-            ));
-            return Ok(Some(response));
-        }
-
-        if request_header.queue_id >= topic_config.get_read_queue_nums() as i32 {
-            let error_info = format!(
-                "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{:?}]",
-                request_header.queue_id,
-                request_header.topic,
-                topic_config.get_read_queue_nums(),
-                channel.remote_address()
-            );
-            warn!("{}", error_info);
-            response.set_code_ref(ResponseCode::InvalidParameter);
-            response.set_remark_mut(&error_info);
-            return Ok(Some(response));
-        }
-
-        let subscription_group_config = match self
-            .context
-            .subscription_group_lookup
-            .find_subscription_group_config(&request_header.consumer_group)
-        {
-            Some(config) => config,
-            None => {
-                response.set_code_ref(ResponseCode::SubscriptionGroupNotExist);
-                response.set_remark_mut(format!(
-                    "subscription group [{}] does not exist, {}",
-                    request_header.consumer_group,
-                    FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
-                ));
-                return Ok(Some(response));
-            }
+        let effective_peer = channel.remote_address();
+        let core = self
+            .execute_notification_core(&request_header, effective_peer, request.opaque(), None)
+            .await;
+        let core = match core {
+            core::NotificationCoreOutcome::Reply(response) => return Ok(Some(response)),
+            core::NotificationCoreOutcome::Ready(core) => core,
         };
-
-        if !subscription_group_config.consume_enable() {
-            response.set_code_ref(ResponseCode::NoPermission);
-            response.set_remark_mut(format!(
-                "subscription group no permission, {}",
-                request_header.consumer_group
-            ));
-            return Ok(Some(response));
-        }
-
-        let filter_contract = match build_notification_filter_contract(
-            self.context.policy.use_message_filter_for_notification,
-            &self.context.consumer_filter_manager,
-            &request_header,
-        ) {
-            Ok(contract) => contract,
-            Err(()) => {
-                warn!(
-                    "Parse the consumer's subscription[{:?}] failed, group: {}",
-                    request_header.exp, request_header.consumer_group
-                );
-                response.set_code_ref(ResponseCode::SubscriptionParseFailed);
-                response.set_remark_mut("parse the consumer's subscription failed");
-                return Ok(Some(response));
-            }
-        };
-
-        let random_q: i32 = rand::rng().random_range(0..100);
-        let mut has_msg = false;
-        let need_retry = random_q % 5 == 0;
-        let retry_policy = self.context.retry_policies.retry_policy(&request_header.consumer_group);
-
-        if need_retry {
-            for retry_topic in
-                retry_policy.read_topics(request_header.topic.as_str(), request_header.consumer_group.as_str())
-            {
-                let retry_topic = retry_topic.into();
-                has_msg = self
-                    .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
-                    .await;
-                if has_msg {
-                    break;
-                }
-            }
-        }
-        if !has_msg {
-            if request_header.queue_id < 0 {
-                has_msg = self
-                    .has_msg_from_topic(Some(&topic_config), random_q, &request_header, filter_contract.as_ref())
-                    .await;
-            } else if let Some(topic_name) = topic_config.topic_name.as_ref() {
-                let queue_id = request_header.queue_id;
-                has_msg = self
-                    .has_msg_from_queue(topic_name, &request_header, queue_id, filter_contract.as_ref())
-                    .await;
-            }
-            // if it doesn't have message, fetch retry again
-            if !need_retry && !has_msg {
-                for retry_topic in
-                    retry_policy.read_topics(request_header.topic.as_str(), request_header.consumer_group.as_str())
-                {
-                    let retry_topic = retry_topic.into();
-                    has_msg = self
-                        .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
-                        .await;
-                    if has_msg {
-                        break;
-                    }
-                }
-            }
-        }
 
         let mut polling_full = false;
-        if !has_msg {
+        if !core.has_msg {
             match self.pop_long_polling_service.polling(
                 ctx,
                 request,
                 PollingHeader::new_from_notification_request_header(&request_header),
-                filter_contract
+                core.filter_contract
                     .as_ref()
                     .map(|contract| contract.subscription_data.clone()),
-                filter_contract.map(|contract| contract.message_filter),
+                core.filter_contract.map(|contract| contract.message_filter),
             ) {
                 PollingResult::PollingSuc => return Ok(None),
                 PollingResult::PollingFull => polling_full = true,
@@ -695,12 +554,12 @@ where
             }
         }
 
-        Ok(Some(
-            self.context
-                .command_factory
-                .create_success_response_command_with_header(NotificationResponseHeader { has_msg, polling_full })
-                .set_opaque(request.opaque()),
-        ))
+        Ok(Some(response::compose_notification_response(
+            &self.context.command_factory,
+            core.has_msg,
+            polling_full,
+            request.opaque(),
+        )))
     }
 }
 

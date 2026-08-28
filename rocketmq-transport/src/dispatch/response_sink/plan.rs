@@ -245,7 +245,7 @@ impl ResponseSink {
     }
 
     #[cfg(test)]
-    fn local_plan_with_handoff_gate(
+    pub(in crate::dispatch) fn local_plan_with_handoff_gate(
         control: RequestControlView,
         checked: Arc<tokio::sync::Notify>,
         resume: Arc<tokio::sync::Notify>,

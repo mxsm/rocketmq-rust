@@ -144,6 +144,7 @@ impl RequestProcessorV2 for TcpDeferredExpiryProcessor {
 struct TcpExpiryHarness {
     runtime: V2TestRuntime,
     admission_controller: Arc<AdmissionController>,
+    admission_events: tokio::sync::mpsc::Receiver<crate::admission::AdmissionEvent>,
     registry: DeferredRegistry<i32>,
     admission: DeferredAdmission,
     state: Arc<ExpiryProcessorState>,
@@ -155,7 +156,11 @@ struct TcpExpiryHarness {
 fn expiry_harness(name: &'static str, policy: ExpiryPolicy) -> TcpExpiryHarness {
     let runtime = V2TestRuntime::new(name);
     let registry = DeferredRegistry::<i32>::new();
-    let admission_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+    let (admission_event_tx, admission_events) = tokio::sync::mpsc::channel(64);
+    let admission_controller = Arc::new(AdmissionController::with_observer(
+        AdmissionLimits::default(),
+        admission_event_tx,
+    ));
     let admission = DeferredAdmission::try_configure(
         admission_controller.as_ref(),
         DeferredWaitLimits::new(8, 8 * 1024 * 1024),
@@ -178,6 +183,7 @@ fn expiry_harness(name: &'static str, policy: ExpiryPolicy) -> TcpExpiryHarness 
     TcpExpiryHarness {
         runtime,
         admission_controller,
+        admission_events,
         registry,
         admission,
         state,
@@ -211,6 +217,17 @@ async fn await_commit_barrier(client: &mut crate::connection::Connection, state:
     state.committed.notified().await;
 }
 
+async fn await_inflight_release(events: &mut tokio::sync::mpsc::Receiver<crate::admission::AdmissionEvent>) {
+    loop {
+        let event = events.recv().await.expect("admission observer remains open");
+        if event.resource == crate::admission::AdmissionResource::Inflight
+            && event.outcome == crate::admission::AdmissionOutcome::Released
+        {
+            break;
+        }
+    }
+}
+
 #[tokio::test]
 async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     let mut harness = expiry_harness(
@@ -227,7 +244,9 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     let terminals = Arc::clone(&harness.terminals);
     let (mut client, _address, mut running) = start_server(harness.runtime, harness.server).await;
     let observed = send_deferred_request(&mut client, &mut harness.registrations, 9_001).await;
+    await_inflight_release(&mut harness.admission_events).await;
     await_commit_barrier(&mut client, &state, 9_011).await;
+    await_inflight_release(&mut harness.admission_events).await;
 
     let batch =
         registry.sweep_expired_at_for_test(observed.scheduled_at, NonZeroUsize::new(8).expect("non-zero sweep"));
@@ -306,7 +325,9 @@ async fn real_tcp_owner_cutoff_removes_without_resuming_or_writing() {
     let terminals = Arc::clone(&harness.terminals);
     let (mut client, _address, mut running) = start_server(harness.runtime, harness.server).await;
     let observed = send_deferred_request(&mut client, &mut harness.registrations, 9_002).await;
+    await_inflight_release(&mut harness.admission_events).await;
     await_commit_barrier(&mut client, &state, 9_012).await;
+    await_inflight_release(&mut harness.admission_events).await;
 
     let batch =
         registry.sweep_expired_at_for_test(observed.scheduled_at, NonZeroUsize::new(8).expect("non-zero sweep"));

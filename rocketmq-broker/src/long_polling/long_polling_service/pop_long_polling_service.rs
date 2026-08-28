@@ -56,6 +56,11 @@ pub(crate) trait PollingCountProvider: Send + Sync {
     fn polling_count(&self, key: &str) -> i32;
 }
 
+#[cfg(test)]
+mod notification_v1_acceptance_tests;
+#[cfg(test)]
+mod permit_release_tests;
+
 #[derive(Clone)]
 pub(crate) struct PopLongPollingPolicy {
     pop_polling_map_size: usize,
@@ -211,24 +216,11 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                     continue;
                 }
                 for entry in service.polling_map.iter() {
-                    let key = entry.key();
                     let value = entry.value();
                     if value.is_empty() {
                         continue;
                     }
-                    loop {
-                        let first = value.pop_front();
-                        if first.is_none() {
-                            break;
-                        }
-                        let first = first.unwrap().value().clone();
-                        if !first.is_timeout() {
-                            value.insert(first);
-                            break;
-                        }
-                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                        service.wake_up(first);
-                    }
+                    service.wake_up_expired_requests(value);
                 }
 
                 let last_clean_time = service.last_clean_time.load(Ordering::Acquire);
@@ -240,11 +232,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             if let Some(service) = service.upgrade() {
                 // Clean all suspended requests before the owned scan task exits.
                 for entry in service.polling_map.iter() {
-                    let value = entry.value();
-                    while let Some(first) = value.pop_front() {
-                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                        service.wake_up(first.value().clone());
-                    }
+                    service.drain_polling_queue(entry.value());
                 }
                 service.running.store(false, Ordering::Release);
             }
@@ -342,7 +330,9 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
 
             // Remove polling entries outside the iteration
             for key in polling_keys_to_remove {
-                self.polling_map.remove(&key);
+                if let Some((_, queue)) = self.polling_map.remove(&key) {
+                    self.discard_polling_queue(&queue);
+                }
             }
         }
         self.last_clean_time.store(current_millis(), Ordering::Release);
@@ -608,6 +598,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
     }
 
     fn wake_up_inner(&self, pop_request: Arc<PopRequest>, completion: Option<PopWakeupObserver>) -> bool {
+        pop_request.release_resource_permit();
         if !pop_request.complete() {
             if let Some(completion) = completion {
                 completion.complete(PopWakeupOutcome::AlreadyCompleted);
@@ -677,31 +668,50 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
             return None;
         }
 
-        let mut pop_request: Option<Arc<PopRequest>>;
-
         //maybe need to optimize
         loop {
-            if self.notify_last {
-                pop_request = remoting_commands.pop_back().map(|entry| entry.value().clone());
+            let pop_request = if self.notify_last {
+                remoting_commands.pop_back().map(|entry| entry.value().clone())
             } else {
-                pop_request = remoting_commands.pop_front().map(|entry| entry.value().clone());
-            }
+                remoting_commands.pop_front().map(|entry| entry.value().clone())
+            }?;
 
             self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-            if pop_request.is_some()
-                && !pop_request
-                    .as_ref()
-                    .unwrap()
-                    .get_channel()
-                    .connection_ref()
-                    .is_healthy()
-            {
+            if !pop_request.get_channel().connection_ref().is_healthy() {
+                pop_request.release_resource_permit();
                 continue;
-            } else {
+            }
+            return Some(pop_request);
+        }
+    }
+
+    fn wake_up_expired_requests(&self, queue: &SkipSet<Arc<PopRequest>>) {
+        loop {
+            let Some(first) = queue.pop_front() else {
+                break;
+            };
+            let first = first.value().clone();
+            if !first.is_timeout() {
+                queue.insert(first);
                 break;
             }
+            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            self.wake_up(first);
         }
-        pop_request
+    }
+
+    fn drain_polling_queue(&self, queue: &SkipSet<Arc<PopRequest>>) {
+        while let Some(first) = queue.pop_front() {
+            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            self.wake_up(first.value().clone());
+        }
+    }
+
+    fn discard_polling_queue(&self, queue: &SkipSet<Arc<PopRequest>>) {
+        while let Some(first) = queue.pop_front() {
+            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            first.value().release_resource_permit();
+        }
     }
 
     /// Gets the number of polling requests for a given key
@@ -961,7 +971,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notification_filter_requeues_a_miss_then_wakes_on_a_match() {
+    async fn notification_v1_wake_compatibility_filter_requeues_a_miss_then_wakes_on_a_match() {
         let processor = Arc::new(FailingProcessor {
             calls: AtomicUsize::new(0),
         });

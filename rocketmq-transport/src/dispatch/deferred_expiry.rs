@@ -297,6 +297,41 @@ mod tests {
         assert_eq!(expiry.kind(), DeferredExpiryKind::OwnerDeadline);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn notification_protocol_deadline_owner_early_equal_late_matrix_is_owner_safe() {
+        let now = Instant::now();
+        let (_runtime, control) = control(Some(RequestDeadline::after(Duration::from_secs(10))));
+        let margins = DeferredExpiryMargins::new(Duration::from_secs(3), Duration::from_secs(2));
+        let cases = [
+            (
+                now + Duration::from_secs(4),
+                DeferredExpiryKind::LongPollTimeout,
+                now + Duration::from_secs(4),
+            ),
+            (
+                now + Duration::from_secs(5),
+                DeferredExpiryKind::OwnerDeadline,
+                now + Duration::from_secs(5),
+            ),
+            (
+                now + Duration::from_secs(6),
+                DeferredExpiryKind::OwnerDeadline,
+                now + Duration::from_secs(5),
+            ),
+        ];
+
+        for (protocol_at, expected_kind, expected_next) in cases {
+            let expiry = DeferredExpiry::try_from_control(&control, protocol_at, margins)
+                .expect("Notification owner/protocol boundary remains live");
+            assert_eq!(expiry.resume_cutoff(), Some(now + Duration::from_secs(5)));
+            assert_eq!(expiry.kind(), expected_kind);
+            assert_eq!(expiry.next_at(), expected_next);
+        }
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(Instant::now(), now + Duration::from_secs(5));
+    }
+
     #[test]
     fn margins_are_non_zero_even_without_an_owner_deadline() {
         let (_runtime, control) = control(None);
