@@ -841,6 +841,12 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::broker_fast_failure_pending_max_bytes")]
     pub broker_fast_failure_pending_max_bytes: usize,
 
+    /// Retained for configuration compatibility only.
+    ///
+    /// Structured fast-failure dispatch never transfers a request, channel,
+    /// or connection context to a detached writer. A configured `true` value
+    /// is ignored with a startup warning until the V2 deferred cutover owns
+    /// genuinely post-return Send work.
     #[serde(default = "defaults::send_request_executor_detached_enable")]
     pub send_request_executor_detached_enable: bool,
 

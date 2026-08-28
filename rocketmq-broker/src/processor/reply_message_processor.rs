@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
@@ -36,21 +38,44 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
+use rocketmq_store_api::MessageAppender;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::RequestControlView;
 
+use crate::client::manager::producer_manager::ProducerReplyChannelRegistry;
 use crate::client::net::broker_to_client::Broker2Client;
 use tracing::info;
 use tracing::warn;
 
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::send_message_processor::capability::SendMessageProcessorContext;
+use crate::processor::send_message_processor::structured_store::append_message_with_control_reply;
+use crate::processor::send_message_processor::structured_store::await_store;
+use crate::processor::send_message_processor::structured_store::StoreAwaitControl;
+use crate::processor::send_message_processor::structured_store::StoreHookCompletion;
+use crate::processor::send_message_processor::structured_store::StructuredStoreReply;
+use crate::processor::send_message_processor::structured_store::StructuredStoreReplyError;
 use crate::processor::send_message_processor::Inner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 const PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS: u64 = 10_000;
+
+pub(crate) async fn append_reply_message_with_control_reply<S, M, B>(
+    control: RequestControlView,
+    store: &mut S,
+    message: M,
+    build_response: B,
+) -> Result<StructuredStoreReply, StructuredStoreReplyError>
+where
+    S: MessageAppender<M>,
+    M: Send,
+    B: FnOnce(Result<S::Receipt, S::Error>) -> (RemotingCommand, StoreHookCompletion),
+{
+    append_message_with_control_reply(control, store, message, build_response).await
+}
 
 fn add_reply_response_metadata(response: &mut RemotingCommand, region_id: &str, trace_on: bool) {
     response
@@ -60,6 +85,119 @@ fn add_reply_response_metadata(response: &mut RemotingCommand, region_id: &str, 
 
 fn push_reply_call_failed_remark(sender_id: &str) -> String {
     format!("push reply message to {sender_id}fail.")
+}
+
+enum ReplyPushPortError {
+    ChannelNotFound,
+    Call {
+        source: rocketmq_error::RocketMQError,
+        remote_address: SocketAddr,
+    },
+}
+
+trait ReplyPushPort {
+    type Target: Send;
+
+    fn acquire(&mut self, sender_id: &str) -> Result<Self::Target, ReplyPushPortError>;
+
+    async fn push(
+        &mut self,
+        target: Self::Target,
+        header: ReplyMessageRequestHeader,
+        body: Option<Bytes>,
+        timeout_millis: u64,
+    ) -> Result<RemotingCommand, ReplyPushPortError>;
+}
+
+struct BrokerReplyPushPort {
+    channels: ProducerReplyChannelRegistry,
+    broker_to_client: Broker2Client,
+    command_factory: rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory,
+}
+
+impl ReplyPushPort for BrokerReplyPushPort {
+    type Target = Channel;
+
+    fn acquire(&mut self, sender_id: &str) -> Result<Self::Target, ReplyPushPortError> {
+        self.channels
+            .find_channel(sender_id)
+            .ok_or(ReplyPushPortError::ChannelNotFound)
+    }
+
+    async fn push(
+        &mut self,
+        mut channel: Self::Target,
+        header: ReplyMessageRequestHeader,
+        body: Option<Bytes>,
+        timeout_millis: u64,
+    ) -> Result<RemotingCommand, ReplyPushPortError> {
+        let remote_address = channel.remote_address();
+        let mut command = self
+            .command_factory
+            .create_request_command(RequestCode::PushReplyMessageToClient, header);
+        if let Some(body) = body {
+            command.set_body_mut_ref(body);
+        }
+        self.broker_to_client
+            .call_client(&mut channel, command, timeout_millis)
+            .await
+            .map_err(|source| ReplyPushPortError::Call { source, remote_address })
+    }
+}
+
+fn apply_reply_store_result(
+    put_message_result: &PutMessageResult,
+    response_header: &mut SendMessageResponseHeader,
+    queue_id: i32,
+    max_message_size: i32,
+) -> bool {
+    let put_ok = match put_message_result.put_message_status() {
+        PutMessageStatus::PutOk
+        | PutMessageStatus::FlushDiskTimeout
+        | PutMessageStatus::FlushSlaveTimeout
+        | PutMessageStatus::SlaveNotAvailable => true,
+        PutMessageStatus::ServiceNotAvailable => {
+            warn!(
+                "service not available now. It may be caused by one of the following reasons: the broker's disk \
+                 is full, messages are put to the slave, message store has been shut down, etc."
+            );
+            false
+        }
+        PutMessageStatus::CreateMappedFileFailed => {
+            warn!("create mapped file failed, remoting_server is busy or broken.");
+            false
+        }
+        PutMessageStatus::MessageIllegal => {
+            warn!(
+                "the message is illegal, maybe msg body or properties length not matched. msg body length limit \
+                 {}B.",
+                max_message_size
+            );
+            false
+        }
+        PutMessageStatus::PropertiesSizeExceeded => {
+            warn!("the message is illegal, maybe msg properties length limit 32KB.");
+            false
+        }
+        PutMessageStatus::OsPageCacheBusy => {
+            warn!("[PC_SYNCHRONIZED]broker busy, start flow control for a while");
+            false
+        }
+        PutMessageStatus::UnknownError => {
+            warn!("UNKNOWN_ERROR");
+            false
+        }
+        _ => {
+            warn!("UNKNOWN_ERROR DEFAULT");
+            false
+        }
+    };
+    if let (true, Some(append_result)) = (put_ok, put_message_result.append_message_result()) {
+        response_header.set_msg_id(append_result.msg_id.clone().unwrap_or_default());
+        response_header.set_queue_id(queue_id);
+        response_header.set_queue_offset(append_result.logics_offset);
+    }
+    put_ok
 }
 
 /// Processes reply messages in the Request-Reply pattern.
@@ -100,6 +238,23 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 /// ```
 pub struct ReplyMessageProcessor<MS: BrokerWriteStore, TS> {
     inner: Arc<Inner<MS, TS>>,
+}
+
+struct ReplyCompletionFacts {
+    owner: Option<CheetahString>,
+    body_len: usize,
+}
+
+impl ReplyCompletionFacts {
+    fn capture(request: &RemotingCommand) -> Self {
+        Self {
+            owner: request
+                .get_ext_fields()
+                .and_then(|fields| fields.get(BrokerStatsManager::COMMERCIAL_OWNER))
+                .cloned(),
+            body_len: request.get_body().map_or(0, |body| body.len()),
+        }
+    }
 }
 
 impl<MS: BrokerWriteStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
@@ -268,12 +423,24 @@ where
             queue_id_int = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
+        let inbound_peer = channel.remote_address();
         // Build message inner with extracted helper
-        let mut msg_inner = self.build_msg_inner(channel, request, &request_header, queue_id_int);
-
-        let mut push_reply_result = self
-            .push_reply_message(channel, ctx, &request_header, &mut msg_inner)
-            .await;
+        let mut msg_inner = self.build_msg_inner(inbound_peer, request, &request_header, queue_id_int);
+        let completion_facts = ReplyCompletionFacts::capture(request);
+        let store_host = self.inner.context.policy.snapshot().store_host;
+        let mut push_port = BrokerReplyPushPort {
+            channels: self.inner.context.producer_reply_channels.clone(),
+            broker_to_client: self.inner.broker_to_client,
+            command_factory: self.inner.context.command_factory,
+        };
+        let mut push_reply_result = push_reply_message(
+            &mut push_port,
+            inbound_peer,
+            store_host,
+            &request_header,
+            &mut msg_inner,
+        )
+        .await;
 
         // Update properties_string after msg_inner properties are modified
         msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
@@ -289,9 +456,14 @@ where
         // Preserve push-first semantics: optional persistence happens only after
         // the client push attempt has completed.
         if store_reply_message_enable {
-            let put_message_result = match self.inner.context.store.put_message(msg_inner).await {
-                Ok(result) => result,
-                Err(_) => {
+            let store_result = await_store(
+                StoreAwaitControl::Legacy,
+                self.inner.context.store.put_message(msg_inner),
+            )
+            .await;
+            let put_message_result = match store_result {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) | Err(_) => {
                     const STORE_ERROR: &str = "message store not available";
                     warn!("process reply message, {}", STORE_ERROR);
                     return response
@@ -301,7 +473,7 @@ where
             };
             self.handle_put_message_result(
                 put_message_result,
-                request,
+                completion_facts,
                 &mut response_header,
                 send_message_context,
                 queue_id_int,
@@ -315,7 +487,7 @@ where
     // Build MessageExtBrokerInner to improve readability
     fn build_msg_inner(
         &self,
-        channel: &Channel,
+        inbound_peer: SocketAddr,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
         queue_id_int: i32,
@@ -333,7 +505,7 @@ where
         );
         msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
         msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        msg_inner.message_ext_inner.born_host = channel.remote_address();
+        msg_inner.message_ext_inner.born_host = inbound_peer;
         msg_inner.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
         msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         msg_inner
@@ -342,60 +514,19 @@ where
     fn handle_put_message_result(
         &mut self,
         put_message_result: PutMessageResult,
-        request: &RemotingCommand,
+        completion_facts: ReplyCompletionFacts,
         response_header: &mut SendMessageResponseHeader,
         send_message_context: &mut SendMessageContext,
         queue_id_int: i32,
         _message_type: TopicMessageType,
         topic: &str,
     ) {
-        let put_ok = match put_message_result.put_message_status() {
-            PutMessageStatus::PutOk
-            | PutMessageStatus::FlushDiskTimeout
-            | PutMessageStatus::FlushSlaveTimeout
-            | PutMessageStatus::SlaveNotAvailable => true,
-            PutMessageStatus::ServiceNotAvailable => {
-                warn!(
-                    "service not available now. It may be caused by one of the following reasons: the broker's disk \
-                     is full, messages are put to the slave, message store has been shut down, etc."
-                );
-                false
-            }
-            PutMessageStatus::CreateMappedFileFailed => {
-                warn!("create mapped file failed, remoting_server is busy or broken.");
-                false
-            }
-            PutMessageStatus::MessageIllegal => {
-                let max_size = self.inner.context.policy.snapshot().max_message_size;
-                warn!(
-                    "the message is illegal, maybe msg body or properties length not matched. msg body length limit \
-                     {}B.",
-                    max_size
-                );
-                false
-            }
-            PutMessageStatus::PropertiesSizeExceeded => {
-                warn!("the message is illegal, maybe msg properties length limit 32KB.");
-                false
-            }
-            PutMessageStatus::OsPageCacheBusy => {
-                warn!("[PC_SYNCHRONIZED]broker busy, start flow control for a while");
-                false
-            }
-            PutMessageStatus::UnknownError => {
-                warn!("UNKNOWN_ERROR");
-                false
-            }
-            _ => {
-                warn!("UNKNOWN_ERROR DEFAULT");
-                false
-            }
-        };
-        let owner = request
-            .get_ext_fields()
-            .unwrap()
-            .get(BrokerStatsManager::COMMERCIAL_OWNER)
-            .cloned();
+        let put_ok = apply_reply_store_result(
+            &put_message_result,
+            response_header,
+            queue_id_int,
+            self.inner.context.policy.snapshot().max_message_size,
+        );
         let (commercial_size_per_msg, commercial_base_count) = {
             let policy = self.inner.context.policy.snapshot();
             (policy.commercial_size_per_msg, policy.commercial_base_count)
@@ -409,10 +540,6 @@ where
             stats_manager.inc_topic_put_nums(topic, append_result.msg_num, 1);
             stats_manager.inc_topic_put_size(topic, append_result.wrote_bytes);
             stats_manager.inc_broker_put_nums(topic, append_result.msg_num);
-
-            response_header.set_msg_id(append_result.msg_id.clone().unwrap_or_default());
-            response_header.set_queue_id(queue_id_int);
-            response_header.set_queue_offset(append_result.logics_offset);
 
             if self.inner.has_send_message_hook() {
                 let msg_id = response_header.msg_id().clone();
@@ -428,15 +555,15 @@ where
                 send_message_context.commercial_send_stats = StatsType::SendSuccess;
                 send_message_context.commercial_send_times = inc_value;
                 send_message_context.commercial_send_size = wrote_size;
-                send_message_context.commercial_owner = owner.unwrap_or_default();
+                send_message_context.commercial_owner = completion_facts.owner.unwrap_or_default();
             }
         } else if self.inner.has_send_message_hook() {
-            let wrote_size = request.get_body().map_or(0, |body| body.len());
+            let wrote_size = completion_facts.body_len;
             let inc_value = (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
             send_message_context.commercial_send_stats = StatsType::SendFailure;
             send_message_context.commercial_send_times = inc_value;
             send_message_context.commercial_send_size = wrote_size as i32;
-            send_message_context.commercial_owner = owner.unwrap_or_default();
+            send_message_context.commercial_owner = completion_facts.owner.unwrap_or_default();
         }
     }
 
@@ -457,36 +584,33 @@ where
             response_header.set_queue_offset(0);
         }
     }
+}
 
-    async fn push_reply_message<M: MessageTrait>(
-        &mut self,
-        channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        request_header: &SendMessageRequestHeader,
-        msg: &mut M,
-    ) -> PushReplyResult {
-        let sender_id = msg.property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
+async fn push_reply_message<P: ReplyPushPort, M: MessageTrait>(
+    port: &mut P,
+    inbound_peer: SocketAddr,
+    store_host: SocketAddr,
+    request_header: &SendMessageRequestHeader,
+    msg: &mut M,
+) -> PushReplyResult {
+    let sender_id = msg.property(&CheetahString::from_static_str(
+        MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
+    ));
+
+    let Some(sender_id) = sender_id else {
+        warn!(
+            "{} is null, can not reply message",
+            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
+        );
+        return PushReplyResult::failure(format!(
+            "reply message properties[{}] is null",
+            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
         ));
+    };
 
-        let Some(sender_id) = sender_id else {
-            warn!(
-                "{} is null, can not reply message",
-                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
-            );
-            return PushReplyResult::failure(format!(
-                "reply message properties[{}] is null",
-                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
-            ));
-        };
-
-        let Some(mut reply_channel) = self
-            .inner
-            .context
-            .producer_reply_channels
-            .find_channel(sender_id.as_str())
-        else {
-            // Format once for both logging and error return
+    let target = match port.acquire(sender_id.as_str()) {
+        Ok(target) => target,
+        Err(ReplyPushPortError::ChannelNotFound) => {
             warn!(
                 "push reply message fail, channel of <{}> not found. Topic: {}, QueueId: {}",
                 sender_id,
@@ -497,93 +621,94 @@ where
                 "push reply message fail, channel of <{}> not found.",
                 sender_id
             ));
-        };
-
-        // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
-        msg.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
-            CheetahString::from_string(current_millis().to_string()),
-        );
-
-        // Build reply message request header with properties (including PROPERTY_PUSH_REPLY_TIME)
-        let reply_message_request_header = self.build_reply_request_header(channel, request_header, msg);
-        let mut command = self
-            .inner
-            .context
-            .command_factory
-            .create_request_command(RequestCode::PushReplyMessageToClient, reply_message_request_header);
-        if let Some(body) = msg.get_body().cloned() {
-            command.set_body_mut_ref(body);
         }
+        Err(ReplyPushPortError::Call { .. }) => {
+            return PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()));
+        }
+    };
 
-        let mut broker_to_client = self.inner.broker_to_client;
-        match broker_to_client
-            .call_client(&mut reply_channel, command, PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS)
-            .await
-        {
-            Ok(response) if response.code() == ResponseCode::Success as i32 => PushReplyResult::success(),
-            Ok(response) => {
-                let code = response.code();
-                let remark = response.remark().map(|r| r.as_str()).unwrap_or("unknown error");
-                warn!(
-                    "push reply message to <{}> return fail, code: {}, remark: {}. Topic: {}, QueueId: {}, \
+    // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
+    msg.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
+        CheetahString::from_string(current_millis().to_string()),
+    );
+
+    // Build reply message request header with properties (including PROPERTY_PUSH_REPLY_TIME)
+    let reply_message_request_header = build_reply_request_header(inbound_peer, store_host, request_header, msg);
+    match port
+        .push(
+            target,
+            reply_message_request_header,
+            msg.get_body().cloned(),
+            PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS,
+        )
+        .await
+    {
+        Ok(response) if response.code() == ResponseCode::Success as i32 => PushReplyResult::success(),
+        Ok(response) => {
+            let code = response.code();
+            let remark = response.remark().map(|r| r.as_str()).unwrap_or("unknown error");
+            warn!(
+                "push reply message to <{}> return fail, code: {}, remark: {}. Topic: {}, QueueId: {}, \
                      CorrelationId: {:?}",
-                    sender_id,
-                    code,
-                    remark,
-                    request_header.topic(),
-                    request_header.queue_id,
-                    msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-                );
-                // Reuse extracted values to avoid duplicate format
-                PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
-            }
-            Err(error) => {
-                warn!(
-                    "push reply message to <{}> failed: {}. Channel: {:?}, Topic: {}, QueueId: {}",
-                    sender_id,
-                    error,
-                    reply_channel.remote_address(),
-                    request_header.topic(),
-                    request_header.queue_id
-                );
-                // Use compact error message to reduce allocation
-                PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
-            }
+                sender_id,
+                code,
+                remark,
+                request_header.topic(),
+                request_header.queue_id,
+                msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            );
+            // Reuse extracted values to avoid duplicate format
+            PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
+        }
+        Err(ReplyPushPortError::ChannelNotFound) => {
+            PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
+        }
+        Err(ReplyPushPortError::Call { source, remote_address }) => {
+            warn!(
+                "push reply message to <{}> failed: {}. Channel: {:?}, Topic: {}, QueueId: {}",
+                sender_id,
+                source,
+                remote_address,
+                request_header.topic(),
+                request_header.queue_id
+            );
+            // Use compact error message to reduce allocation
+            PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
         }
     }
+}
 
-    // Build ReplyMessageRequestHeader with message properties
-    fn build_reply_request_header<M: MessageTrait>(
-        &self,
-        channel: &Channel,
-        request_header: &SendMessageRequestHeader,
-        msg: &M,
-    ) -> ReplyMessageRequestHeader {
-        // Use message properties directly (PROPERTY_PUSH_REPLY_TIME already added)
-        let properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
+// Build ReplyMessageRequestHeader with message properties
+fn build_reply_request_header<M: MessageTrait>(
+    inbound_peer: SocketAddr,
+    store_host: SocketAddr,
+    request_header: &SendMessageRequestHeader,
+    msg: &M,
+) -> ReplyMessageRequestHeader {
+    // Use message properties directly (PROPERTY_PUSH_REPLY_TIME already added)
+    let properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
 
-        // Cache addresses to avoid repeated .to_string() calls
-        let born_host = CheetahString::from_string(channel.remote_address().to_string());
-        let store_host = CheetahString::from_string(self.inner.context.policy.snapshot().store_host.to_string());
+    // Cache addresses to avoid repeated .to_string() calls
+    let born_host = CheetahString::from_string(inbound_peer.to_string());
+    let store_host = CheetahString::from_string(store_host.to_string());
 
-        ReplyMessageRequestHeader {
-            born_host,
-            store_host,
-            store_timestamp: current_millis() as i64,
-            producer_group: request_header.producer_group.clone(),
-            topic: request_header.topic.clone(),
-            default_topic: request_header.default_topic.clone(),
-            default_topic_queue_nums: request_header.default_topic_queue_nums,
-            queue_id: request_header.queue_id,
-            sys_flag: request_header.sys_flag,
-            born_timestamp: request_header.born_timestamp,
-            flag: request_header.flag,
-            properties: Some(properties_string),
-            reconsume_times: request_header.reconsume_times,
-            unit_mode: request_header.unit_mode,
-            ..Default::default()
-        }
+    ReplyMessageRequestHeader {
+        born_host,
+        store_host,
+        store_timestamp: current_millis() as i64,
+        producer_group: request_header.producer_group.clone(),
+        topic: request_header.topic.clone(),
+        default_topic: request_header.default_topic.clone(),
+        default_topic_queue_nums: request_header.default_topic_queue_nums,
+        queue_id: request_header.queue_id,
+        sys_flag: request_header.sys_flag,
+        born_timestamp: request_header.born_timestamp,
+        flag: request_header.flag,
+        properties: Some(properties_string),
+        reconsume_times: request_header.reconsume_times,
+        unit_mode: request_header.unit_mode,
+        ..Default::default()
     }
 }
 
@@ -775,3 +900,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "reply_message_processor/structured_store_tests.rs"]
+mod structured_store_tests;
