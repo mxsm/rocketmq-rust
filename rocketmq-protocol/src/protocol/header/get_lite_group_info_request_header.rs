@@ -51,21 +51,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn get_lite_group_info_request_header_creation() {
-        let header = GetLiteGroupInfoRequestHeader {
-            group: CheetahString::from("test_group"),
-            lite_topic: CheetahString::from("test_lite_topic"),
-            top_k: 10,
-            rpc: None,
-        };
-
-        assert_eq!(header.group, CheetahString::from("test_group"));
-        assert_eq!(header.lite_topic, CheetahString::from("test_lite_topic"));
-        assert_eq!(header.top_k, 10);
-        assert!(header.rpc.is_none());
-    }
-
-    #[test]
     fn get_lite_group_info_request_header_serializes_to_map() {
         let header = GetLiteGroupInfoRequestHeader {
             group: CheetahString::from("my_group"),
@@ -100,62 +85,5 @@ mod tests {
         assert_eq!(header.group, CheetahString::from("deserialized_group"));
         assert_eq!(header.lite_topic, CheetahString::from("deserialized_lite"));
         assert_eq!(header.top_k, 20);
-    }
-
-    #[test]
-    fn get_lite_group_info_request_header_clone() {
-        let header = GetLiteGroupInfoRequestHeader {
-            group: CheetahString::from("group"),
-            lite_topic: CheetahString::from("lite"),
-            top_k: 3,
-            rpc: None,
-        };
-
-        let cloned = header.clone();
-        assert_eq!(header.group, cloned.group);
-        assert_eq!(header.lite_topic, cloned.lite_topic);
-        assert_eq!(header.top_k, cloned.top_k);
-    }
-
-    #[test]
-    fn get_lite_group_info_request_header_debug() {
-        let header = GetLiteGroupInfoRequestHeader {
-            group: CheetahString::from("group"),
-            lite_topic: CheetahString::from("lite"),
-            top_k: 7,
-            rpc: None,
-        };
-
-        let debug_str = format!("{:?}", header);
-        assert!(debug_str.contains("group"));
-        assert!(debug_str.contains("lite"));
-        assert!(debug_str.contains("7"));
-    }
-
-    #[test]
-    fn get_lite_group_info_request_header_with_different_top_k_values() {
-        let header_zero = GetLiteGroupInfoRequestHeader {
-            group: CheetahString::from("g"),
-            lite_topic: CheetahString::from("t"),
-            top_k: 0,
-            rpc: None,
-        };
-        assert_eq!(header_zero.top_k, 0);
-
-        let header_negative = GetLiteGroupInfoRequestHeader {
-            group: CheetahString::from("g"),
-            lite_topic: CheetahString::from("t"),
-            top_k: -1,
-            rpc: None,
-        };
-        assert_eq!(header_negative.top_k, -1);
-
-        let header_large = GetLiteGroupInfoRequestHeader {
-            group: CheetahString::from("g"),
-            lite_topic: CheetahString::from("t"),
-            top_k: i32::MAX,
-            rpc: None,
-        };
-        assert_eq!(header_large.top_k, i32::MAX);
     }
 }

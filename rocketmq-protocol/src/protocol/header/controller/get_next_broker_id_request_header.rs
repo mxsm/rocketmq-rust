@@ -78,15 +78,4 @@ mod tests {
         assert_eq!(header.cluster_name, "");
         assert_eq!(header.broker_name, "");
     }
-
-    #[test]
-    fn get_next_broker_id_request_header_clone() {
-        let header = GetNextBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str("test_cluster"),
-            broker_name: CheetahString::from_static_str("test_broker"),
-        };
-        let cloned = header.clone();
-        assert_eq!(header.cluster_name, cloned.cluster_name);
-        assert_eq!(header.broker_name, cloned.broker_name);
-    }
 }

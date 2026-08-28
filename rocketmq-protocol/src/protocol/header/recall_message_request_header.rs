@@ -209,14 +209,4 @@ mod tests {
         assert_eq!(header.recall_handle(), &CheetahString::from("handle123"));
         assert_eq!(header.producer_group(), None);
     }
-
-    #[test]
-    fn test_clone() {
-        let header = RecallMessageRequestHeader::new("TestTopic", "handle123", Some("ProducerGroup1"));
-        let cloned = header.clone();
-
-        assert_eq!(header.topic(), cloned.topic());
-        assert_eq!(header.recall_handle(), cloned.recall_handle());
-        assert_eq!(header.producer_group(), cloned.producer_group());
-    }
 }

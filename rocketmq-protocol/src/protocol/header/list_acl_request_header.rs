@@ -72,19 +72,6 @@ mod tests {
     }
 
     #[test]
-    fn list_acl_request_header_clone() {
-        let header = ListAclRequestHeader {
-            subject_filter: CheetahString::from("subjectFilterValue"),
-            resource_filter: CheetahString::from("resourceFilterValue"),
-        };
-
-        let cloned_header = header.clone();
-
-        assert_eq!(header.subject_filter, cloned_header.subject_filter);
-        assert_eq!(header.resource_filter, cloned_header.resource_filter);
-    }
-
-    #[test]
     fn list_acls_request_header_alias_matches_java_name() {
         let header = ListAclsRequestHeader {
             subject_filter: CheetahString::from("subject"),

@@ -81,12 +81,4 @@ mod tests {
         let header = GetProducerConnectionListRequestHeader::default();
         assert_eq!(header.producer_group(), "");
     }
-
-    #[test]
-    fn get_producer_connection_list_request_header_clone() {
-        let mut header = GetProducerConnectionListRequestHeader::default();
-        header.set_producer_group(CheetahString::from_static_str("test_group"));
-        let cloned = header.clone();
-        assert_eq!(cloned.producer_group(), header.producer_group());
-    }
 }

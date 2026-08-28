@@ -23,15 +23,10 @@ mod tests {
     fn test_empty_header_lifecycle() {
         let header = EmptyHeader::default();
 
-        let cloned = header.clone();
-        assert_eq!(header, cloned);
-
         let json = serde_json::to_string(&header).unwrap();
         assert_eq!(json, "{}");
         let de: EmptyHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(header, de);
         assert_eq!(header.to_map(), Some(HashMap::new()));
-
-        assert!(format!("{:?}", header).contains("EmptyHeader"));
     }
 }

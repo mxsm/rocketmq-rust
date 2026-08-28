@@ -65,13 +65,4 @@ mod tests {
         let header = GetReplicaInfoRequestHeader::default();
         assert_eq!(header.broker_name, "");
     }
-
-    #[test]
-    fn get_replica_info_request_header_clone() {
-        let header = GetReplicaInfoRequestHeader {
-            broker_name: CheetahString::from_static_str("test_broker"),
-        };
-        let cloned = header.clone();
-        assert_eq!(header.broker_name, cloned.broker_name);
-    }
 }

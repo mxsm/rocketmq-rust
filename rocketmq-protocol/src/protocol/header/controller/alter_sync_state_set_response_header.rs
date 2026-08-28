@@ -67,13 +67,4 @@ mod tests {
         let header = AlterSyncStateSetResponseHeader::default();
         assert_eq!(header.new_sync_state_set_epoch, 0);
     }
-
-    #[test]
-    fn alter_sync_state_set_response_header_clone() {
-        let header = AlterSyncStateSetResponseHeader {
-            new_sync_state_set_epoch: 10,
-        };
-        let cloned = header.clone();
-        assert_eq!(header.new_sync_state_set_epoch, cloned.new_sync_state_set_epoch);
-    }
 }

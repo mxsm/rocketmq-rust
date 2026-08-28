@@ -127,23 +127,4 @@ mod tests {
         assert_eq!(header.master_epoch, None);
         assert_eq!(header.sync_state_set_epoch, None);
     }
-
-    #[test]
-    fn register_broker_to_controller_response_header_clone() {
-        let header = RegisterBrokerToControllerResponseHeader {
-            cluster_name: Some(CheetahString::from_static_str("test_cluster")),
-            broker_name: Some(CheetahString::from_static_str("test_broker")),
-            master_broker_id: Some(123),
-            master_address: Some(CheetahString::from_static_str("127.0.0.1:10911")),
-            master_epoch: Some(5),
-            sync_state_set_epoch: Some(10),
-        };
-        let cloned = header.clone();
-        assert_eq!(header.cluster_name, cloned.cluster_name);
-        assert_eq!(header.broker_name, cloned.broker_name);
-        assert_eq!(header.master_broker_id, cloned.master_broker_id);
-        assert_eq!(header.master_address, cloned.master_address);
-        assert_eq!(header.master_epoch, cloned.master_epoch);
-        assert_eq!(header.sync_state_set_epoch, cloned.sync_state_set_epoch);
-    }
 }

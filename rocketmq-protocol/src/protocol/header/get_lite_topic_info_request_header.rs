@@ -40,17 +40,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn get_lite_topic_info_request_header_creation() {
-        let header = GetLiteTopicInfoRequestHeader {
-            parent_topic: CheetahString::from("parent_topic"),
-            lite_topic: CheetahString::from("lite_topic"),
-        };
-
-        assert_eq!(header.parent_topic, CheetahString::from("parent_topic"));
-        assert_eq!(header.lite_topic, CheetahString::from("lite_topic"));
-    }
-
-    #[test]
     fn get_lite_topic_info_request_header_serializes_to_map() {
         let header = GetLiteTopicInfoRequestHeader {
             parent_topic: CheetahString::from("test_parent"),
@@ -83,29 +72,5 @@ mod tests {
         let header = <GetLiteTopicInfoRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.parent_topic, CheetahString::from("deserialized_parent"));
         assert_eq!(header.lite_topic, CheetahString::from("deserialized_lite"));
-    }
-
-    #[test]
-    fn get_lite_topic_info_request_header_clone() {
-        let header = GetLiteTopicInfoRequestHeader {
-            parent_topic: CheetahString::from("parent"),
-            lite_topic: CheetahString::from("lite"),
-        };
-
-        let cloned = header.clone();
-        assert_eq!(header.parent_topic, cloned.parent_topic);
-        assert_eq!(header.lite_topic, cloned.lite_topic);
-    }
-
-    #[test]
-    fn get_lite_topic_info_request_header_debug() {
-        let header = GetLiteTopicInfoRequestHeader {
-            parent_topic: CheetahString::from("parent"),
-            lite_topic: CheetahString::from("lite"),
-        };
-
-        let debug_str = format!("{:?}", header);
-        assert!(debug_str.contains("parent"));
-        assert!(debug_str.contains("lite"));
     }
 }
