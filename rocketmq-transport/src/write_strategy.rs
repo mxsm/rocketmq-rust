@@ -55,14 +55,14 @@ const AUTO_SENDFILE_MIN_BYTES: u64 = 64 * 1024;
 /// Test-only one-shot barrier placed immediately before the first write-progress
 /// transition. It makes deadline/preflight races deterministic without adding a
 /// production field or branch.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
 pub(crate) struct WritePreflightBarrier {
     checked: Arc<tokio::sync::Notify>,
     resume: Arc<tokio::sync::Notify>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl WritePreflightBarrier {
     pub(crate) fn new(checked: Arc<tokio::sync::Notify>, resume: Arc<tokio::sync::Notify>) -> Self {
         Self { checked, resume }
@@ -412,7 +412,7 @@ pub struct FrameWriter<W> {
     poisoned: bool,
     file_region_blocking: Option<BlockingExecutor>,
     file_transfer_mode: FileTransferMode,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     preflight_barrier: Option<WritePreflightBarrier>,
 }
 
@@ -460,7 +460,7 @@ where
             poisoned: false,
             file_region_blocking: None,
             file_transfer_mode: FileTransferMode::Auto,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             preflight_barrier: None,
         })
     }
@@ -475,7 +475,7 @@ where
             poisoned: false,
             file_region_blocking: None,
             file_transfer_mode: FileTransferMode::Auto,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             preflight_barrier: None,
         }
     }
@@ -520,12 +520,12 @@ where
         self.file_transfer_mode = mode;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_write_preflight_barrier(&mut self, barrier: WritePreflightBarrier) {
         self.preflight_barrier = Some(barrier);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     async fn wait_write_preflight_barrier(&mut self) {
         if let Some(barrier) = self.preflight_barrier.take() {
             barrier.wait().await;
@@ -619,7 +619,7 @@ where
         // The callback is the canonical write-progress boundary. It runs after
         // validation/coalescing selection but immediately before the first
         // possible socket write or flush attempt.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.wait_write_preflight_barrier().await;
         on_start();
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
@@ -796,7 +796,7 @@ impl FrameWriter<WriteBackend> {
                 }
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.wait_write_preflight_barrier().await;
         on_start();
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);

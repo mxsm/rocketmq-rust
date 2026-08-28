@@ -45,6 +45,7 @@ use rocketmq_transport::api::v1::RpcClientImpl;
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
+use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -473,6 +474,19 @@ impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
 
     pub(crate) fn install_pull_request_hold_service(&self, service: Arc<PullRequestHoldService<MS>>) -> bool {
         self.pull_request_hold.set(service).is_ok()
+    }
+
+    pub(crate) fn install_deferred_generation_handoff(
+        &self,
+        handoff: Arc<DeferredGenerationHandoff>,
+    ) -> Result<(), Arc<DeferredGenerationHandoff>>
+    where
+        MS: Send + Sync + 'static,
+    {
+        let Some(service) = self.pull_request_hold.get() else {
+            return Err(handoff);
+        };
+        service.install_handoff(handoff)
     }
 
     pub(crate) fn suspend_pull_request(&self, topic: &str, queue_id: i32, request: PullRequest) -> bool {

@@ -27,6 +27,7 @@ mod deferred_session_cleanup;
 mod embedded_dispatch;
 mod handler_outcome;
 mod legacy_processor_adapter;
+mod legacy_session_execution;
 mod remoting_request;
 mod request_context;
 mod request_control;
@@ -109,8 +110,13 @@ pub(crate) use deferred_response::ResponseStateError;
     reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
 )]
 pub(crate) use deferred_response::ResponseStateSnapshot;
+#[cfg(test)]
+pub(crate) use deferred_session_cleanup::DeferredSessionCleanupCloseOutcome;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupOwner;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupRegistration;
+pub(crate) use deferred_session_cleanup::LegacySessionCleanupCapability;
+pub use deferred_session_cleanup::LegacySessionCleanupEnrollment;
+pub use deferred_session_cleanup::LegacySessionCleanupInstallError;
 pub use embedded_dispatch::EmbeddedDispatchError;
 pub use embedded_dispatch::EmbeddedDispatchErrorKind;
 pub use embedded_dispatch::EmbeddedDispatchOutcome;
@@ -144,6 +150,10 @@ pub(crate) use legacy_processor_adapter::LegacyReplyCandidate;
     reason = "DSP-05 exposes the sealed legacy bridge to later coexistence routing"
 )]
 pub(crate) use legacy_processor_adapter::LegacyRequestBridge;
+pub(crate) use legacy_session_execution::LegacySessionExecutionCapability;
+pub use legacy_session_execution::LegacySessionExecutionEnrollment;
+pub(crate) use legacy_session_execution::LegacySessionExecutionSeed;
+pub use legacy_session_execution::LegacySessionExecutionSubmitError;
 pub use remoting_request::IngressRequestView;
 pub use remoting_request::RemotingRequest;
 pub use request_context::RequestContext;

@@ -296,6 +296,7 @@ where
                         builder,
                         ordering,
                         resume_executor,
+                        retained_bytes,
                         session_cleanup,
                     )
                     .await
@@ -341,6 +342,10 @@ where
         dead_code,
         reason = "DSP-03 admitted execution is reached through the not-yet-wired private dispatcher"
     )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private admitted boundary carries the original session execution metadata without exposing a mutable aggregate"
+    )]
     async fn execute_admitted_network(
         &self,
         mut processor: D,
@@ -353,6 +358,7 @@ where
         builder: RemotingRequestBuilder,
         ordering: crate::request_ordering::RequestOrdering,
         resume_executor: crate::session_executor::DeferredResumeExecutor,
+        retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<(), AuthorizedDispatchV2Error> {
         let request_bytes = builder.command().body().map_or(0, |body| body.len() as u64);
@@ -383,6 +389,7 @@ where
                 ordering,
                 class,
                 resume_executor,
+                retained_bytes,
                 session_cleanup,
             )?
         };
@@ -554,6 +561,7 @@ where
             builder,
             crate::request_ordering::RequestOrdering::Concurrent,
             crate::session_executor::DeferredResumeExecutor::retired(),
+            0,
             None,
         )
         .await

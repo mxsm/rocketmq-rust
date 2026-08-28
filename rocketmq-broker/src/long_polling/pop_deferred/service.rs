@@ -20,12 +20,14 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -69,19 +71,38 @@ use tokio::sync::oneshot;
 
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupOutcome;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
+use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
+use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
+use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
+use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 
 use super::deadline::LongPollingDeadline;
 use super::deadline::LongPollingDeadlineError;
 use super::index::PopArrival;
+use super::index::PopArrivalView;
+use super::index::PopCandidateReservation;
 use super::index::PopCriteriaIndex;
 use super::index::PopCriteriaKey;
 use super::index::PopCriteriaLimits;
+use super::index::PopFanoutBatch;
+use super::index::PopFanoutCursor;
 use super::index::PopIndexError;
 use super::index::PopIndexLease;
 use super::index::PopIndexReservation;
 use super::index::PopIndexSnapshot;
 use super::index::PopMatchCriteria;
 use super::index::PopSelectionOrder;
+
+mod continuation;
+
+pub(crate) use continuation::PopArrivalContinuation;
+use continuation::PopContinuationAdmission;
+pub(crate) use continuation::PopContinuationError;
+use continuation::PopContinuationPermit;
+use continuation::PopPendingArrival;
+use continuation::PopPendingArrivalKey;
 
 /// Typed POP request data retained without a channel or connection context.
 pub(crate) struct PopRequestData {
@@ -293,6 +314,12 @@ pub(crate) struct PopDeferredService {
     index: PopCriteriaIndex,
     expiry_margins: DeferredExpiryMargins,
     sweep_limit: NonZeroUsize,
+    continuation_admission: Arc<PopContinuationAdmission>,
+    pending_arrivals: Arc<PendingArrivalLatch<PopPendingArrivalKey, PopPendingArrival>>,
+    pending_offsets: Arc<PendingOffsetRangeLatch<PopPendingOffsetTarget>>,
+    pending_arrival_sequence: AtomicU64,
+    resume_executions: Arc<AtomicUsize>,
+    resume_execution_bytes: Arc<AtomicUsize>,
     closed: AtomicBool,
 }
 
@@ -342,12 +369,23 @@ impl PopDeferredService {
         expiry_margins: DeferredExpiryMargins,
         sweep_limit: NonZeroUsize,
     ) -> Self {
+        let limits = admission.limits();
+        let continuation_bytes = limits.max_retained_bytes();
         Self {
             admission,
             registry: DeferredRegistry::new(),
             index: PopCriteriaIndex::new(index_limits),
             expiry_margins,
             sweep_limit,
+            continuation_admission: Arc::new(PopContinuationAdmission::new(sweep_limit.get(), continuation_bytes)),
+            pending_arrivals: PendingArrivalLatch::new(limits.max_waiters(), continuation_bytes),
+            pending_offsets: PendingOffsetRangeLatch::new(
+                combined_budget(limits.max_waiters(), sweep_limit.get()),
+                combined_budget(continuation_bytes, continuation_bytes),
+            ),
+            pending_arrival_sequence: AtomicU64::new(0),
+            resume_executions: Arc::new(AtomicUsize::new(0)),
+            resume_execution_bytes: Arc::new(AtomicUsize::new(0)),
             closed: AtomicBool::new(false),
         }
     }
@@ -506,6 +544,54 @@ impl PopDeferredService {
         Ok(claimed)
     }
 
+    /// Reserves one matching candidate while all arrival metadata is still
+    /// borrowed by the synchronous message-listener callback.
+    pub(crate) fn reserve_arrival_candidate(
+        &self,
+        arrival: PopArrivalView<'_>,
+        order: PopSelectionOrder,
+    ) -> Option<PopCandidateReservation> {
+        if self.closed.load(Ordering::Acquire) {
+            return None;
+        }
+        self.index
+            .reserve_next_matching_view(arrival, order, self.sweep_limit)
+            .into_candidate()
+    }
+
+    /// Reserves one candidate from a target whose generation route is already stable.
+    pub(crate) fn reserve_target_arrival_candidate(
+        &self,
+        key: &PopCriteriaKey,
+        arrival: PopArrivalView<'_>,
+        order: PopSelectionOrder,
+    ) -> Option<PopCandidateReservation> {
+        if self.closed.load(Ordering::Acquire) {
+            return None;
+        }
+        self.index
+            .reserve_target_matching_view(key, arrival, order, self.sweep_limit)
+            .into_candidate()
+    }
+
+    pub(crate) async fn claim_candidate(
+        &self,
+        candidate: PopCandidateReservation,
+        reason: DeferredWakeReason,
+    ) -> Result<ClaimedDeferred<ResumePop>, DeferredClaimError> {
+        let result = self.claim(candidate.id(), reason).await;
+        drop(candidate);
+        result
+    }
+
+    /// Claims a candidate selected by the bounded POP lag-refresh producer.
+    pub(crate) async fn claim_forced_candidate(
+        &self,
+        candidate: PopCandidateReservation,
+    ) -> Result<ClaimedDeferred<ResumePop>, DeferredClaimError> {
+        self.claim_candidate(candidate, DeferredWakeReason::ForcedRefresh).await
+    }
+
     pub(crate) async fn claim_message(
         &self,
         arrival: &PopArrival,
@@ -536,7 +622,23 @@ impl PopDeferredService {
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
     {
-        claimed.resume(handler_retained, handler).await
+        let observation = Arc::new(Mutex::new(None));
+        let accepted = Arc::clone(&observation);
+        let resume_executions = Arc::clone(&self.resume_executions);
+        let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
+        let retained_bytes = handler_retained.dynamic_bytes();
+        let result = claimed
+            .resume(handler_retained, move |resume, reason| {
+                *accepted.lock() = Some(ResumeExecutionObservation::new(
+                    resume_executions,
+                    resume_execution_bytes,
+                    retained_bytes,
+                ));
+                handler(resume, reason)
+            })
+            .await;
+        drop(observation.lock().take());
+        result
     }
 
     /// Resumes and writes one claimed POP response, completing the legacy
@@ -555,6 +657,48 @@ impl PopDeferredService {
         let result = self.resume_claimed(claimed, handler_retained, handler).await;
         observer.complete_resume_result(&result);
         result
+    }
+
+    /// Transfers one claimed POP execution to its canonical session owner and
+    /// returns after bounded session admission, before handler/write terminal.
+    pub(crate) fn submit_claimed<F, Fut>(
+        &self,
+        claimed: ClaimedDeferred<ResumePop>,
+        handler_retained: DeferredResumeRetainedSize,
+        handler: F,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+    {
+        let resume_executions = Arc::clone(&self.resume_executions);
+        let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
+        let retained_bytes = handler_retained.dynamic_bytes();
+        let observation = ResumeExecutionObservation::new(resume_executions, resume_execution_bytes, retained_bytes);
+        claimed.submit(handler_retained, handler, move |_| drop(observation))
+    }
+
+    /// Transfers one lag-refresh execution to the session owner. The observer
+    /// remains attached to the canonical response terminal, not this submitter.
+    pub(crate) fn submit_claimed_observed<F, Fut>(
+        &self,
+        claimed: ClaimedDeferred<ResumePop>,
+        handler_retained: DeferredResumeRetainedSize,
+        observer: PopDeferredWakeupObserver,
+        handler: F,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+    {
+        let resume_executions = Arc::clone(&self.resume_executions);
+        let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
+        let retained_bytes = handler_retained.dynamic_bytes();
+        let observation = ResumeExecutionObservation::new(resume_executions, resume_execution_bytes, retained_bytes);
+        claimed.submit(handler_retained, handler, move |result| {
+            observer.complete_resume_result(result);
+            drop(observation);
+        })
     }
 
     async fn claim_matching(
@@ -610,6 +754,171 @@ impl PopDeferredService {
         self.index.consumer_groups(topic, queue_id, self.sweep_limit)
     }
 
+    pub(crate) const fn fanout_cursor(&self) -> PopFanoutCursor {
+        PopFanoutCursor::new()
+    }
+
+    pub(crate) fn consumer_group_batch(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        cursor: &mut PopFanoutCursor,
+    ) -> PopFanoutBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PopFanoutBatch::empty();
+        }
+        self.index
+            .consumer_group_batch(topic, queue_id, cursor, self.sweep_limit)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the continuation retains the exact Store arrival callback metadata"
+    )]
+    pub(crate) fn admit_arrival_continuation(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        tags_code: Option<i64>,
+        message_store_time: i64,
+        filter_bitmap: Option<&[u8]>,
+        properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
+        cursor: PopFanoutCursor,
+    ) -> Result<PopArrivalContinuation, PopContinuationError> {
+        PopArrivalContinuation::new(
+            &self.continuation_admission,
+            topic,
+            queue_id,
+            tags_code,
+            message_store_time,
+            filter_bitmap,
+            properties,
+            cursor,
+        )
+    }
+
+    pub(crate) fn continuation_consumer_group_batch(
+        &self,
+        continuation: &mut PopArrivalContinuation,
+    ) -> PopFanoutBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PopFanoutBatch::empty();
+        }
+        continuation.next_batch(&self.index, self.sweep_limit)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the replay latch retains the exact Store arrival callback metadata"
+    )]
+    pub(crate) fn latch_arrival(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        tags_code: Option<i64>,
+        message_store_time: i64,
+        filter_bitmap: Option<&[u8]>,
+        properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
+        cursor: PopFanoutCursor,
+    ) -> Result<(), PopPendingArrivalError> {
+        let key = PopPendingArrivalKey::new(
+            self.pending_arrival_sequence.fetch_add(1, Ordering::Relaxed),
+            topic.clone(),
+            queue_id,
+        );
+        let pending = PopPendingArrival::new(
+            topic,
+            queue_id,
+            tags_code,
+            message_store_time,
+            filter_bitmap,
+            properties,
+            cursor,
+        )
+        .map_err(PopPendingArrivalError::Continuation)?;
+        self.pending_arrivals
+            .insert(key, pending)
+            .map_err(PopPendingArrivalError::Latch)
+    }
+
+    pub(crate) fn pending_arrival_reservations(&self) -> Vec<PopPendingArrivalReservation> {
+        self.pending_arrivals.reserve_batch(self.sweep_limit.get())
+    }
+
+    pub(crate) fn latch_offset(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        logical_offset: i64,
+    ) -> Result<(), PendingArrivalInsertError> {
+        if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
+            return Ok(());
+        }
+        self.pending_offsets
+            .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));
+        self.pending_offsets
+            .merge(PopPendingOffsetTarget::new(topic.clone(), queue_id), logical_offset - 1)
+    }
+
+    #[cfg(test)]
+    pub(super) fn latch_queue_offset_for_test(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        queue_offset: i64,
+    ) -> Result<(), PendingArrivalInsertError> {
+        self.pending_offsets
+            .merge(PopPendingOffsetTarget::new(topic.clone(), queue_id), queue_offset)
+    }
+
+    pub(crate) fn pending_offset_reservations(&self) -> Vec<PopPendingOffsetReservation> {
+        self.pending_offsets
+            .reserve_batch(self.sweep_limit.get())
+            .into_iter()
+            .filter_map(|reservation| {
+                let permit = self.continuation_admission.reserve(reservation.retained_bytes()).ok()?;
+                Some(PopPendingOffsetReservation {
+                    reservation,
+                    _permit: permit,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn pending_consumer_group_batch(&self, pending: &mut PopPendingArrival) -> PopFanoutBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PopFanoutBatch::empty();
+        }
+        pending.next_batch(&self.index, self.sweep_limit)
+    }
+
+    pub(crate) fn pending_offset_consumer_group_batch(
+        &self,
+        target: &PopPendingOffsetTarget,
+        cursor: &mut PopFanoutCursor,
+    ) -> PopFanoutBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PopFanoutBatch::empty();
+        }
+        self.index
+            .consumer_group_batch(target.topic(), target.queue_id(), cursor, self.sweep_limit)
+    }
+
+    pub(crate) fn replay_read_limit(&self) -> i32 {
+        i32::try_from(self.sweep_limit.get()).unwrap_or(i32::MAX)
+    }
+
+    pub(crate) fn forced_target_batch(
+        &self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+    ) -> Vec<PopCriteriaKey> {
+        if self.closed.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        self.index.forced_targets(topic, consumer_group, self.sweep_limit)
+    }
+
     /// Starts one lifecycle-owned bounded sweep loop; the callback owns each claim batch.
     pub(crate) fn start_sweeper<F, Fut>(
         self: &Arc<Self>,
@@ -654,15 +963,142 @@ impl PopDeferredService {
         self.index.snapshot()
     }
 
+    #[must_use]
+    pub(crate) fn resource_snapshot(&self) -> PopDeferredResourceSnapshot {
+        let continuation = self.continuation_admission.snapshot();
+        let pending = self.pending_arrivals.snapshot();
+        let offsets = self.pending_offsets.snapshot();
+        PopDeferredResourceSnapshot {
+            admission: self.admission.snapshot(),
+            index: self.index.snapshot(),
+            resume_executions: self.resume_executions.load(Ordering::Acquire),
+            resume_execution_bytes: self.resume_execution_bytes.load(Ordering::Acquire),
+            active_continuations: continuation.count,
+            continuation_bytes: continuation.bytes,
+            continuation_rejected: continuation.rejected,
+            pending_arrivals: pending.count.saturating_add(offsets.count),
+            pending_arrival_bytes: pending.bytes.saturating_add(offsets.bytes),
+            pending_arrival_rejected: pending.rejected.saturating_add(offsets.rejected),
+            pending_offset_invariant_failures: offsets.rejected,
+        }
+    }
+
     pub(crate) fn index_contains(&self, id: DeferredId) -> bool {
         self.index.contains(id)
     }
 
+    pub(crate) fn seal(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.pending_arrivals.seal();
+        self.pending_offsets.seal();
+    }
+
     #[must_use]
     pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
-        self.closed.store(true, Ordering::Release);
+        self.seal();
         self.registry.shutdown()
     }
+}
+
+struct ResumeExecutionObservation {
+    executions: Arc<AtomicUsize>,
+    bytes: Arc<AtomicUsize>,
+    retained_bytes: usize,
+}
+
+impl ResumeExecutionObservation {
+    fn new(executions: Arc<AtomicUsize>, bytes: Arc<AtomicUsize>, retained_bytes: usize) -> Self {
+        executions.fetch_add(1, Ordering::AcqRel);
+        bytes.fetch_add(retained_bytes, Ordering::AcqRel);
+        Self {
+            executions,
+            bytes,
+            retained_bytes,
+        }
+    }
+}
+
+impl Drop for ResumeExecutionObservation {
+    fn drop(&mut self) {
+        self.bytes.fetch_sub(self.retained_bytes, Ordering::AcqRel);
+        self.executions.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PopDeferredResourceSnapshot {
+    pub(crate) admission: DeferredAdmissionSnapshot,
+    pub(crate) index: PopIndexSnapshot,
+    pub(crate) resume_executions: usize,
+    pub(crate) resume_execution_bytes: usize,
+    pub(crate) active_continuations: usize,
+    pub(crate) continuation_bytes: usize,
+    pub(crate) continuation_rejected: usize,
+    pub(crate) pending_arrivals: usize,
+    pub(crate) pending_arrival_bytes: usize,
+    pub(crate) pending_arrival_rejected: usize,
+    pub(crate) pending_offset_invariant_failures: usize,
+}
+
+pub(crate) type PopPendingArrivalReservation = PendingArrivalReservation<PopPendingArrivalKey, PopPendingArrival>;
+pub(crate) struct PopPendingOffsetReservation {
+    reservation: PendingOffsetRangeReservation<PopPendingOffsetTarget>,
+    _permit: PopContinuationPermit,
+}
+
+impl PopPendingOffsetReservation {
+    pub(crate) fn key(&self) -> &PopPendingOffsetTarget {
+        self.reservation.key()
+    }
+
+    pub(crate) const fn range(&self) -> crate::long_polling::pending_arrival_latch::PendingOffsetRange {
+        self.reservation.range()
+    }
+
+    pub(crate) fn finish_or_updated(
+        &mut self,
+    ) -> Option<crate::long_polling::pending_arrival_latch::PendingOffsetRange> {
+        self.reservation.finish_or_updated()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PopPendingOffsetTarget {
+    topic: CheetahString,
+    queue_id: i32,
+}
+
+impl PopPendingOffsetTarget {
+    fn new(topic: CheetahString, queue_id: i32) -> Self {
+        Self { topic, queue_id }
+    }
+
+    pub(crate) const fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub(crate) const fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
+}
+
+impl PendingOffsetTarget for PopPendingOffsetTarget {
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.topic.len().saturating_mul(2))
+    }
+}
+
+const fn combined_budget(left: usize, right: usize) -> usize {
+    match left.checked_add(right) {
+        Some(combined) => combined,
+        None => usize::MAX,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PopPendingArrivalError {
+    Continuation(PopContinuationError),
+    Latch(PendingArrivalInsertError),
 }
 
 fn match_criteria_allocation_bytes() -> Option<usize> {

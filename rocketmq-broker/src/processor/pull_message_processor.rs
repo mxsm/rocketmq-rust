@@ -15,6 +15,7 @@
 pub(crate) mod capability;
 mod resume;
 
+#[cfg(test)]
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -44,6 +45,7 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
+#[cfg(test)]
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
@@ -53,6 +55,7 @@ use rocketmq_store::MAX_PULL_MSG_SIZE;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::LegacySessionExecutionEnrollment;
 use rocketmq_transport::api::v1::RejectRequestResponse;
 use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::RpcClient;
@@ -69,6 +72,8 @@ use tracing::info;
 use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
+use crate::deferred_generation_handoff::DeferredGenerationHandoff;
+use crate::deferred_generation_handoff::LegacyContinuation;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -388,6 +393,21 @@ where
         self.pull_deferred_service.set(service)
     }
 
+    pub(crate) fn install_deferred_generation_handoff(
+        &self,
+        handoff: Arc<DeferredGenerationHandoff>,
+    ) -> Result<(), Arc<DeferredGenerationHandoff>>
+    where
+        MS: Send + Sync + 'static,
+    {
+        self.context.install_deferred_generation_handoff(handoff)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pull_deferred_service_is_installed_for_test(&self) -> bool {
+        self.pull_deferred_service.get().is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn session_client_id_for_test(
         &self,
@@ -400,9 +420,20 @@ where
     }
 
     pub(crate) fn set_wakeup_task_group(&self, task_group: TaskGroup) {
-        if self.wakeup_task_group.set(task_group).is_err() {
+        let wakeup_task_group = match task_group.try_child("broker.pull-message.legacy-wakeup") {
+            Ok(task_group) => task_group,
+            Err(error) => {
+                warn!(%error, "failed to create PullMessageProcessor legacy wake-up task group");
+                return;
+            }
+        };
+        if self.wakeup_task_group.set(wakeup_task_group).is_err() {
             warn!("PullMessageProcessor wake-up task group is already initialized");
         }
+    }
+
+    pub(crate) fn deferred_current_max_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<i64> {
+        self.context.store().max_offset(topic, queue_id).ok()
     }
 
     /// Creates an error response with the given code and remark.
@@ -1436,9 +1467,12 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
-    ) {
+        continuation: Option<LegacyContinuation>,
+        execution: Option<LegacySessionExecutionEnrollment>,
+    ) -> bool {
         let pull_message_processor = Arc::clone(self);
         let task = async move {
+            let _continuation = continuation;
             let opaque = request.opaque();
             let response = pull_message_processor
                 .process_request_inner(
@@ -1462,7 +1496,18 @@ where
                 }
             }
         };
-        spawn_wakeup_pull_task(self.wakeup_task_group.get(), task);
+        if let Some(execution) = execution {
+            return execution.try_execute(task).is_ok();
+        }
+        #[cfg(test)]
+        {
+            spawn_wakeup_pull_task(self.wakeup_task_group.get(), task)
+        }
+        #[cfg(not(test))]
+        {
+            warn!("pull wake-up has no canonical session execution owner");
+            false
+        }
     }
 }
 
@@ -1500,23 +1545,32 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) {
-        PullMessageProcessor::execute_request_when_wakeup(&self, channel, ctx, request);
+        continuation: Option<LegacyContinuation>,
+        execution: Option<LegacySessionExecutionEnrollment>,
+    ) -> bool {
+        PullMessageProcessor::execute_request_when_wakeup(&self, channel, ctx, request, continuation, execution)
+    }
+
+    fn wakeup_task_group(&self) -> Option<TaskGroup> {
+        self.wakeup_task_group.get().cloned()
     }
 }
 
-fn spawn_wakeup_pull_task<F>(task_group: Option<&TaskGroup>, task: F)
+#[cfg(test)]
+fn spawn_wakeup_pull_task<F>(task_group: Option<&TaskGroup>, task: F) -> bool
 where
     F: Future<Output = ()> + Send + 'static,
 {
     let Some(task_group) = task_group else {
         warn!("Cannot execute wakeup pull request without broker request processor task group");
-        return;
+        return false;
     };
 
     if let Err(error) = task_group.spawn("broker.pull-message.wakeup", TaskKind::Worker, task) {
         warn!(%error, "failed to spawn tracked wakeup pull request task");
+        return false;
     }
+    true
 }
 pub(crate) fn is_broadcast(proxy_pull_broadcast: bool, consumer_group_info: Option<&ConsumerGroupInfo>) -> bool {
     proxy_pull_broadcast
@@ -1567,6 +1621,7 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
+    use cheetah_string::CheetahString;
     use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
@@ -1607,6 +1662,9 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_channel_info::ClientChannelInfo;
     use crate::client::consumer_group_info::ConsumerGroupInfo;
+    use crate::deferred_generation_handoff::DeferredGenerationHandoff;
+    use crate::deferred_generation_handoff::DeferredGenerationTarget;
+    use crate::deferred_generation_handoff::LegacyContinuation;
     use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
     use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
     use crate::processor::response_plan::BrokerResponseParts;
@@ -1672,6 +1730,65 @@ mod tests {
         assert_eq!(report.aborted, 1, "{}", report.to_json());
         assert_eq!(report.leaked, 0, "{}", report.to_json());
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    fn pull_legacy_continuation(handoff: &DeferredGenerationHandoff) -> LegacyContinuation {
+        let target = DeferredGenerationTarget::pull(CheetahString::from_static_str("pull-continuation-topic"), 0);
+        let (_, wait) = handoff
+            .arrival_adapter()
+            .enroll_legacy_wait(target.clone(), || Ok::<_, ()>(()))
+            .expect("register Pull legacy waiter");
+        let route = handoff.acquire_route(target).expect("acquire Pull legacy route");
+        wait.begin_wake(route)
+            .expect("begin Pull legacy wake")
+            .into_continuation()
+    }
+
+    #[test]
+    fn rejected_pull_wakeup_spawn_drops_continuation() {
+        let handoff = DeferredGenerationHandoff::new();
+        let continuation = pull_legacy_continuation(&handoff);
+
+        spawn_wakeup_pull_task(None, async move {
+            let _continuation = continuation;
+        });
+
+        assert!(handoff.zero_report().is_zero());
+    }
+
+    #[tokio::test]
+    async fn pull_wakeup_future_owns_continuation_until_terminal() {
+        let handoff = DeferredGenerationHandoff::new();
+        let continuation = pull_legacy_continuation(&handoff);
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker.pull-continuation-test");
+        let task_group = runtime.root_group().clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let task_started = Arc::clone(&started);
+        let task_release = Arc::clone(&release);
+
+        spawn_wakeup_pull_task(Some(&task_group), async move {
+            let _continuation = continuation;
+            task_started.notify_one();
+            task_release.notified().await;
+        });
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("accepted Pull wake task must start");
+        assert_eq!(handoff.snapshot().continuations, 1);
+
+        let mut shutdown = Box::pin(task_group.shutdown(Duration::from_secs(1)));
+        tokio::select! {
+            biased;
+            _ = &mut shutdown => panic!("Pull execution owner drained before the accepted handler barrier"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(handoff.snapshot().continuations, 1);
+
+        release.notify_one();
+        let report = shutdown.await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(handoff.zero_report().is_zero());
     }
 
     fn new_processor<MS: BrokerReadStore>(context: Arc<PullMessageProcessorContext<MS>>) -> PullMessageProcessor<MS> {

@@ -468,6 +468,31 @@ where
         crate::dispatch::deferred_resume::resume_claimed(self, handler_retained, handler).await
     }
 
+    /// Submits this claim to the original session executor without waiting for
+    /// handler execution or canonical response delivery.
+    ///
+    /// The terminal observer is owned by that session job and runs exactly once
+    /// after response delivery reaches its canonical terminal. Submission
+    /// failures invoke it synchronously before this method returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed failure when lifecycle state, retained-size accounting,
+    /// bounded admission, or executor shutdown prevents session ownership.
+    pub fn submit<F, Fut, O>(
+        self,
+        handler_retained: DeferredResumeRetainedSize,
+        handler: F,
+        terminal_observer: O,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
+        Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+        O: FnOnce(&Result<ResponseReceipt, DeferredResumeError>) + Send + 'static,
+    {
+        crate::dispatch::deferred_resume::submit_claimed(self, handler_retained, handler, terminal_observer)
+    }
+
     pub(crate) fn take_request(&mut self) -> DeferredRequest<R> {
         self.request.take().expect("claimed request remains owned")
     }

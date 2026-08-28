@@ -27,6 +27,11 @@ use rocketmq_runtime::ResourcePermit;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::LegacySessionExecutionEnrollment;
+
+use crate::deferred_generation_handoff::DeferredGenerationTarget;
+use crate::deferred_generation_handoff::LegacyWaitHandoff;
+use crate::deferred_generation_handoff::LegacyWaitLease;
 
 struct PopRequestPermit {
     permit: Mutex<Option<ResourcePermit>>,
@@ -60,6 +65,7 @@ pub struct PopRequest {
     subscription_data: Option<SubscriptionData>,
     message_filter: Option<ArcMessageFilter>,
     resource_permit: PopRequestPermit,
+    legacy_handoff: LegacyWaitHandoff,
 }
 
 impl PopRequest {
@@ -100,6 +106,7 @@ impl PopRequest {
             subscription_data,
             message_filter,
             resource_permit: PopRequestPermit::empty(),
+            legacy_handoff: LegacyWaitHandoff::default(),
         }
     }
 
@@ -119,6 +126,54 @@ impl PopRequest {
     /// Releases retained-request budget at the logical terminal, independently of node reclamation.
     pub(crate) fn release_resource_permit(&self) -> bool {
         self.resource_permit.release()
+    }
+
+    pub(crate) fn install_legacy_handoff(
+        &self,
+        expected_target: &DeferredGenerationTarget,
+        lease: LegacyWaitLease,
+    ) -> Result<(), LegacyWaitLease> {
+        self.legacy_handoff.install(expected_target, lease)
+    }
+
+    #[must_use]
+    pub(crate) fn legacy_handoff_target(&self) -> Option<DeferredGenerationTarget> {
+        self.legacy_handoff.target()
+    }
+
+    pub(crate) fn take_legacy_wait(&self) -> Option<LegacyWaitLease> {
+        self.legacy_handoff.take()
+    }
+
+    pub(crate) fn restore_legacy_wait(&self, lease: LegacyWaitLease) -> Result<(), LegacyWaitLease> {
+        self.legacy_handoff.restore(lease)
+    }
+
+    pub(crate) fn install_legacy_session_cleanup(
+        &self,
+        cleanup: LegacySessionExecutionEnrollment,
+    ) -> Result<(), LegacySessionExecutionEnrollment> {
+        self.legacy_handoff.install_session_cleanup(cleanup)
+    }
+
+    pub(crate) fn take_legacy_session_execution(&self) -> Option<LegacySessionExecutionEnrollment> {
+        self.legacy_handoff.take_session_execution()
+    }
+
+    pub(crate) fn release_legacy_session_cleanup(&self) {
+        self.legacy_handoff.release_session_cleanup();
+    }
+
+    pub(crate) fn mark_legacy_session_closed(&self) {
+        self.legacy_handoff.mark_session_closed();
+    }
+
+    pub(crate) fn legacy_session_closed(&self) -> bool {
+        self.legacy_handoff.session_closed()
+    }
+
+    pub(crate) fn release_legacy_wait(&self) {
+        self.legacy_handoff.release();
     }
 
     pub fn get_channel(&self) -> &Channel {

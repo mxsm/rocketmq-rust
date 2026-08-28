@@ -33,10 +33,49 @@ use super::deadline::LongPollingDeadline;
 mod types;
 
 pub(crate) use types::PopArrival;
+pub(crate) use types::PopArrivalView;
 pub(crate) use types::PopCriteriaKey;
 pub(crate) use types::PopCriteriaLimits;
 pub(crate) use types::PopMatchCriteria;
 pub(crate) use types::PopSelectionOrder;
+
+#[derive(Default)]
+pub(crate) struct PopFanoutCursor {
+    after_group: Option<CheetahString>,
+    complete: bool,
+}
+
+impl PopFanoutCursor {
+    pub(crate) const fn new() -> Self {
+        Self {
+            after_group: None,
+            complete: false,
+        }
+    }
+}
+
+#[must_use]
+pub(crate) struct PopFanoutBatch {
+    consumer_groups: Vec<CheetahString>,
+    exhausted: bool,
+}
+
+impl PopFanoutBatch {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            consumer_groups: Vec::new(),
+            exhausted: true,
+        }
+    }
+
+    pub(crate) const fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    pub(crate) fn into_consumer_groups(self) -> Vec<CheetahString> {
+        self.consumer_groups
+    }
+}
 
 /// Bounded POP criteria index. Registry ownership remains authoritative.
 pub(crate) struct PopCriteriaIndex<I = DeferredId> {
@@ -245,13 +284,53 @@ where
         order: PopSelectionOrder,
         scan_limit: NonZeroUsize,
     ) -> PopCandidateSelection<I> {
-        let exact = PopCriteriaKey::from_parts(&arrival.topic, &arrival.consumer_group, arrival.queue_id);
-        let wildcard = PopCriteriaKey::from_parts(&arrival.topic, &arrival.consumer_group, -1);
+        self.reserve_next_matching_view(arrival.view(), order, scan_limit)
+    }
+
+    pub(crate) fn reserve_next_matching_view(
+        &self,
+        arrival: PopArrivalView<'_>,
+        order: PopSelectionOrder,
+        scan_limit: NonZeroUsize,
+    ) -> PopCandidateSelection<I> {
+        let exact = PopCriteriaKey::from_parts(arrival.topic, arrival.consumer_group, arrival.queue_id);
+        let wildcard = PopCriteriaKey::from_parts(arrival.topic, arrival.consumer_group, -1);
         let mut skipped = Vec::new();
         let mut inspected = 0;
         let mut conflicts = 0;
         while inspected < scan_limit.get() && conflicts <= scan_limit.get() {
             let Some(snapshot) = self.next_candidate(&exact, &wildcard, order, &skipped) else {
+                break;
+            };
+            if !snapshot.criteria.matches(arrival) {
+                skipped.push((snapshot.key, snapshot.order));
+                inspected += 1;
+                continue;
+            }
+            match self.try_reserve_candidate(snapshot) {
+                Some(candidate) => {
+                    inspected += 1;
+                    return PopCandidateSelection::new(Some(candidate), inspected);
+                }
+                None => conflicts += 1,
+            }
+        }
+        PopCandidateSelection::new(None, inspected)
+    }
+
+    /// Reserves the first matching candidate from one already-routed target.
+    pub(crate) fn reserve_target_matching_view(
+        &self,
+        key: &PopCriteriaKey,
+        arrival: PopArrivalView<'_>,
+        order: PopSelectionOrder,
+        scan_limit: NonZeroUsize,
+    ) -> PopCandidateSelection<I> {
+        let mut skipped = Vec::new();
+        let mut inspected = 0;
+        let mut conflicts = 0;
+        while inspected < scan_limit.get() && conflicts <= scan_limit.get() {
+            let Some(snapshot) = self.next_candidate(key, key, order, &skipped) else {
                 break;
             };
             if !snapshot.criteria.matches(arrival) {
@@ -301,6 +380,82 @@ where
             append_fanout_groups(&mut state, &wildcard, per_scope_limit, &mut groups);
         }
         groups
+    }
+
+    pub(crate) fn has_arrival_target(&self, topic: &CheetahString, queue_id: i32) -> bool {
+        let exact = PopTopicQueueKey::from_arrival(topic, queue_id);
+        let wildcard = PopTopicQueueKey::from_arrival(topic, -1);
+        let state = self.inner.state.lock();
+        let has_target = [&exact, &wildcard].into_iter().any(|key| {
+            state
+                .fanout
+                .get(key)
+                .is_some_and(|fanout| fanout.groups.iter().any(|group| group.live > 0))
+        });
+        has_target
+    }
+
+    /// Returns one deterministic bounded batch from the union of exact and
+    /// wildcard fanout groups for a single arrival continuation.
+    pub(crate) fn consumer_group_batch(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        cursor: &mut PopFanoutCursor,
+        limit: NonZeroUsize,
+    ) -> PopFanoutBatch {
+        if cursor.complete {
+            return PopFanoutBatch::empty();
+        }
+        let exact = PopTopicQueueKey::from_arrival(topic, queue_id);
+        let wildcard = PopTopicQueueKey::from_arrival(topic, -1);
+        let state = self.inner.state.lock();
+        let mut groups = Vec::new();
+        while groups.len() < limit.get() {
+            let Some(next) = next_fanout_group(&state, &exact, &wildcard, cursor.after_group.as_ref()) else {
+                cursor.complete = true;
+                break;
+            };
+            cursor.after_group = Some(next.clone());
+            groups.push(next);
+        }
+        if !cursor.complete && next_fanout_group(&state, &exact, &wildcard, cursor.after_group.as_ref()).is_none() {
+            cursor.complete = true;
+        }
+        PopFanoutBatch {
+            consumer_groups: groups,
+            exhausted: cursor.complete,
+        }
+    }
+
+    /// Returns a bounded round-robin batch of live targets for one lag refresh.
+    pub(crate) fn forced_targets(
+        &self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        limit: NonZeroUsize,
+    ) -> Vec<PopCriteriaKey> {
+        let mut state = self.inner.state.lock();
+        let mut keys = state
+            .buckets
+            .iter()
+            .filter(|(key, bucket)| {
+                &key.topic == topic && &key.consumer_group == consumer_group && !bucket.entries.is_empty()
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        keys.sort_by_key(PopCriteriaKey::queue_id);
+        if keys.is_empty() {
+            state.target_cursor = 0;
+            return keys;
+        }
+        let start = state.target_cursor % keys.len();
+        let take = limit.get().min(keys.len());
+        let selected = (0..take)
+            .map(|offset| keys[(start + offset) % keys.len()].clone())
+            .collect();
+        state.target_cursor = (start + take) % keys.len();
+        selected
     }
 
     fn next_candidate(
@@ -355,6 +510,7 @@ where
             live: state.live,
             reserved: state.reserved,
             buckets: state.buckets.len(),
+            candidates: state.buckets.values().map(|bucket| bucket.candidates).sum(),
         }
     }
 
@@ -503,6 +659,7 @@ struct PopCriteriaIndexState<I> {
     live: usize,
     reserved: usize,
     next_sequence: u64,
+    target_cursor: usize,
 }
 
 impl<I> Default for PopCriteriaIndexState<I> {
@@ -513,6 +670,7 @@ impl<I> Default for PopCriteriaIndexState<I> {
             live: 0,
             reserved: 0,
             next_sequence: 0,
+            target_cursor: 0,
         }
     }
 }
@@ -799,6 +957,44 @@ where
     pub(crate) fn id(&self) -> I {
         self.record.as_ref().expect("live POP candidate owns its record").id
     }
+
+    #[must_use]
+    pub(crate) const fn key(&self) -> &PopCriteriaKey {
+        &self.key
+    }
+
+    pub(crate) fn criteria(&self) -> &Arc<PopMatchCriteria> {
+        &self
+            .record
+            .as_ref()
+            .expect("live POP candidate owns its record")
+            .criteria
+    }
+}
+
+fn next_fanout_group<I>(
+    state: &PopCriteriaIndexState<I>,
+    exact: &PopTopicQueueKey,
+    wildcard: &PopTopicQueueKey,
+    after: Option<&CheetahString>,
+) -> Option<CheetahString> {
+    let exact_groups = state
+        .fanout
+        .get(exact)
+        .into_iter()
+        .flat_map(|bucket| bucket.groups.iter());
+    let wildcard_groups = (wildcard != exact)
+        .then(|| state.fanout.get(wildcard))
+        .flatten()
+        .into_iter()
+        .flat_map(|bucket| bucket.groups.iter());
+    exact_groups
+        .chain(wildcard_groups)
+        .filter(|group| group.live > 0)
+        .map(|group| &group.consumer_group)
+        .filter(|group| after.is_none_or(|after| *group > after))
+        .min()
+        .cloned()
 }
 
 impl<I> Drop for PopCandidateReservation<I>
@@ -834,6 +1030,7 @@ pub(crate) struct PopIndexSnapshot {
     live: usize,
     reserved: usize,
     buckets: usize,
+    candidates: usize,
 }
 
 impl PopIndexSnapshot {
@@ -850,6 +1047,11 @@ impl PopIndexSnapshot {
     #[must_use]
     pub(crate) const fn buckets(self) -> usize {
         self.buckets
+    }
+
+    #[must_use]
+    pub(crate) const fn candidates(self) -> usize {
+        self.candidates
     }
 }
 

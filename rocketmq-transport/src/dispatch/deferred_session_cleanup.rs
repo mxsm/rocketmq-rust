@@ -14,6 +14,9 @@
 
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -22,8 +25,8 @@ use parking_lot::Mutex;
 use super::DeferredRegistryErrorKind;
 use crate::session_view::SessionId;
 
-#[cfg(test)]
-type TestInsertCheckpoint = Arc<dyn Fn(bool) + Send + Sync + 'static>;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) type TestInsertCheckpoint = Arc<dyn Fn(bool) + Send + Sync + 'static>;
 #[cfg(test)]
 type TestCloseCheckpoint = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -41,6 +44,122 @@ pub(crate) trait DeferredSessionCleanupTarget: sealed::Sealed + Send + Sync + 's
 pub(crate) struct DeferredSessionCleanupRegistration {
     coordinator: Arc<CleanupCoordinator>,
     session_id: SessionId,
+}
+
+/// Opaque affine ownership of one legacy waiter's session-close callback.
+///
+/// Dropping this value deregisters the callback. The transport deliberately
+/// exposes neither the session cleanup registry nor its concrete registration
+/// type through this capability.
+#[must_use = "dropping the enrollment deregisters the session-close callback"]
+pub struct LegacySessionCleanupEnrollment {
+    inner: Option<CleanupEnrollment>,
+}
+
+impl std::fmt::Debug for LegacySessionCleanupEnrollment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LegacySessionCleanupEnrollment")
+            .field("active", &self.inner.is_some())
+            .finish()
+    }
+}
+
+/// Failure to atomically install a legacy waiter's session-close callback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum LegacySessionCleanupInstallError<E> {
+    /// The context did not originate from an admitted network session.
+    #[error("legacy session cleanup is unavailable for this context")]
+    Unavailable,
+    /// The canonical network session was already closing or closed.
+    #[error("legacy session cleanup rejected a closed session")]
+    SessionClosed,
+    /// The caller rejected installation and recovered its affine enrollment.
+    #[error("legacy waiter rejected session cleanup installation")]
+    Install(E),
+    /// An internal affine cleanup invariant was not satisfied.
+    #[error("legacy session cleanup invariant was not satisfied")]
+    Invariant,
+}
+
+#[derive(Clone)]
+pub(crate) struct LegacySessionCleanupCapability {
+    registration: DeferredSessionCleanupRegistration,
+}
+
+impl LegacySessionCleanupCapability {
+    pub(crate) fn new(registration: DeferredSessionCleanupRegistration) -> Self {
+        Self { registration }
+    }
+
+    pub(crate) fn install<T, E>(
+        &self,
+        cleanup: impl Fn() + Send + Sync + 'static,
+        install: impl FnOnce(LegacySessionCleanupEnrollment) -> Result<T, (E, LegacySessionCleanupEnrollment)>,
+    ) -> Result<T, LegacySessionCleanupInstallError<E>> {
+        static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
+
+        let key = NEXT_KEY
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
+            .map_err(|_| LegacySessionCleanupInstallError::Invariant)?;
+        let target = Arc::new(LegacyCallbackCleanupTarget {
+            key,
+            cleanup: Box::new(cleanup),
+            completed: AtomicBool::new(false),
+        });
+        let mut install_error = None;
+        let result = self.registration.clone().enroll(
+            key,
+            move || target as Arc<dyn DeferredSessionCleanupTarget>,
+            |slot| {
+                let Some(enrollment) = slot.take() else {
+                    return Err(DeferredRegistryErrorKind::RegistryInvariant);
+                };
+                match install(LegacySessionCleanupEnrollment {
+                    inner: Some(enrollment),
+                }) {
+                    Ok(value) => Ok(value),
+                    Err((error, mut returned)) => {
+                        let Some(inner) = returned.inner.take() else {
+                            return Err(DeferredRegistryErrorKind::RegistryInvariant);
+                        };
+                        *slot = Some(inner);
+                        install_error = Some(error);
+                        Err(DeferredRegistryErrorKind::Builder)
+                    }
+                }
+            },
+        );
+        match result {
+            Ok(value) => Ok(value),
+            Err(DeferredRegistryErrorKind::SessionClosed) => Err(LegacySessionCleanupInstallError::SessionClosed),
+            Err(DeferredRegistryErrorKind::Builder) => match install_error {
+                Some(error) => Err(LegacySessionCleanupInstallError::Install(error)),
+                None => Err(LegacySessionCleanupInstallError::Invariant),
+            },
+            Err(_) => Err(LegacySessionCleanupInstallError::Invariant),
+        }
+    }
+}
+
+struct LegacyCallbackCleanupTarget {
+    key: usize,
+    cleanup: Box<dyn Fn() + Send + Sync + 'static>,
+    completed: AtomicBool,
+}
+
+impl sealed::Sealed for LegacyCallbackCleanupTarget {}
+
+impl DeferredSessionCleanupTarget for LegacyCallbackCleanupTarget {
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn remove_session(&self, _session_id: SessionId) {
+        if !self.completed.swap(true, Ordering::AcqRel) {
+            (self.cleanup)();
+        }
+    }
 }
 
 pub(crate) struct DeferredSessionCleanupOwner {
@@ -65,7 +184,7 @@ impl DeferredSessionCleanupOwner {
         self.registration.coordinator.close(self.registration.session_id)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_insert_checkpoint(&self, checkpoint: TestInsertCheckpoint) {
         *self.registration.coordinator.insert_checkpoint.lock() = Some(checkpoint);
     }
@@ -96,7 +215,30 @@ pub(crate) struct CleanupEnrollment {
     coordinator: Weak<CleanupCoordinator>,
     target: Arc<dyn DeferredSessionCleanupTarget>,
     key: usize,
-    active: bool,
+    active: Arc<AtomicBool>,
+}
+
+struct CleanupEnrollmentRollback<'a> {
+    state: &'a mut CleanupState,
+    key: usize,
+    active: Arc<AtomicBool>,
+    committed: bool,
+}
+
+impl CleanupEnrollmentRollback<'_> {
+    fn commit(&mut self) {
+        self.active.store(true, Ordering::Release);
+        self.committed = true;
+    }
+}
+
+impl Drop for CleanupEnrollmentRollback<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.active.store(false, Ordering::Release);
+            release_enrollment(self.state, self.key);
+        }
+    }
 }
 
 impl DeferredSessionCleanupRegistration {
@@ -139,35 +281,46 @@ impl DeferredSessionCleanupRegistration {
                 target
             }
         };
+        let active = Arc::new(AtomicBool::new(false));
         let mut enrollment = Some(CleanupEnrollment {
             coordinator: Arc::downgrade(&self.coordinator),
             target,
             key,
-            active: true,
+            active: Arc::clone(&active),
         });
-        #[cfg(test)]
-        if let Some(checkpoint) = self.coordinator.insert_checkpoint.lock().clone() {
-            checkpoint(self.coordinator.state.is_locked());
-        }
-        let result = insert(&mut enrollment);
+        let mut rollback = CleanupEnrollmentRollback {
+            state: &mut state,
+            key,
+            active,
+            committed: false,
+        };
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(checkpoint) = self.coordinator.insert_checkpoint.lock().clone() {
+                checkpoint(self.coordinator.state.is_locked());
+            }
+            insert(&mut enrollment)
+        }));
         match result {
-            Ok(value) if enrollment.is_none() => Ok(value),
-            Ok(_) => {
-                release_enrollment(&mut state, key);
-                enrollment.as_mut().expect("cleanup enrollment remains owned").active = false;
-                drop(state);
+            Ok(Ok(value)) if enrollment.is_none() => {
+                rollback.commit();
+                Ok(value)
+            }
+            Ok(Ok(_)) => {
+                drop(rollback);
                 drop(enrollment);
                 Err(DeferredRegistryErrorKind::RegistryInvariant)
             }
-            Err(error) => {
-                release_enrollment(&mut state, key);
-                enrollment
-                    .as_mut()
-                    .expect("failed cleanup enrollment remains owned")
-                    .active = false;
-                drop(state);
+            Ok(Err(error)) => {
+                drop(rollback);
                 drop(enrollment);
                 Err(error)
+            }
+            Err(payload) => {
+                drop(rollback);
+                drop(enrollment);
+                drop(state);
+                std::panic::resume_unwind(payload)
             }
         }
     }
@@ -175,20 +328,19 @@ impl DeferredSessionCleanupRegistration {
 
 impl Drop for CleanupEnrollment {
     fn drop(&mut self) {
-        if !self.active {
+        if !self.active.swap(false, Ordering::AcqRel) {
             return;
         }
         let _keep_target_alive = &self.target;
         if let Some(coordinator) = self.coordinator.upgrade() {
             release_enrollment(&mut coordinator.state.lock(), self.key);
         }
-        self.active = false;
     }
 }
 
 struct CleanupCoordinator {
     state: Mutex<CleanupState>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     insert_checkpoint: Mutex<Option<TestInsertCheckpoint>>,
     #[cfg(test)]
     close_acquired_checkpoint: Mutex<Option<TestCloseCheckpoint>>,
@@ -198,7 +350,7 @@ impl CleanupCoordinator {
     fn new() -> Self {
         Self {
             state: Mutex::new(CleanupState::default()),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             insert_checkpoint: Mutex::new(None),
             #[cfg(test)]
             close_acquired_checkpoint: Mutex::new(None),
@@ -473,6 +625,112 @@ mod tests {
         drop((first, second, third));
         assert_eq!(first_owner.target_counts(), (0, 0));
         assert_eq!(second_owner.target_counts(), (0, 0));
+    }
+
+    #[test]
+    fn close_waits_for_atomic_legacy_publication_and_calls_back_without_registry_lock() {
+        let owner = Arc::new(DeferredSessionCleanupOwner::new(SessionId::from_session_owner(9_001)));
+        let registration = owner.registration();
+        let coordinator = Arc::clone(&registration.coordinator);
+        let capability = LegacySessionCleanupCapability::new(registration);
+        let published = Arc::new(AtomicBool::new(false));
+        let callback_calls = Arc::new(AtomicUsize::new(0));
+        let held = Arc::new(Mutex::new(None::<LegacySessionCleanupEnrollment>));
+        let checkpoint = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let insert_checkpoint = Arc::clone(&checkpoint);
+        let insert_release = Arc::clone(&release);
+        owner.set_insert_checkpoint(Arc::new(move |state_locked| {
+            assert!(state_locked, "publication checkpoint must own the cleanup gate");
+            insert_checkpoint.wait();
+            insert_release.wait();
+        }));
+
+        let enrollment_published = Arc::clone(&published);
+        let enrollment_calls = Arc::clone(&callback_calls);
+        let enrollment_held = Arc::clone(&held);
+        let enrollment_coordinator = Arc::clone(&coordinator);
+        let enrollment = std::thread::spawn(move || {
+            capability
+                .install(
+                    move || {
+                        assert!(
+                            !enrollment_coordinator.state.is_locked(),
+                            "session callback must run after the cleanup gate is released"
+                        );
+                        assert!(
+                            enrollment_published.load(Ordering::Acquire),
+                            "session close must not observe a half-published legacy node"
+                        );
+                        enrollment_calls.fetch_add(1, Ordering::AcqRel);
+                    },
+                    |cleanup| {
+                        published.store(true, Ordering::Release);
+                        *enrollment_held.lock() = Some(cleanup);
+                        Ok::<_, ((), LegacySessionCleanupEnrollment)>(())
+                    },
+                )
+                .expect("publish legacy cleanup enrollment");
+        });
+
+        checkpoint.wait();
+        let (close_started_tx, close_started_rx) = std::sync::mpsc::channel();
+        let (close_done_tx, close_done_rx) = std::sync::mpsc::channel();
+        let closing_owner = Arc::clone(&owner);
+        let closing = std::thread::spawn(move || {
+            close_started_tx.send(()).expect("signal close attempt");
+            let outcome = closing_owner.close();
+            close_done_tx.send(outcome).expect("signal close completion");
+        });
+        close_started_rx.recv().expect("close thread started");
+        assert!(
+            close_done_rx.try_recv().is_err(),
+            "close cannot pass an in-progress atomic publication"
+        );
+
+        release.wait();
+        enrollment.join().expect("enrollment thread");
+        assert_eq!(
+            close_done_rx.recv().expect("close completion"),
+            DeferredSessionCleanupCloseOutcome::Completed
+        );
+        closing.join().expect("close thread");
+        assert_eq!(callback_calls.load(Ordering::Acquire), 1);
+
+        drop(held.lock().take());
+        assert_eq!(owner.target_counts(), (0, 0));
+    }
+
+    #[test]
+    fn panicking_legacy_install_rolls_back_provisional_enrollment_before_unwind() {
+        let owner = Arc::new(DeferredSessionCleanupOwner::new(SessionId::from_session_owner(9_002)));
+        let capability = LegacySessionCleanupCapability::new(owner.registration());
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let worker_barrier = Arc::clone(&barrier);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = capability.install(
+                    || {},
+                    |_provisional| -> Result<(), ((), LegacySessionCleanupEnrollment)> {
+                        worker_barrier.wait();
+                        panic!("legacy cleanup installer panic");
+                    },
+                );
+            }));
+            done_tx.send(panic.is_err()).expect("report panic completion");
+        });
+
+        barrier.wait();
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("provisional enrollment must not self-deadlock"),
+            "panic must resume after registry rollback"
+        );
+        worker.join().expect("panic is contained by worker");
+        assert_eq!(owner.target_counts(), (0, 0));
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
     }
 
     struct PanickingTarget {

@@ -78,6 +78,46 @@ fn service(max_entries: usize, per_key: usize) -> PopDeferredService {
     )
 }
 
+#[tokio::test]
+async fn closed_task_group_releases_pending_offset_for_the_next_service_tick() {
+    let service = service(2, 2);
+    let key = criteria_key(3);
+    service
+        .latch_queue_offset_for_test(key.topic(), key.queue_id(), 10)
+        .expect("retain offset arrival");
+    assert_eq!(service.resource_snapshot().pending_arrivals, 1);
+
+    let pending = service
+        .pending_offset_reservations()
+        .pop()
+        .expect("first producer tick reserves replay");
+    let stopped = crate::test_task_group("pop-offset-replay-spawn-rejection");
+    let report = stopped.shutdown(Duration::ZERO).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert!(stopped
+        .spawn(
+            "rejected-pop-offset-replay",
+            rocketmq_runtime::TaskKind::Worker,
+            async move {
+                drop(pending);
+            }
+        )
+        .is_err());
+    assert_eq!(service.resource_snapshot().pending_arrivals, 1);
+    assert_eq!(service.resource_snapshot().active_continuations, 0);
+
+    let retry = service
+        .pending_offset_reservations()
+        .pop()
+        .expect("next producer tick retries the exact range");
+    assert_eq!(retry.range().first, 10);
+    assert_eq!(retry.range().last, 10);
+    drop(retry);
+    service.seal();
+    assert_eq!(service.resource_snapshot().pending_arrivals, 0);
+    assert_eq!(service.resource_snapshot().pending_arrival_bytes, 0);
+}
+
 fn criteria_key(queue_id: i32) -> PopCriteriaKey {
     PopCriteriaKey::new(
         CheetahString::from_static_str("topic"),

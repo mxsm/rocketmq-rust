@@ -560,7 +560,7 @@ async fn tcp_pending_wake_replays_then_writes_exactly_one_bound_frame() {
             let result = service_for_resume
                 .resume_claimed(
                     claim,
-                    rocketmq_transport::api::v2::DeferredResumeRetainedSize::default(),
+                    rocketmq_transport::api::v2::DeferredResumeRetainedSize::new(321),
                     move |resume, reason| async move {
                         assert_eq!(reason, DeferredWakeReason::MessageArrived);
                         assert_eq!(resume.request().effective_peer(), peer);
@@ -584,6 +584,9 @@ async fn tcp_pending_wake_replays_then_writes_exactly_one_bound_frame() {
         })
         .expect("spawn owned Pull resume");
     plan_ready_rx.await.expect("owner-backed Pull response plan ready");
+    let active_resume = service.resource_snapshot();
+    assert_eq!(active_resume.resume_executions, 1);
+    assert_eq!(active_resume.resume_execution_bytes, 321);
     assert_eq!(owner_drops.load(Ordering::SeqCst), 0);
     let mut receipt_rx = Box::pin(receipt_rx);
     tokio::select! {
@@ -609,6 +612,9 @@ async fn tcp_pending_wake_replays_then_writes_exactly_one_bound_frame() {
     assert_eq!(response.body().map(|body| body.as_ref()), Some(RESPONSE_BODY));
     assert_eq!(rereads.load(Ordering::SeqCst), 1);
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
+    let terminal_resume = service.resource_snapshot();
+    assert_eq!(terminal_resume.resume_executions, 0);
+    assert_eq!(terminal_resume.resume_execution_bytes, 0);
     assert_released(&service);
     let _ = service.shutdown();
     running.finish().await;

@@ -18,8 +18,13 @@ use std::fmt;
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -67,6 +72,21 @@ use super::index::PullIndexLease;
 use super::index::PullIndexReservation;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
+
+mod continuation;
+
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
+use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
+use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
+use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
+use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
+pub(crate) use continuation::PullArrivalContinuation;
+use continuation::PullContinuationAdmission;
+pub(crate) use continuation::PullContinuationError;
+use continuation::PullContinuationPermit;
+use continuation::PullPendingArrival;
+use continuation::PullPendingArrivalKey;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PullSuspendTiming {
@@ -375,6 +395,12 @@ pub(crate) struct PullDeferredService {
     expiry_margins: DeferredExpiryMargins,
     scan_limit: NonZeroUsize,
     candidate_limit: NonZeroUsize,
+    continuation_admission: Arc<PullContinuationAdmission>,
+    pending_arrivals: Arc<PendingArrivalLatch<PullPendingArrivalKey, PullPendingArrival>>,
+    pending_offsets: Arc<PendingOffsetRangeLatch<PullCriteriaKey>>,
+    pending_arrival_sequence: AtomicU64,
+    resume_executions: Arc<AtomicUsize>,
+    resume_execution_bytes: Arc<AtomicUsize>,
     closed: AtomicBool,
 }
 
@@ -386,6 +412,8 @@ impl PullDeferredService {
         scan_limit: NonZeroUsize,
         candidate_limit: NonZeroUsize,
     ) -> Self {
+        let limits = admission.limits();
+        let continuation_bytes = limits.max_retained_bytes();
         Self {
             admission,
             registry: DeferredRegistry::new(),
@@ -393,6 +421,15 @@ impl PullDeferredService {
             expiry_margins,
             scan_limit,
             candidate_limit,
+            continuation_admission: Arc::new(PullContinuationAdmission::new(scan_limit.get(), continuation_bytes)),
+            pending_arrivals: PendingArrivalLatch::new(limits.max_waiters(), continuation_bytes),
+            pending_offsets: PendingOffsetRangeLatch::new(
+                combined_budget(limits.max_waiters(), scan_limit.get()),
+                combined_budget(continuation_bytes, continuation_bytes),
+            ),
+            pending_arrival_sequence: AtomicU64::new(0),
+            resume_executions: Arc::new(AtomicUsize::new(0)),
+            resume_execution_bytes: Arc::new(AtomicUsize::new(0)),
             closed: AtomicBool::new(false),
         }
     }
@@ -551,23 +588,183 @@ impl PullDeferredService {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_arrival_batch(
         &self,
         arrival: &PullArrivalView<'_>,
         cursor: &mut PullScanCursor,
     ) -> Vec<PullCandidateReservation> {
+        self.reserve_arrival_batch_state(arrival, cursor).into_candidates()
+    }
+
+    pub(crate) fn reserve_arrival_batch_state(
+        &self,
+        arrival: &PullArrivalView<'_>,
+        cursor: &mut PullScanCursor,
+    ) -> PullCandidateBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PullCandidateBatch::empty();
+        }
+        self.index
+            .reserve_matching_batch(arrival, cursor, self.scan_limit, self.candidate_limit)
+    }
+
+    pub(crate) fn needs_offset_refresh(&self, arrival: &PullArrivalView<'_>) -> bool {
+        !self.closed.load(Ordering::Acquire) && self.index.needs_offset_refresh(arrival)
+    }
+
+    pub(crate) const fn scan_cursor(&self) -> PullScanCursor {
+        PullScanCursor::new()
+    }
+
+    pub(crate) fn reserve_forced_batch(&self, cursor: &mut PullScanCursor) -> PullCandidateBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PullCandidateBatch::empty();
+        }
+        self.index
+            .reserve_forced_batch(cursor, self.scan_limit, self.candidate_limit)
+    }
+
+    pub(crate) fn admit_arrival_continuation(
+        &self,
+        arrival: PullArrivalView<'_>,
+        cursor: PullScanCursor,
+    ) -> Result<PullArrivalContinuation, PullContinuationError> {
+        PullArrivalContinuation::arrival(&self.continuation_admission, arrival, cursor)
+    }
+
+    pub(crate) fn admit_forced_continuation(
+        &self,
+        cursor: PullScanCursor,
+    ) -> Result<PullArrivalContinuation, PullContinuationError> {
+        PullArrivalContinuation::forced(&self.continuation_admission, cursor)
+    }
+
+    pub(crate) fn reserve_continuation_batch(&self, continuation: &mut PullArrivalContinuation) -> PullCandidateBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PullCandidateBatch::empty();
+        }
+        continuation.reserve_next(&self.index, self.scan_limit, self.candidate_limit)
+    }
+
+    pub(crate) fn latch_arrival(
+        &self,
+        arrival: PullArrivalView<'_>,
+        cursor: PullScanCursor,
+    ) -> Result<(), PullPendingArrivalError> {
+        let key = PullPendingArrivalKey::Arrival(
+            self.pending_arrival_sequence.fetch_add(1, Ordering::Relaxed),
+            PullCriteriaKey::new(arrival.topic().clone(), arrival.queue_id()),
+        );
+        let pending = PullPendingArrival::arrival(arrival, cursor).map_err(PullPendingArrivalError::Continuation)?;
+        self.pending_arrivals
+            .insert(key, pending)
+            .map_err(PullPendingArrivalError::Latch)
+    }
+
+    pub(crate) fn latch_forced(&self, cursor: PullScanCursor) -> Result<(), PullPendingArrivalError> {
+        let key = PullPendingArrivalKey::Forced;
+        if self.pending_arrivals.coalesce_existing(&key) {
+            return Ok(());
+        }
+        self.pending_arrivals
+            .insert(key, PullPendingArrival::forced(cursor))
+            .map_err(PullPendingArrivalError::Latch)
+    }
+
+    pub(crate) fn pending_arrival_reservations(&self) -> Vec<PullPendingArrivalReservation> {
+        self.pending_arrivals.reserve_batch(self.scan_limit.get())
+    }
+
+    pub(crate) fn latch_offset(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        logical_offset: i64,
+    ) -> Result<(), PendingArrivalInsertError> {
+        if logical_offset <= 0 {
+            return Ok(());
+        }
+        self.latch_queue_offset_range(topic, queue_id, logical_offset - 1, logical_offset - 1)
+    }
+
+    pub(crate) fn latch_max_offset_range(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        max_offset: i64,
+    ) -> Result<(), PendingArrivalInsertError> {
+        if max_offset <= 0 {
+            return Ok(());
+        }
+        self.latch_queue_offset_range(topic, queue_id, 0, max_offset - 1)
+    }
+
+    fn latch_queue_offset_range(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        first: i64,
+        last: i64,
+    ) -> Result<(), PendingArrivalInsertError> {
+        let key = PullCriteriaKey::new(topic.clone(), queue_id);
+        if !self.index.has_target(&key) {
+            return Ok(());
+        }
+        self.pending_offsets
+            .retain_targets(|target| self.index.has_target(target));
+        self.pending_offsets.merge_range(key, first, last)
+    }
+
+    pub(crate) fn pending_offset_reservations(&self) -> Vec<PullPendingOffsetReservation> {
+        self.pending_offsets
+            .reserve_batch(self.scan_limit.get())
+            .into_iter()
+            .filter_map(|reservation| {
+                let permit = self.continuation_admission.reserve(reservation.retained_bytes()).ok()?;
+                Some(PullPendingOffsetReservation {
+                    reservation,
+                    _permit: permit,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn reserve_pending_arrival_batch(&self, pending: &mut PullPendingArrival) -> PullCandidateBatch {
+        if self.closed.load(Ordering::Acquire) {
+            return PullCandidateBatch::empty();
+        }
+        pending.reserve_next(&self.index, self.scan_limit, self.candidate_limit)
+    }
+
+    pub(crate) fn reserve_offset_replay_batch(
+        &self,
+        key: &PullCriteriaKey,
+        cursor: &mut PullScanCursor,
+    ) -> PullCandidateBatch {
+        let arrival = PullArrivalView::new(key.topic(), key.queue_id(), 0).forced();
+        self.index
+            .reserve_matching_batch(&arrival, cursor, self.scan_limit, self.candidate_limit)
+    }
+
+    pub(crate) fn replay_read_limit(&self) -> i32 {
+        i32::try_from(self.candidate_limit.get()).unwrap_or(i32::MAX)
+    }
+
+    /// Returns one bounded, round-robin batch of live topic/queue targets.
+    pub(crate) fn target_batch(&self) -> Vec<PullCriteriaKey> {
         if self.closed.load(Ordering::Acquire) {
             return Vec::new();
         }
-        self.index
-            .reserve_matching(arrival, cursor, self.scan_limit, self.candidate_limit)
+        self.index.target_batch(self.scan_limit)
     }
 
-    /// Selects every waiter matching one borrowed arrival in bounded batches.
+    /// Test helper that selects every waiter matching one borrowed arrival.
     ///
     /// `submit` must synchronously transfer the affine candidates to a
     /// lifecycle-owned task. If it rejects a batch, dropping that batch restores
     /// index visibility and this callback stops without spinning.
+    #[cfg(test)]
     pub(crate) fn produce_arrival<E, R, S>(
         &self,
         arrival: PullArrivalView<'_>,
@@ -595,7 +792,8 @@ impl PullDeferredService {
         )
     }
 
-    /// Selects every currently indexed waiter for master-online refresh.
+    /// Test helper that selects every indexed waiter for master-online refresh.
+    #[cfg(test)]
     pub(crate) fn produce_forced<S, E>(&self, mut submit: S) -> Result<PullProducerStats, E>
     where
         S: FnMut(Vec<PullCandidateReservation>) -> Result<(), E>,
@@ -612,6 +810,7 @@ impl PullDeferredService {
         )
     }
 
+    #[cfg(test)]
     fn produce_batches<E, N, S>(&self, mut next: N, submit: &mut S) -> Result<PullProducerStats, E>
     where
         N: FnMut(&mut PullScanCursor) -> PullCandidateBatch,
@@ -675,12 +874,53 @@ impl PullDeferredService {
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
     {
-        claimed.resume(retained, handler).await
+        let observation = Arc::new(Mutex::new(None));
+        let accepted = Arc::clone(&observation);
+        let resume_executions = Arc::clone(&self.resume_executions);
+        let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
+        let retained_bytes = retained.dynamic_bytes();
+        let result = claimed
+            .resume(retained, move |resume, reason| {
+                *accepted.lock() = Some(ResumeExecutionObservation::new(
+                    resume_executions,
+                    resume_execution_bytes,
+                    retained_bytes,
+                ));
+                handler(resume, reason)
+            })
+            .await;
+        drop(observation.lock().take());
+        result
+    }
+
+    /// Transfers one claimed Pull execution to its canonical session owner and
+    /// returns after bounded session admission, before handler/write terminal.
+    pub(crate) fn submit_claimed<F, Fut>(
+        &self,
+        claimed: ClaimedDeferred<ResumePull>,
+        retained: DeferredResumeRetainedSize,
+        handler: F,
+    ) -> Result<(), DeferredResumeError>
+    where
+        F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+    {
+        let resume_executions = Arc::clone(&self.resume_executions);
+        let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
+        let retained_bytes = retained.dynamic_bytes();
+        let observation = ResumeExecutionObservation::new(resume_executions, resume_execution_bytes, retained_bytes);
+        claimed.submit(retained, handler, move |_| drop(observation))
+    }
+
+    pub(crate) fn seal(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.pending_arrivals.seal();
+        self.pending_offsets.seal();
     }
 
     #[must_use]
     pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
-        self.closed.store(true, Ordering::Release);
+        self.seal();
         self.registry.shutdown()
     }
 
@@ -693,6 +933,107 @@ impl PullDeferredService {
     pub(crate) fn index_snapshot(&self) -> PullIndexSnapshot {
         self.index.snapshot()
     }
+
+    #[must_use]
+    pub(crate) fn resource_snapshot(&self) -> PullDeferredResourceSnapshot {
+        let continuation = self.continuation_admission.snapshot();
+        let pending = self.pending_arrivals.snapshot();
+        let offsets = self.pending_offsets.snapshot();
+        PullDeferredResourceSnapshot {
+            admission: self.admission.snapshot(),
+            index: self.index.snapshot(),
+            resume_executions: self.resume_executions.load(Ordering::Acquire),
+            resume_execution_bytes: self.resume_execution_bytes.load(Ordering::Acquire),
+            active_continuations: continuation.count,
+            continuation_bytes: continuation.bytes,
+            continuation_rejected: continuation.rejected,
+            pending_arrivals: pending.count.saturating_add(offsets.count),
+            pending_arrival_bytes: pending.bytes.saturating_add(offsets.bytes),
+            pending_arrival_rejected: pending.rejected.saturating_add(offsets.rejected),
+            pending_offset_invariant_failures: offsets.rejected,
+        }
+    }
+}
+
+struct ResumeExecutionObservation {
+    executions: Arc<AtomicUsize>,
+    bytes: Arc<AtomicUsize>,
+    retained_bytes: usize,
+}
+
+impl ResumeExecutionObservation {
+    fn new(executions: Arc<AtomicUsize>, bytes: Arc<AtomicUsize>, retained_bytes: usize) -> Self {
+        executions.fetch_add(1, Ordering::AcqRel);
+        bytes.fetch_add(retained_bytes, Ordering::AcqRel);
+        Self {
+            executions,
+            bytes,
+            retained_bytes,
+        }
+    }
+}
+
+impl Drop for ResumeExecutionObservation {
+    fn drop(&mut self) {
+        self.bytes.fetch_sub(self.retained_bytes, Ordering::AcqRel);
+        self.executions.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PullDeferredResourceSnapshot {
+    pub(crate) admission: DeferredAdmissionSnapshot,
+    pub(crate) index: PullIndexSnapshot,
+    pub(crate) resume_executions: usize,
+    pub(crate) resume_execution_bytes: usize,
+    pub(crate) active_continuations: usize,
+    pub(crate) continuation_bytes: usize,
+    pub(crate) continuation_rejected: usize,
+    pub(crate) pending_arrivals: usize,
+    pub(crate) pending_arrival_bytes: usize,
+    pub(crate) pending_arrival_rejected: usize,
+    pub(crate) pending_offset_invariant_failures: usize,
+}
+
+pub(crate) type PullPendingArrivalReservation = PendingArrivalReservation<PullPendingArrivalKey, PullPendingArrival>;
+pub(crate) struct PullPendingOffsetReservation {
+    reservation: PendingOffsetRangeReservation<PullCriteriaKey>,
+    _permit: PullContinuationPermit,
+}
+
+impl PullPendingOffsetReservation {
+    pub(crate) fn key(&self) -> &PullCriteriaKey {
+        self.reservation.key()
+    }
+
+    pub(crate) const fn range(&self) -> crate::long_polling::pending_arrival_latch::PendingOffsetRange {
+        self.reservation.range()
+    }
+
+    pub(crate) fn finish_or_updated(
+        &mut self,
+    ) -> Option<crate::long_polling::pending_arrival_latch::PendingOffsetRange> {
+        self.reservation.finish_or_updated()
+    }
+}
+
+impl PendingOffsetTarget for PullCriteriaKey {
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.topic().len().saturating_mul(2))
+    }
+}
+
+const fn combined_budget(left: usize, right: usize) -> usize {
+    match left.checked_add(right) {
+        Some(combined) => combined,
+        None => usize::MAX,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PullPendingArrivalError {
+    Continuation(PullContinuationError),
+    Latch(PendingArrivalInsertError),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

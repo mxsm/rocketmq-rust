@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownReport;
@@ -42,6 +43,44 @@ impl RunningV2LeafServer {
         assert!(tasks.is_healthy(), "{}", tasks.to_json());
         let background = self.owner.shutdown_background();
         assert!(background.is_healthy(), "{}", background.to_json());
+    }
+
+    pub(crate) async fn finish_and_collect(mut self, mut connection: Connection) -> Vec<RemotingCommand> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let shutdown = async move {
+            let report = self.result.await.expect("V2 leaf server shutdown report");
+            assert!(report.is_healthy(), "{}", report.to_json());
+            let tasks = self.owner.shutdown_tasks().await;
+            assert!(tasks.is_healthy(), "{}", tasks.to_json());
+            let background = self.owner.shutdown_background();
+            assert!(background.is_healthy(), "{}", background.to_json());
+        };
+        let collect = async move {
+            let mut responses = Vec::new();
+            while let Some(response) = connection.receive_command().await {
+                responses.push(response.expect("receive V2 leaf response"));
+            }
+            responses
+        };
+        let ((), responses) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(shutdown, collect)
+        })
+        .await
+        .expect("V2 leaf server and client should terminate deterministically");
+        responses
+    }
+
+    pub(crate) async fn receive_one_then_finish_and_collect(self, mut connection: Connection) -> Vec<RemotingCommand> {
+        let first = tokio::time::timeout(std::time::Duration::from_secs(10), connection.receive_command())
+            .await
+            .expect("V2 leaf response should arrive before shutdown")
+            .expect("V2 leaf connection should remain open for its response")
+            .expect("receive V2 leaf response");
+        let mut responses = vec![first];
+        responses.extend(self.finish_and_collect(connection).await);
+        responses
     }
 }
 

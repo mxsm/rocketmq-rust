@@ -295,6 +295,36 @@ fn topic_queue_fanout_is_bounded_round_robin_and_cleans_up_exact_and_wildcard_gr
     assert_eq!(index.snapshot(), PopIndexSnapshot::default());
 }
 
+#[test]
+fn arrival_fanout_cursor_visits_every_group_beyond_one_batch() {
+    let index = PopCriteriaIndex::<u64>::new(PopCriteriaLimits::new(nonzero(4), nonzero(4)));
+    let base = tokio::time::Instant::now();
+    let mut leases = Vec::new();
+    for (id, group, queue_id) in [(1, "a", 3), (2, "b", 3), (3, "c", 3), (4, "wildcard", -1)] {
+        leases.push(
+            index
+                .reserve(key(group, queue_id))
+                .expect("fanout reservation")
+                .publish(id, deadline(base, id * 10), match_all()),
+        );
+    }
+
+    let topic = CheetahString::from_static_str("topic");
+    let mut cursor = PopFanoutCursor::new();
+    let mut observed = Vec::new();
+    loop {
+        let batch = index.consumer_group_batch(&topic, 3, &mut cursor, nonzero(1));
+        let exhausted = batch.exhausted();
+        observed.extend(batch.into_consumer_groups().into_iter().map(|group| group.to_string()));
+        if exhausted {
+            break;
+        }
+    }
+    assert_eq!(observed, ["a", "b", "c", "wildcard"]);
+
+    drop(leases);
+}
+
 struct CountingMatchFilter(Arc<AtomicUsize>);
 
 impl MessageFilter for CountingMatchFilter {

@@ -113,6 +113,15 @@ impl LegacyRequestBridge {
         response: &ResponseSink,
         endpoint: &LegacyNetworkSession,
     ) -> Result<Self, LegacyProcessorAdapterError> {
+        Self::from_network_session_with_execution(session, response, endpoint, None)
+    }
+
+    fn from_network_session_with_execution(
+        session: &SessionHandle,
+        response: &ResponseSink,
+        endpoint: &LegacyNetworkSession,
+        session_execution: Option<crate::dispatch::LegacySessionExecutionSeed>,
+    ) -> Result<Self, LegacyProcessorAdapterError> {
         let canonical_session_id = SessionId::from_session_owner(session.session_id());
         #[cfg(test)]
         BRIDGE_CONSTRUCTIONS
@@ -140,7 +149,12 @@ impl LegacyRequestBridge {
                 endpoint.owner.clone(),
             )
             .map_err(LegacyProcessorAdapterError::BridgeConstruction)?;
-        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let context = Arc::new(match session_execution {
+            Some(session_execution) => {
+                ConnectionHandlerContextWrapper::new_with_legacy_session_execution(channel.clone(), session_execution)
+            }
+            None => ConnectionHandlerContextWrapper::new(channel.clone()),
+        });
         let bridge = Self {
             channel,
             context,
@@ -583,6 +597,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         ordering: RequestOrdering,
         class: crate::admission::AdmissionClass,
         resume_executor: crate::session_executor::DeferredResumeExecutor,
+        retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError>;
 
@@ -665,6 +680,7 @@ where
         ordering: RequestOrdering,
         class: crate::admission::AdmissionClass,
         resume_executor: crate::session_executor::DeferredResumeExecutor,
+        _retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
         let mut seed = response
@@ -815,12 +831,24 @@ where
         builder: RemotingRequestBuilder,
         _response: &ResponseSink,
         _session: &SessionHandle,
-        _ordering: RequestOrdering,
-        _class: crate::admission::AdmissionClass,
-        _resume_executor: crate::session_executor::DeferredResumeExecutor,
-        _session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
+        ordering: RequestOrdering,
+        class: crate::admission::AdmissionClass,
+        resume_executor: crate::session_executor::DeferredResumeExecutor,
+        retained_bytes: usize,
+        session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
-        Ok(builder)
+        Ok(match session_cleanup {
+            Some(session_cleanup) => {
+                builder.with_legacy_session_execution(crate::dispatch::LegacySessionExecutionSeed::new(
+                    session_cleanup,
+                    resume_executor,
+                    retained_bytes,
+                    class,
+                    ordering,
+                ))
+            }
+            None => builder,
+        })
     }
 
     #[allow(
@@ -837,7 +865,13 @@ where
         response: &ResponseSink,
     ) -> impl Future<Output = Result<InternalProcessorCandidate, DispatchProcessorError>> + Send {
         async move {
-            let bridge = LegacyRequestBridge::from_network_session(session, response, network_session)?;
+            let session_execution = request.take_legacy_session_execution();
+            let bridge = LegacyRequestBridge::from_network_session_with_execution(
+                session,
+                response,
+                network_session,
+                session_execution,
+            )?;
             bridge.validate_request(request)?;
 
             if let Err(error) = run_before_rpc_hooks(hook_snapshot, remote_address, request.legacy_command_mut()) {

@@ -23,6 +23,7 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -378,14 +379,48 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
         self.notification_deferred_service.set(service)
     }
 
+    #[cfg(test)]
+    pub(crate) fn notification_deferred_service_is_installed_for_test(&self) -> bool {
+        self.notification_deferred_service.get().is_some()
+    }
+
     pub async fn start(&self) {
         let _lifecycle = self.lifecycle.lock().await;
         PopLongPollingService::start(&self.pop_long_polling_service).await
     }
 
-    pub async fn shutdown(&self) {
-        let _lifecycle = self.lifecycle.lock().await;
-        self.pop_long_polling_service.shutdown().await;
+    pub(crate) async fn stop_legacy_producer_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.pop_long_polling_service.stop_producer_until(deadline).await
+    }
+
+    pub(crate) async fn drain_legacy_executions_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.pop_long_polling_service.drain_executions_until(deadline).await
+    }
+
+    pub(crate) async fn finalize_legacy_shutdown(
+        &self,
+    ) -> crate::long_polling::long_polling_service::LegacyServiceFinalization {
+        self.pop_long_polling_service.finalize_shutdown().await
+    }
+
+    pub async fn shutdown(&self) -> crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
+        let deadline = rocketmq_runtime::ShutdownDeadline::after(std::time::Duration::from_secs(5));
+        let producer = self.stop_legacy_producer_until(deadline).await;
+        let executions = self.drain_legacy_executions_until(deadline).await;
+        let finalization = self.finalize_legacy_shutdown().await;
+        crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
+            name: "notification_long_polling",
+            producer,
+            executions,
+            observed_after_session_drain: finalization.observed_after_session_drain,
+            resources: finalization.terminal,
+        }
     }
 
     pub fn notify_message_arriving_simple(&self, topic: &CheetahString, queue_id: i32) {
@@ -525,6 +560,13 @@ impl<MS> NotificationProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
+    pub(crate) fn install_deferred_generation_handoff(
+        &self,
+        handoff: Arc<DeferredGenerationHandoff>,
+    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
+        self.pop_long_polling_service.install_handoff(handoff)
+    }
+
     pub(crate) async fn process_request_shared(
         &self,
         _channel: Channel,

@@ -198,6 +198,7 @@ pub(crate) struct LiteEventDispatcher {
     deferred_dispatches: Arc<DashMap<CheetahString, DeferredDispatchState>>,
     client_access: Arc<DashMap<CheetahString, ClientAccessState>>,
     wakeup_notify: Arc<Mutex<Option<Arc<Notify>>>>,
+    deferred_event_observer: Arc<Mutex<Option<Arc<DeferredEventObserver>>>>,
     event_budget: ResourceBudget,
     client_access_budget: ResourceBudget,
     next_reservation_id: Arc<AtomicU64>,
@@ -256,6 +257,7 @@ impl LiteEventDispatcher {
             deferred_dispatches: Arc::new(DashMap::new()),
             client_access: Arc::new(DashMap::new()),
             wakeup_notify: Arc::new(Mutex::new(None)),
+            deferred_event_observer: Arc::new(Mutex::new(None)),
             event_budget,
             client_access_budget,
             next_reservation_id: Arc::new(AtomicU64::new(1)),
@@ -279,6 +281,55 @@ impl LiteEventDispatcher {
         self.wakeup_notify
             .lock()
             .expect("lite wakeup notify lock poisoned")
+            .take();
+    }
+
+    pub(crate) fn set_deferred_event_observer(&self, observer: Arc<DeferredEventObserver>) {
+        *self
+            .deferred_event_observer
+            .lock()
+            .expect("Lite deferred event observer lock poisoned") = Some(observer);
+    }
+
+    pub(crate) fn install_deferred_event_observer(
+        &self,
+        observer: Arc<DeferredEventObserver>,
+    ) -> Result<(), Arc<DeferredEventObserver>> {
+        let mut installed = self
+            .deferred_event_observer
+            .lock()
+            .expect("Lite deferred event observer lock poisoned");
+        if installed.is_some() {
+            return Err(observer);
+        }
+        *installed = Some(observer);
+        Ok(())
+    }
+
+    pub(crate) fn uninstall_deferred_event_observer(&self, observer: &Arc<DeferredEventObserver>) -> bool {
+        let mut installed = self
+            .deferred_event_observer
+            .lock()
+            .expect("Lite deferred event observer lock poisoned");
+        if installed.as_ref().is_some_and(|current| Arc::ptr_eq(current, observer)) {
+            installed.take();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn has_deferred_event_observer(&self) -> bool {
+        self.deferred_event_observer
+            .lock()
+            .expect("Lite deferred event observer lock poisoned")
+            .is_some()
+    }
+
+    pub(crate) fn clear_deferred_event_observer(&self) {
+        self.deferred_event_observer
+            .lock()
+            .expect("Lite deferred event observer lock poisoned")
             .take();
     }
 
@@ -655,7 +706,15 @@ impl LiteEventDispatcher {
         }
     }
 
-    fn notify_client(&self, _client_id: &CheetahString) {
+    fn notify_client(&self, client_id: &CheetahString) {
+        let deferred_event_observer = self
+            .deferred_event_observer
+            .lock()
+            .expect("Lite deferred event observer lock poisoned")
+            .clone();
+        if deferred_event_observer.is_some_and(|observer| observer(client_id)) {
+            return;
+        }
         let wakeup_notify = self
             .wakeup_notify
             .lock()
@@ -666,6 +725,8 @@ impl LiteEventDispatcher {
         }
     }
 }
+
+pub(crate) type DeferredEventObserver = dyn Fn(&CheetahString) -> bool + Send + Sync + 'static;
 
 #[cfg(test)]
 mod tests {
@@ -704,6 +765,29 @@ mod tests {
 
         assert!(dispatcher.get_client_last_access_time(&client_id) > 0);
         assert_eq!(dispatcher.event_map_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn deferred_event_observer_exclusively_owns_new_generation_signal() {
+        let dispatcher = LiteEventDispatcher::default();
+        let legacy_notify = Arc::new(Notify::new());
+        dispatcher.set_wakeup_notify(Arc::clone(&legacy_notify));
+        dispatcher.set_deferred_event_observer(Arc::new(|_| true));
+        let client_id = CheetahString::from_static_str("new-client");
+        let group = CheetahString::from_static_str("group");
+        let events = HashSet::from([CheetahString::from_static_str("%LMQ%topic%queue")]);
+
+        assert_eq!(dispatcher.do_full_dispatch(&client_id, &group, &events), 1);
+        assert!(tokio::time::timeout(Duration::ZERO, legacy_notify.notified())
+            .await
+            .is_err());
+
+        dispatcher.set_deferred_event_observer(Arc::new(|_| false));
+        let legacy_client = CheetahString::from_static_str("legacy-client");
+        assert_eq!(dispatcher.do_full_dispatch(&legacy_client, &group, &events), 1);
+        tokio::time::timeout(Duration::from_millis(10), legacy_notify.notified())
+            .await
+            .expect("legacy generation receives the dispatcher signal");
     }
 
     #[test]

@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
@@ -319,20 +320,68 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         self.pop_lite_deferred_service.set(service)
     }
 
+    #[cfg(test)]
+    pub(crate) fn pop_lite_deferred_service_is_installed_for_test(&self) -> bool {
+        self.pop_lite_deferred_service.get().is_some()
+    }
+
     pub(crate) async fn start(&self) {
         let _lifecycle = self.lifecycle.lock().await;
         PopLiteLongPollingService::start(&self.pop_lite_long_polling_service).await;
         self.context.queue_lock_manager.start();
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub(crate) async fn stop_legacy_producer_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.pop_lite_long_polling_service.stop_producer_until(deadline).await
+    }
+
+    pub(crate) async fn drain_legacy_executions_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.pop_lite_long_polling_service
+            .drain_executions_until(deadline)
+            .await
+    }
+
+    pub(crate) async fn finalize_legacy_shutdown(
+        &self,
+    ) -> crate::long_polling::long_polling_service::LegacyServiceFinalization {
+        self.pop_lite_long_polling_service.finalize_shutdown().await
+    }
+
+    pub(crate) async fn shutdown_auxiliary(&self) {
         let _lifecycle = self.lifecycle.lock().await;
-        self.pop_lite_long_polling_service.shutdown().await;
         self.context.queue_lock_manager.shutdown().await;
+    }
+
+    pub(crate) async fn shutdown(&self) -> crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
+        let deadline = rocketmq_runtime::ShutdownDeadline::after(std::time::Duration::from_secs(5));
+        let producer = self.stop_legacy_producer_until(deadline).await;
+        let executions = self.drain_legacy_executions_until(deadline).await;
+        let finalization = self.finalize_legacy_shutdown().await;
+        self.shutdown_auxiliary().await;
+        crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
+            name: "pop_lite_long_polling",
+            producer,
+            executions,
+            observed_after_session_drain: finalization.observed_after_session_drain,
+            resources: finalization.terminal,
+        }
     }
 
     pub(crate) fn pop_lite_long_polling_service(&self) -> &Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>> {
         &self.pop_lite_long_polling_service
+    }
+
+    pub(crate) fn install_deferred_generation_handoff(
+        &self,
+        handoff: Arc<DeferredGenerationHandoff>,
+    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
+        self.pop_lite_long_polling_service.install_handoff(handoff)
     }
 
     pub(crate) fn order_info_count(&self) -> i32 {

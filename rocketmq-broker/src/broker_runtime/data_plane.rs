@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+
 #[cfg(feature = "local_file_store")]
 use crate::broker_path_config_helper::get_transaction_metrics_path;
 #[cfg(feature = "local_file_store")]
@@ -21,9 +22,13 @@ use crate::transaction::transaction_metrics::TransactionMetrics;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
+
+use super::deferred::BrokerDeferredLifecycle;
+
 pub(super) struct BrokerDataPlane {
     #[cfg(feature = "local_file_store")]
     pub(super) escape_bridge_owner: Arc<EscapeBridge<BrokerMessageStore>>,
+    pub(super) deferred: Option<BrokerDeferredLifecycle>,
 }
 
 impl BrokerDataPlane {
@@ -33,6 +38,7 @@ impl BrokerDataPlane {
         Self {
             #[cfg(feature = "local_file_store")]
             escape_bridge_owner,
+            deferred: None,
         }
     }
 }

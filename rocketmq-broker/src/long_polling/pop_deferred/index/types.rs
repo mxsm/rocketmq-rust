@@ -94,7 +94,7 @@ impl PopMatchCriteria {
         self.filter.as_ref()
     }
 
-    pub(super) fn matches(&self, arrival: &PopArrival) -> bool {
+    pub(super) fn matches(&self, arrival: PopArrivalView<'_>) -> bool {
         if arrival.force {
             return true;
         }
@@ -104,15 +104,67 @@ impl PopMatchCriteria {
         let cq = CqExtUnit::new(
             arrival.tags_code.unwrap_or_default(),
             arrival.message_store_time,
-            arrival.filter_bitmap.clone(),
+            arrival.filter_bitmap.map(<[u8]>::to_vec),
         );
         if !filter.is_matched_by_consume_queue(arrival.tags_code, Some(&cq)) {
             return false;
         }
         arrival
             .properties
-            .as_ref()
             .is_none_or(|properties| filter.is_matched_by_commit_log(None, Some(properties)))
+    }
+}
+
+/// Borrowed message-arrival facts used only during synchronous index selection.
+///
+/// The view deliberately cannot cross the producer task boundary. Only the
+/// affine candidate selected from it may be submitted to a lifecycle-owned
+/// task.
+#[derive(Clone, Copy)]
+pub(crate) struct PopArrivalView<'a> {
+    pub(super) topic: &'a CheetahString,
+    pub(super) consumer_group: &'a CheetahString,
+    pub(super) queue_id: i32,
+    pub(super) tags_code: Option<i64>,
+    pub(super) message_store_time: i64,
+    pub(super) filter_bitmap: Option<&'a [u8]>,
+    pub(super) properties: Option<&'a HashMap<CheetahString, CheetahString>>,
+    pub(super) force: bool,
+}
+
+impl<'a> PopArrivalView<'a> {
+    pub(crate) const fn new(topic: &'a CheetahString, consumer_group: &'a CheetahString, queue_id: i32) -> Self {
+        Self {
+            topic,
+            consumer_group,
+            queue_id,
+            tags_code: None,
+            message_store_time: 0,
+            filter_bitmap: None,
+            properties: None,
+            force: false,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn with_filter_metadata(
+        mut self,
+        tags_code: Option<i64>,
+        message_store_time: i64,
+        filter_bitmap: Option<&'a [u8]>,
+        properties: Option<&'a HashMap<CheetahString, CheetahString>>,
+    ) -> Self {
+        self.tags_code = tags_code;
+        self.message_store_time = message_store_time;
+        self.filter_bitmap = filter_bitmap;
+        self.properties = properties;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn forced(mut self) -> Self {
+        self.force = true;
+        self
     }
 }
 
@@ -169,6 +221,19 @@ impl PopArrival {
     pub(crate) fn forced(mut self) -> Self {
         self.force = true;
         self
+    }
+
+    pub(super) fn view(&self) -> PopArrivalView<'_> {
+        PopArrivalView {
+            topic: &self.topic,
+            consumer_group: &self.consumer_group,
+            queue_id: self.queue_id,
+            tags_code: self.tags_code,
+            message_store_time: self.message_store_time,
+            filter_bitmap: self.filter_bitmap.as_deref(),
+            properties: self.properties.as_ref(),
+            force: self.force,
+        }
     }
 }
 

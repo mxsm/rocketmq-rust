@@ -829,6 +829,7 @@ fn broker_basic_shutdown_report_exposes_required_component_names() {
             "observability",
             "scheduled_tasks",
             "message_store",
+            "deferred_services",
             "pull_request_hold",
             "pop_services",
             "transaction_services",
@@ -1671,6 +1672,56 @@ async fn new_phase3_test_runtime(label: &str) -> BrokerRuntime {
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
     assert!(runtime.initialize().await.is_ok());
     runtime
+}
+
+async fn new_phase3_lifecycle_test_runtime(label: &str) -> BrokerRuntime {
+    let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-{label}-{}", current_millis()));
+    let broker_config = Arc::new(BrokerConfig {
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        flush_disk_type: FlushDiskType::AsyncFlush,
+        ha_listen_port: allocate_broker_runtime_test_port() as usize,
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new_with_service_context(
+        broker_config,
+        message_store_config,
+        crate::test_service_context(format!("broker-runtime.{label}")),
+    );
+    assert!(runtime.initialize().await.is_ok());
+    runtime
+}
+
+async fn assert_deferred_lifecycle_shutdown(runtime: &mut BrokerRuntime) {
+    let deferred = runtime
+        .composition
+        .data_plane
+        .deferred
+        .as_ref()
+        .expect("request pipeline should retain the Broker deferred lifecycle");
+    deferred.seal();
+    let producer_report = deferred
+        .producer_task_group()
+        .expect("deferred producer task group should be retained")
+        .shutdown(Duration::from_secs(1))
+        .await;
+    assert!(producer_report.is_healthy(), "{}", producer_report.to_json());
+
+    let initial = deferred.shutdown();
+    let terminal = deferred.shutdown();
+    let registry_report = crate::broker_runtime::deferred::BrokerDeferredRegistryShutdownReport::new(initial, terminal);
+    assert!(registry_report.is_healthy(), "{registry_report:?}");
+
+    let terminal = deferred.resource_snapshot();
+    assert_eq!(terminal.producer_task_count, 0, "{terminal:?}");
+    assert_eq!(terminal.shared_admission_current_count, 0, "{terminal:?}");
+    assert_eq!(terminal.shared_admission_current_bytes, 0, "{terminal:?}");
+    assert!(terminal.is_zero(), "{terminal:?}");
+    assert!(terminal.handoff_zero, "{terminal:?}");
 }
 
 #[tokio::test]
@@ -3249,6 +3300,421 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
         pull_processor.session_client_id_for_test(replacement_session_id, &group),
         None
     );
+    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
+    let mut runtime = new_phase3_lifecycle_test_runtime("shared-deferred-lifecycle").await;
+    let _ = runtime.init_processor();
+    let initial_admission = runtime
+        .composition
+        .data_plane
+        .deferred
+        .as_ref()
+        .expect("request pipeline should initialize the Broker deferred lifecycle")
+        .admission_controller
+        .clone();
+    let reinitialized_admission = runtime
+        .initialize_deferred_lifecycle()
+        .expect("deferred lifecycle initialization should be idempotent");
+    assert!(Arc::ptr_eq(&initial_admission, &reinitialized_admission));
+    let deferred = runtime
+        .composition
+        .data_plane
+        .deferred
+        .as_ref()
+        .expect("request pipeline should initialize the Broker deferred lifecycle");
+    let pipeline_admission = runtime
+        .composition
+        .request_pipeline
+        .admission_controller()
+        .expect("request pipeline should retain the shared admission controller");
+
+    assert!(Arc::ptr_eq(&pipeline_admission, &deferred.admission_controller));
+    assert!(Arc::ptr_eq(
+        &runtime
+            .composition
+            .deferred_generation_handoff()
+            .expect("composition should expose the shared handoff"),
+        &deferred.handoff,
+    ));
+    assert!(runtime
+        .composition
+        .state
+        .pop_message_processor
+        .as_ref()
+        .expect("POP processor")
+        .pop_deferred_service_is_installed_for_test());
+    assert!(runtime
+        .composition
+        .request_pipeline
+        .pull_message_processor_for_test
+        .as_ref()
+        .expect("Pull processor")
+        .pull_deferred_service_is_installed_for_test());
+    assert!(runtime
+        .composition
+        .state
+        .notification_processor
+        .as_ref()
+        .expect("Notification processor")
+        .notification_deferred_service_is_installed_for_test());
+    assert!(runtime
+        .composition
+        .state
+        .pop_lite_message_processor
+        .as_ref()
+        .expect("PopLite processor")
+        .pop_lite_deferred_service_is_installed_for_test());
+    assert!(deferred.producer_is_installed());
+    let producer = deferred
+        .producer
+        .as_ref()
+        .cloned()
+        .expect("deferred producer should be retained by the lifecycle owner");
+    let producer_task_group = deferred
+        .producer_task_group()
+        .expect("deferred producer task group should be retained by its lifecycle owner");
+    assert_eq!(
+        producer_task_group.parent_id(),
+        Some(
+            runtime
+                .composition
+                .state
+                .service_context
+                .as_ref()
+                .expect("phase3 runtime should retain a service context")
+                .task_group()
+                .id()
+        )
+    );
+    assert!(
+        producer_task_group.task_count() >= 2,
+        "producer periodic tasks should be owned by the dedicated child group"
+    );
+
+    let topic = CheetahString::from_static_str("shared-deferred-lifecycle-topic");
+    let pull_legacy = AtomicU64::new(0);
+    let pop_legacy = AtomicU64::new(0);
+    let notification_legacy = AtomicU64::new(0);
+    producer.route_pull_arrival(&topic, 0, 1, None, 0, None, None, || {
+        pull_legacy.fetch_add(1, Ordering::Relaxed);
+    });
+    producer.route_pop_arrival(&topic, 0, None, 0, None, None, || {
+        pop_legacy.fetch_add(1, Ordering::Relaxed);
+    });
+    producer.route_notification_arrival(&topic, 0, None, 0, None, None, || {
+        notification_legacy.fetch_add(1, Ordering::Relaxed);
+    });
+    assert_eq!(pull_legacy.load(Ordering::Relaxed), 1);
+    assert_eq!(pop_legacy.load(Ordering::Relaxed), 1);
+    assert_eq!(notification_legacy.load(Ordering::Relaxed), 1);
+
+    let lite_dispatcher = runtime.composition.state.lite_event_dispatcher().clone();
+    let lite_client = CheetahString::from_static_str("shared-deferred-lifecycle-client");
+    let lite_group = CheetahString::from_static_str("shared-deferred-lifecycle-group");
+    let lite_events = HashSet::from([CheetahString::from_static_str("%LMQ%shared-deferred-lifecycle")]);
+    assert_eq!(
+        lite_dispatcher.do_full_dispatch(&lite_client, &lite_group, &lite_events),
+        1
+    );
+    assert_eq!(
+        lite_dispatcher.take_pending_events(&lite_client),
+        vec![CheetahString::from_static_str("%LMQ%shared-deferred-lifecycle")],
+        "the initial Legacy owner must receive the event exactly once"
+    );
+    assert!(
+        deferred.resource_snapshot().handoff_zero,
+        "Legacy-only arrival probes must release every transient route permit"
+    );
+    drop(producer);
+
+    assert_deferred_lifecycle_shutdown(&mut runtime).await;
+
+    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initialized_broker_shutdown_unbinds_deferred_replay_store_before_exclusive_store_access() {
+    let mut runtime = new_phase3_lifecycle_test_runtime("deferred-replay-store-shutdown").await;
+    let _ = runtime.init_processor();
+    let store_root = runtime
+        .composition
+        .state
+        .message_store
+        .as_ref()
+        .expect("message store should be initialized");
+    assert!(
+        Arc::weak_count(store_root) > 0,
+        "the running deferred producer should hold its replay Store capability"
+    );
+    assert!(
+        runtime.composition.state.message_store_mut().is_none(),
+        "a bound replay capability must prevent premature exclusive Store access"
+    );
+
+    let report = runtime
+        .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_secs(10)))
+        .await;
+
+    assert!(
+        report
+            .deferred_producer_tasks
+            .as_ref()
+            .is_some_and(ShutdownReport::is_healthy),
+        "deferred producers must join before their Store capability is unbound: {report:?}"
+    );
+    assert!(
+        report.message_store.present && report.message_store.healthy && !report.message_store.timed_out,
+        "exclusive Store shutdown should complete after deferred replay unbind: {report:?}"
+    );
+    assert!(
+        runtime.composition.state.message_store().is_none(),
+        "healthy shutdown should release the final Store lifecycle owner"
+    );
+
+    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
+    use crate::broker_runtime::deferred_producer::BrokerDeferredProducer;
+    use crate::broker_runtime::deferred_producer::BrokerDeferredProducerInstallError;
+    use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
+
+    let mut runtime = new_phase3_lifecycle_test_runtime("deferred-producer-install-transaction").await;
+    let _ = runtime.init_processor();
+    {
+        let deferred = runtime
+            .composition
+            .data_plane
+            .deferred
+            .as_ref()
+            .expect("request pipeline should initialize the Broker deferred lifecycle");
+        let handoff = Arc::clone(&deferred.handoff);
+        let pop = Arc::clone(&deferred.pop);
+        let pull = Arc::clone(&deferred.pull);
+        let notification = Arc::clone(&deferred.notification);
+        let pop_lite = Arc::clone(&deferred.pop_lite);
+        let task_group = deferred
+            .producer_task_group()
+            .expect("deferred producer task group should be retained");
+        let pull_processor = runtime
+            .composition
+            .request_pipeline
+            .pull_message_processor_for_test
+            .as_ref()
+            .cloned()
+            .expect("Pull processor");
+        let pull_hold = runtime
+            .composition
+            .state
+            .pull_request_hold_service
+            .as_ref()
+            .cloned()
+            .expect("Pull hold service");
+        let pop_processor = runtime
+            .composition
+            .state
+            .pop_message_processor
+            .as_ref()
+            .cloned()
+            .expect("POP processor");
+        let notification_processor = runtime
+            .composition
+            .state
+            .notification_processor
+            .as_ref()
+            .cloned()
+            .expect("Notification processor");
+        let pop_lite_processor = runtime
+            .composition
+            .state
+            .pop_lite_message_processor
+            .as_ref()
+            .cloned()
+            .expect("PopLite processor");
+        let installed_lite_dispatcher = runtime.composition.state.lite_event_dispatcher().clone();
+
+        let duplicate = BrokerDeferredProducer::new(
+            Arc::clone(&handoff),
+            Arc::clone(&pop),
+            Arc::clone(&pull),
+            Arc::clone(&notification),
+            Arc::clone(&pop_lite),
+            installed_lite_dispatcher.clone(),
+            &pull_hold,
+            &pull_processor,
+            &pop_processor,
+            &notification_processor,
+            &pop_lite_processor,
+            task_group.clone(),
+            Duration::from_millis(1),
+        );
+        let Err(duplicate) = duplicate else {
+            panic!("a second producer must not replace the lifecycle owner");
+        };
+        assert_eq!(duplicate, BrokerDeferredProducerInstallError::LiteEventObserver);
+        assert!(installed_lite_dispatcher.has_deferred_event_observer());
+        assert!(pull_hold.has_master_online_producer());
+        assert!(pop_processor.has_lag_refresh_producer());
+
+        let rejected_lite_hits = Arc::new(AtomicU64::new(0));
+        let rejected_lite_probe = {
+            let hits = Arc::clone(&rejected_lite_hits);
+            Arc::new(move |_client_id: &CheetahString| {
+                hits.fetch_add(1, Ordering::Relaxed);
+                true
+            }) as Arc<crate::lite::lite_event_dispatcher::DeferredEventObserver>
+        };
+        assert!(installed_lite_dispatcher
+            .install_deferred_event_observer(Arc::clone(&rejected_lite_probe))
+            .is_err());
+        let rejected_pull_hits = Arc::new(AtomicU64::new(0));
+        let rejected_pull_probe: Arc<dyn Fn() + Send + Sync + 'static> = {
+            let hits = Arc::clone(&rejected_pull_hits);
+            Arc::new(move || {
+                hits.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        assert!(pull_hold
+            .install_master_online_producer(Arc::clone(&rejected_pull_probe))
+            .is_err());
+        let rejected_pop_hits = Arc::new(AtomicU64::new(0));
+        let rejected_pop_probe: Arc<crate::processor::pop_message_processor::PopLagRefreshProducer> = {
+            let hits = Arc::clone(&rejected_pop_hits);
+            Arc::new(move |_topic: &CheetahString, _group: &CheetahString| {
+                hits.fetch_add(1, Ordering::Relaxed);
+                None
+            })
+        };
+        assert!(pop_processor
+            .install_lag_refresh_producer(Arc::clone(&rejected_pop_probe))
+            .is_err());
+
+        let client = CheetahString::from_static_str("producer-owner-client");
+        let group = CheetahString::from_static_str("producer-owner-group");
+        let events = HashSet::from([CheetahString::from_static_str("%LMQ%producer-owner")]);
+        assert_eq!(installed_lite_dispatcher.do_full_dispatch(&client, &group, &events), 1);
+        assert_eq!(installed_lite_dispatcher.take_pending_events(&client).len(), 1);
+        pull_hold.notify_master_online();
+        let topic = CheetahString::from_static_str("producer-owner-topic");
+        let _ = pop_processor.notify_message_arriving_before_lag(&topic, &group);
+        assert_eq!(rejected_lite_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(rejected_pull_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(rejected_pop_hits.load(Ordering::Relaxed), 0);
+
+        let middle_lite_dispatcher = crate::lite::lite_event_dispatcher::LiteEventDispatcher::default();
+        let middle_pull_hold = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_processor)));
+        let middle_pop_processor = runtime.pop_message_processor_for_test();
+        let middle_pull_hits = Arc::new(AtomicU64::new(0));
+        let middle_pull_probe: Arc<dyn Fn() + Send + Sync + 'static> = {
+            let hits = Arc::clone(&middle_pull_hits);
+            Arc::new(move || {
+                hits.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        assert!(middle_pull_hold
+            .install_master_online_producer(Arc::clone(&middle_pull_probe))
+            .is_ok());
+        let middle_error = BrokerDeferredProducer::new(
+            Arc::clone(&handoff),
+            Arc::clone(&pop),
+            Arc::clone(&pull),
+            Arc::clone(&notification),
+            Arc::clone(&pop_lite),
+            middle_lite_dispatcher.clone(),
+            &middle_pull_hold,
+            &pull_processor,
+            &middle_pop_processor,
+            &notification_processor,
+            &pop_lite_processor,
+            task_group.clone(),
+            Duration::from_millis(1),
+        );
+        let Err(middle_error) = middle_error else {
+            panic!("a middle-stage conflict must roll back the Lite observer");
+        };
+        assert_eq!(middle_error, BrokerDeferredProducerInstallError::PullMasterOnline);
+        assert!(!middle_lite_dispatcher.has_deferred_event_observer());
+        assert!(middle_pull_hold.has_master_online_producer());
+        assert!(!middle_pop_processor.has_lag_refresh_producer());
+        middle_pull_hold.notify_master_online();
+        assert_eq!(middle_pull_hits.load(Ordering::Relaxed), 1);
+
+        let late_lite_dispatcher = crate::lite::lite_event_dispatcher::LiteEventDispatcher::default();
+        let late_pull_hold = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_processor)));
+        let late_pop_processor = runtime.pop_message_processor_for_test();
+        let late_pop_hits = Arc::new(AtomicU64::new(0));
+        let late_pop_probe: Arc<crate::processor::pop_message_processor::PopLagRefreshProducer> = {
+            let hits = Arc::clone(&late_pop_hits);
+            Arc::new(move |_topic: &CheetahString, _group: &CheetahString| {
+                hits.fetch_add(1, Ordering::Relaxed);
+                None
+            })
+        };
+        assert!(late_pop_processor
+            .install_lag_refresh_producer(Arc::clone(&late_pop_probe))
+            .is_ok());
+        let late_error = BrokerDeferredProducer::new(
+            handoff,
+            pop,
+            pull,
+            notification,
+            pop_lite,
+            late_lite_dispatcher.clone(),
+            &late_pull_hold,
+            &pull_processor,
+            &late_pop_processor,
+            &notification_processor,
+            &pop_lite_processor,
+            task_group,
+            Duration::from_millis(1),
+        );
+        let Err(late_error) = late_error else {
+            panic!("a late-stage conflict must roll back Lite and Pull callbacks");
+        };
+        assert_eq!(late_error, BrokerDeferredProducerInstallError::PopLagRefresh);
+        assert!(!late_lite_dispatcher.has_deferred_event_observer());
+        assert!(!late_pull_hold.has_master_online_producer());
+        assert!(late_pop_processor.has_lag_refresh_producer());
+
+        let late_lite_hits = Arc::new(AtomicU64::new(0));
+        let late_lite_probe = {
+            let hits = Arc::clone(&late_lite_hits);
+            Arc::new(move |_client_id: &CheetahString| {
+                hits.fetch_add(1, Ordering::Relaxed);
+                true
+            }) as Arc<crate::lite::lite_event_dispatcher::DeferredEventObserver>
+        };
+        assert!(late_lite_dispatcher
+            .install_deferred_event_observer(Arc::clone(&late_lite_probe))
+            .is_ok());
+        let late_pull_hits = Arc::new(AtomicU64::new(0));
+        let late_pull_probe: Arc<dyn Fn() + Send + Sync + 'static> = {
+            let hits = Arc::clone(&late_pull_hits);
+            Arc::new(move || {
+                hits.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        assert!(late_pull_hold
+            .install_master_online_producer(Arc::clone(&late_pull_probe))
+            .is_ok());
+        assert_eq!(late_lite_dispatcher.do_full_dispatch(&client, &group, &events), 1);
+        late_pull_hold.notify_master_online();
+        let _ = late_pop_processor.notify_message_arriving_before_lag(&topic, &group);
+        assert_eq!(late_lite_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(late_pull_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(late_pop_hits.load(Ordering::Relaxed), 1);
+
+        assert!(late_lite_dispatcher.uninstall_deferred_event_observer(&late_lite_probe));
+        assert!(late_pull_hold.uninstall_master_online_producer(&late_pull_probe));
+        assert!(late_pop_processor.uninstall_lag_refresh_producer(&late_pop_probe));
+        assert!(middle_pull_hold.uninstall_master_online_producer(&middle_pull_probe));
+    }
+
+    assert_deferred_lifecycle_shutdown(&mut runtime).await;
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
 

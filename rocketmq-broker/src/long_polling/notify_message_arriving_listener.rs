@@ -21,6 +21,7 @@ use rocketmq_model::common::lite::get_parent_topic;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::MessageArrivingListener;
 
+use crate::broker_runtime::deferred_producer::BrokerDeferredProducer;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -29,6 +30,7 @@ use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 
 pub struct NotifyMessageArrivingListener<MS: BrokerReadWriteStore> {
+    deferred_producer: Arc<BrokerDeferredProducer<MS>>,
     pull_request_hold_service: Weak<PullRequestHoldService<MS>>,
     pop_message_processor: Weak<PopMessageProcessor<MS>>,
     notification_processor: Weak<NotificationProcessor<MS>>,
@@ -45,6 +47,7 @@ where
     MS: BrokerReadWriteStore + Send + Sync,
 {
     pub fn new(
+        deferred_producer: Arc<BrokerDeferredProducer<MS>>,
         pull_request_hold_service: &Arc<PullRequestHoldService<MS>>,
         pop_message_processor: &Arc<PopMessageProcessor<MS>>,
         notification_processor: &Arc<NotificationProcessor<MS>>,
@@ -56,6 +59,7 @@ where
         wildcard_dispatch_delay_millis: u64,
     ) -> Self {
         Self {
+            deferred_producer,
             pull_request_hold_service: Arc::downgrade(pull_request_hold_service),
             pop_message_processor: Arc::downgrade(pop_message_processor),
             notification_processor: Arc::downgrade(notification_processor),
@@ -84,39 +88,77 @@ where
         filter_bit_map: Option<Vec<u8>>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
-        if let Some(pull_request_hold_service) = self.pull_request_hold_service.upgrade() {
-            pull_request_hold_service.notify_message_arriving_ext(
-                topic,
-                queue_id,
-                logic_offset,
-                tags_code,
-                msg_store_time,
-                filter_bit_map.clone(),
-                properties,
-            );
-        }
+        let pull_filter = filter_bit_map.clone();
+        let pull_legacy_filter = filter_bit_map.clone();
+        self.deferred_producer.route_pull_arrival(
+            topic,
+            queue_id,
+            logic_offset,
+            tags_code,
+            msg_store_time,
+            pull_filter.as_deref(),
+            properties,
+            || {
+                if let Some(pull_request_hold_service) = self.pull_request_hold_service.upgrade() {
+                    pull_request_hold_service.notify_message_arriving_ext(
+                        topic,
+                        queue_id,
+                        logic_offset,
+                        tags_code,
+                        msg_store_time,
+                        pull_legacy_filter,
+                        properties,
+                    );
+                }
+            },
+        );
 
-        if let Some(pop_message_processor) = self.pop_message_processor.upgrade() {
-            pop_message_processor.notify_message_arriving_full(
-                topic.clone(),
-                queue_id,
-                tags_code,
-                msg_store_time,
-                filter_bit_map.clone(),
-                properties,
-            );
-        }
+        let pop_filter = filter_bit_map.clone();
+        let pop_legacy_filter = filter_bit_map.clone();
+        self.deferred_producer.route_pop_arrival_at(
+            topic,
+            queue_id,
+            logic_offset,
+            tags_code,
+            msg_store_time,
+            pop_filter.as_deref(),
+            properties,
+            || {
+                if let Some(pop_message_processor) = self.pop_message_processor.upgrade() {
+                    pop_message_processor.notify_message_arriving_full(
+                        topic.clone(),
+                        queue_id,
+                        tags_code,
+                        msg_store_time,
+                        pop_legacy_filter,
+                        properties,
+                    );
+                }
+            },
+        );
 
-        if let Some(notification_processor) = self.notification_processor.upgrade() {
-            notification_processor.notify_message_arriving(
-                topic.clone(),
-                queue_id,
-                tags_code,
-                msg_store_time,
-                filter_bit_map,
-                properties,
-            );
-        }
+        let notification_filter = filter_bit_map.clone();
+        self.deferred_producer.route_notification_arrival_at(
+            topic,
+            queue_id,
+            logic_offset,
+            tags_code,
+            msg_store_time,
+            notification_filter.as_deref(),
+            properties,
+            || {
+                if let Some(notification_processor) = self.notification_processor.upgrade() {
+                    notification_processor.notify_message_arriving(
+                        topic.clone(),
+                        queue_id,
+                        tags_code,
+                        msg_store_time,
+                        filter_bit_map,
+                        properties,
+                    );
+                }
+            },
+        );
 
         if get_parent_topic(topic.as_str()).is_some() {
             let lmq_names = std::collections::HashSet::from([topic.clone()]);
