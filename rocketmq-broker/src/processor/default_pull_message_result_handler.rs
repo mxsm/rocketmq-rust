@@ -112,7 +112,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
             response_context.hook_metadata,
             &request_header,
             &get_message_result,
-            response_context.allow_legacy_suspend,
+            response_context.allow_suspend,
             code,
         );
         {
@@ -151,7 +151,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
             get_message_result.next_begin_offset(),
         )?;
         self.try_commit_offset(
-            response_context.allow_legacy_suspend,
+            response_context.allow_suspend,
             &request_header,
             get_message_result.next_begin_offset(),
             response_context.effective_peer,
@@ -220,7 +220,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                 } else {
                     0
                 };
-                if response_context.allow_legacy_suspend && has_suspend_flag {
+                if response_context.allow_suspend && has_suspend_flag {
                     let timing = PullSuspendTiming::from_policy(
                         current_millis(),
                         tokio::time::Instant::now(),

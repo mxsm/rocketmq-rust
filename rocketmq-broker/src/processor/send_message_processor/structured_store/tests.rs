@@ -185,6 +185,7 @@ impl RequestProcessorV2 for StoreProbeProcessor {
         let identity = request.original_identity();
         let original_opaque = identity.original_opaque();
         let request_id = identity.request_id();
+        let original_one_way = identity.is_one_way();
         self.state.events.lock().push("before_hook");
         let mut store = ProbeAppender {
             behavior: self.behavior,
@@ -264,15 +265,20 @@ impl RequestProcessorV2 for StoreProbeProcessor {
         .await
         .map_err(|_| RocketMQError::invariant_violated("structured Send reply conversion failed"))?;
         let (outcome, completion) = reply.into_parts();
-        assert!(
-            self.state.built_replies.lock().insert(request_id),
-            "one RequestId owns at most one built reply"
-        );
+        if !original_one_way {
+            assert!(
+                self.state.built_replies.lock().insert(request_id),
+                "one RequestId owns at most one built reply"
+            );
+        }
         match completion {
-            StoreHookCompletion::AfterCanonicalWrite => assert!(
-                self.state.pending_after_write.lock().insert(request_id),
-                "one RequestId owns at most one pending after-hook"
-            ),
+            StoreHookCompletion::AfterCanonicalWrite if !original_one_way => {
+                assert!(
+                    self.state.pending_after_write.lock().insert(request_id),
+                    "one RequestId owns at most one pending after-hook"
+                );
+            }
+            StoreHookCompletion::AfterCanonicalWrite => self.state.events.lock().push("after_hook"),
             StoreHookCompletion::BeforeReply => self.state.events.lock().push("after_hook"),
             StoreHookCompletion::NoAfterHook => {}
         }
@@ -338,8 +344,13 @@ impl Fixture {
     }
 }
 
-fn request() -> RemotingCommand {
-    RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(OPAQUE)
+fn request(one_way: bool) -> RemotingCommand {
+    let command = RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(OPAQUE);
+    if one_way {
+        command.mark_oneway_rpc()
+    } else {
+        command
+    }
 }
 
 #[tokio::test]
@@ -352,7 +363,7 @@ async fn structured_send_store_await_preserves_hook_order_and_response_side_cont
     );
     let outcome = {
         let entered = state.entered.notified();
-        let dispatch = fixture.harness.dispatch(None, request());
+        let dispatch = fixture.harness.dispatch(None, request(false));
         tokio::pin!(dispatch);
         tokio::select! {
             () = entered => {}
@@ -404,7 +415,7 @@ async fn structured_send_store_error_is_one_visible_reply() {
     );
     let EmbeddedDispatchOutcome::Reply(plan) = fixture
         .harness
-        .dispatch(None, request())
+        .dispatch(None, request(false))
         .await
         .expect("structured store error reply")
     else {
@@ -437,7 +448,7 @@ async fn structured_send_rejected_status_runs_after_hook_before_canonical_write(
     );
     let EmbeddedDispatchOutcome::Reply(plan) = fixture
         .harness
-        .dispatch(None, request())
+        .dispatch(None, request(false))
         .await
         .expect("structured rejected-status reply")
     else {
@@ -468,8 +479,8 @@ async fn structured_send_after_write_completions_are_correlated_by_request_id() 
         Arc::clone(&state),
     );
     let (first, second) = {
-        let first = fixture.harness.dispatch(None, request());
-        let second = fixture.harness.dispatch(None, request());
+        let first = fixture.harness.dispatch(None, request(false));
+        let second = fixture.harness.dispatch(None, request(false));
         let both = async { tokio::join!(first, second) };
         tokio::pin!(both);
         while state.entered_count.load(Ordering::SeqCst) < 2 {
@@ -502,12 +513,42 @@ async fn structured_send_after_write_completions_are_correlated_by_request_id() 
 }
 
 #[tokio::test]
+async fn structured_send_one_way_completes_the_after_hook_without_a_write_observer() {
+    let state = ProbeState::new();
+    let fixture = Fixture::new(
+        "structured-send-one-way",
+        StoreBehavior::GatedSuccess,
+        Arc::clone(&state),
+    );
+    let outcome = {
+        let entered = state.entered.notified();
+        let dispatch = fixture.harness.dispatch(None, request(true));
+        tokio::pin!(dispatch);
+        tokio::select! {
+            () = entered => {}
+            result = &mut dispatch => panic!("one-way store completed before its explicit release: {result:?}"),
+        }
+        state.release.notify_one();
+        dispatch.await.expect("one-way structured Send dispatch")
+    };
+
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert_eq!(
+        state.events.lock().as_slice(),
+        ["before_hook", "store_entered", "store_completed", "after_hook"]
+    );
+    assert!(state.built_replies.lock().is_empty());
+    assert!(state.pending_after_write.lock().is_empty());
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn structured_send_parent_cancel_stops_waiting_and_suppresses_reply() {
     let state = ProbeState::new();
     let fixture = Fixture::new("structured-send-cancel", StoreBehavior::Pending, Arc::clone(&state));
     let error = {
         let entered = state.entered.notified();
-        let dispatch = fixture.harness.dispatch(None, request());
+        let dispatch = fixture.harness.dispatch(None, request(false));
         tokio::pin!(dispatch);
         tokio::select! {
             () = entered => {}
@@ -533,7 +574,7 @@ async fn structured_send_expired_deadline_suppresses_store_and_reply() {
     let fixture = Fixture::new("structured-send-deadline", StoreBehavior::Pending, Arc::clone(&state));
     let error = fixture
         .harness
-        .dispatch(Some(RequestDeadline::after(Duration::ZERO)), request())
+        .dispatch(Some(RequestDeadline::after(Duration::ZERO)), request(false))
         .await
         .expect_err("deadline stops the pending store await");
     assert_eq!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);

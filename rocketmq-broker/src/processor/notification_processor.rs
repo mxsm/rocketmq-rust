@@ -15,9 +15,11 @@
 mod core;
 mod response;
 mod resume;
+mod v2;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
@@ -47,6 +49,7 @@ use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
+use crate::long_polling::notification_deferred::service::NotificationDeferredService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
@@ -345,6 +348,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
 pub struct NotificationProcessor<MS: BrokerReadWriteStore> {
     context: NotificationProcessorContext<MS>,
     pop_long_polling_service: Arc<PopLongPollingService<NotificationProcessor<MS>>>,
+    notification_deferred_service: OnceLock<Arc<NotificationDeferredService>>,
     lifecycle: AsyncMutex<()>,
 }
 
@@ -357,9 +361,21 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
                 true,
                 processor.clone(),
             )),
+            notification_deferred_service: OnceLock::new(),
             context,
             lifecycle: AsyncMutex::new(()),
         })
+    }
+
+    /// Installs the Broker-owned BRK-05 deferred Notification service.
+    ///
+    /// BRK-06 owns the service lifecycle and installs it once during Broker composition. Until
+    /// then, V2 requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`.
+    pub(crate) fn install_notification_deferred_service(
+        &self,
+        service: Arc<NotificationDeferredService>,
+    ) -> Result<(), Arc<NotificationDeferredService>> {
+        self.notification_deferred_service.set(service)
     }
 
     pub async fn start(&self) {
@@ -604,7 +620,9 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
 
-    fn notification_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<NotificationProcessor<BrokerMessageStore>> {
+    pub(super) fn notification_processor_for_test(
+        runtime: &mut BrokerRuntime,
+    ) -> Arc<NotificationProcessor<BrokerMessageStore>> {
         let inner = runtime.runtime_state_mut();
         let policy = NotificationPolicy::from_config(&inner.broker_config());
         let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());

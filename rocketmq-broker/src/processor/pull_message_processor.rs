@@ -58,7 +58,12 @@ use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::RpcClient;
 use rocketmq_transport::api::v1::RpcClientUtils;
 use rocketmq_transport::api::v1::RpcRequest;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::SessionView;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -68,7 +73,10 @@ use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestProcessor;
+use crate::long_polling::pull_deferred::PullDeferredService;
 use crate::long_polling::pull_deferred::PullHookMetadata;
+use crate::long_polling::pull_deferred::PullMatchCriteria;
+use crate::long_polling::pull_deferred::PullRetainedEstimate;
 use crate::long_polling::pull_deferred::PullSessionClientLookup;
 use crate::long_polling::pull_request::PullRequest;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
@@ -110,6 +118,7 @@ pub struct PullMessageProcessor<MS: BrokerReadStore> {
     context: Arc<PullMessageProcessorContext<MS>>,
     wakeup_task_group: OnceLock<TaskGroup>,
     session_client_lookup: OnceLock<Arc<dyn PullSessionClientLookup>>,
+    pull_deferred_service: OnceLock<Arc<PullDeferredService>>,
 }
 
 fn pull_command(response: RemotingCommand) -> rocketmq_error::RocketMQResult<PullMessageResult> {
@@ -139,6 +148,50 @@ where
 
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {
         self.reject_request_shared()
+    }
+}
+
+impl<MS> RequestProcessorV2 for PullMessageProcessor<MS>
+where
+    MS: BrokerReadStore + Send + Sync + 'static,
+{
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<MS> PullMessageProcessor<MS>
+where
+    MS: BrokerReadStore + Send + Sync + 'static,
+{
+    /// Arc-callable V2 leaf boundary used by the MIG-05 Broker aggregate.
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let request_code = RequestCode::from(request.original_identity().original_code());
+        info!(?request_code, "PullMessageProcessor received a V2 request");
+        match request_code {
+            RequestCode::PullMessage | RequestCode::LitePullMessage => {
+                self.process_supported_v2(request_code, request).await
+            }
+            _ => {
+                warn!(
+                    ?request_code,
+                    "PullMessageProcessor received an unknown V2 request code"
+                );
+                BrokerResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
+                    request.original_identity().original_code(),
+                    format!(
+                        "PullMessageProcessor request code {} not supported",
+                        request.original_identity().original_code()
+                    ),
+                    request.original_identity().original_opaque(),
+                ))?
+                .into_handler_outcome()
+            }
+        }
     }
 }
 
@@ -313,6 +366,7 @@ where
             context,
             wakeup_task_group: OnceLock::new(),
             session_client_lookup: OnceLock::new(),
+            pull_deferred_service: OnceLock::new(),
         }
     }
 
@@ -321,6 +375,17 @@ where
         lookup: Arc<dyn PullSessionClientLookup>,
     ) -> Result<(), Arc<dyn PullSessionClientLookup>> {
         self.session_client_lookup.set(lookup)
+    }
+
+    /// Installs the Broker-owned BRK-04 deferred Pull service.
+    ///
+    /// BRK-06 owns the service lifecycle and calls this once during Broker composition. Until
+    /// then, V2 requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`.
+    pub(crate) fn install_pull_deferred_service(
+        &self,
+        service: Arc<PullDeferredService>,
+    ) -> Result<(), Arc<PullDeferredService>> {
+        self.pull_deferred_service.set(service)
     }
 
     #[cfg(test)]
@@ -883,6 +948,76 @@ where
         }
     }
 
+    async fn process_supported_v2(
+        &self,
+        request_code: RequestCode,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let effective_peer = trusted_pull_peer(request)?;
+        let session_id = request.session().id();
+        let request_header = request
+            .command()
+            .decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
+        let hook_metadata = PullHookMetadata::from_command(request.command());
+        let broadcast_client_resolver = |request_header: &PullMessageRequestHeader| {
+            self.resolve_session_broadcast_client_id(request_header, session_id)
+        };
+        let result = self
+            .execute_pull(
+                request_code,
+                request_header,
+                effective_peer,
+                &hook_metadata,
+                &broadcast_client_resolver,
+                true,
+                None,
+            )
+            .await?;
+        match result {
+            PullMessageResult::Reply(parts) => parts.into_handler_outcome(),
+            PullMessageResult::Suspend(suspension) => {
+                let suspension = *suspension;
+                let Some(service) = self.pull_deferred_service.get() else {
+                    return BrokerResponseParts::command(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::ServiceNotAvailable,
+                            "the deferred Pull service is not installed",
+                        ),
+                    )?
+                    .into_handler_outcome();
+                };
+                let criteria = PullMatchCriteria::new(
+                    suspension.request_header.topic.clone(),
+                    suspension.request_header.queue_id,
+                    suspension.request_header.queue_offset,
+                    suspension.subscription_data,
+                    suspension.message_filter,
+                );
+                let fallback = suspension.fallback.into_response_plan()?;
+                let prepared = match service.prepare(
+                    request,
+                    criteria,
+                    fallback,
+                    suspension.timing,
+                    PullRetainedEstimate::default(),
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(error) => return Ok(HandlerOutcome::Reply(error.into_fallback())),
+                };
+                match service.register(prepared, request) {
+                    Ok(registration) => Ok(HandlerOutcome::Deferred(registration)),
+                    Err(error) => match error.into_pre_take_fallback() {
+                        Ok(fallback) => Ok(HandlerOutcome::Reply(fallback)),
+                        Err(error) => Err(rocketmq_error::RocketMQError::internal(
+                            "register deferred Pull request",
+                            error,
+                        )),
+                    },
+                }
+            }
+        }
+    }
+
     #[allow(unused_assignments)]
     #[allow(clippy::too_many_arguments, reason = "typed Pull execution inputs are kept explicit")]
     async fn execute_pull(
@@ -1192,7 +1327,7 @@ where
                         effective_peer,
                         hook_metadata,
                         broadcast_client_resolver,
-                        allow_legacy_suspend: broker_allow_suspend,
+                        allow_suspend: broker_allow_suspend,
                         begin_time_millis: begin_time_mills,
                     },
                 )
@@ -1331,6 +1466,22 @@ where
     }
 }
 
+fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<std::net::SocketAddr> {
+    match (request.origin(), request.session()) {
+        (
+            RequestOrigin::Network { peer },
+            SessionView::Network {
+                remote_addr,
+                transport_peer_addr: _,
+                ..
+            },
+        ) if peer.address() == *remote_addr => Ok(*remote_addr),
+        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+            "Pull request origin does not match its network session view",
+        )),
+    }
+}
+
 impl<MS> PullRequestProcessor for PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
@@ -1399,6 +1550,10 @@ fn legacy_pull_delivery_response(
 #[cfg(test)]
 #[path = "pull_message_processor/resume_store_tests.rs"]
 mod resume_store_tests;
+
+#[cfg(test)]
+#[path = "pull_message_processor/v2_tests.rs"]
+mod v2_tests;
 
 #[cfg(test)]
 mod tests {

@@ -86,6 +86,8 @@ pub(crate) mod reply_message_processor;
 mod request_ordering;
 pub(crate) mod response_plan;
 pub(crate) mod send_message_processor;
+#[cfg(test)]
+pub(crate) mod v2_leaf_test_support;
 
 pub enum BrokerProcessorType<MS: BrokerStorePort, TS> {
     Send(Arc<SendMessageProcessor<MS, TS>>),
