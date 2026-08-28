@@ -34,6 +34,7 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
+use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
@@ -207,7 +208,38 @@ where
     S: QueryMessageStore + Clone + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_command(request.command_mut()).await
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<S> QueryMessageProcessor<S>
+where
+    S: QueryMessageStore + Clone,
+{
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original = request.original_identity();
+        match self
+            .process_v2_command(
+                request.command_mut(),
+                original.original_code(),
+                original.original_opaque(),
+            )
+            .await
+        {
+            Ok(outcome) => Ok(outcome),
+            Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => {
+                BrokerResponseParts::from_command(command_from_error_with_factory_and_opaque(
+                    &self.command_factory,
+                    &error,
+                    original.original_opaque(),
+                ))?
+                .into_handler_outcome()
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -272,10 +304,12 @@ where
     }
 
     async fn process_v2_command(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
+        original_code: i32,
+        original_opaque: i32,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let request_code = RequestCode::from(request.code());
+        let request_code = RequestCode::from(original_code);
         info!("QueryMessageProcessor V2 received request code: {:?}", request_code);
         let parts = match request_code {
             RequestCode::QueryMessage => self.query_message_parts(request).await?,
@@ -287,9 +321,9 @@ where
                 );
                 QueryResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
                     &self.command_factory,
-                    request.code(),
-                    format!("QueryMessageProcessor request code {} not supported", request.code()),
-                    0,
+                    original_code,
+                    format!("QueryMessageProcessor request code {original_code} not supported"),
+                    original_opaque,
                 ))
             }
         };
@@ -311,7 +345,7 @@ where
     }
 
     async fn query_message_parts(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
         let mut response = self
@@ -414,7 +448,7 @@ where
     }
 
     async fn view_message_by_id_parts(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
         let response = self.command_factory.create_success_response_command();
@@ -500,7 +534,7 @@ async fn query_wire_fixture_response(
         },
     };
     let factory = RemotingCommandFactory::new(RemotingCommandDefaults::default());
-    let mut processor = QueryMessageProcessor::new_with_factory(64, store, factory);
+    let processor = QueryMessageProcessor::new_with_factory(64, store, factory);
     let mut request = match kind {
         QueryWireFixtureKind::Query => factory.create_request_command(
             RequestCode::QueryMessage,
@@ -556,6 +590,7 @@ pub(crate) async fn query_wire_fixture_parts(
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
     use std::time::Duration;
 
     use super::*;
@@ -614,6 +649,18 @@ mod tests {
             last_key: None,
             topic_request_header: None,
         }
+    }
+
+    #[test]
+    fn query_v2_shared_seam_accepts_an_arc_held_leaf() {
+        fn call_shared<'a>(
+            leaf: &'a Arc<QueryMessageProcessor<TestQueryStore>>,
+            request: &'a mut RemotingRequest,
+        ) -> impl Future<Output = rocketmq_error::RocketMQResult<HandlerOutcome>> + 'a {
+            leaf.process_v2_shared(request)
+        }
+
+        let _ = call_shared;
     }
 
     #[test]
@@ -695,7 +742,7 @@ mod tests {
     #[tokio::test]
     async fn v2_query_success_returns_one_owned_bytes_plan() {
         let body = Bytes::from_static(b"query-body");
-        let mut processor = QueryMessageProcessor::new(
+        let processor = QueryMessageProcessor::new(
             64,
             TestQueryStore {
                 query_body: Some(body.clone()),
@@ -706,7 +753,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let outcome = processor
-            .process_v2_command(&mut request)
+            .process_v2_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
             .expect("V2 query response plan");
         let HandlerOutcome::Reply(plan) = outcome else {
@@ -796,7 +843,7 @@ mod tests {
     #[tokio::test]
     async fn v2_view_consumes_the_selected_owner_into_one_bytes_plan() {
         let body = Bytes::from_static(b"view-body");
-        let mut processor = QueryMessageProcessor::new(
+        let processor = QueryMessageProcessor::new(
             64,
             TestQueryStore {
                 query_body: None,
@@ -810,7 +857,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let outcome = processor
-            .process_v2_command(&mut request)
+            .process_v2_command(&mut request, RequestCode::ViewMessageById as i32, 0)
             .await
             .expect("V2 view response plan");
         let HandlerOutcome::Reply(plan) = outcome else {
@@ -824,12 +871,12 @@ mod tests {
 
     #[tokio::test]
     async fn v2_query_not_found_returns_an_empty_reply_plan() {
-        let mut processor = QueryMessageProcessor::new(64, TestQueryStore::default());
+        let processor = QueryMessageProcessor::new(64, TestQueryStore::default());
         let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None));
         request.make_custom_header_to_net();
 
         let outcome = processor
-            .process_v2_command(&mut request)
+            .process_v2_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
             .expect("V2 not-found response plan");
         let HandlerOutcome::Reply(plan) = outcome else {
@@ -844,7 +891,7 @@ mod tests {
     #[tokio::test]
     async fn legacy_query_projection_keeps_opaque_and_body_behavior() {
         let body = Bytes::from_static(b"legacy-query-body");
-        let mut processor = QueryMessageProcessor::new(
+        let processor = QueryMessageProcessor::new(
             64,
             TestQueryStore {
                 query_body: Some(body.clone()),

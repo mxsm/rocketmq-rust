@@ -16,6 +16,7 @@
 
 pub(crate) mod capability;
 mod resume;
+mod v2;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -24,6 +25,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
@@ -33,7 +35,7 @@ use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::consume_init_mode::ConsumeInitMode;
-use rocketmq_model::common::constant::PermName;
+#[cfg(test)]
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -42,14 +44,11 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
-use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
-use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
-use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -74,7 +73,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
@@ -82,6 +80,7 @@ use crate::long_polling::long_polling_service::pop_long_polling_service::PopLong
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
+use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustment;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::profile_store::PopConsumerProfileStore;
@@ -92,8 +91,6 @@ use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
 use crate::processor::pop_message_processor::capability::PopBufferMergeContext;
 use crate::processor::pop_message_processor::capability::PopMessageProcessorContext;
 use crate::processor::pop_message_processor::resume::PopCallerHost;
-use crate::processor::pop_message_processor::resume::PopStoreReadOutcome;
-use crate::processor::pop_message_processor::resume::PopStoreReadRequest;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::processor::response_plan::pop::deliver_pop_legacy;
 
@@ -109,6 +106,7 @@ pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
     context: Arc<PopMessageProcessorContext<MS>>,
+    pop_deferred_service: OnceLock<Arc<PopDeferredService>>,
     #[cfg(feature = "rocksdb_store")]
     profile_store: Option<Arc<PopConsumerProfileStore>>,
     lifecycle: AsyncMutex<()>,
@@ -171,10 +169,22 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
             queue_lock_manager,
             revive_topic,
             context,
+            pop_deferred_service: OnceLock::new(),
             #[cfg(feature = "rocksdb_store")]
             profile_store,
             lifecycle: AsyncMutex::new(()),
         }))
+    }
+
+    /// Installs the Broker-owned BRK-03 deferred POP service.
+    ///
+    /// BRK-06 owns the service lifecycle and installs it once during Broker composition. Until
+    /// then, V2 requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`.
+    pub(crate) fn install_pop_deferred_service(
+        &self,
+        service: Arc<PopDeferredService>,
+    ) -> Result<(), Arc<PopDeferredService>> {
+        self.pop_deferred_service.set(service)
     }
 
     fn retry_policy_for_group(&self, group: &CheetahString) -> PopRetryPolicy {
@@ -309,341 +319,45 @@ where
         &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
+        _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let begin_time_mills = current_millis();
-        request.add_ext_field_if_not_exist(CheetahString::from_static_str(BORN_TIME), begin_time_mills.to_string());
-
-        if request
-            .get_ext_fields()
-            .and_then(|fields| fields.get(BORN_TIME).cloned())
-            .is_none_or(|old| old == "0")
-        {
-            request.add_ext_field(CheetahString::from_static_str(BORN_TIME), begin_time_mills.to_string());
-        }
-        let opaque = request.opaque();
-        let request_header = request.decode_command_custom_header::<PopMessageRequestHeader>()?;
-        let policy = self.context.policy.snapshot();
-        let retry_policy = self.retry_policy_for_group(&request_header.consumer_group);
-
-        if request_header.is_timeout_too_much_at(rocketmq_runtime::common::time_utils::current_millis() as i64) {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::PollingTimeout,
-                    format!("the broker[{}] pop message is timeout too much", policy.broker_ip),
-                ),
-            ));
-        }
-
-        if !PermName::is_readable(policy.broker_permission) {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!("the broker[{}] pop message is forbidden", policy.broker_ip),
-                ),
-            ));
-        }
-
-        if request_header.max_msg_nums > 32 {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!("the broker[{}] pop message's num is greater than 32", policy.broker_ip),
-                ),
-            ));
-        }
-
-        if !policy.timer_wheel_enable {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "the broker[{}] pop message is forbidden because timerWheelEnable is false",
-                        policy.broker_ip
-                    ),
-                ),
-            ));
-        }
-        let topic_config = self.context.topics.select_topic_config(&request_header.topic);
-        if topic_config.is_none() {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::TopicNotExist,
-                    format!(
-                        "topic[{}] not exist, apply first please! {}",
-                        request_header.topic,
-                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                    ),
-                ),
-            ));
-        }
-        let topic_config = topic_config.unwrap();
-        if !PermName::is_readable(topic_config.perm) {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!("the topic[{}] peeking message is forbidden", request_header.topic),
-                ),
-            ));
-        }
-        if request_header.queue_id >= topic_config.read_queue_nums as i32 {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "the queueId[{}] is illegal, topic[{}]  topicConfig readQueueNums[{}] consumer[{}]",
-                        request_header.queue_id,
-                        request_header.topic,
-                        topic_config.read_queue_nums,
-                        channel.remote_address()
-                    ),
-                ),
-            ));
-        }
-        let subscription_group_config = self
-            .context
-            .subscriptions
-            .find_subscription_group_config(&request_header.consumer_group);
-        if subscription_group_config.is_none() {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::SubscriptionGroupNotExist,
-                    format!(
-                        "the consumer group[{}] not online, apply first please! {}",
-                        request_header.consumer_group,
-                        FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
-                    ),
-                ),
-            ));
-        }
-        let subscription_group_config = subscription_group_config.unwrap();
-        if !subscription_group_config.consume_enable() {
-            return Ok(Some(
-                self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!(
-                        "the consumer group[{}], not permitted to consume",
-                        request_header.consumer_group
-                    ),
-                ),
-            ));
-        }
-
-        let expression = request_header.exp.as_ref().filter(|value| !value.is_empty());
-
-        let (subscription_data, retry_subscription_data, message_filter) = if let Some(expression) = expression {
-            let subscription_data =
-                match FilterAPI::build(&request_header.topic, expression, request_header.exp_type.clone()) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        warn!(
-                            "Parse the consumer's subscription[{:?}] error, group: {}",
-                            request_header.exp, request_header.consumer_group
-                        );
-                        return Ok(Some(
-                            self.context.command_factory.create_response_command_with_code_remark(
-                                ResponseCode::SubscriptionParseFailed,
-                                "parse the consumer's subscription failed",
-                            ),
-                        ));
-                    }
-                };
-            let retry_topic = CheetahString::from_string(
-                retry_policy.write_topic(&request_header.topic, &request_header.consumer_group),
-            );
-            let retry_subscription_data = match FilterAPI::build(
-                &retry_topic,
-                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
-                request_header.exp_type.clone(),
-            ) {
-                Ok(value) => value,
-                Err(_) => {
-                    warn!(
-                        "Parse the consumer's subscription[{:?}] error, group: {}",
-                        request_header.exp, request_header.consumer_group
-                    );
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
-                }
-            };
-            let message_filter = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-                let consumer_filter_data = self.context.filters.resolve(
-                    request_header.topic.clone(),
-                    request_header.consumer_group.clone(),
-                    request_header.exp.clone(),
-                    request_header.exp_type.clone(),
-                    current_millis(),
-                );
-                let Some(consumer_filter_data) = consumer_filter_data else {
-                    warn!(
-                        "Parse the consumer's subscription[{:?}] failed, group: {}",
-                        request_header.exp, request_header.consumer_group
-                    );
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
-                };
-                let message_filter: ArcMessageFilter = Arc::new(ExpressionMessageFilter::new(
-                    Some(subscription_data.clone()),
-                    Some(consumer_filter_data),
-                    Arc::clone(&self.context.filters),
-                ));
-                Some(message_filter)
-            } else {
-                None
-            };
-            (subscription_data, retry_subscription_data, message_filter)
-        } else {
-            let subscription_data = match FilterAPI::build(
-                &request_header.topic,
-                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
-                Some(CheetahString::from_static_str(ExpressionType::TAG)),
-            ) {
-                Ok(value) => value,
-                Err(_) => {
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
-                }
-            };
-            let retry_topic = CheetahString::from_string(
-                retry_policy.write_topic(&request_header.topic, &request_header.consumer_group),
-            );
-            let retry_subscription_data = match FilterAPI::build(
-                &retry_topic,
-                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
-                Some(CheetahString::from_static_str(ExpressionType::TAG)),
-            ) {
-                Ok(value) => value,
-                Err(_) => {
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
-                }
-            };
-            (subscription_data, retry_subscription_data, None)
-        };
-
-        let mut durable_subscriptions = vec![subscription_data.clone(), retry_subscription_data];
-        for retry_topic in retry_policy.read_topics(&request_header.topic, &request_header.consumer_group) {
-            if durable_subscriptions
-                .iter()
-                .any(|subscription| subscription.topic.as_str() == retry_topic)
-            {
-                continue;
-            }
-            let fallback_subscription = FilterAPI::build(
-                &CheetahString::from_string(retry_topic),
-                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
-                request_header.exp_type.clone(),
-            )
-            .map_err(|error| rocketmq_error::RocketMQError::illegal_argument(error.to_string()))?;
-            durable_subscriptions.push(fallback_subscription);
-        }
-        #[cfg(feature = "rocksdb_store")]
-        let retry_policy = if let Some(profile_store) = &self.profile_store {
-            let profile_store = Arc::clone(profile_store);
-            let group = request_header.consumer_group.clone();
-            let subscriptions = durable_subscriptions.clone();
-            let requested_retry_policy = retry_policy.clone();
-            let persist_result = self
-                .context
-                .metadata_io
-                .spawn_io("broker.pop-consumer-profile.upsert", move || {
-                    profile_store.upsert(group, subscriptions, requested_retry_policy, current_millis() as i64)
-                })
-                .await;
-            match persist_result {
-                Ok(Ok(profile)) => {
-                    let persisted_policy = profile
-                        .retry_policy
-                        .unwrap_or_else(|| policy.default_retry_policy.clone());
-                    self.context
-                        .policy
-                        .restore_retry_policy(request_header.consumer_group.clone(), persisted_policy.clone());
-                    persisted_policy
-                }
-                Ok(Err(error)) => {
-                    error!(%error, group = %request_header.consumer_group, "Failed to persist POP consumer profile");
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::ServiceNotAvailable,
-                            "POP consumer profile persistence is unavailable",
-                        ),
-                    ));
-                }
-                Err(error) => {
-                    error!(%error, group = %request_header.consumer_group, "Failed to persist POP consumer profile");
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::ServiceNotAvailable,
-                            "POP consumer profile persistence is unavailable",
-                        ),
-                    ));
-                }
-            }
-        } else {
-            retry_policy
-        };
-        self.context
-            .consumers
-            .restore_pop_consumer_profile(&request_header.consumer_group, &durable_subscriptions);
-
-        match self
-            .read_pop_store(PopStoreReadRequest::new(
-                &request_header,
-                &topic_config,
-                &policy,
-                &retry_policy,
-                subscription_group_config.priority_factor(),
-                message_filter.clone(),
-                PopCallerHost::Network(channel.remote_address()),
-                opaque,
-            ))
-            .await?
-        {
-            PopStoreReadOutcome::Found(parts) => deliver_pop_legacy(parts, &channel).await,
-            PopStoreReadOutcome::Empty { mut head, rest_num } => {
+        match self.execute_pop_initial(request, channel.remote_address()).await? {
+            v2::PopInitialOutcome::Reply(parts) => deliver_pop_legacy(parts, &channel).await,
+            v2::PopInitialOutcome::Suspend(suspension) => {
+                let suspension = *suspension;
+                let mut head = suspension.head;
                 let polling_result = self.pop_long_polling_service.polling(
-                    ctx.clone(),
+                    ctx,
                     request,
-                    PollingHeader::new_from_pop_message_request_header(&request_header),
-                    Some(subscription_data),
-                    message_filter,
+                    PollingHeader::new_from_pop_message_request_header(&suspension.request_header),
+                    Some(suspension.subscription_data),
+                    suspension.message_filter,
                 );
                 match polling_result {
                     PollingResult::PollingSuc => {
-                        if rest_num > 0 {
+                        if suspension.rest_num > 0 {
                             self.pop_long_polling_service.notify_message_arriving(
-                                &request_header.topic,
-                                request_header.queue_id,
-                                &request_header.consumer_group,
+                                &suspension.request_header.topic,
+                                suspension.request_header.queue_id,
+                                &suspension.request_header.consumer_group,
                                 None,
                                 0,
                                 None,
                                 None,
                             );
                         }
-                        return Ok(None);
+                        Ok(None)
                     }
-                    PollingResult::PollingFull => head.set_code_ref(ResponseCode::PollingFull),
-                    _ => head.set_code_ref(ResponseCode::PollingTimeout),
+                    PollingResult::PollingFull => {
+                        head.set_code_ref(ResponseCode::PollingFull);
+                        Ok(Some(head))
+                    }
+                    _ => {
+                        head.set_code_ref(ResponseCode::PollingTimeout);
+                        Ok(Some(head))
+                    }
                 }
-                Ok(Some(head))
             }
         }
     }
@@ -1705,7 +1419,7 @@ mod tests {
         path
     }
 
-    async fn new_test_runtime(label: &str) -> BrokerRuntime {
+    pub(super) async fn new_test_runtime(label: &str) -> BrokerRuntime {
         let temp_root = temp_test_root(label);
         let broker_config = std::sync::Arc::new(BrokerConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),

@@ -31,7 +31,9 @@ use crate::long_polling::long_polling_service::pop_lite_long_polling_service::Po
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
 use crate::processor::pop_message_processor::QueueLockManager;
 
-fn pop_lite_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<PopLiteMessageProcessor<BrokerMessageStore>> {
+pub(super) fn pop_lite_processor_for_test(
+    runtime: &mut BrokerRuntime,
+) -> Arc<PopLiteMessageProcessor<BrokerMessageStore>> {
     let inner = runtime.runtime_state_mut();
     let topic_config_manager = inner.topic_config_manager_handle();
     let subscription_group_lookup = inner.subscription_group_manager().config_lookup();

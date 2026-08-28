@@ -36,11 +36,11 @@ pub(crate) struct PullResponseContext<'a> {
     pub(crate) effective_peer: SocketAddr,
     pub(crate) hook_metadata: &'a PullHookMetadata,
     pub(crate) broadcast_client_resolver: &'a PullBroadcastClientResolver<'a>,
-    pub(crate) allow_legacy_suspend: bool,
+    pub(crate) allow_suspend: bool,
     pub(crate) begin_time_millis: u64,
 }
 
-/// Affine data returned to the V1 wrapper when the existing hold service owns the request.
+/// Affine data returned when the selected request boundary can transfer a suspended Pull.
 pub(crate) struct PullSuspension {
     pub(crate) timing: PullSuspendTiming,
     pub(crate) request_header: PullMessageRequestHeader,
@@ -53,7 +53,7 @@ pub(crate) struct PullSuspension {
 pub(crate) enum PullMessageResult {
     /// An immediate response whose head and affine body are ready for delivery.
     Reply(BrokerResponseParts),
-    /// The request was admitted to the existing long-poll owner.
+    /// The request is eligible for an atomic transfer to the selected long-poll owner.
     Suspend(Box<PullSuspension>),
 }
 
@@ -67,23 +67,20 @@ pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
     /// Handles the result of a pull message request.
     ///
     /// This method processes the result of a message retrieval operation (`get_message_result`),
-    /// using the provided request information, channel, context, subscription data, and other
-    /// parameters to generate an appropriate response.
+    /// using typed request facts, subscription data, and store results to generate an appropriate
+    /// response plan or suspension candidate.
     ///
     /// # Parameters
     /// - `get_message_result`: The result of the message retrieval operation.
-    /// - `request`: The original remoting command representing the pull message request.
     /// - `request_header`: The header of the pull message request, containing request-specific
     ///   information.
-    /// - `channel`: The channel through which the request was received.
-    /// - `ctx`: The connection handler context associated with the request.
     /// - `subscription_data`: Subscription data for the consumer making the request.
     /// - `subscription_group_config`: Configuration for the subscription group of the consumer.
-    /// - `broker_allow_suspend`: Flag indicating whether the broker allows suspending the request.
     /// - `message_filter`: The message filter to apply to the retrieved messages.
     /// - `response`: The initial response remoting command to be potentially modified and returned.
     /// - `mapping_context`: Context for topic-queue mapping.
-    /// - `begin_time_mills`: The timestamp (in milliseconds) when the request began processing.
+    /// - `response_context`: Trusted peer, hook, broadcast identity, suspension policy, and timing
+    ///   facts for the response.
     ///
     /// # Returns
     /// An explicit immediate response or suspension result.

@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
@@ -46,6 +47,7 @@ use crate::long_polling::long_polling_service::pop_lite_long_polling_service::Po
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
 use crate::long_polling::polling_result::PollingResult;
+use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::pop_message_processor::QueueLockManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
@@ -54,6 +56,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 pub(crate) mod core;
 pub(crate) mod response;
 mod resume;
+mod v2;
 
 #[derive(Clone)]
 pub(crate) struct PopLiteMessagePolicy {
@@ -266,6 +269,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
 pub(crate) struct PopLiteMessageProcessor<MS: BrokerReadWriteStore> {
     context: PopLiteMessageProcessorContext<MS>,
     pop_lite_long_polling_service: Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>>,
+    pop_lite_deferred_service: OnceLock<Arc<PopLiteDeferredService>>,
     consumer_order_info_manager: MemoryConsumerOrderInfoManager,
     lifecycle: AsyncMutex<()>,
 }
@@ -297,10 +301,22 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
                 long_polling_context,
                 processor.clone(),
             )),
+            pop_lite_deferred_service: OnceLock::new(),
             consumer_order_info_manager: MemoryConsumerOrderInfoManager::default(),
             context,
             lifecycle: AsyncMutex::new(()),
         })
+    }
+
+    /// Installs the Broker-owned BRK-05 deferred POP Lite service.
+    ///
+    /// BRK-06 owns the service lifecycle and installs it once during Broker composition. The
+    /// service must share this processor's `LiteEventDispatcher` reservation domain.
+    pub(crate) fn install_pop_lite_deferred_service(
+        &self,
+        service: Arc<PopLiteDeferredService>,
+    ) -> Result<(), Arc<PopLiteDeferredService>> {
+        self.pop_lite_deferred_service.set(service)
     }
 
     pub(crate) async fn start(&self) {
