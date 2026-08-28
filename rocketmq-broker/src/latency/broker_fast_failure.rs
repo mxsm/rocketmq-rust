@@ -545,7 +545,7 @@ impl BrokerFastFailure {
         self.inner.broker_config.broker_fast_failure_enable
     }
 
-    pub(crate) fn send_request_executor_detached_enabled(&self) -> bool {
+    pub(crate) fn legacy_send_detach_requested(&self) -> bool {
         self.inner.broker_config.send_request_executor_detached_enable
     }
 

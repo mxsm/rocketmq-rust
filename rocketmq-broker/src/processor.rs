@@ -21,7 +21,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::command_from_error_with_factory_remark_and_opaque;
@@ -38,7 +37,6 @@ use tracing::warn;
 use self::client_manage_processor::ClientManageProcessor;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::latency::broker_fast_failure::FastFailureQueueKind;
-use crate::latency::broker_fast_failure::FastFailureTask;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
@@ -68,6 +66,7 @@ pub(crate) mod client_manage_processor;
 pub(crate) mod consumer_manage_processor;
 pub(crate) mod default_pull_message_result_handler;
 pub(crate) mod end_transaction_processor;
+mod fast_failure_dispatch;
 pub(crate) mod lite_manager_processor;
 pub(crate) mod lite_subscription_ctl_processor;
 pub(crate) mod maintenance_request_processor;
@@ -269,7 +268,7 @@ pub struct BrokerRequestProcessor<MS: BrokerStorePort, TS> {
     default_request_processor: Option<Arc<BrokerProcessorType<MS, TS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_fast_failure: Option<BrokerFastFailure>,
-    request_task_group: Option<TaskGroup>,
+    _request_task_group: Option<TaskGroup>,
 }
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
@@ -288,7 +287,7 @@ where
             default_request_processor: None,
             auth_runtime: None,
             broker_fast_failure: None,
-            request_task_group: None,
+            _request_task_group: None,
         }
     }
 
@@ -305,11 +304,17 @@ where
     }
 
     pub fn set_broker_fast_failure(&mut self, broker_fast_failure: BrokerFastFailure) {
+        if broker_fast_failure.legacy_send_detach_requested() {
+            warn!(
+                "sendRequestExecutorDetachedEnable is deprecated and ignored by structured fast-failure dispatch; \
+                 Send requests remain in the admitted handler future until the V2 deferred cutover"
+            );
+        }
         self.broker_fast_failure = Some(broker_fast_failure);
     }
 
     pub fn set_request_task_group(&mut self, request_task_group: TaskGroup) {
-        self.request_task_group = Some(request_task_group);
+        self._request_task_group = Some(request_task_group);
     }
 }
 
@@ -338,7 +343,7 @@ impl<MS: BrokerStorePort, TS> Clone for BrokerRequestProcessor<MS, TS> {
             default_request_processor: self.default_request_processor.clone(),
             auth_runtime: self.auth_runtime.clone(),
             broker_fast_failure: self.broker_fast_failure.clone(),
-            request_task_group: self.request_task_group.clone(),
+            _request_task_group: self._request_task_group.clone(),
         }
     }
 }
@@ -480,231 +485,40 @@ where
         }
 
         let opaque = request.opaque();
-        let retained_bytes = estimate_fast_failure_retained_bytes(request);
-        let (task, response_rx) = match broker_fast_failure.try_enqueue(queue_kind, opaque, retained_bytes) {
-            Ok(admitted) => admitted,
-            Err(response) => return Ok(Some(response)),
+        let metadata = fast_failure_dispatch::FastFailureRequestMetadata::from_command(request);
+        let admission = match fast_failure_dispatch::try_admit(broker_fast_failure, queue_kind, metadata) {
+            Ok(admission) => admission,
+            Err(rejection) => return Ok(Some(rejection.into_legacy_command())),
         };
-        let queued_request = request.clone();
-        let broker_fast_failure = broker_fast_failure.clone();
-        let detach_response = should_detach_fast_failure_response(
-            queue_kind,
-            broker_fast_failure.send_request_executor_detached_enabled(),
-            self.request_task_group.is_some(),
-        );
-
-        if detach_response {
-            let Some(task_group) = &self.request_task_group else {
+        let run = match admission
+            .await_run(fast_failure_dispatch::FastFailureControl::legacy())
+            .await
+        {
+            Ok(run) => run,
+            Err(fast_failure_dispatch::FastFailureAwaitError::Rejected(rejection)) => {
+                return Ok(Some(rejection.into_legacy_command()));
+            }
+            Err(fast_failure_dispatch::FastFailureAwaitError::LifecycleStopped) => {
                 return Ok(Some(system_error_response(
                     &self.command_factory,
                     opaque,
-                    "detached send request executor has no task group",
-                )));
-            };
-            let detached_task = Self::run_detached_fast_failure_request(
-                queue_kind,
-                broker_fast_failure.clone(),
-                task.clone(),
-                processor,
-                channel,
-                ctx,
-                queued_request,
-                opaque,
-                response_rx,
-            );
-            if let Err(error) =
-                task_group.spawn("broker.request.fast-failure.detached", TaskKind::Worker, detached_task)
-            {
-                warn!(?error, "failed to spawn detached fast failure request task");
-                broker_fast_failure.cancel(
-                    queue_kind,
-                    &task,
-                    system_error_response(
-                        &self.command_factory,
-                        opaque,
-                        "detached fast failure request task spawn failed",
-                    ),
-                );
-                return Ok(Some(system_error_response(
-                    &self.command_factory,
-                    opaque,
-                    "detached fast failure request task spawn failed",
+                    "legacy fast-failure dispatch unexpectedly lost its lifecycle owner",
                 )));
             }
-            return Ok(None);
-        }
-
-        let request_task = Self::run_fast_failure_request(
-            queue_kind,
-            broker_fast_failure.clone(),
-            task.clone(),
-            processor,
-            channel,
-            ctx,
-            queued_request,
-            opaque,
-        );
-        if let Some(task_group) = &self.request_task_group {
-            if let Err(error) = task_group.spawn("broker.request.fast-failure", TaskKind::Worker, request_task) {
-                warn!(?error, "failed to spawn fast failure request task");
-                broker_fast_failure.cancel(
-                    queue_kind,
-                    &task,
-                    system_error_response(&self.command_factory, opaque, "fast failure request task spawn failed"),
-                );
-            }
-        } else {
-            request_task.await;
-        }
-
-        match response_rx.await {
-            Ok(response) => Ok(response),
-            Err(_error) => Ok(Some(system_error_response(
-                &self.command_factory,
-                opaque,
-                "fast failure response channel closed before request completed",
-            ))),
-        }
-    }
-
-    async fn run_detached_fast_failure_request(
-        queue_kind: FastFailureQueueKind,
-        broker_fast_failure: BrokerFastFailure,
-        task: Arc<FastFailureTask>,
-        processor: BrokerProcessorType<MS, TS>,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        queued_request: RemotingCommand,
-        opaque: i32,
-        response_rx: tokio::sync::oneshot::Receiver<Option<RemotingCommand>>,
-    ) {
-        let command_factory = broker_fast_failure.command_factory();
-        let request_task = Self::run_fast_failure_request(
-            queue_kind,
-            broker_fast_failure,
-            task,
-            processor,
-            channel,
-            ctx.clone(),
-            queued_request,
-            opaque,
-        );
-        tokio::pin!(request_task);
-        tokio::pin!(response_rx);
-
-        let response_result = tokio::select! {
-            _ = &mut request_task => (&mut response_rx).await,
-            response_result = &mut response_rx => response_result,
         };
-        Self::write_detached_fast_failure_response(&command_factory, response_result, ctx, opaque).await;
-    }
-
-    async fn write_detached_fast_failure_response(
-        command_factory: &RemotingCommandFactory,
-        response_result: Result<Option<RemotingCommand>, tokio::sync::oneshot::error::RecvError>,
-        ctx: ConnectionHandlerContext,
-        opaque: i32,
-    ) {
-        match response_result {
-            Ok(Some(response)) => {
-                if let Err(error) = ctx.try_write_response(response.set_opaque(opaque)).await {
-                    warn!(
-                        kind = error.kind().as_str(),
-                        progress = error.write_progress().map_or("none", |progress| progress.as_str()),
-                        retryable = error.retryable(),
-                        "detached fast failure response write failed; not retrying"
-                    );
-                }
-            }
-            Ok(None) => {}
-            Err(_error) => {
-                if let Err(error) = ctx
-                    .try_write_response(system_error_response(
-                        command_factory,
-                        opaque,
-                        "fast failure response channel closed before detached request completed",
-                    ))
-                    .await
-                {
-                    warn!(
-                        kind = error.kind().as_str(),
-                        progress = error.write_progress().map_or("none", |progress| progress.as_str()),
-                        retryable = error.retryable(),
-                        "detached fast failure response write failed; not retrying"
-                    );
-                }
-            }
-        }
-    }
-
-    async fn run_fast_failure_request(
-        queue_kind: FastFailureQueueKind,
-        broker_fast_failure: BrokerFastFailure,
-        task: Arc<FastFailureTask>,
-        mut processor: BrokerProcessorType<MS, TS>,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        mut queued_request: RemotingCommand,
-        opaque: i32,
-    ) {
-        let Some(_permit) = broker_fast_failure.acquire_permit(queue_kind).await else {
-            warn!("fast failure queue permit acquisition failed: queue={queue_kind:?}");
-            if broker_fast_failure.try_mark_running(queue_kind, &task) {
-                broker_fast_failure.complete(
-                    queue_kind,
-                    &task,
-                    Some(system_error_response(
-                        &broker_fast_failure.command_factory(),
-                        opaque,
-                        "fast failure queue permit acquisition failed",
-                    )),
-                );
-            }
-            return;
-        };
-
-        if !broker_fast_failure.try_mark_running(queue_kind, &task) {
-            return;
-        }
-
-        let response = match processor.process_request(channel, ctx, &mut queued_request).await {
+        let response = match processor.process_request(channel, ctx, request).await {
             Ok(response) => response,
             Err(error) => Some(command_from_error_with_factory_and_opaque(
-                &broker_fast_failure.command_factory(),
+                &self.command_factory,
                 &error,
                 opaque,
             )),
         };
-        broker_fast_failure.complete(queue_kind, &task, response);
+        Ok(match run.complete(response).await {
+            Ok(response) => response,
+            Err(rejection) => Some(rejection.into_legacy_command()),
+        })
     }
-}
-
-fn estimate_fast_failure_retained_bytes(request: &RemotingCommand) -> usize {
-    let mut retained_bytes = std::mem::size_of::<RemotingCommand>();
-    retained_bytes = retained_bytes.saturating_add(request.body().map_or(0, bytes::Bytes::len));
-    retained_bytes = retained_bytes.saturating_add(request.remark().map_or(0, |remark| remark.len()));
-    if let Some(ext_fields) = request.ext_fields() {
-        retained_bytes = retained_bytes.saturating_add(
-            ext_fields
-                .iter()
-                .map(|(key, value)| {
-                    std::mem::size_of_val(key)
-                        .saturating_add(std::mem::size_of_val(value))
-                        .saturating_add(key.len())
-                        .saturating_add(value.len())
-                })
-                .fold(0usize, usize::saturating_add),
-        );
-    }
-    retained_bytes.max(1)
-}
-
-fn should_detach_fast_failure_response(
-    queue_kind: FastFailureQueueKind,
-    send_request_executor_detached_enabled: bool,
-    has_request_task_group: bool,
-) -> bool {
-    queue_kind == FastFailureQueueKind::Send && send_request_executor_detached_enabled && has_request_task_group
 }
 
 fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option<FastFailureQueueKind> {
@@ -862,13 +676,13 @@ mod tests {
     #[test]
     fn fast_failure_retained_bytes_include_body_remark_and_extension_fields() {
         let base = RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(1);
-        let base_bytes = estimate_fast_failure_retained_bytes(&base);
+        let base_bytes = fast_failure_dispatch::estimate_retained_bytes(&base);
         let request = RemotingCommand::new_request(RequestCode::SendMessage, bytes::Bytes::from(vec![1; 1_024]))
             .set_opaque(2)
             .set_remark("busy-budget-test")
             .set_ext_fields(std::collections::HashMap::from([("topic".into(), "orders".into())]));
 
-        let retained_bytes = estimate_fast_failure_retained_bytes(&request);
+        let retained_bytes = fast_failure_dispatch::estimate_retained_bytes(&request);
 
         assert!(retained_bytes >= base_bytes + 1_024 + "busy-budget-test".len() + "topic".len() + "orders".len());
     }
@@ -883,30 +697,6 @@ mod tests {
             fast_failure_queue_kind(RequestCode::UpdateBrokerConfig as i32, false),
             None
         );
-    }
-
-    #[test]
-    fn detach_fast_failure_response_only_applies_to_send_with_task_group() {
-        assert!(should_detach_fast_failure_response(
-            FastFailureQueueKind::Send,
-            true,
-            true
-        ));
-        assert!(!should_detach_fast_failure_response(
-            FastFailureQueueKind::Send,
-            false,
-            true
-        ));
-        assert!(!should_detach_fast_failure_response(
-            FastFailureQueueKind::Send,
-            true,
-            false
-        ));
-        assert!(!should_detach_fast_failure_response(
-            FastFailureQueueKind::Pull,
-            true,
-            true
-        ));
     }
 
     #[test]
