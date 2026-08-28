@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub(crate) mod capability;
+mod resume;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::RpcClient;
 use rocketmq_transport::api::v1::RpcClientUtils;
 use rocketmq_transport::api::v1::RpcRequest;
+use rocketmq_transport::api::v2::SessionId;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -66,10 +68,16 @@ use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestProcessor;
+use crate::long_polling::pull_deferred::PullHookMetadata;
+use crate::long_polling::pull_deferred::PullSessionClientLookup;
+use crate::long_polling::pull_request::PullRequest;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
+use crate::processor::pull_message_result_handler::PullBroadcastClientResolver;
 use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
+use crate::processor::pull_message_result_handler::PullResponseContext;
+use crate::processor::response_plan::BrokerResponseParts;
 use crate::processor::response_plan::LegacyResponseDelivery;
 
 fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
@@ -101,6 +109,19 @@ pub struct PullMessageProcessor<MS: BrokerReadStore> {
     pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
     context: Arc<PullMessageProcessorContext<MS>>,
     wakeup_task_group: OnceLock<TaskGroup>,
+    session_client_lookup: OnceLock<Arc<dyn PullSessionClientLookup>>,
+}
+
+fn pull_command(response: RemotingCommand) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    Ok(PullMessageResult::Reply(BrokerResponseParts::command(response)?))
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PullClientIdentityError {
+    #[error("the Pull session client lookup is not installed")]
+    LookupUnavailable,
+    #[error("the resumed Pull session has no current client registration")]
+    RegistrationMissing,
 }
 
 impl<MS> RequestProcessor for PullMessageProcessor<MS>
@@ -291,7 +312,16 @@ where
             pull_message_result_handler,
             context,
             wakeup_task_group: OnceLock::new(),
+            session_client_lookup: OnceLock::new(),
         }
+    }
+
+    #[allow(dead_code, reason = "installed by the forthcoming V2 Pull composition root")]
+    pub(crate) fn install_session_client_lookup(
+        &self,
+        lookup: Arc<dyn PullSessionClientLookup>,
+    ) -> Result<(), Arc<dyn PullSessionClientLookup>> {
+        self.session_client_lookup.set(lookup)
     }
 
     pub(crate) fn set_wakeup_task_group(&self, task_group: TaskGroup) {
@@ -793,35 +823,97 @@ where
         request: &mut RemotingCommand,
         broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header =
+            request.decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
+        let hook_metadata = PullHookMetadata::from_command(request);
+        let broadcast_client_resolver = |request_header: &PullMessageRequestHeader| {
+            self.resolve_broadcast_client_id_with(request_header, || {
+                Ok(self.legacy_broadcast_client_id(&request_header.consumer_group, &channel))
+            })
+        };
+        let result = self
+            .execute_pull(
+                request_code,
+                request_header,
+                channel.remote_address(),
+                &hook_metadata,
+                &broadcast_client_resolver,
+                broker_allow_suspend,
+                Some(request.opaque()),
+            )
+            .await?;
+        match result {
+            PullMessageResult::Reply(parts) => Ok(legacy_pull_delivery_response(parts.deliver_legacy(&channel).await)),
+            PullMessageResult::Suspend(suspension) => {
+                let suspension = *suspension;
+                let topic = suspension.request_header.topic.clone();
+                let queue_id = suspension.request_header.queue_id;
+                let offset = suspension.request_header.queue_offset;
+                let pull_request = PullRequest::new(
+                    request.clone(),
+                    channel.clone(),
+                    ctx,
+                    suspension.timing.effective_timeout_millis(),
+                    suspension.timing.suspend_wall_millis(),
+                    offset,
+                    suspension.subscription_data,
+                    suspension.message_filter,
+                );
+                if self
+                    .context
+                    .suspend_pull_request(topic.as_str(), queue_id, pull_request)
+                {
+                    Ok(None)
+                } else {
+                    Ok(legacy_pull_delivery_response(
+                        suspension.fallback.deliver_legacy(&channel).await,
+                    ))
+                }
+            }
+        }
+    }
+
+    #[allow(unused_assignments)]
+    #[allow(clippy::too_many_arguments, reason = "typed Pull execution inputs are kept explicit")]
+    async fn execute_pull(
+        &self,
+        request_code: RequestCode,
+        mut request_header: PullMessageRequestHeader,
+        effective_peer: std::net::SocketAddr,
+        hook_metadata: &PullHookMetadata,
+        broadcast_client_resolver: &PullBroadcastClientResolver<'_>,
+        broker_allow_suspend: bool,
+        legacy_opaque: Option<i32>,
+    ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
         let begin_time_mills = current_millis();
         let mut response = self
             .context
             .command_factory
             .create_java_default_error_response_command();
-        response.set_opaque_mut(request.opaque());
-        let mut request_header =
-            request.decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
+        if let Some(opaque) = legacy_opaque {
+            response.set_opaque_mut(opaque);
+        }
         //info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
         let policy = self.context.policy();
 
         if !PermName::is_readable(policy.broker_permission) {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
                     .set_remark(format!("the broker[{}] pulling message is forbidden", policy.broker_ip)),
-            ));
+            );
         }
         if RequestCode::LitePullMessage == request_code && !policy.lite_pull_message_enable {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
                     .set_remark(format!("the broker[{}] pulling message is forbidden", policy.broker_ip)),
-            ));
+            );
         }
         let subscription_group_config = self
             .context
@@ -829,7 +921,7 @@ where
             .find_subscription_group_config(request_header.consumer_group.as_ref());
 
         if subscription_group_config.is_none() {
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
                     .set_remark(format!(
@@ -837,12 +929,12 @@ where
                         request_header.consumer_group,
                         FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
                     )),
-            ));
+            );
         }
 
         if !subscription_group_config.as_ref().unwrap().consume_enable() {
             response_header.forbidden_type = Some(ForbiddenType::GROUP_FORBIDDEN);
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
@@ -850,26 +942,23 @@ where
                         "subscription group no permission, {}",
                         request_header.consumer_group,
                     )),
-            ));
+            );
         }
         let topic_config = self.context.topics().select_topic_config(request_header.topic.as_ref());
         if topic_config.is_none() {
             error!(
                 "the topic {} not exist, consumer: {}",
-                request_header.topic,
-                channel.remote_address()
+                request_header.topic, effective_peer
             );
-            return Ok(Some(response.set_code(ResponseCode::TopicNotExist).set_remark(
-                format!(
-                    "topic[{}] not exist, apply first please! {}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                ),
+            return pull_command(response.set_code(ResponseCode::TopicNotExist).set_remark(format!(
+                "topic[{}] not exist, apply first please! {}",
+                request_header.topic,
+                FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
             )));
         }
         if !PermName::is_readable(topic_config.as_ref().unwrap().perm) {
             response_header.forbidden_type = Some(ForbiddenType::TOPIC_FORBIDDEN);
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
@@ -877,7 +966,7 @@ where
                         "the topic[{}] pulling message is forbidden",
                         request_header.topic,
                     )),
-            ));
+            );
         }
         let mut topic_queue_mapping_context = self
             .context
@@ -887,12 +976,12 @@ where
             .rewrite_request_for_static_topic(&mut request_header, &mut topic_queue_mapping_context)
             .await
         {
-            return Ok(Some(resp));
+            return pull_command(resp);
         }
         if request_header.queue_id < 0
             || request_header.queue_id >= topic_config.as_ref().unwrap().read_queue_nums as i32
         {
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(RemotingSysResponseCode::SystemError)
                     .set_remark(format!(
@@ -900,9 +989,9 @@ where
                         request_header.queue_id,
                         request_header.topic,
                         topic_config.as_ref().unwrap().read_queue_nums,
-                        channel.remote_address()
+                        effective_peer
                     )),
-            ));
+            );
         }
         let (consume_type, message_model) =
             consumer_compensation_for_request_source(RequestSource::parse_integer(request_header.request_source));
@@ -930,20 +1019,20 @@ where
             consumer_filter_data,
         } = match subscription_result {
             Ok(result) => result,
-            Err(err_response) => return Ok(Some(err_response)),
+            Err(err_response) => return pull_command(err_response),
         };
 
         if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
             && !policy.enable_property_filter
         {
-            return Ok(Some(
+            return pull_command(
                 response
                     .set_code(RemotingSysResponseCode::SystemError)
                     .set_remark(format!(
                         "The broker does not support consumer to filter message by {}",
                         subscription_data.expression_type
                     )),
-            ));
+            );
         }
 
         // Build message filter using helper method
@@ -970,11 +1059,11 @@ where
                             if let Some(ref cg_info) = consumer_group_info {
                                 match cg_info.get_consume_type() {
                                     ConsumeType::ConsumePassively => {
-                                        return Ok(Some(
+                                        return pull_command(
                                             response
                                                 .set_code(ResponseCode::SystemBusy)
                                                 .set_remark("This consumer group is reading cold data. It has been flow control"),
-                                        ));
+                                        );
                                     }
                                     ConsumeType::ConsumeActively => {
                                         if broker_allow_suspend
@@ -983,11 +1072,11 @@ where
                                                 .await
                                                 == crate::coldctr::cold_data_cg_ctr_service::ColdDataShortSuspendOutcome::QueueFull
                                         {
-                                            return Ok(Some(
+                                            return pull_command(
                                                 response
                                                     .set_code(ResponseCode::SystemBusy)
                                                     .set_remark("Cold-data pull suspension queue is full"),
-                                            ));
+                                            );
                                         }
                                         request_header.max_msg_nums = 1;
                                     }
@@ -1010,11 +1099,11 @@ where
                 self.context.store().min_offset(topic, queue_id),
                 self.context.store().max_offset(topic, queue_id),
             ) else {
-                return Ok(Some(
+                return pull_command(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark("message store is unavailable"),
-                ));
+                );
             };
             let mut get_message_result = GetMessageResult::new();
             get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
@@ -1024,8 +1113,15 @@ where
             get_message_result.set_suggest_pulling_from_slave(false);
             Some(get_message_result)
         } else {
-            let broadcast_init_offset =
-                self.query_broadcast_pull_init_offset(topic, group, queue_id, &request_header, &channel);
+            let broadcast_init_client_id = broadcast_client_resolver(&request_header)?;
+            let broadcast_init_offset = self.query_broadcast_pull_init_offset(
+                topic,
+                group,
+                queue_id,
+                &request_header,
+                broadcast_init_client_id.as_ref(),
+            );
+            drop(broadcast_init_client_id);
             if broadcast_init_offset >= 0 {
                 let mut get_message_result = GetMessageResult::new();
                 get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
@@ -1048,19 +1144,19 @@ where
                 {
                     Ok(result) => result,
                     Err(_) => {
-                        return Ok(Some(
+                        return pull_command(
                             response
                                 .set_code(ResponseCode::SystemError)
                                 .set_remark("message store is unavailable"),
-                        ));
+                        );
                     }
                 };
                 if result.is_none() {
-                    return Ok(Some(
+                    return pull_command(
                         response
                             .set_code(ResponseCode::SystemError)
                             .set_remark("store getMessage return None"),
-                    ));
+                    );
                 }
                 // Accumulate cold data read bytes for flow control
                 if let Some(ref result) = result {
@@ -1076,27 +1172,28 @@ where
                 .pull_message_result_handler
                 .handle(
                     get_message_result,
-                    request,
                     request_header,
-                    channel.clone(),
-                    ctx,
                     subscription_data,
                     &subscription_group_config.unwrap(),
-                    broker_allow_suspend,
                     message_filter,
                     response,
                     topic_queue_mapping_context,
-                    begin_time_mills,
+                    PullResponseContext {
+                        effective_peer,
+                        hook_metadata,
+                        broadcast_client_resolver,
+                        allow_legacy_suspend: broker_allow_suspend,
+                        begin_time_millis: begin_time_mills,
+                    },
                 )
                 .await?;
-            return match result {
-                PullMessageResult::Reply(parts) => {
-                    Ok(legacy_pull_delivery_response(parts.deliver_legacy(&channel).await))
-                }
-                PullMessageResult::Suspended => Ok(None),
-            };
+            return Ok(result);
         }
-        Ok(None)
+        pull_command(
+            response
+                .set_code(ResponseCode::SystemError)
+                .set_remark("store getMessage return None"),
+        )
     }
 
     fn query_broadcast_pull_init_offset(
@@ -1105,7 +1202,7 @@ where
         group: &CheetahString,
         queue_id: i32,
         request_header: &PullMessageRequestHeader,
-        channel: &Channel,
+        client_id: Option<&CheetahString>,
     ) -> i64 {
         if !self.context.policy().enable_broadcast_offset_store {
             return -1;
@@ -1116,25 +1213,77 @@ where
 
         if is_broadcast(proxy_pull_broadcast, consumer_group_info.as_ref()) {
             let client_id = if proxy_pull_broadcast {
-                request_header.proxy_forward_client_id.as_ref().cloned()
+                request_header.proxy_forward_client_id.as_ref()
             } else {
-                match consumer_group_info.as_ref().unwrap().find_channel_by_channel(channel) {
-                    None => {
-                        return -1;
-                    }
-                    Some(value) => Some(value.client_id().clone()),
-                }
+                client_id
+            };
+            let Some(client_id) = client_id else {
+                return -1;
             };
             return self.context.query_broadcast_offset(
                 topic,
                 group,
                 queue_id,
-                client_id.as_ref().unwrap().as_str(),
+                client_id.as_str(),
                 request_header.queue_offset,
                 proxy_pull_broadcast,
             );
         }
         -1
+    }
+
+    fn resolve_session_broadcast_client_id(
+        &self,
+        request_header: &PullMessageRequestHeader,
+        session_id: SessionId,
+    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        self.resolve_broadcast_client_id_with(request_header, || {
+            let lookup = self.session_client_lookup.get().ok_or_else(|| {
+                rocketmq_error::RocketMQError::internal(
+                    "resume-pull-client-lookup",
+                    PullClientIdentityError::LookupUnavailable,
+                )
+            })?;
+            lookup
+                .client_id(session_id, &request_header.consumer_group)
+                .map(Some)
+                .ok_or_else(|| {
+                    rocketmq_error::RocketMQError::internal(
+                        "resume-pull-client-lookup",
+                        PullClientIdentityError::RegistrationMissing,
+                    )
+                })
+        })
+    }
+
+    fn resolve_broadcast_client_id_with(
+        &self,
+        request_header: &PullMessageRequestHeader,
+        resolve_normal_client: impl FnOnce() -> rocketmq_error::RocketMQResult<Option<CheetahString>>,
+    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        if !self.context.policy().enable_broadcast_offset_store {
+            return Ok(None);
+        }
+        let proxy = RequestSource::ProxyForBroadcast == From::from(request_header.request_source.unwrap_or(-2));
+        if proxy {
+            return Ok(request_header.proxy_forward_client_id.clone());
+        }
+        let consumer_group_info = self
+            .context
+            .consumers()
+            .get_consumer_group_info(request_header.consumer_group.as_ref());
+        if !is_broadcast(false, consumer_group_info.as_ref()) {
+            return Ok(None);
+        }
+        resolve_normal_client()
+    }
+
+    fn legacy_broadcast_client_id(&self, consumer_group: &CheetahString, channel: &Channel) -> Option<CheetahString> {
+        self.context
+            .consumers()
+            .get_consumer_group_info(consumer_group.as_ref())?
+            .find_channel_by_channel(channel)
+            .map(|info| info.client_id().clone())
     }
 
     pub fn execute_request_when_wakeup(
@@ -1236,6 +1385,10 @@ fn legacy_pull_delivery_response(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pull_message_processor/resume_store_tests.rs"]
+mod resume_store_tests;
 
 #[cfg(test)]
 mod tests {

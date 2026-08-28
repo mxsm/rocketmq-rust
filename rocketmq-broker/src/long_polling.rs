@@ -19,4 +19,5 @@ pub(crate) mod polling_header;
 pub(crate) mod polling_result;
 pub(crate) mod pop_deferred;
 pub(crate) mod pop_request;
+pub(crate) mod pull_deferred;
 pub(crate) mod pull_request;

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::net::SocketAddr;
 
+use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -21,17 +23,38 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::GetMessageResult;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
+use crate::long_polling::pull_deferred::PullHookMetadata;
+use crate::long_polling::pull_deferred::PullSuspendTiming;
 use crate::processor::response_plan::BrokerResponseParts;
+
+pub(crate) type PullBroadcastClientResolver<'a> =
+    dyn Fn(&PullMessageRequestHeader) -> rocketmq_error::RocketMQResult<Option<CheetahString>> + Send + Sync + 'a;
+
+/// Channel-free facts required to compose one Pull response.
+pub(crate) struct PullResponseContext<'a> {
+    pub(crate) effective_peer: SocketAddr,
+    pub(crate) hook_metadata: &'a PullHookMetadata,
+    pub(crate) broadcast_client_resolver: &'a PullBroadcastClientResolver<'a>,
+    pub(crate) allow_legacy_suspend: bool,
+    pub(crate) begin_time_millis: u64,
+}
+
+/// Affine data returned to the V1 wrapper when the existing hold service owns the request.
+pub(crate) struct PullSuspension {
+    pub(crate) timing: PullSuspendTiming,
+    pub(crate) request_header: PullMessageRequestHeader,
+    pub(crate) subscription_data: SubscriptionData,
+    pub(crate) message_filter: ArcMessageFilter,
+    pub(crate) fallback: BrokerResponseParts,
+}
 
 /// The explicit outcome of composing a Pull response.
 pub(crate) enum PullMessageResult {
     /// An immediate response whose head and affine body are ready for delivery.
     Reply(BrokerResponseParts),
     /// The request was admitted to the existing long-poll owner.
-    Suspended,
+    Suspend(Box<PullSuspension>),
 }
 
 /// Trait defining the behavior for handling the result of a pull message request.
@@ -71,17 +94,13 @@ pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
     async fn handle(
         &self,
         get_message_result: GetMessageResult,
-        request: &mut RemotingCommand,
         request_header: PullMessageRequestHeader,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: &SubscriptionGroupConfig,
-        broker_allow_suspend: bool,
         message_filter: ArcMessageFilter,
         response: RemotingCommand,
         mapping_context: TopicQueueMappingContext,
-        begin_time_mills: u64,
+        response_context: PullResponseContext<'_>,
     ) -> rocketmq_error::RocketMQResult<PullMessageResult>;
 
     /// Returns a mutable reference to `self` as a trait object of type `Any`.
