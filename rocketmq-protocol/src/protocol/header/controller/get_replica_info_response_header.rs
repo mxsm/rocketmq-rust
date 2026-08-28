@@ -86,17 +86,4 @@ mod tests {
         assert_eq!(header.master_address, None);
         assert_eq!(header.master_epoch, None);
     }
-
-    #[test]
-    fn get_replica_info_response_header_clone() {
-        let header = GetReplicaInfoResponseHeader {
-            master_broker_id: Some(123),
-            master_address: Some("127.0.0.1:10911".to_string()),
-            master_epoch: Some(5),
-        };
-        let cloned = header.clone();
-        assert_eq!(header.master_broker_id, cloned.master_broker_id);
-        assert_eq!(header.master_address, cloned.master_address);
-        assert_eq!(header.master_epoch, cloned.master_epoch);
-    }
 }

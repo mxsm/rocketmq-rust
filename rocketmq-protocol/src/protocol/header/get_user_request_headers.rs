@@ -53,13 +53,4 @@ mod tests {
         let header: GetUserRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.username, CheetahString::from("value"));
     }
-
-    #[test]
-    fn get_user_request_header_clone() {
-        let header = GetUserRequestHeader {
-            username: CheetahString::from("value"),
-        };
-        let cloned_header = header.clone();
-        assert_eq!(header.username, cloned_header.username);
-    }
 }

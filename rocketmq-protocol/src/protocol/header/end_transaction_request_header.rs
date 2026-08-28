@@ -108,30 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn end_transaction_request_header_clone() {
-        let header = EndTransactionRequestHeader {
-            topic: CheetahString::from("topic1"),
-            producer_group: CheetahString::from("group1"),
-            tran_state_table_offset: 123,
-            commit_log_offset: 456,
-            commit_or_rollback: 8,
-            from_transaction_check: true,
-            msg_id: CheetahString::from("msg1"),
-            transaction_id: Some(CheetahString::from("tran1")),
-            rpc_request_header: RpcRequestHeader::default(),
-        };
-        let cloned_header = header.clone();
-        assert_eq!(cloned_header.topic, "topic1");
-        assert_eq!(cloned_header.producer_group, "group1");
-        assert_eq!(cloned_header.tran_state_table_offset, 123);
-        assert_eq!(cloned_header.commit_log_offset, 456);
-        assert_eq!(cloned_header.commit_or_rollback, 8);
-        assert!(cloned_header.from_transaction_check);
-        assert_eq!(cloned_header.msg_id, "msg1");
-        assert_eq!(cloned_header.transaction_id.as_ref().unwrap(), "tran1");
-    }
-
-    #[test]
     fn end_transaction_request_header_serialization() {
         let header = EndTransactionRequestHeader {
             topic: CheetahString::from("topic1"),

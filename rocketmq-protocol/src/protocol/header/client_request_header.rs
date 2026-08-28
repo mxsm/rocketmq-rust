@@ -48,55 +48,13 @@ impl GetRouteInfoRequestHeader {
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::CheetahString;
-
     use super::*;
 
     #[test]
-    fn get_route_info_request_header_with_required_topic() {
-        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            accept_standard_json_only: Some(true),
-            topic_request_header: None,
-        };
-        assert_eq!(header.topic, CheetahString::from("testTopic"));
-        assert_eq!(header.accept_standard_json_only, Some(true));
-        assert!(header.topic_request_header.is_none());
-    }
+    fn new_sets_its_arguments_and_leaves_the_rpc_envelope_absent() {
+        let header = GetRouteInfoRequestHeader::new("topic-a", Some(true));
 
-    #[test]
-    fn get_route_info_request_header_with_optional_fields() {
-        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            accept_standard_json_only: None,
-            topic_request_header: Some(TopicRequestHeader::default()),
-        };
-        assert_eq!(header.topic, CheetahString::from("testTopic"));
-        assert!(header.accept_standard_json_only.is_none());
-        assert!(header.topic_request_header.is_some());
-    }
-
-    #[test]
-    fn get_route_info_request_header_with_empty_topic() {
-        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
-            topic: CheetahString::from(""),
-            accept_standard_json_only: Some(false),
-            topic_request_header: None,
-        };
-        assert_eq!(header.topic, CheetahString::from(""));
-        assert_eq!(header.accept_standard_json_only, Some(false));
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
-    fn get_route_info_request_header_with_long_topic() {
-        let long_topic = "a".repeat(1000);
-        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
-            topic: CheetahString::from(&long_topic),
-            accept_standard_json_only: Some(true),
-            topic_request_header: None,
-        };
-        assert_eq!(header.topic, CheetahString::from(&long_topic));
+        assert_eq!(header.topic, "topic-a");
         assert_eq!(header.accept_standard_json_only, Some(true));
         assert!(header.topic_request_header.is_none());
     }

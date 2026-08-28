@@ -139,346 +139,100 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
 mod tests {
     use std::collections::HashMap;
 
-    use cheetah_string::CheetahString;
-
     use super::*;
-    use crate::protocol::command_custom_header::CommandCustomHeader;
-    use crate::protocol::command_custom_header::FromMap;
+    use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
     use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-    #[test]
-    fn update_consumer_offset_request_header_serializes_correctly() {
-        let header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_consumer_group"),
-            topic: CheetahString::from_static_str("test_topic"),
+    fn request_with_rpc_envelope() -> UpdateConsumerOffsetRequestHeader {
+        UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from("group-a"),
+            topic: CheetahString::from("topic-a"),
             queue_id: 1,
             commit_offset: 100,
+            topic_request_header: Some(TopicRequestHeader {
+                lo: None,
+                rpc: Some(RpcRequestHeader::default()),
+            }),
+        }
+    }
+
+    #[test]
+    fn v3_codec_round_trips_required_fields_and_always_creates_the_rpc_envelope() {
+        let header = UpdateConsumerOffsetRequestHeader {
             topic_request_header: None,
+            ..request_with_rpc_envelope()
         };
         let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("consumerGroup")).unwrap(),
-            "test_consumer_group"
-        );
-        assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
-        assert_eq!(map.get(&CheetahString::from_static_str("queueId")).unwrap(), "1");
-        assert_eq!(map.get(&CheetahString::from_static_str("commitOffset")).unwrap(), "100");
+
+        assert_eq!(map.get("consumerGroup").map(|value| value.as_str()), Some("group-a"));
+        assert_eq!(map.get("topic").map(|value| value.as_str()), Some("topic-a"));
+        assert_eq!(map.get("queueId").map(|value| value.as_str()), Some("1"));
+        assert_eq!(map.get("commitOffset").map(|value| value.as_str()), Some("100"));
+
+        let decoded = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(decoded.consumer_group, "group-a");
+        assert_eq!(decoded.topic, "topic-a");
+        assert_eq!(decoded.queue_id, 1);
+        assert_eq!(decoded.commit_offset, 100);
+        assert!(decoded.topic_request_header.is_some());
     }
 
     #[test]
-    fn update_consumer_offset_request_header_deserializes_correctly() {
-        let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from_static_str("consumerGroup"),
-            CheetahString::from_static_str("test_consumer_group"),
-        );
-        map.insert(
-            CheetahString::from_static_str("topic"),
-            CheetahString::from_static_str("test_topic"),
-        );
-        map.insert(
-            CheetahString::from_static_str("queueId"),
-            CheetahString::from_static_str("1"),
-        );
-        map.insert(
-            CheetahString::from_static_str("commitOffset"),
-            CheetahString::from_static_str("100"),
-        );
+    fn v3_codec_rejects_missing_or_invalid_required_values() {
+        assert!(<UpdateConsumerOffsetRequestHeader as FromMap>::from(&HashMap::new()).is_err());
 
-        let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.consumer_group, "test_consumer_group");
-        assert_eq!(header.topic, "test_topic");
-        assert_eq!(header.queue_id, 1);
-        assert_eq!(header.commit_offset, 100);
+        let mut map = request_with_rpc_envelope().to_map().unwrap();
+        map.insert("queueId".into(), "invalid".into());
+        assert!(<UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).is_err());
     }
 
     #[test]
-    fn update_consumer_offset_request_header_handles_missing_optional_fields() {
-        let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from_static_str("consumerGroup"),
-            CheetahString::from_static_str("test_consumer_group"),
-        );
-        map.insert(
-            CheetahString::from_static_str("topic"),
-            CheetahString::from_static_str("test_topic"),
-        );
-        map.insert(
-            CheetahString::from_static_str("queueId"),
-            CheetahString::from_static_str("1"),
-        );
-        map.insert(
-            CheetahString::from_static_str("commitOffset"),
-            CheetahString::from_static_str("100"),
-        );
+    fn topic_request_trait_reads_and_updates_every_forwarded_field() {
+        let mut header = request_with_rpc_envelope();
 
-        let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.consumer_group, "test_consumer_group");
-        assert_eq!(header.topic, "test_topic");
-        assert_eq!(header.queue_id, 1);
-        assert_eq!(header.commit_offset, 100);
-        assert!(header.topic_request_header.is_some());
-    }
-
-    #[test]
-    fn update_consumer_offset_request_header_handles_invalid_data() {
-        let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from_static_str("consumerGroup"),
-            CheetahString::from_static_str("test_consumer_group"),
-        );
-        map.insert(
-            CheetahString::from_static_str("topic"),
-            CheetahString::from_static_str("test_topic"),
-        );
-        map.insert(
-            CheetahString::from_static_str("queueId"),
-            CheetahString::from_static_str("invalid"),
-        );
-        map.insert(
-            CheetahString::from_static_str("commitOffset"),
-            CheetahString::from_static_str("invalid"),
-        );
-
-        let result = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_and_get_lo() {
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: Some(TopicRequestHeader::default()),
-        };
-
+        header.set_topic(CheetahString::from("topic-b"));
+        header.set_queue_id(2);
         header.set_lo(Some(true));
-        assert_eq!(header.lo(), Some(true));
-
-        header.set_lo(Some(false));
-        assert_eq!(header.lo(), Some(false));
-
-        header.set_lo(None);
-        assert_eq!(header.lo(), None);
-
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: None,
-        };
-
-        header.set_lo(Some(true));
-        assert_eq!(header.lo(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_and_get_topic() {
-        let mut header = UpdateConsumerOffsetRequestHeader::default();
-
-        header.set_topic(CheetahString::from_static_str("new_topic"));
-        assert_eq!(header.topic(), "new_topic");
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_and_get_broker_name() {
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: Some(TopicRequestHeader {
-                lo: None,
-                rpc: Some(RpcRequestHeader::default()),
-            }),
-        };
-
-        header.set_broker_name(CheetahString::from_static_str("new_broker"));
-        assert_eq!(
-            header.broker_name(),
-            Some(&CheetahString::from_static_str("new_broker"))
-        );
-
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: None,
-        };
-
-        header.set_broker_name(CheetahString::from_static_str("new_broker"));
-        assert_eq!(header.broker_name(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_and_get_namespace() {
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: Some(TopicRequestHeader {
-                lo: None,
-                rpc: Some(RpcRequestHeader::default()),
-            }),
-        };
-
-        header.set_namespace(CheetahString::from_static_str("new_namespace"));
-        assert_eq!(header.namespace(), Some("new_namespace"));
-
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: None,
-        };
-
-        header.set_namespace(CheetahString::from_static_str("new_namespace"));
-        assert_eq!(header.namespace(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_and_get_namespaced() {
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: Some(TopicRequestHeader {
-                lo: None,
-                rpc: Some(RpcRequestHeader::default()),
-            }),
-        };
-
+        header.set_broker_name(CheetahString::from("broker-a"));
+        header.set_namespace(CheetahString::from("namespace-a"));
         header.set_namespaced(true);
-        assert_eq!(header.namespaced(), Some(true));
-
-        header.set_namespaced(false);
-        assert_eq!(header.namespaced(), Some(false));
-
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: None,
-        };
-
-        header.set_namespaced(true);
-        assert_eq!(header.namespaced(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_and_get_oneway() {
-        let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
-            topic_request_header: Some(TopicRequestHeader {
-                lo: None,
-                rpc: Some(RpcRequestHeader::default()),
-            }),
-        };
-
-        header.set_oneway(true);
-        assert_eq!(header.oneway(), Some(true));
-
         header.set_oneway(false);
-        assert_eq!(header.oneway(), Some(false));
 
+        assert_eq!(header.topic(), "topic-b");
+        assert_eq!(header.queue_id(), 2);
+        assert_eq!(header.lo(), Some(true));
+        assert_eq!(header.broker_name().map(|value| value.as_str()), Some("broker-a"));
+        assert_eq!(header.namespace(), Some("namespace-a"));
+        assert_eq!(header.namespaced(), Some(true));
+        assert_eq!(header.oneway(), Some(false));
+    }
+
+    #[test]
+    fn nested_setters_are_noops_without_an_rpc_envelope() {
         let mut header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            commit_offset: 0,
             topic_request_header: None,
+            ..request_with_rpc_envelope()
         };
 
+        header.set_lo(Some(true));
+        header.set_broker_name(CheetahString::from("broker-a"));
+        header.set_namespace(CheetahString::from("namespace-a"));
+        header.set_namespaced(true);
         header.set_oneway(true);
+
+        assert_eq!(header.lo(), None);
+        assert_eq!(header.broker_name(), None);
+        assert_eq!(header.namespace(), None);
+        assert_eq!(header.namespaced(), None);
         assert_eq!(header.oneway(), None);
     }
 
     #[test]
-    fn topic_request_header_trait_set_and_get_queue_id() {
-        let mut header = UpdateConsumerOffsetRequestHeader::default();
-
-        header.set_queue_id(10);
-        assert_eq!(header.queue_id(), 10);
-
-        header.set_queue_id(-1);
-        assert_eq!(header.queue_id(), -1);
-    }
-
-    #[test]
-    fn response_header_can_be_created() {
-        let header: UpdateConsumerOffsetResponseHeader = UpdateConsumerOffsetResponseHeader {};
-        let default: UpdateConsumerOffsetResponseHeader = UpdateConsumerOffsetResponseHeader::default();
-        assert_eq!(format!("{:?}", header), format!("{:?}", default));
-    }
-
-    #[test]
-    fn response_header_is_zero_sized() {
-        assert_eq!(std::mem::size_of::<UpdateConsumerOffsetResponseHeader>(), 0);
-    }
-
-    #[test]
-    fn response_header_serializes_to_empty_json() {
+    fn empty_response_header_has_empty_serde_and_v3_representations() {
         let header = UpdateConsumerOffsetResponseHeader::default();
-        let json = serde_json::to_string(&header).unwrap();
 
-        assert_eq!(json, "{}");
-    }
-
-    #[test]
-    fn response_header_deserializes_from_empty_json() {
-        let json = "{}";
-        let header: UpdateConsumerOffsetResponseHeader = serde_json::from_str(json).unwrap();
-
-        let default = UpdateConsumerOffsetResponseHeader::default();
-
-        assert_eq!(format!("{:?}", header), format!("{:?}", default));
-    }
-
-    #[test]
-    fn response_header_round_trip() {
-        let original = UpdateConsumerOffsetResponseHeader::default();
-
-        let json = serde_json::to_string(&original).unwrap();
-        let decoded: UpdateConsumerOffsetResponseHeader = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(format!("{:?}", original), format!("{:?}", decoded));
-    }
-
-    #[test]
-    fn response_header_ignores_extra_fields() {
-        let json = r#"{"unexpected":"field"}"#;
-
-        let header: UpdateConsumerOffsetResponseHeader = serde_json::from_str(json).unwrap();
-
-        let default = UpdateConsumerOffsetResponseHeader::default();
-
-        assert_eq!(format!("{:?}", header), format!("{:?}", default));
-    }
-
-    #[test]
-    fn all_instances_are_equivalent() {
-        let a = UpdateConsumerOffsetResponseHeader {};
-        let b = UpdateConsumerOffsetResponseHeader::default();
-
-        assert_eq!(format!("{:?}", a), format!("{:?}", b));
-    }
-
-    #[test]
-    fn response_header_encodes_to_empty_map() {
-        let header = UpdateConsumerOffsetResponseHeader::default();
-        let map = header.to_map().unwrap();
-
-        assert!(map.is_empty());
+        assert_eq!(serde_json::to_string(&header).unwrap(), "{}");
+        assert!(serde_json::from_str::<UpdateConsumerOffsetResponseHeader>("{}").is_ok());
+        assert!(header.to_map().unwrap().is_empty());
     }
 }

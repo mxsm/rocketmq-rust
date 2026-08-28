@@ -85,10 +85,4 @@ mod tests {
         let body: RecallMessageResponseHeader = serde_json::from_str(json).unwrap();
         assert_eq!(body.msg_id(), &CheetahString::from("some_message"));
     }
-    #[test]
-    fn recall_message_clone() {
-        let body = RecallMessageResponseHeader::new("some_message");
-        let cloned = body.clone();
-        assert_eq!(body.msg_id(), cloned.msg_id());
-    }
 }

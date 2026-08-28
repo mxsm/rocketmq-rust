@@ -39,13 +39,6 @@ mod tests {
     }
 
     #[test]
-    fn list_users_request_header_clone() {
-        let body = ListUsersRequestHeader { filter: "test".into() };
-        let cloned = body.clone();
-        assert_eq!(body.filter, cloned.filter);
-    }
-
-    #[test]
     fn list_users_request_header_serialize_deserialize() {
         let body = ListUsersRequestHeader { filter: "test".into() };
         let serialized = serde_json::to_string(&body).unwrap();

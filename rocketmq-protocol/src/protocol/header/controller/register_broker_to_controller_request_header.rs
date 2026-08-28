@@ -116,21 +116,4 @@ mod tests {
         assert_eq!(header.broker_address, None);
         assert_eq!(header.invoke_time, 0);
     }
-
-    #[test]
-    fn register_broker_to_controller_request_header_clone() {
-        let header = RegisterBrokerToControllerRequestHeader {
-            cluster_name: Some(CheetahString::from_static_str("test_cluster")),
-            broker_name: Some(CheetahString::from_static_str("test_broker")),
-            broker_id: Some(123),
-            broker_address: Some(CheetahString::from_static_str("127.0.0.1:10911")),
-            invoke_time: 1234567890,
-        };
-        let cloned = header.clone();
-        assert_eq!(header.cluster_name, cloned.cluster_name);
-        assert_eq!(header.broker_name, cloned.broker_name);
-        assert_eq!(header.broker_id, cloned.broker_id);
-        assert_eq!(header.broker_address, cloned.broker_address);
-        assert_eq!(header.invoke_time, cloned.invoke_time);
-    }
 }

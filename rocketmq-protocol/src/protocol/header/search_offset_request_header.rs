@@ -138,326 +138,100 @@ impl TopicRequestHeaderTrait for SearchOffsetRequestHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::command_custom_header::CommandCustomHeader;
-    use crate::protocol::command_custom_header::FromMap;
+    use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-    #[test]
-    fn search_offset_request_header_default() {
-        let header = SearchOffsetRequestHeader::default();
-        assert_eq!(header.topic, CheetahString::default());
-        assert!(header.lite_topic.is_none());
-        assert_eq!(header.queue_id, 0);
-        assert_eq!(header.timestamp, 0);
-        assert_eq!(header.boundary_type, BoundaryType::Lower);
-    }
-
-    #[test]
-    fn search_offset_request_header_creation() {
-        let header = SearchOffsetRequestHeader {
-            topic: CheetahString::from("test_topic"),
-            lite_topic: None,
+    fn header_with_rpc_envelope() -> SearchOffsetRequestHeader {
+        SearchOffsetRequestHeader {
+            topic: CheetahString::from("topic-a"),
+            lite_topic: Some(CheetahString::from("lite-topic-a")),
             queue_id: 1,
-            timestamp: 1702345678000,
-            boundary_type: BoundaryType::Upper,
-            topic_request_header: None,
-        };
-
-        assert_eq!(header.topic, CheetahString::from("test_topic"));
-        assert!(header.lite_topic.is_none());
-        assert_eq!(header.queue_id, 1);
-        assert_eq!(header.timestamp, 1702345678000);
-        assert_eq!(header.boundary_type, BoundaryType::Upper);
-    }
-
-    #[test]
-    fn search_offset_request_header_maps_lite_topic_like_java_fast_header() {
-        let header = SearchOffsetRequestHeader {
-            topic: CheetahString::from("parent_topic"),
-            lite_topic: Some(CheetahString::from("lite_topic")),
-            queue_id: 2,
-            timestamp: 1702345678999,
-            boundary_type: BoundaryType::Upper,
-            topic_request_header: None,
-        };
-
-        let map = header.to_map().unwrap();
-        assert_eq!(map.get("topic").map(|value| value.as_str()), Some("parent_topic"));
-        assert_eq!(map.get("liteTopic").map(|value| value.as_str()), Some("lite_topic"));
-
-        let decoded = <SearchOffsetRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(decoded.topic, "parent_topic");
-        assert_eq!(decoded.lite_topic.as_deref(), Some("lite_topic"));
-    }
-
-    #[test]
-    fn search_offset_request_header_serializes_to_json() {
-        let header = SearchOffsetRequestHeader {
-            topic: CheetahString::from("my_topic"),
-            lite_topic: Some(CheetahString::from("my_lite_topic")),
-            queue_id: 2,
-            timestamp: 1702345678999,
-            boundary_type: BoundaryType::Upper,
-            topic_request_header: None,
-        };
-
-        let json = serde_json::to_string(&header).unwrap();
-
-        // Verify camelCase field names and uppercase enum
-        assert!(json.contains(r#""topic":"my_topic""#));
-        assert!(json.contains(r#""liteTopic":"my_lite_topic""#));
-        assert!(json.contains(r#""queueId":2"#));
-        assert!(json.contains(r#""timestamp":1702345678999"#));
-        assert!(json.contains(r#""boundaryType":"UPPER""#));
-    }
-
-    #[test]
-    fn search_offset_request_header_deserializes_from_json() {
-        let json = r#"{
-            "topic": "test_topic",
-            "queueId": 3,
-            "timestamp": 1702345678123,
-            "boundaryType": "LOWER"
-        }"#;
-
-        let header: SearchOffsetRequestHeader = serde_json::from_str(json).unwrap();
-
-        assert_eq!(header.topic, CheetahString::from("test_topic"));
-        assert_eq!(header.queue_id, 3);
-        assert_eq!(header.timestamp, 1702345678123);
-        assert_eq!(header.boundary_type, BoundaryType::Lower);
-    }
-
-    #[test]
-    fn search_offset_request_header_deserializes_with_uppercase_boundary_type() {
-        let json = r#"{
-            "topic": "topic1",
-            "queueId": 0,
-            "timestamp": 1000000000,
-            "boundaryType": "UPPER"
-        }"#;
-
-        let header: SearchOffsetRequestHeader = serde_json::from_str(json).unwrap();
-
-        assert_eq!(header.boundary_type, BoundaryType::Upper);
-    }
-
-    #[test]
-    fn search_offset_request_header_deserializes_with_lowercase_boundary_type() {
-        let json = r#"{
-            "topic": "topic2",
-            "queueId": 5,
-            "timestamp": 2000000000,
-            "boundaryType": "lower"
-        }"#;
-
-        let header: SearchOffsetRequestHeader = serde_json::from_str(json).unwrap();
-
-        assert_eq!(header.boundary_type, BoundaryType::Lower);
-    }
-
-    #[test]
-    fn search_offset_request_header_boundary_type_defaults_to_lower_for_invalid_value() {
-        let json = r#"{
-            "topic": "topic3",
-            "queueId": 1,
-            "timestamp": 3000000000,
-            "boundaryType": "invalid"
-        }"#;
-
-        let header: SearchOffsetRequestHeader = serde_json::from_str(json).unwrap();
-
-        // Matches Java behavior: defaults to Lower
-        assert_eq!(header.boundary_type, BoundaryType::Lower);
-    }
-
-    #[test]
-    fn search_offset_request_header_roundtrip_serialization() {
-        let original = SearchOffsetRequestHeader {
-            topic: CheetahString::from("roundtrip_topic"),
-            lite_topic: Some(CheetahString::from("roundtrip_lite_topic")),
-            queue_id: 10,
-            timestamp: 1702400000000,
-            boundary_type: BoundaryType::Upper,
-            topic_request_header: None,
-        };
-
-        let json = serde_json::to_string(&original).unwrap();
-        let deserialized: SearchOffsetRequestHeader = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.topic, original.topic);
-        assert_eq!(deserialized.lite_topic, original.lite_topic);
-        assert_eq!(deserialized.queue_id, original.queue_id);
-        assert_eq!(deserialized.timestamp, original.timestamp);
-        assert_eq!(deserialized.boundary_type, original.boundary_type);
-    }
-
-    #[test]
-    fn search_offset_request_header_with_negative_queue_id() {
-        let header = SearchOffsetRequestHeader {
-            topic: CheetahString::from("test"),
-            lite_topic: None,
-            queue_id: -1,
-            timestamp: 1000,
-            boundary_type: BoundaryType::Lower,
-            topic_request_header: None,
-        };
-
-        assert_eq!(header.queue_id, -1);
-    }
-
-    #[test]
-    fn search_offset_request_header_with_empty_topic() {
-        let header = SearchOffsetRequestHeader {
-            topic: CheetahString::new(),
-            lite_topic: None,
-            queue_id: 0,
-            timestamp: 0,
-            boundary_type: BoundaryType::Lower,
-            topic_request_header: None,
-        };
-
-        assert!(header.topic.is_empty());
-    }
-
-    #[test]
-    fn search_offset_request_header_with_large_timestamp() {
-        let header = SearchOffsetRequestHeader {
-            topic: CheetahString::from("test"),
-            lite_topic: None,
-            queue_id: 0,
             timestamp: i64::MAX,
             boundary_type: BoundaryType::Upper,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader::default()),
+                lo: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn v3_codec_preserves_java_keys_and_numeric_boundaries() {
+        let header = SearchOffsetRequestHeader {
             topic_request_header: None,
+            ..header_with_rpc_envelope()
         };
+        let map = header.to_map().unwrap();
 
-        assert_eq!(header.timestamp, i64::MAX);
+        assert_eq!(map.get("topic").map(|value| value.as_str()), Some("topic-a"));
+        assert_eq!(map.get("liteTopic").map(|value| value.as_str()), Some("lite-topic-a"));
 
-        let json = serde_json::to_string(&header).unwrap();
-        let deserialized: SearchOffsetRequestHeader = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.timestamp, i64::MAX);
-    }
-
-    // Tests for TopicRequestHeaderTrait implementation
-    #[test]
-    fn topic_request_header_trait_set_and_get_topic() {
-        let mut header = SearchOffsetRequestHeader::default();
-        let topic = CheetahString::from("test_topic");
-
-        header.set_topic(topic.clone());
-        assert_eq!(header.topic(), &topic);
+        let decoded = <SearchOffsetRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(decoded.topic, "topic-a");
+        assert_eq!(decoded.lite_topic.as_deref(), Some("lite-topic-a"));
+        assert_eq!(decoded.queue_id, 1);
+        assert_eq!(decoded.timestamp, i64::MAX);
+        assert_eq!(decoded.boundary_type, BoundaryType::Upper);
     }
 
     #[test]
-    fn topic_request_header_trait_set_and_get_queue_id() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        header.set_queue_id(5);
-        assert_eq!(header.queue_id(), 5);
-
-        header.set_queue_id(-1);
-        assert_eq!(header.queue_id(), -1);
-    }
-
-    #[test]
-    fn topic_request_header_trait_lo_with_none_topic_request_header() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        // Should not panic when topic_request_header is None
-        header.set_lo(Some(true));
-        assert_eq!(header.lo(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_lo_with_some_topic_request_header() {
-        let mut header = SearchOffsetRequestHeader {
-            topic: CheetahString::from("test"),
-            lite_topic: None,
-            queue_id: 0,
-            timestamp: 0,
-            boundary_type: BoundaryType::Lower,
-            topic_request_header: Some(TopicRequestHeader::default()),
+    fn serde_uses_java_names_and_the_uppercase_boundary_value() {
+        let header = SearchOffsetRequestHeader {
+            topic_request_header: None,
+            ..header_with_rpc_envelope()
         };
+        let value = serde_json::to_value(&header).unwrap();
 
+        assert_eq!(value["topic"], "topic-a");
+        assert_eq!(value["liteTopic"], "lite-topic-a");
+        assert_eq!(value["queueId"], 1);
+        assert_eq!(value["timestamp"], i64::MAX);
+        assert_eq!(value["boundaryType"], "UPPER");
+
+        let decoded: SearchOffsetRequestHeader = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.boundary_type, BoundaryType::Upper);
+    }
+
+    #[test]
+    fn serde_matches_java_fallback_for_non_upper_boundary_values() {
+        for boundary_type in ["LOWER", "lower", "invalid"] {
+            let json = format!(r#"{{"topic":"topic-a","queueId":1,"timestamp":1,"boundaryType":"{boundary_type}"}}"#);
+            let decoded: SearchOffsetRequestHeader = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(decoded.boundary_type, BoundaryType::Lower);
+        }
+    }
+
+    #[test]
+    fn topic_request_trait_reads_and_updates_every_forwarded_field() {
+        let mut header = header_with_rpc_envelope();
+
+        header.set_topic(CheetahString::from("topic-b"));
+        header.set_queue_id(2);
         header.set_lo(Some(true));
-        assert_eq!(header.lo(), Some(true));
-
-        header.set_lo(Some(false));
-        assert_eq!(header.lo(), Some(false));
-
-        header.set_lo(None);
-        assert_eq!(header.lo(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_broker_name_with_none() {
-        let header = SearchOffsetRequestHeader::default();
-        assert_eq!(header.broker_name(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_broker_name_with_none_topic_request_header() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        // Should not panic when topic_request_header is None
-        header.set_broker_name(CheetahString::from("broker1"));
-        assert_eq!(header.broker_name(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_namespace_with_none() {
-        let header = SearchOffsetRequestHeader::default();
-        assert_eq!(header.namespace(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_namespace_with_none_topic_request_header() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        // Should not panic when topic_request_header is None
-        header.set_namespace(CheetahString::from("namespace1"));
-        assert_eq!(header.namespace(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_namespaced_with_none() {
-        let header = SearchOffsetRequestHeader::default();
-        assert_eq!(header.namespaced(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_namespaced_with_none_topic_request_header() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        // Should not panic when topic_request_header is None
-        header.set_namespaced(true);
-        assert_eq!(header.namespaced(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_oneway_with_none() {
-        let header = SearchOffsetRequestHeader::default();
-        assert_eq!(header.oneway(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_set_oneway_with_none_topic_request_header() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        // Should not panic when topic_request_header is None
-        header.set_oneway(true);
-        assert_eq!(header.oneway(), None);
-    }
-
-    #[test]
-    fn topic_request_header_trait_all_methods_safe_with_none() {
-        let mut header = SearchOffsetRequestHeader::default();
-
-        // All these operations should be safe and not panic
-        header.set_lo(Some(true));
-        header.set_broker_name(CheetahString::from("broker"));
-        header.set_namespace(CheetahString::from("ns"));
+        header.set_broker_name(CheetahString::from("broker-a"));
+        header.set_namespace(CheetahString::from("namespace-a"));
         header.set_namespaced(true);
         header.set_oneway(false);
+
+        assert_eq!(header.topic(), "topic-b");
+        assert_eq!(header.queue_id(), 2);
+        assert_eq!(header.lo(), Some(true));
+        assert_eq!(header.broker_name().map(|value| value.as_str()), Some("broker-a"));
+        assert_eq!(header.namespace(), Some("namespace-a"));
+        assert_eq!(header.namespaced(), Some(true));
+        assert_eq!(header.oneway(), Some(false));
+    }
+
+    #[test]
+    fn nested_setters_are_noops_without_an_rpc_envelope() {
+        let mut header = SearchOffsetRequestHeader::default();
+
+        header.set_lo(Some(true));
+        header.set_broker_name(CheetahString::from("broker-a"));
+        header.set_namespace(CheetahString::from("namespace-a"));
+        header.set_namespaced(true);
+        header.set_oneway(true);
 
         assert_eq!(header.lo(), None);
         assert_eq!(header.broker_name(), None);

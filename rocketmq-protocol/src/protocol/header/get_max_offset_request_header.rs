@@ -136,381 +136,68 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
 
 #[cfg(test)]
 mod tests {
-    use crate::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-    use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+    use super::*;
     use crate::rpc::rpc_request_header::RpcRequestHeader;
-    use crate::rpc::topic_request_header::TopicRequestHeader;
-    use cheetah_string::CheetahString;
-    use cheetah_string::{self};
-    #[test]
-    fn get_max_offset_request_header_with_required_fields_only() {
-        let header = GetMaxOffsetRequestHeader {
-            topic: cheetah_string::CheetahString::from("testTopic"),
+
+    fn header_with_rpc_envelope() -> GetMaxOffsetRequestHeader {
+        GetMaxOffsetRequestHeader {
+            topic: CheetahString::from("topic-a"),
             queue_id: 1,
             committed: true,
-            topic_request_header: None,
-        };
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader::default()),
+                lo: None,
+            }),
+        }
+    }
 
-        assert_eq!(header.topic, cheetah_string::CheetahString::from("testTopic"));
-        assert_eq!(header.queue_id, 1);
+    #[test]
+    fn serde_defaults_committed_to_java_default() {
+        let header: GetMaxOffsetRequestHeader = serde_json::from_str(r#"{"topic":"topic-a","queueId":1}"#).unwrap();
+
         assert!(header.committed);
-        assert!(header.topic_request_header.is_none());
     }
 
     #[test]
-    fn get_max_offset_request_header_with_all_fields() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
+    fn topic_request_trait_reads_and_updates_every_forwarded_field() {
+        let mut header = header_with_rpc_envelope();
 
-        assert_eq!(header.topic, CheetahString::from("testTopic"));
-        assert_eq!(header.queue_id, 1);
-        assert!(header.committed);
-        assert!(header.topic_request_header.is_some());
-    }
+        header.set_topic(CheetahString::from("topic-b"));
+        header.set_queue_id(2);
+        header.set_lo(Some(true));
+        header.set_broker_name(CheetahString::from("broker-a"));
+        header.set_namespace(CheetahString::from("namespace-a"));
+        header.set_namespaced(true);
+        header.set_oneway(false);
 
-    #[test]
-    fn get_max_offset_request_header_with_empty_topic() {
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from(""),
-            queue_id: 0,
-            committed: false,
-            topic_request_header: None,
-        };
-        assert_eq!(header.topic, CheetahString::from(""));
-        assert_eq!(header.queue_id, 0);
-        assert!(!header.committed);
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
-    fn get_max_offset_request_header_with_long_values() {
-        let long_string = "a".repeat(1000);
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from(&long_string),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: None,
-        };
-        assert_eq!(header.topic, CheetahString::from(&long_string));
-        assert_eq!(header.queue_id, 1);
-        assert!(header.committed);
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
-    fn fn_lo() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-
+        assert_eq!(header.topic(), "topic-b");
+        assert_eq!(header.queue_id(), 2);
         assert_eq!(header.lo(), Some(true));
-    }
-
-    #[test]
-    fn fn_set_lo() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-
-        header.set_lo(Some(false));
-        assert_eq!(header.lo(), Some(false));
-    }
-
-    #[test]
-    fn fn_topic() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        assert_eq!(header.topic(), &CheetahString::from("testTopic"));
-    }
-
-    #[test]
-    fn fn_set_topic() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        header.set_topic(CheetahString::from("test_topic"));
-        assert_eq!(header.topic(), &CheetahString::from("test_topic"));
-    }
-
-    #[test]
-    fn fn_broker_name() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        assert_eq!(header.broker_name(), Some(&CheetahString::from("broker-0")));
-    }
-
-    #[test]
-    fn fn_set_broker_name() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        header.set_broker_name(CheetahString::from("broker-1"));
-        assert_eq!(header.broker_name(), Some(&CheetahString::from("broker-1")));
-    }
-
-    #[test]
-    fn fn_namespace() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        assert_eq!(header.namespace(), Some(CheetahString::from("ns1")).as_deref());
-    }
-
-    #[test]
-    fn fn_set_namespace() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        header.set_namespace(CheetahString::from("ns2"));
-        assert_eq!(header.namespace(), Some(CheetahString::from("ns2")).as_deref());
-    }
-
-    #[test]
-    fn fn_namespaced() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
+        assert_eq!(header.broker_name().map(|value| value.as_str()), Some("broker-a"));
+        assert_eq!(header.namespace(), Some("namespace-a"));
         assert_eq!(header.namespaced(), Some(true));
-    }
-
-    #[test]
-    fn fn_set_namespaced() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        header.set_namespaced(false);
-        assert_eq!(header.namespaced(), Some(false));
-    }
-
-    #[test]
-    fn fn_oneway() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
         assert_eq!(header.oneway(), Some(false));
     }
 
     #[test]
-    fn fn_set_oneway() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
+    fn nested_setters_are_noops_without_an_rpc_envelope() {
         let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
+            topic: CheetahString::from("topic-a"),
             queue_id: 1,
             committed: true,
-            topic_request_header: Some(topic_req),
+            topic_request_header: None,
         };
+
+        header.set_lo(Some(true));
+        header.set_broker_name(CheetahString::from("broker-a"));
+        header.set_namespace(CheetahString::from("namespace-a"));
+        header.set_namespaced(true);
         header.set_oneway(true);
-        assert_eq!(header.oneway(), Some(true));
-    }
 
-    #[test]
-    fn fn_queue_id() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        assert_eq!(header.queue_id(), 1);
-    }
-
-    #[test]
-    fn fn_set_queue_id() {
-        let rpc_header = RpcRequestHeader {
-            namespace: Some(CheetahString::from("ns1")),
-            namespaced: Some(true),
-            broker_name: Some(CheetahString::from("broker-0")),
-            oneway: Some(false),
-        };
-        let topic_req = TopicRequestHeader {
-            rpc_request_header: Some(rpc_header),
-            lo: Some(true),
-        };
-        let mut header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("testTopic"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(topic_req),
-        };
-        header.set_queue_id(2);
-        assert_eq!(header.queue_id(), 2);
+        assert_eq!(header.lo(), None);
+        assert_eq!(header.broker_name(), None);
+        assert_eq!(header.namespace(), None);
+        assert_eq!(header.namespaced(), None);
+        assert_eq!(header.oneway(), None);
     }
 }

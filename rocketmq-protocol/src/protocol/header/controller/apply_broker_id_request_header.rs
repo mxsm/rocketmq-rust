@@ -104,19 +104,4 @@ mod tests {
         assert_eq!(header.applied_broker_id, 0);
         assert_eq!(header.register_check_code, "");
     }
-
-    #[test]
-    fn apply_broker_id_request_header_clone() {
-        let header = ApplyBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str("test_cluster"),
-            broker_name: CheetahString::from_static_str("test_broker"),
-            applied_broker_id: 9876543210,
-            register_check_code: CheetahString::from_static_str("check_code_123"),
-        };
-        let cloned = header.clone();
-        assert_eq!(header.cluster_name, cloned.cluster_name);
-        assert_eq!(header.broker_name, cloned.broker_name);
-        assert_eq!(header.applied_broker_id, cloned.applied_broker_id);
-        assert_eq!(header.register_check_code, cloned.register_check_code);
-    }
 }

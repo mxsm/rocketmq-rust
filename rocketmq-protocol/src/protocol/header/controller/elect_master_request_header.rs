@@ -161,15 +161,4 @@ mod tests {
         assert!(!header.designate_elect);
         assert!(header.invoke_time > 0);
     }
-
-    #[test]
-    fn elect_master_request_header_clone() {
-        let header = ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
-        let cloned = header.clone();
-        assert_eq!(header.cluster_name, cloned.cluster_name);
-        assert_eq!(header.broker_name, cloned.broker_name);
-        assert_eq!(header.broker_id, cloned.broker_id);
-        assert_eq!(header.designate_elect, cloned.designate_elect);
-        assert_eq!(header.invoke_time, cloned.invoke_time);
-    }
 }

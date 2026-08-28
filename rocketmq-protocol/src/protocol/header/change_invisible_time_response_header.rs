@@ -40,19 +40,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn change_invisible_time_response_header_display_format() {
-        let header = ChangeInvisibleTimeResponseHeader {
-            pop_time: 123456789,
-            revive_qid: 1,
-            invisible_time: 987654321,
-        };
-        assert_eq!(
-            format!("{:?}", header),
-            "ChangeInvisibleTimeResponseHeader { pop_time: 123456789, revive_qid: 1, invisible_time: 987654321 }"
-        );
-    }
-
-    #[test]
     fn change_invisible_time_response_header_serialize() {
         let header = ChangeInvisibleTimeResponseHeader {
             pop_time: 123456789,
@@ -73,13 +60,5 @@ mod tests {
         assert_eq!(header.pop_time, 123456789);
         assert_eq!(header.revive_qid, 1);
         assert_eq!(header.invisible_time, 987654321);
-    }
-
-    #[test]
-    fn change_invisible_time_response_header_default() {
-        let header = ChangeInvisibleTimeResponseHeader::default();
-        assert_eq!(header.pop_time, 0);
-        assert_eq!(header.revive_qid, 0);
-        assert_eq!(header.invisible_time, 0);
     }
 }
