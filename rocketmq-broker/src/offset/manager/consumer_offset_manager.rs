@@ -432,6 +432,47 @@ where
             map.insert(queue_id, offset);
         }
 
+        self.record_offset_change_with_locked();
+    }
+
+    /// Replaces a Store-rejected consumer offset only while it is still the value that was read.
+    ///
+    /// Unlike normal commits, a correction may move backwards. The expected-current comparison is
+    /// performed under the offset-table write lock so a concurrent forward commit cannot be
+    /// overwritten by a stale Store correction. The topic/group must still exist; `-1` denotes a
+    /// queue offset that was absent within that existing topic/group when the Store read began.
+    pub(crate) fn correct_offset_if_current(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        expected_current: i64,
+        corrected_offset: i64,
+    ) -> bool {
+        if corrected_offset < 0 {
+            return false;
+        }
+
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+        let key = build_topic_group_key(topic, group);
+
+        {
+            let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
+            let Some(map) = write_guard.get_mut(&key) else {
+                return false;
+            };
+            let current = map.get(&queue_id).copied().unwrap_or(-1);
+            if current != expected_current || current == corrected_offset {
+                return false;
+            }
+            map.insert(queue_id, corrected_offset);
+        }
+
+        self.record_offset_change_with_locked();
+        true
+    }
+
+    fn record_offset_change_with_locked(&self) {
         let committed_updates = self
             .consumer_offset_wrapper
             .version_change_counter
@@ -1468,6 +1509,148 @@ mod tests {
                 .load(Ordering::Acquire),
             after_first + 1
         );
+    }
+
+    #[test]
+    fn missing_and_cleaned_offsets_are_not_recreated_by_correction() {
+        let manager = new_manager();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+        let key = build_topic_group_key(&topic, &group);
+        let initial_change_count = manager
+            .consumer_offset_wrapper
+            .version_change_counter
+            .load(Ordering::Acquire);
+
+        assert!(!manager.correct_offset_if_current(&group, &topic, 0, -1, 2));
+        assert!(!manager.consumer_offset_wrapper.offset_table.read().contains_key(&key));
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            initial_change_count
+        );
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 100);
+        manager.clean_offset_by_group(&group);
+        let before_stale_correction = manager
+            .consumer_offset_wrapper
+            .version_change_counter
+            .load(Ordering::Acquire);
+
+        assert!(!manager.correct_offset_if_current(&group, &topic, 0, 100, 2));
+        assert!(!manager.consumer_offset_wrapper.offset_table.read().contains_key(&key));
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            before_stale_correction
+        );
+    }
+
+    #[test]
+    fn concurrent_forward_commit_makes_correction_stale_without_rollback_or_phantom() {
+        let manager = Arc::new(new_manager());
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 40);
+
+        let forward_commit = {
+            let manager = Arc::clone(&manager);
+            let barrier = Arc::new(Barrier::new(2));
+            let worker_barrier = Arc::clone(&barrier);
+            let worker = std::thread::spawn(move || {
+                worker_barrier.wait();
+                manager.commit_offset(
+                    "127.0.0.1:10911".into(),
+                    &CheetahString::from_static_str("group-a"),
+                    &CheetahString::from_static_str("topic-a"),
+                    0,
+                    41,
+                );
+                worker_barrier.wait();
+            });
+            (barrier, worker)
+        };
+
+        forward_commit.0.wait();
+        forward_commit.0.wait();
+        let before_stale_correction = manager
+            .consumer_offset_wrapper
+            .version_change_counter
+            .load(Ordering::Acquire);
+
+        assert!(!manager.correct_offset_if_current(&group, &topic, 0, 40, 2));
+        forward_commit
+            .1
+            .join()
+            .expect("forward offset commit worker should finish");
+
+        assert_eq!(manager.query_offset(&group, &topic, 0), 41);
+        assert_eq!(
+            manager.offset_table_snapshot(),
+            HashMap::from([(build_topic_group_key(&topic, &group), HashMap::from([(0, 41)]))])
+        );
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            before_stale_correction
+        );
+    }
+
+    #[test]
+    fn offset_correction_advances_version_exactly_once_and_false_paths_do_not() {
+        let mut manager = new_manager();
+        Arc::get_mut(&mut manager.broker_config)
+            .expect("test manager should own its broker config")
+            .consumer_offset_update_version_step = 1;
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 99);
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 100);
+        let before_stale_correction = manager
+            .consumer_offset_wrapper
+            .version_change_counter
+            .load(Ordering::Acquire);
+        let version_before_stale_correction = manager.data_version().counter();
+
+        assert!(!manager.correct_offset_if_current(&group, &topic, 0, 99, 2));
+        assert_eq!(manager.query_offset(&group, &topic, 0), 100);
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            before_stale_correction
+        );
+        assert_eq!(manager.data_version().counter(), version_before_stale_correction);
+
+        assert!(manager.correct_offset_if_current(&group, &topic, 0, 100, 2));
+        assert_eq!(manager.query_offset(&group, &topic, 0), 2);
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            before_stale_correction + 1
+        );
+        assert_eq!(manager.data_version().counter(), version_before_stale_correction + 1);
+
+        assert!(!manager.correct_offset_if_current(&group, &topic, 0, 2, 2));
+        assert!(!manager.correct_offset_if_current(&group, &topic, 0, 2, -1));
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            before_stale_correction + 1
+        );
+        assert_eq!(manager.data_version().counter(), version_before_stale_correction + 1);
     }
 
     #[test]

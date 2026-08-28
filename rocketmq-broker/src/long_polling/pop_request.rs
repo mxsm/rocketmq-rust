@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+use parking_lot::Mutex;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -26,6 +27,28 @@ use rocketmq_runtime::ResourcePermit;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+
+struct PopRequestPermit {
+    permit: Mutex<Option<ResourcePermit>>,
+}
+
+impl PopRequestPermit {
+    fn empty() -> Self {
+        Self {
+            permit: Mutex::new(None),
+        }
+    }
+
+    fn new(permit: ResourcePermit) -> Self {
+        Self {
+            permit: Mutex::new(Some(permit)),
+        }
+    }
+
+    fn release(&self) -> bool {
+        self.permit.lock().take().is_some()
+    }
+}
 
 pub struct PopRequest {
     remoting_command: RemotingCommand,
@@ -36,7 +59,7 @@ pub struct PopRequest {
     expired: u64,
     subscription_data: Option<SubscriptionData>,
     message_filter: Option<ArcMessageFilter>,
-    _resource_permit: Option<ResourcePermit>,
+    resource_permit: PopRequestPermit,
 }
 
 impl PopRequest {
@@ -76,7 +99,7 @@ impl PopRequest {
             expired,
             subscription_data,
             message_filter,
-            _resource_permit: None,
+            resource_permit: PopRequestPermit::empty(),
         }
     }
 
@@ -89,8 +112,13 @@ impl PopRequest {
         resource_permit: ResourcePermit,
     ) -> Self {
         let mut request = Self::new(remoting_command, ctx, expired, subscription_data, message_filter);
-        request._resource_permit = Some(resource_permit);
+        request.resource_permit = PopRequestPermit::new(resource_permit);
         request
+    }
+
+    /// Releases retained-request budget at the logical terminal, independently of node reclamation.
+    pub(crate) fn release_resource_permit(&self) -> bool {
+        self.resource_permit.release()
     }
 
     pub fn get_channel(&self) -> &Channel {

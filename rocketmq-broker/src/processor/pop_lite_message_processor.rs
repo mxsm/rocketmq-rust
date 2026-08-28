@@ -22,11 +22,9 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::constant::PermName;
-use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
-use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
@@ -52,6 +50,10 @@ use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::pop_message_processor::QueueLockManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
+
+pub(crate) mod core;
+pub(crate) mod response;
+mod resume;
 
 #[derive(Clone)]
 pub(crate) struct PopLiteMessagePolicy {
@@ -105,6 +107,42 @@ impl<MS: BrokerReadWriteStore> PopLiteOffsetCapability<MS> {
         }
     }
 
+    fn correct_offset_if_current(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        expected_current: i64,
+        corrected_offset: i64,
+    ) -> bool {
+        self.manager.upgrade().is_some_and(|manager| {
+            manager.correct_offset_if_current(group, topic, 0, expected_current, corrected_offset)
+        })
+    }
+
+    fn apply_store_offset_correction(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        expected_current: i64,
+        corrected_offset: i64,
+    ) -> Option<i64> {
+        let manager = self.manager.upgrade()?;
+        if expected_current == -1 {
+            manager.commit_offset(
+                CheetahString::from_static_str("PopLiteInitialOffset"),
+                group,
+                topic,
+                0,
+                corrected_offset,
+            );
+            let effective = manager.query_offset(group, topic, 0);
+            return (effective >= 0).then_some(effective);
+        }
+        manager
+            .correct_offset_if_current(group, topic, 0, expected_current, corrected_offset)
+            .then_some(corrected_offset)
+    }
+
     pub(crate) fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, offset: i64) -> bool {
         let Some(manager) = self.manager.upgrade() else {
             return false;
@@ -116,13 +154,29 @@ impl<MS: BrokerReadWriteStore> PopLiteOffsetCapability<MS> {
 
 pub(crate) struct PopLiteMessageStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
+    #[cfg(test)]
+    store_await_hook: parking_lot::Mutex<Option<PopLiteStoreAwaitHook>>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct PopLiteStoreAwaitHook {
+    entered: Arc<tokio::sync::Barrier>,
+    release: Arc<tokio::sync::Barrier>,
 }
 
 impl<MS: BrokerReadWriteStore> PopLiteMessageStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
+            #[cfg(test)]
+            store_await_hook: parking_lot::Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    fn set_store_await_hook(&self, entered: Arc<tokio::sync::Barrier>, release: Arc<tokio::sync::Barrier>) {
+        *self.store_await_hook.lock() = Some(PopLiteStoreAwaitHook { entered, release });
     }
 
     fn is_available(&self) -> bool {
@@ -136,6 +190,13 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageStoreCapability<MS> {
         offset: i64,
         batch_size: i32,
     ) -> Option<GetMessageResult> {
+        #[cfg(test)]
+        let store_await_hook = self.store_await_hook.lock().clone();
+        #[cfg(test)]
+        if let Some(hook) = store_await_hook {
+            hook.entered.wait().await;
+            hook.release.wait().await;
+        }
         self.escape_bridge
             .upgrade()?
             .get_message_from_local_store(group, topic, 0, offset, batch_size)
@@ -461,20 +522,15 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
                 &request_header.consumer_group,
                 0,
             ));
-            if !self
-                .context
-                .queue_lock_manager
-                .try_lock_with_key(lock_key.clone())
-                .await
-            {
+            let Some(queue_lock) = self.context.queue_lock_manager.try_acquire_with_key(lock_key).await else {
                 requeue_events.insert(lmq_name);
                 continue;
-            }
+            };
 
             let result = self
                 .pop_from_lmq(request_header, &attempt_id, &lmq_name, remaining)
                 .await;
-            self.context.queue_lock_manager.unlock_with_key(lock_key).await;
+            drop(queue_lock);
 
             match result {
                 PopLmqResult::Fetched {
@@ -532,9 +588,15 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
             return PopLmqResult::Requeue;
         }
 
-        let consume_offset = self.get_pop_offset(&request_header.consumer_group, lmq_name);
+        let (consume_offset, expected_current_offset) = self.get_pop_offset(&request_header.consumer_group, lmq_name);
         let Some(get_message_result) = self
-            .get_message(&request_header.consumer_group, lmq_name, consume_offset, remaining)
+            .get_message(
+                &request_header.consumer_group,
+                lmq_name,
+                consume_offset,
+                expected_current_offset,
+                remaining,
+            )
             .await
         else {
             return PopLmqResult::Skip;
@@ -565,20 +627,27 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         }
     }
 
-    fn get_pop_offset(&self, group: &CheetahString, lmq_name: &CheetahString) -> i64 {
-        let mut offset = self.context.consumer_offset.query_offset(group, lmq_name).max(0);
-        if let Some(reset_offset) = self
+    fn get_pop_offset(&self, group: &CheetahString, lmq_name: &CheetahString) -> (i64, i64) {
+        let reset_offset = self
             .context
             .consumer_offset
-            .query_then_erase_reset_offset(lmq_name, group)
-        {
+            .query_then_erase_reset_offset(lmq_name, group);
+        let expected_current = self.context.consumer_offset.query_offset(group, lmq_name);
+        if let Some(reset_offset) = reset_offset {
             self.consumer_order_info_manager.clear_block(lmq_name, group, 0);
-            self.context
-                .consumer_offset
-                .commit_offset("ResetOffset", group, lmq_name, reset_offset);
-            offset = reset_offset;
+            if reset_offset >= expected_current {
+                self.context
+                    .consumer_offset
+                    .commit_offset("ResetOffset", group, lmq_name, reset_offset);
+            } else {
+                self.context
+                    .consumer_offset
+                    .correct_offset_if_current(group, lmq_name, expected_current, reset_offset);
+            }
+            let effective_offset = self.context.consumer_offset.query_offset(group, lmq_name);
+            return (effective_offset.max(0), effective_offset);
         }
-        offset
+        (expected_current.max(0), expected_current)
     }
 
     async fn get_message(
@@ -586,6 +655,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         group: &CheetahString,
         lmq_name: &CheetahString,
         offset: i64,
+        expected_current_offset: i64,
         batch_size: i32,
     ) -> Option<GetMessageResult> {
         let result = self
@@ -606,14 +676,18 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         ) && result.next_begin_offset() >= 0
         {
             let correct_offset = result.next_begin_offset();
-            self.context
-                .consumer_offset
-                .commit_offset("CorrectOffset", group, lmq_name, correct_offset);
-            return self
-                .context
-                .message_store
-                .get_message(group, lmq_name, correct_offset, batch_size)
-                .await;
+            if let Some(effective_offset) = self.context.consumer_offset.apply_store_offset_correction(
+                group,
+                lmq_name,
+                expected_current_offset,
+                correct_offset,
+            ) {
+                return self
+                    .context
+                    .message_store
+                    .get_message(group, lmq_name, effective_offset, batch_size)
+                    .await;
+            }
         }
         Some(result)
     }
@@ -674,41 +748,14 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
 
         let dispatcher = &self.context.lite_event_dispatcher;
         dispatcher.touch_client(&request_header.client_id);
-        let pending_events = dispatcher.take_pending_events(&request_header.client_id);
-        let (body, requeue_events, fetched_count, order_count_info) =
-            self.pop_from_events(&request_header, pending_events).await;
-        if !requeue_events.is_empty() {
-            let (max_event_count, dispatch_delay_millis) = self.lite_dispatch_policy(&request_header.consumer_group);
-            dispatcher.do_full_dispatch_with_limit(
-                &request_header.client_id,
-                &request_header.consumer_group,
-                &requeue_events,
-                max_event_count,
-                dispatch_delay_millis,
-            );
-        }
-
-        let response_header = PopLiteMessageResponseHeader {
-            pop_time: current_millis() as i64,
-            invisible_time: request_header.invisible_time,
-            revive_qid: POP_ORDER_REVIVE_QUEUE,
-            start_offset_info: None,
-            msg_offset_info: None,
-            order_count_info: (fetched_count > 0).then_some(order_count_info).flatten(),
+        let result = match dispatcher.reserve_pending_events(&request_header.client_id) {
+            Some(reservation) => self.execute_pop_lite_batch(&request_header, reservation.commit()).await,
+            None => self.execute_pop_lite_without_events(&request_header).await,
         };
-        let mut response = self
-            .context
-            .command_factory
-            .create_success_response_command_with_header(response_header)
-            .set_opaque(request.opaque());
-
-        match body {
-            Some(body) => {
-                response.set_code_ref(ResponseCode::Success);
-                response.set_remark_mut("FOUND");
-                response.set_body_mut_ref(body);
-            }
-            None => match self.pop_lite_long_polling_service.polling(
+        let response_kind = if result.body.is_some() {
+            response::PopLiteResponseKind::Found
+        } else {
+            match self.pop_lite_long_polling_service.polling(
                 ctx,
                 request,
                 &request_header.client_id,
@@ -722,16 +769,11 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
                     }
                     return Ok(None);
                 }
-                PollingResult::PollingFull => {
-                    response.set_code_ref(ResponseCode::PollingFull);
-                    response.set_remark_mut("POP_LITE_POLLING_FULL");
-                }
-                _ => {
-                    response.set_code_ref(ResponseCode::PollingTimeout);
-                    response.set_remark_mut("NO_MESSAGE_IN_QUEUE");
-                }
-            },
-        }
+                PollingResult::PollingFull => response::PopLiteResponseKind::PollingFull,
+                _ => response::PopLiteResponseKind::PollingTimeout,
+            }
+        };
+        let response = self.compose_pop_lite_command(request.opaque(), &request_header, result, response_kind);
 
         Ok(Some(response))
     }
@@ -760,226 +802,4 @@ impl<MS: BrokerReadWriteStore> PopLiteLongPollingRequestProcessor for PopLiteMes
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::sync::Weak;
-    use std::time::Duration;
-
-    use crate::config::broker_config::BrokerConfig;
-    use cheetah_string::CheetahString;
-    use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
-
-    use super::PopLiteMessagePolicy;
-    use super::PopLiteMessageProcessor;
-    use super::PopLiteMessageProcessorContext;
-    use super::PopLiteMessageStoreCapability;
-    use super::PopLiteOffsetCapability;
-    use crate::broker_runtime::BrokerMessageStore;
-    use crate::broker_runtime::BrokerRuntime;
-    use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingPolicy;
-    use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
-    use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
-    use crate::processor::pop_message_processor::QueueLockManager;
-
-    fn pop_lite_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<PopLiteMessageProcessor<BrokerMessageStore>> {
-        let inner = runtime.runtime_state_mut();
-        let topic_config_manager = inner.topic_config_manager_handle();
-        let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
-        let lite_event_dispatcher = inner.lite_event_dispatcher().clone();
-        let service_context = inner.broker_service_context();
-        let queue_lock_manager = service_context
-            .clone()
-            .map(QueueLockManager::new_with_service_context)
-            .unwrap_or_else(QueueLockManager::new);
-        let long_polling = PopLiteLongPollingServiceContext::try_with_resource_budget(
-            PopLiteLongPollingPolicy::from_config(&inner.broker_config()),
-            lite_event_dispatcher.clone(),
-            service_context,
-            inner.resource_budget(),
-        )
-        .expect("test Broker resource budget");
-        let consumer_offset_manager = inner.consumer_offset_manager_handle();
-
-        PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(
-            PopLiteMessagePolicy::from_config(&inner.broker_config()),
-            topic_config_manager,
-            subscription_group_lookup,
-            PopLiteOffsetCapability::new(&consumer_offset_manager),
-            PopLiteMessageStoreCapability {
-                escape_bridge: Weak::new(),
-            },
-            lite_event_dispatcher,
-            queue_lock_manager,
-            long_polling,
-        ))
-    }
-
-    #[test]
-    fn transform_order_count_info_drops_queue_level_suffix_when_offset_entries_exist() {
-        let result = PopLiteMessageProcessor::<StorePorts>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
-
-        assert_eq!(result, "0 qo0%100 1");
-    }
-
-    #[test]
-    fn pop_lite_message_policy_captures_only_required_startup_values() {
-        let broker_config = BrokerConfig {
-            broker_ip1: CheetahString::from_static_str("192.0.2.10"),
-            broker_permission: 4,
-            max_client_event_count: 17,
-            lite_event_full_dispatch_delay_time: 29,
-            ..Default::default()
-        };
-
-        let policy = PopLiteMessagePolicy::from_config(&broker_config);
-
-        assert_eq!(policy.broker_ip1, "192.0.2.10");
-        assert_eq!(policy.broker_permission, 4);
-        assert_eq!(policy.max_client_event_count, 17);
-        assert_eq!(policy.lite_event_full_dispatch_delay_time, 29);
-    }
-
-    #[test]
-    fn pop_lite_message_processor_source_uses_only_explicit_capabilities() {
-        let source = include_str!("pop_lite_message_processor.rs");
-
-        assert!(!source.contains(concat!("rocketmq_rust::", "ArcMut")));
-        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
-        assert!(!source.contains(concat!("broker_runtime", "_inner")));
-        assert!(source.contains("context: PopLiteMessageProcessorContext<MS>"));
-        assert!(source.contains("consumer_offset: PopLiteOffsetCapability<MS>"));
-        assert!(source.contains("message_store: PopLiteMessageStoreCapability<MS>"));
-    }
-
-    #[test]
-    fn pop_lite_message_providers_do_not_keep_runtime_or_store_alive() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.runtime_state_mut();
-        let offset_manager = inner.consumer_offset_manager_handle();
-        let offset = PopLiteOffsetCapability::new(&offset_manager);
-        let escape_bridge = inner.escape_bridge();
-        let store = PopLiteMessageStoreCapability::new(&escape_bridge);
-        let group = CheetahString::from_static_str("group");
-        let topic = CheetahString::from_static_str("topic");
-
-        assert!(store.is_available());
-        drop(offset_manager);
-        drop(escape_bridge);
-        drop(runtime);
-
-        assert!(!store.is_available());
-        assert_eq!(offset.query_offset(&group, &topic), -1);
-        assert_eq!(offset.query_then_erase_reset_offset(&topic, &group), None);
-        offset.commit_offset("provider-shutdown-test", &group, &topic, 1);
-    }
-
-    #[tokio::test]
-    async fn pop_lite_long_polling_service_uses_weak_processor_back_reference() {
-        fn assert_send_sync<T: Send + Sync>(_: &T) {}
-
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = pop_lite_processor_for_test(&mut runtime);
-        let processor_weak = Arc::downgrade(&processor);
-        let service = processor.pop_lite_long_polling_service.clone();
-
-        assert_send_sync(&processor);
-        drop(processor);
-
-        assert!(processor_weak.upgrade().is_none());
-        assert_eq!(Arc::strong_count(&service), 1);
-    }
-
-    #[tokio::test]
-    async fn pop_lite_long_polling_service_start_shutdown_and_restart_are_serialized() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = pop_lite_processor_for_test(&mut runtime);
-        let service = processor.pop_lite_long_polling_service.clone();
-
-        PopLiteLongPollingService::start(&service).await;
-        let first_task_group = service
-            .task_group_for_test()
-            .expect("long-polling task group should be installed");
-        PopLiteLongPollingService::start(&service).await;
-        assert_eq!(
-            service
-                .task_group_for_test()
-                .expect("duplicate start should retain the task group")
-                .task_count(),
-            1
-        );
-        assert_eq!(first_task_group.task_count(), 1);
-        assert!(service.is_running());
-
-        service.shutdown().await;
-        assert!(!service.is_running());
-        assert!(service.task_group_for_test().is_none());
-
-        PopLiteLongPollingService::start(&service).await;
-        let restarted_task_group = service
-            .task_group_for_test()
-            .expect("restart should install a task group");
-        assert_eq!(restarted_task_group.task_count(), 1);
-        assert!(!restarted_task_group.cancellation_token().is_cancelled());
-        service.shutdown().await;
-        assert!(!service.is_running());
-    }
-
-    #[tokio::test]
-    async fn pop_lite_long_polling_service_uses_broker_parent_task_group() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let runtime_context = RuntimeContext::from_current("pop-lite-long-polling-parent-test");
-        let broker_service = runtime_context.service_context("broker-service");
-        let mut runtime =
-            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
-        let parent_id = runtime
-            .runtime_state_mut()
-            .broker_service_task_group()
-            .expect("broker service task group should exist")
-            .id();
-        let processor = pop_lite_processor_for_test(&mut runtime);
-        let service = processor.pop_lite_long_polling_service.clone();
-
-        PopLiteLongPollingService::start(&service).await;
-        let task_group = service
-            .task_group_for_test()
-            .expect("POP Lite long-polling task group should be installed");
-
-        assert_eq!(task_group.parent_id(), Some(parent_id));
-        service.shutdown().await;
-        let report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
-        assert!(report.is_healthy(), "{}", report.to_json());
-    }
-
-    #[tokio::test]
-    async fn active_pop_lite_long_polling_scan_does_not_keep_owner_alive() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = pop_lite_processor_for_test(&mut runtime);
-        let service = processor.pop_lite_long_polling_service.clone();
-        let processor_weak = Arc::downgrade(&processor);
-        let service_weak = Arc::downgrade(&service);
-
-        PopLiteLongPollingService::start(&service).await;
-        drop(processor);
-        drop(service);
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while service_weak.upgrade().is_some() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("scan task should release the service owner");
-        assert!(processor_weak.upgrade().is_none());
-    }
-}
+mod tests;

@@ -15,6 +15,53 @@
 use super::*;
 
 #[tokio::test(start_paused = true)]
+async fn owner_cutoff_is_live_early_and_terminal_at_equal_and_late_instants() {
+    let (runtime, _controller, executor) =
+        executor_with_limits("deferred-resume-cutoff-boundary", AdmissionLimits::default());
+    let session = Arc::new(EmbeddedSessionRecord::new(9_820));
+    let lifecycle = runtime
+        .root_context()
+        .component("deferred-resume-cutoff-boundary-owner");
+    let control = RequestControlView::from_meta(
+        &RequestMeta::new(
+            std::time::Instant::now(),
+            Some(RequestDeadline::after(Duration::from_millis(10))),
+        ),
+        session.view().state().clone(),
+        lifecycle.task_group(),
+    );
+    let stop_view = ResumeStopView::new(control, None);
+
+    assert_eq!(stop_view.current_before_resume(), None);
+    assert_eq!(stop_view.current_before_write(), None);
+    tokio::time::advance(Duration::from_millis(9)).await;
+    assert_eq!(stop_view.current_before_resume(), None, "early remains live");
+    assert_eq!(stop_view.current_before_write(), None, "early write remains live");
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(
+        stop_view.current_before_resume().map(|stop| stop.terminal_reason()),
+        Some(DeferredTerminalReason::OwnerDeadline),
+        "the equal instant is terminal"
+    );
+    assert_eq!(
+        stop_view.current_before_write().map(|stop| stop.terminal_reason()),
+        Some(DeferredTerminalReason::OwnerDeadline)
+    );
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(
+        stop_view.current_before_resume().map(|stop| stop.terminal_reason()),
+        Some(DeferredTerminalReason::OwnerDeadline),
+        "late remains terminal"
+    );
+    let report = executor
+        .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
+        .await;
+    assert_eq!(report.aborted, 0);
+}
+
+#[tokio::test(start_paused = true)]
 async fn owner_cutoff_cancels_an_ordered_waiter_before_processor_execution() {
     let (runtime, controller, executor) =
         executor_with_limits("deferred-resume-ordering-cutoff", AdmissionLimits::default());

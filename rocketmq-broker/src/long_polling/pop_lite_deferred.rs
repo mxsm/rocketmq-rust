@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod long_polling_service;
-pub(crate) mod many_pull_request;
-pub(crate) mod notification_deferred;
-pub(crate) mod notify_message_arriving_listener;
-pub(crate) mod polling_header;
-pub(crate) mod polling_result;
-pub(crate) mod pop_deferred;
-pub(crate) mod pop_lite_deferred;
-pub(crate) mod pop_request;
-pub(crate) mod pull_deferred;
-pub(crate) mod pull_request;
+pub(crate) mod data;
+pub(crate) mod deadline;
+pub(crate) mod gate;
+pub(crate) mod index;
+pub(crate) mod prepare;
+pub(crate) mod service;
+
+#[cfg(test)]
+mod acceptance_tests;
+#[cfg(test)]
+mod tests;

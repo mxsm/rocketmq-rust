@@ -1488,11 +1488,22 @@ impl TimedLock {
 
 #[derive(Clone)]
 pub struct QueueLockManager {
-    expired_local_cache: Arc<RwLock<HashMap<CheetahString, TimedLock>>>,
+    expired_local_cache: Arc<RwLock<HashMap<CheetahString, Arc<TimedLock>>>>,
     shutdown: Arc<Notify>,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
     service_context: ChildServiceContext,
+}
+
+#[must_use]
+pub(crate) struct QueueLockLease {
+    lock: Arc<TimedLock>,
+}
+
+impl Drop for QueueLockLease {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
 }
 
 impl QueueLockManager {
@@ -1542,8 +1553,20 @@ impl QueueLockManager {
         }
         drop(cache);
         let mut cache = self.expired_local_cache.write().await;
-        let lock = cache.entry(key).or_insert(TimedLock::new());
+        let lock = cache.entry(key).or_insert_with(|| Arc::new(TimedLock::new()));
         lock.try_lock()
+    }
+
+    pub(crate) async fn try_acquire_with_key(&self, key: CheetahString) -> Option<QueueLockLease> {
+        {
+            let cache = self.expired_local_cache.read().await;
+            if let Some(lock) = cache.get(&key) {
+                return lock.try_lock().then(|| QueueLockLease { lock: Arc::clone(lock) });
+            }
+        }
+        let mut cache = self.expired_local_cache.write().await;
+        let lock = cache.entry(key).or_insert_with(|| Arc::new(TimedLock::new()));
+        lock.try_lock().then(|| QueueLockLease { lock: Arc::clone(lock) })
     }
 
     pub async fn unlock(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) {
@@ -1561,7 +1584,10 @@ impl QueueLockManager {
     pub async fn clean_unused_locks(&self, used_expire_millis: u64) -> usize {
         let mut cache = self.expired_local_cache.write().await;
         let count = cache.len();
-        cache.retain(|_, lock| current_millis() - lock.get_lock_time() <= used_expire_millis);
+        cache.retain(|_, lock| {
+            let has_affine_holder = lock.is_locked() && Arc::strong_count(lock) > 1;
+            has_affine_holder || current_millis().saturating_sub(lock.get_lock_time()) <= used_expire_millis
+        });
         count
     }
 
@@ -2067,16 +2093,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queue_lock_lease_releases_exact_entry_on_drop() {
+        let manager = QueueLockManager::new();
+        let key = CheetahString::from_static_str("lease-drop");
+        let lease = manager
+            .try_acquire_with_key(key.clone())
+            .await
+            .expect("first affine queue lock lease");
+
+        assert!(manager.try_acquire_with_key(key.clone()).await.is_none());
+        drop(lease);
+
+        assert!(manager.try_acquire_with_key(key).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn queue_lock_cleanup_preserves_held_entry_and_prevents_aba_replacement() {
+        let manager = QueueLockManager::new();
+        let key = CheetahString::from_static_str("lease-cleanup");
+        let lease = manager
+            .try_acquire_with_key(key.clone())
+            .await
+            .expect("held affine queue lock lease");
+        let held = manager
+            .expired_local_cache
+            .read()
+            .await
+            .get(&key)
+            .cloned()
+            .expect("held entry is indexed");
+        held.lock_time.store(0, Ordering::Relaxed);
+
+        assert_eq!(manager.clean_unused_locks(0).await, 1);
+        let after_cleanup = manager
+            .expired_local_cache
+            .read()
+            .await
+            .get(&key)
+            .cloned()
+            .expect("cleanup retains a held entry");
+        assert!(Arc::ptr_eq(&held, &after_cleanup));
+        assert!(manager.try_acquire_with_key(key.clone()).await.is_none());
+
+        drop(after_cleanup);
+        drop(lease);
+        held.lock_time.store(0, Ordering::Relaxed);
+        drop(held);
+        assert_eq!(manager.clean_unused_locks(0).await, 1);
+        assert!(!manager.expired_local_cache.read().await.contains_key(&key));
+        assert!(manager.try_acquire_with_key(key).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn queue_lock_cleanup_preserves_legacy_stale_lock_recovery() {
+        let manager = QueueLockManager::new();
+        let key = CheetahString::from_static_str("legacy-stale-cleanup");
+        assert!(manager.try_lock_with_key(key.clone()).await);
+        manager
+            .expired_local_cache
+            .read()
+            .await
+            .get(&key)
+            .expect("legacy locked entry is indexed")
+            .lock_time
+            .store(0, Ordering::Relaxed);
+
+        assert_eq!(manager.clean_unused_locks(0).await, 1);
+        assert!(!manager.expired_local_cache.read().await.contains_key(&key));
+        assert!(manager.try_lock_with_key(key).await);
+    }
+
+    #[tokio::test]
     async fn clean_unused_locks_removes_expired_locks() {
         let manager = QueueLockManager::new();
         let topic = CheetahString::from_static_str("test_topic");
         let consumer_group = CheetahString::from_static_str("test_group");
         let queue_id = 1;
-        manager.try_lock(&topic, &consumer_group, queue_id).await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        let removed_count = manager.clean_unused_locks(5).await;
+        let key = CheetahString::from_string(QueueLockManager::build_lock_key(&topic, &consumer_group, queue_id));
+        manager.try_lock_with_key(key.clone()).await;
+        manager.unlock_with_key(key.clone()).await;
+        manager
+            .expired_local_cache
+            .read()
+            .await
+            .get(&key)
+            .expect("unlocked entry is indexed")
+            .lock_time
+            .store(0, Ordering::Relaxed);
+        let removed_count = manager.clean_unused_locks(0).await;
         assert_eq!(removed_count, 1);
-        let removed_count = manager.clean_unused_locks(15).await;
+        let removed_count = manager.clean_unused_locks(0).await;
         assert_eq!(removed_count, 0);
     }
 }
