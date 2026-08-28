@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
@@ -29,17 +30,20 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::RpcClient;
 use rocketmq_transport::api::v1::RpcClientImpl;
 use rocketmq_transport::api::v1::RpcRequest;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::v2::SessionView;
 use tracing::info;
 use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerAssignmentView;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetRequestCapability;
+use crate::processor::response_plan::immediate_outcome_from_command_result;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
@@ -68,36 +72,20 @@ pub(crate) struct ConsumerManageProcessorContext<MS: BrokerStorePort> {
     pub(crate) forward_timeout: u64,
 }
 
-impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
+impl<MS> RequestProcessorV2 for ConsumerManageProcessor<MS>
 where
-    MS: BrokerStorePort,
+    MS: BrokerStorePort + 'static,
 {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        info!("ConsumerManageProcessor received request code: {:?}", request_code);
-        match request_code {
-            RequestCode::GetConsumerListByGroup
-            | RequestCode::UpdateConsumerOffset
-            | RequestCode::QueryConsumerOffset => self.process_request_inner(channel, ctx, request_code, request).await,
-            _ => {
-                warn!(
-                    "ConsumerManageProcessor received unknown request code: {:?}",
-                    request_code
-                );
-                let response = request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.command_factory,
-                    request.code(),
-                    format!("ConsumerManageProcessor request code {} not supported", request.code()),
-                    request.opaque(),
-                );
-                Ok(Some(response))
-            }
-        }
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let request_source = trusted_request_source(request)?;
+        let result = self.process_command(request_source, request.command_mut()).await;
+        immediate_outcome_from_command_result(
+            &self.command_factory,
+            result,
+            original_opaque,
+            "consumer manager returned no response",
+        )
     }
 }
 
@@ -119,14 +107,13 @@ where
         }
     }
 
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        request_source: CheetahString,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut processor = self.clone();
-        processor.process_request(channel, ctx, request).await
+        processor.process_command(request_source, request).await
     }
 }
 
@@ -151,25 +138,35 @@ impl<MS> ConsumerManageProcessor<MS>
 where
     MS: BrokerStorePort,
 {
-    async fn process_request_inner(
+    async fn process_command(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
+        request_source: CheetahString,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!("ConsumerManageProcessor received request code: {:?}", request_code);
         match request_code {
-            RequestCode::GetConsumerListByGroup => self.get_consumer_list_by_group(channel, ctx, request).await,
-            RequestCode::UpdateConsumerOffset => self.update_consumer_offset(channel, ctx, request).await,
-            RequestCode::QueryConsumerOffset => self.query_consumer_offset(channel, ctx, request).await,
-            _ => Ok(None),
+            RequestCode::GetConsumerListByGroup => self.get_consumer_list_by_group(&request_source, request).await,
+            RequestCode::UpdateConsumerOffset => self.update_consumer_offset(request_source, request).await,
+            RequestCode::QueryConsumerOffset => self.query_consumer_offset(request).await,
+            _ => {
+                warn!(
+                    "ConsumerManageProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.command_factory,
+                    request.code(),
+                    format!("ConsumerManageProcessor request code {} not supported", request.code()),
+                    request.opaque(),
+                )))
+            }
         }
     }
 
     pub async fn get_consumer_list_by_group(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        request_source: &str,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = self.command_factory.create_success_response_command();
@@ -180,8 +177,7 @@ where
             None => {
                 warn!(
                     "getConsumerGroupInfo failed, {} {}",
-                    request_header.consumer_group,
-                    channel.remote_address()
+                    request_header.consumer_group, request_source
                 );
             }
             Some(client_ids) => {
@@ -197,8 +193,7 @@ where
                 } else {
                     warn!(
                         "getAllClientId failed, {} {}",
-                        request_header.consumer_group,
-                        channel.remote_address()
+                        request_header.consumer_group, request_source
                     )
                 }
             }
@@ -212,8 +207,7 @@ where
 
     async fn update_consumer_offset(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        request_source: CheetahString,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()?;
@@ -274,20 +268,13 @@ where
                     .set_remark("Offset has been previously reset"),
             ));
         }
-        self.consumer_offset.commit_offset(
-            channel.remote_address().to_string().into(),
-            group,
-            topic,
-            queue_id,
-            offset,
-        );
+        self.consumer_offset
+            .commit_offset(request_source, group, topic, queue_id, offset);
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
     async fn query_consumer_offset(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()?;
@@ -566,8 +553,187 @@ where
     }
 }
 
+fn trusted_request_source(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<CheetahString> {
+    let origin = match request.origin() {
+        RequestOrigin::Network { peer } => TrustedOriginFact::Network(peer.address()),
+        RequestOrigin::Embedded { .. } => TrustedOriginFact::Embedded,
+        _ => TrustedOriginFact::Unsupported,
+    };
+    let session = match request.session() {
+        SessionView::Network { remote_addr, .. } => TrustedSessionFact::Network(*remote_addr),
+        SessionView::Embedded { .. } => TrustedSessionFact::Embedded,
+        _ => TrustedSessionFact::Unsupported,
+    };
+    trusted_request_source_from_facts(origin, session)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrustedOriginFact {
+    Network(std::net::SocketAddr),
+    Embedded,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrustedSessionFact {
+    Network(std::net::SocketAddr),
+    Embedded,
+    Unsupported,
+}
+
+fn trusted_request_source_from_facts(
+    origin: TrustedOriginFact,
+    session: TrustedSessionFact,
+) -> rocketmq_error::RocketMQResult<CheetahString> {
+    match (origin, session) {
+        (TrustedOriginFact::Network(peer), TrustedSessionFact::Network(remote_addr)) if peer == remote_addr => {
+            Ok(remote_addr.to_string().into())
+        }
+        (TrustedOriginFact::Embedded, TrustedSessionFact::Embedded) => Ok(CheetahString::from_static_str("embedded")),
+        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+            "consumer manager request origin does not match its session view",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+
+    use super::*;
+    use crate::broker_runtime::BrokerMessageStore;
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::config::broker_config::BrokerConfig;
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    fn temp_test_root(label: &str) -> PathBuf {
+        let unique = format!(
+            "rocketmq-broker-consumer-manage-{label}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    async fn new_test_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = temp_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await.is_ok());
+        runtime
+    }
+
+    fn consumer_processor_for_test(runtime: &mut BrokerRuntime) -> ConsumerManageProcessor<BrokerMessageStore> {
+        let inner = runtime.runtime_state_mut();
+        ConsumerManageProcessor::new(ConsumerManageProcessorContext {
+            command_factory: application_remoting_command_factory(),
+            consumer_view: inner.consumer_manager().assignment_view(),
+            consumer_offset: inner.consumer_offset_manager_handle().request_capability(),
+            topic_queue_mapping_manager: inner.topic_queue_mapping_manager_handle(),
+            subscription_group_lookup: inner.subscription_group_manager().config_lookup(),
+            topic_config_manager: inner.topic_config_manager_handle(),
+            rpc_client: inner.broker_outer_api().rpc_client().clone(),
+            use_server_side_reset_offset: inner.broker_config().use_server_side_reset_offset,
+            forward_timeout: inner.broker_config().forward_timeout,
+        })
+    }
+
+    async fn dispatch_v2(
+        processor: ConsumerManageProcessor<BrokerMessageStore>,
+        command: RemotingCommand,
+    ) -> EmbeddedDispatchOutcome {
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            processor,
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            crate::test_task_group("consumer-manage-v2"),
+            Principal::new("consumer-manage-v2-test"),
+        )
+        .dispatch(None, command)
+        .await
+        .expect("consumer manager V2 dispatch should complete")
+    }
+
+    #[tokio::test]
+    async fn consumer_manage_v2_maps_header_errors_into_a_response_plan() {
+        let mut runtime = new_test_runtime("consumer-manage-v2").await;
+        let processor = consumer_processor_for_test(&mut runtime);
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, EmptyHeader {})
+            .set_opaque(4_204);
+
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
+            panic!("consumer manager V2 must return an inline response plan");
+        };
+
+        assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::InvalidParameter);
+        assert_eq!(plan.body_len(), 0);
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[test]
+    fn consumer_manage_rejects_origin_session_mismatch() {
+        let remote_addr = "127.0.0.1:10911".parse().expect("remote address");
+        let other_addr = "127.0.0.1:10912".parse().expect("other address");
+
+        assert!(trusted_request_source_from_facts(
+            TrustedOriginFact::Network(remote_addr),
+            TrustedSessionFact::Embedded,
+        )
+        .is_err());
+        assert!(trusted_request_source_from_facts(
+            TrustedOriginFact::Embedded,
+            TrustedSessionFact::Network(remote_addr),
+        )
+        .is_err());
+        assert!(trusted_request_source_from_facts(
+            TrustedOriginFact::Network(remote_addr),
+            TrustedSessionFact::Network(other_addr),
+        )
+        .is_err());
+    }
+
     #[test]
     fn production_processor_has_no_complete_runtime_owner() {
         let source = include_str!("consumer_manage_processor.rs");

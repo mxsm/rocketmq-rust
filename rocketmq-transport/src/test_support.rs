@@ -25,6 +25,7 @@ use rocketmq_runtime::TaskGroup;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
+use crate::session_view::SessionId;
 
 mod embedded_v2;
 pub use embedded_v2::EmbeddedRequestHarnessV2;
@@ -52,6 +53,20 @@ pub use crate::write_strategy::FrameWriteMode;
 pub use crate::write_strategy::FrameWriter;
 pub use crate::writer_runtime::MicroBatchConfig;
 pub use crate::writer_runtime::WriterQueueConfig;
+
+/// Creates a stable session identity for downstream behavior tests.
+///
+/// Production code cannot construct [`SessionId`] values; it receives them from the trusted
+/// transport boundary. This fixture is available only when the explicit `test-support` feature is
+/// enabled and rejects the sentinels excluded by the production allocator.
+#[must_use]
+pub fn session_id_for_test(owner_id: u64) -> SessionId {
+    assert!(
+        !matches!(owner_id, 0 | u64::MAX),
+        "test session owner must use a production-valid identity"
+    );
+    SessionId::from_session_owner(owner_id)
+}
 
 /// Builds a real transport-backed channel for downstream tests without
 /// exposing response-table or channel ownership internals.

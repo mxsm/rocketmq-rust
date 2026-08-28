@@ -27,20 +27,33 @@ use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::ConnectionState;
+use rocketmq_transport::api::v2::SessionId;
 use tracing::info;
 use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::client_channel_info::ClientSessionInfo;
 use crate::client::producer_change_listener::ArcProducerChangeListener;
 use crate::client::producer_group_event::ProducerGroupEvent;
+use crate::client::session_transition_locks::ClientSessionTransitionGuard;
+use crate::client::session_transition_locks::ClientSessionTransitionLocks;
 use crate::types::ProducerGroupName;
 
 /// Timeout for considering a producer channel as expired (120 seconds in milliseconds)
 const CHANNEL_EXPIRED_TIMEOUT: u64 = 120_000;
 /// Number of retry attempts when getting an available channel
 const GET_AVAILABLE_CHANNEL_RETRY_COUNT: u32 = 3;
+
+struct ProducerSessionRemoval {
+    group: ProducerGroupName,
+    group_table_removed: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct ProducerSessionBatch {
+    removals: Vec<ProducerSessionRemoval>,
+}
 
 /// Manages producer client connections and their lifecycle.
 ///
@@ -52,6 +65,16 @@ const GET_AVAILABLE_CHANNEL_RETRY_COUNT: u32 = 3;
 pub struct ProducerManager {
     /// Group name -> (Channel -> ClientChannelInfo) mapping
     group_channel_table: Arc<DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>>,
+    /// Group name -> (stable V2 session -> client identity) mapping.
+    group_session_table: Arc<DashMap<ProducerGroupName, DashMap<SessionId, ClientSessionInfo>>>,
+    /// Latest canonical V2 session for each producer client identity.
+    client_session_table: Arc<DashMap<CheetahString, SessionId>>,
+    /// Immutable client identity claimed by each live V2 session.
+    session_client_table: Arc<DashMap<SessionId, CheetahString>>,
+    /// Reverse lookup used to remove all producer groups owned by a V2 session.
+    session_to_groups: Arc<DashMap<SessionId, HashSet<ProducerGroupName>>>,
+    /// Striped serialization for canonical client-session multi-index transitions.
+    session_transition_locks: Arc<ClientSessionTransitionLocks>,
     /// Client ID -> Channel mapping for quick channel lookup by client ID
     client_channel_table: Arc<DashMap<CheetahString, Channel>>,
     /// Channel -> ProducerGroups mapping for fast channel close event processing
@@ -96,13 +119,45 @@ impl ProducerClientRegistration {
         self.manager.register_producer(group, client);
     }
 
-    pub(crate) fn unregister_producer(
+    pub(crate) fn unregister_producer(&self, group: &str, client: &ClientChannelInfo) {
+        self.manager.unregister_producer(group, client);
+    }
+
+    pub(crate) fn register_producer_session(&self, group: &ProducerGroupName, client: ClientSessionInfo) {
+        self.manager.register_producer_session(group, client);
+    }
+
+    pub(crate) fn register_producer_sessions(&self, groups: Vec<ProducerGroupName>, client: ClientSessionInfo) {
+        self.manager.register_producer_sessions(groups, client);
+    }
+
+    pub(crate) fn prepare_producer_sessions(
         &self,
-        group: &str,
-        client: &ClientChannelInfo,
-        context: &ConnectionHandlerContext,
-    ) {
-        self.manager.unregister_producer(group, client, context);
+        transition: &ClientSessionTransitionGuard<'_>,
+        groups: Vec<ProducerGroupName>,
+        client: ClientSessionInfo,
+    ) -> ProducerSessionBatch {
+        self.manager
+            .register_producer_sessions_locked(transition, groups, client)
+    }
+
+    pub(crate) fn complete_producer_sessions(&self, batch: ProducerSessionBatch) {
+        self.manager.dispatch_producer_session_removals(batch.removals);
+    }
+
+    pub(crate) fn session_transition_locks(&self) -> Arc<ClientSessionTransitionLocks> {
+        Arc::clone(&self.manager.session_transition_locks)
+    }
+
+    pub(crate) fn client_id_for_session(&self, session_id: SessionId) -> Option<CheetahString> {
+        self.manager
+            .session_client_table
+            .get(&session_id)
+            .map(|entry| entry.clone())
+    }
+
+    pub(crate) fn unregister_producer_session(&self, group: &str, session_id: SessionId) {
+        self.manager.unregister_producer_session(group, session_id);
     }
 }
 
@@ -122,6 +177,10 @@ impl ProducerConnectionHousekeeping {
     pub(crate) fn do_channel_close_event(&self, remote_addr: &str, channel: &Channel) -> bool {
         self.manager.do_channel_close_event(remote_addr, channel)
     }
+
+    pub(crate) fn do_session_close_event(&self, session_id: SessionId) -> bool {
+        self.manager.do_session_close_event(session_id)
+    }
 }
 
 /// Shared read capability for producer channel selection and connection snapshots.
@@ -131,6 +190,7 @@ impl ProducerConnectionHousekeeping {
 #[derive(Clone)]
 pub(crate) struct ProducerChannelRegistry {
     group_channel_table: Arc<DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>>,
+    group_session_table: Arc<DashMap<ProducerGroupName, DashMap<SessionId, ClientSessionInfo>>>,
     positive_atomic_counter: Arc<AtomicI32>,
 }
 
@@ -140,7 +200,7 @@ impl ProducerChannelRegistry {
     }
 
     pub(crate) fn producer_table(&self) -> ProducerTableInfo {
-        producer_table_snapshot(&self.group_channel_table)
+        producer_table_snapshot(&self.group_channel_table, &self.group_session_table)
     }
 }
 
@@ -194,6 +254,7 @@ fn select_available_channel(
 
 fn producer_table_snapshot(
     group_channel_table: &DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>,
+    group_session_table: &DashMap<ProducerGroupName, DashMap<SessionId, ClientSessionInfo>>,
 ) -> ProducerTableInfo {
     let mut producers: HashMap<String, Vec<ProducerInfo>> = HashMap::new();
     for group_entry in group_channel_table.iter() {
@@ -202,6 +263,26 @@ fn producer_table_snapshot(
             let producer = ProducerInfo::new(
                 client.client_id().to_string(),
                 client.channel().remote_address().to_string(),
+                client.language(),
+                client.version(),
+                client.last_update_timestamp() as i64,
+            );
+            producers
+                .entry(group_entry.key().to_string())
+                .or_default()
+                .push(producer);
+        }
+    }
+    for group_entry in group_session_table.iter() {
+        for session_entry in group_entry.value().iter() {
+            let client = session_entry.value();
+            let remote_address = client
+                .remote_address()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("session:{:?}", client.session_id()));
+            let producer = ProducerInfo::new(
+                client.client_id().to_string(),
+                remote_address,
                 client.language(),
                 client.version(),
                 client.last_update_timestamp() as i64,
@@ -231,6 +312,11 @@ impl ProducerManager {
     pub(crate) fn clone_shared_state(&self) -> Self {
         Self {
             group_channel_table: Arc::clone(&self.group_channel_table),
+            group_session_table: Arc::clone(&self.group_session_table),
+            client_session_table: Arc::clone(&self.client_session_table),
+            session_client_table: Arc::clone(&self.session_client_table),
+            session_to_groups: Arc::clone(&self.session_to_groups),
+            session_transition_locks: Arc::clone(&self.session_transition_locks),
             client_channel_table: Arc::clone(&self.client_channel_table),
             channel_to_groups: Arc::clone(&self.channel_to_groups),
             positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
@@ -243,6 +329,7 @@ impl ProducerManager {
     pub(crate) fn channel_registry(&self) -> ProducerChannelRegistry {
         ProducerChannelRegistry {
             group_channel_table: Arc::clone(&self.group_channel_table),
+            group_session_table: Arc::clone(&self.group_session_table),
             positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
         }
     }
@@ -255,8 +342,19 @@ impl ProducerManager {
 
     /// Creates a new producer manager with empty state.
     pub fn new() -> Self {
+        Self::new_with_session_transition_locks(Arc::new(ClientSessionTransitionLocks::default()))
+    }
+
+    pub(crate) fn new_with_session_transition_locks(
+        session_transition_locks: Arc<ClientSessionTransitionLocks>,
+    ) -> Self {
         Self {
             group_channel_table: Arc::new(DashMap::new()),
+            group_session_table: Arc::new(DashMap::new()),
+            client_session_table: Arc::new(DashMap::new()),
+            session_client_table: Arc::new(DashMap::new()),
+            session_to_groups: Arc::new(DashMap::new()),
+            session_transition_locks,
             client_channel_table: Arc::new(DashMap::new()),
             channel_to_groups: Arc::new(DashMap::new()),
             positive_atomic_counter: Arc::new(AtomicI32::new(0)),
@@ -301,7 +399,12 @@ impl ProducerManager {
     /// # Returns
     /// The total count of producer groups
     pub fn group_size(&self) -> usize {
-        self.group_channel_table.len()
+        self.group_channel_table
+            .iter()
+            .map(|entry| entry.key().clone())
+            .chain(self.group_session_table.iter().map(|entry| entry.key().clone()))
+            .collect::<HashSet<_>>()
+            .len()
     }
 
     /// Returns connected producer counts grouped by client language and version.
@@ -310,6 +413,12 @@ impl ProducerManager {
         for group_entry in self.group_channel_table.iter() {
             for channel_entry in group_entry.value().iter() {
                 let client = channel_entry.value();
+                *counts.entry((client.language(), client.version())).or_default() += 1;
+            }
+        }
+        for group_entry in self.group_session_table.iter() {
+            for session_entry in group_entry.value().iter() {
+                let client = session_entry.value();
                 *counts.entry((client.language(), client.version())).or_default() += 1;
             }
         }
@@ -324,7 +433,7 @@ impl ProducerManager {
     /// The snapshot reflects the state at the time of the call and may become stale
     /// as producers connect or disconnect.
     pub fn get_producer_table(&self) -> ProducerTableInfo {
-        producer_table_snapshot(&self.group_channel_table)
+        producer_table_snapshot(&self.group_channel_table, &self.group_session_table)
     }
 
     /// Checks whether a producer group has at least one connected producer.
@@ -335,10 +444,16 @@ impl ProducerManager {
     /// # Returns
     /// `true` if the group exists and contains at least one producer, `false` otherwise
     pub fn group_online(&self, group: &str) -> bool {
-        self.group_channel_table
+        let has_channel = self
+            .group_channel_table
             .get(group)
             .map(|channels| !channels.is_empty())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        has_channel
+            || self
+                .group_session_table
+                .get(group)
+                .is_some_and(|sessions| !sessions.is_empty())
     }
 
     /// Removes a producer from a group.
@@ -349,19 +464,13 @@ impl ProducerManager {
     /// # Arguments
     /// * `group` - The producer group name
     /// * `client_channel_info` - The client channel information
-    /// * `ctx` - Connection handler context containing the channel
-    pub fn unregister_producer(
-        &self,
-        group: &str,
-        _client_channel_info: &ClientChannelInfo,
-        ctx: &ConnectionHandlerContext,
-    ) {
+    pub fn unregister_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
         let mut removed_info: Option<ClientChannelInfo> = None;
         let mut is_group_empty = false;
 
         // Atomically remove producer from group table
         if let Some(channel_table) = self.group_channel_table.get(group) {
-            if let Some((_channel, old)) = channel_table.remove(ctx.channel()) {
+            if let Some((_channel, old)) = channel_table.remove(client_channel_info.channel()) {
                 removed_info = Some(old);
                 is_group_empty = channel_table.is_empty();
             }
@@ -371,7 +480,7 @@ impl ProducerManager {
         if let Some(old) = removed_info {
             // Remove from clientChannelTable only if the channel matches
             if let Some(entry) = self.client_channel_table.get(old.client_id()) {
-                if entry.value() == ctx.channel() {
+                if entry.value() == client_channel_info.channel() {
                     drop(entry); // Release read lock before remove
                     self.client_channel_table.remove(old.client_id());
                 }
@@ -388,11 +497,11 @@ impl ProducerManager {
 
             // Update channel_to_groups mapping (if fast path is enabled)
             if self.is_fast_channel_event_enabled() {
-                if let Some(mut entry) = self.channel_to_groups.get_mut(ctx.channel()) {
+                if let Some(mut entry) = self.channel_to_groups.get_mut(client_channel_info.channel()) {
                     entry.remove(group);
                     if entry.is_empty() {
                         drop(entry);
-                        self.channel_to_groups.remove(ctx.channel());
+                        self.channel_to_groups.remove(client_channel_info.channel());
                     }
                 }
             }
@@ -405,7 +514,9 @@ impl ProducerManager {
                     .remove_if(group, |_, channel_map| channel_map.is_empty());
                 if removed.is_some() {
                     info!("unregister a producer group[{}] from groupChannelTable", group);
-                    self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, group, None);
+                    if !self.group_online(group) {
+                        self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, group, None);
+                    }
                 }
             }
         }
@@ -503,6 +614,172 @@ impl ProducerManager {
         );
     }
 
+    fn register_producer_session(&self, group: &ProducerGroupName, client: ClientSessionInfo) {
+        self.register_producer_sessions(vec![group.clone()], client);
+    }
+
+    fn register_producer_sessions(&self, groups: Vec<ProducerGroupName>, client: ClientSessionInfo) {
+        let transition = self
+            .session_transition_locks
+            .lock(client.client_id(), client.session_id());
+        let batch = self.register_producer_sessions_locked(&transition, groups, client);
+        drop(transition);
+        self.dispatch_producer_session_removals(batch.removals);
+    }
+
+    fn register_producer_sessions_locked(
+        &self,
+        transition: &ClientSessionTransitionGuard<'_>,
+        groups: Vec<ProducerGroupName>,
+        client: ClientSessionInfo,
+    ) -> ProducerSessionBatch {
+        assert!(
+            self.session_transition_locks
+                .covers(transition, client.client_id(), client.session_id()),
+            "producer session mutation requires the matching transition guard"
+        );
+        if self
+            .session_client_table
+            .get(&client.session_id())
+            .is_some_and(|current| current.as_str() != client.client_id().as_str())
+        {
+            warn!(
+                "ignore producer heartbeat that changes client identity for live session {:?}",
+                client.session_id()
+            );
+            return ProducerSessionBatch::default();
+        }
+        let replaced_session = self
+            .client_session_table
+            .get(client.client_id())
+            .map(|entry| *entry.value())
+            .filter(|session_id| *session_id != client.session_id());
+        if groups.is_empty() {
+            let removals = replaced_session
+                .map(|session_id| self.unregister_producer_session_all_locked(session_id))
+                .unwrap_or_default();
+            return ProducerSessionBatch { removals };
+        }
+        if self
+            .broker_config
+            .load_full()
+            .is_some_and(|config| !config.enable_register_producer && config.reject_transaction_message)
+        {
+            return ProducerSessionBatch::default();
+        }
+        let mut unique_groups = HashSet::with_capacity(groups.len());
+        for group in groups {
+            if !unique_groups.insert(group.clone()) {
+                continue;
+            }
+            let sessions = self.group_session_table.entry(group.clone()).or_default();
+            if let Some(mut existing) = sessions.get_mut(&client.session_id()) {
+                existing.refresh_from(&client);
+            } else {
+                sessions.insert(client.session_id(), client.clone());
+            }
+            drop(sessions);
+            self.session_to_groups
+                .entry(client.session_id())
+                .or_default()
+                .insert(group.clone());
+        }
+        self.client_session_table
+            .insert(client.client_id().clone(), client.session_id());
+        self.session_client_table
+            .insert(client.session_id(), client.client_id().clone());
+        let removals = replaced_session
+            .map(|session_id| self.unregister_producer_session_all_locked(session_id))
+            .unwrap_or_default();
+        info!(
+            "producer session heartbeat applied, session: {:?} clientId: {}",
+            client.session_id(),
+            client.client_id()
+        );
+        ProducerSessionBatch { removals }
+    }
+
+    fn unregister_producer_session(&self, group: &str, session_id: SessionId) {
+        let Some(client_id) = self.session_client_table.get(&session_id).map(|entry| entry.clone()) else {
+            return;
+        };
+        let transition = self.session_transition_locks.lock(&client_id, session_id);
+        let removal = self.unregister_producer_session_locked(group, session_id);
+        drop(transition);
+        self.dispatch_producer_session_removals(removal.into_iter().collect());
+    }
+
+    fn unregister_producer_session_locked(&self, group: &str, session_id: SessionId) -> Option<ProducerSessionRemoval> {
+        let sessions = self.group_session_table.get(group)?;
+        let (_, client) = sessions.remove(&session_id)?;
+        let sessions_empty = sessions.is_empty();
+        drop(sessions);
+        let group_table_removed = if sessions_empty {
+            self.group_session_table
+                .remove_if(group, |_, current| current.is_empty())
+                .is_some()
+        } else {
+            false
+        };
+        let session_has_groups = self.remove_producer_session_group_index(session_id, group);
+        if !session_has_groups {
+            self.client_session_table
+                .remove_if(client.client_id(), |_, current| *current == session_id);
+            self.session_client_table
+                .remove_if(&session_id, |_, current| current == client.client_id());
+        }
+        Some(ProducerSessionRemoval {
+            group: group.into(),
+            group_table_removed,
+        })
+    }
+
+    fn unregister_producer_session_all_locked(&self, session_id: SessionId) -> Vec<ProducerSessionRemoval> {
+        let groups = self
+            .session_to_groups
+            .get(&session_id)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
+        groups
+            .into_iter()
+            .filter_map(|group| self.unregister_producer_session_locked(group.as_str(), session_id))
+            .collect()
+    }
+
+    fn do_session_close_event(&self, session_id: SessionId) -> bool {
+        let Some(client_id) = self.session_client_table.get(&session_id).map(|entry| entry.clone()) else {
+            return false;
+        };
+        let transition = self.session_transition_locks.lock(&client_id, session_id);
+        let removals = self.unregister_producer_session_all_locked(session_id);
+        drop(transition);
+        let removed = !removals.is_empty();
+        self.dispatch_producer_session_removals(removals);
+        removed
+    }
+
+    fn dispatch_producer_session_removals(&self, removals: Vec<ProducerSessionRemoval>) {
+        for removal in removals {
+            if removal.group_table_removed && !self.group_online(&removal.group) {
+                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &removal.group, None);
+            }
+        }
+    }
+
+    fn remove_producer_session_group_index(&self, session_id: SessionId, group: &str) -> bool {
+        let Some(mut groups) = self.session_to_groups.get_mut(&session_id) else {
+            return false;
+        };
+        groups.remove(group);
+        let has_groups = !groups.is_empty();
+        drop(groups);
+        if !has_groups {
+            self.session_to_groups
+                .remove_if(&session_id, |_, current| current.is_empty());
+        }
+        has_groups
+    }
+
     /// Finds the channel associated with a client identifier.
     ///
     /// # Arguments
@@ -537,6 +814,58 @@ impl ProducerManager {
     /// notified of each removal.
     pub fn scan_not_active_channel(&self) {
         let current_time = current_millis();
+
+        let expired_sessions = self
+            .group_session_table
+            .iter()
+            .flat_map(|group_entry| {
+                group_entry
+                    .value()
+                    .iter()
+                    .filter(|session_entry| {
+                        current_time.saturating_sub(session_entry.last_update_timestamp()) > CHANNEL_EXPIRED_TIMEOUT
+                    })
+                    .map(|session_entry| {
+                        (
+                            group_entry.key().clone(),
+                            *session_entry.key(),
+                            session_entry.client_id().clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for (group, session_id, client_id) in expired_sessions {
+            let transition = self.session_transition_locks.lock(&client_id, session_id);
+            let removed = self.group_session_table.get(&group).and_then(|sessions| {
+                sessions
+                    .remove_if(&session_id, |_, info| {
+                        current_time.saturating_sub(info.last_update_timestamp()) > CHANNEL_EXPIRED_TIMEOUT
+                    })
+                    .map(|(_, info)| info)
+            });
+            let removal = removed.map(|client| {
+                let group_table_removed = self
+                    .group_session_table
+                    .remove_if(&group, |_, sessions| sessions.is_empty())
+                    .is_some();
+                let session_has_groups = self.remove_producer_session_group_index(session_id, &group);
+                if !session_has_groups {
+                    self.client_session_table
+                        .remove_if(client.client_id(), |_, current| *current == session_id);
+                    self.session_client_table
+                        .remove_if(&session_id, |_, current| current == client.client_id());
+                }
+                ProducerSessionRemoval {
+                    group,
+                    group_table_removed,
+                }
+            });
+            drop(transition);
+            if let Some(removal) = removal {
+                self.dispatch_producer_session_removals(vec![removal]);
+            }
+        }
 
         // Collect expired channels: (group_name, channel, client_info)
         let mut expired_channels: Vec<(ProducerGroupName, Channel, ClientChannelInfo)> = Vec::new();
@@ -612,7 +941,9 @@ impl ProducerManager {
                     "SCAN: remove expired channel from ProducerManager groupChannelTable, all clear, group={}",
                     group
                 );
-                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+                if !self.group_online(&group) {
+                    self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+                }
             }
         }
     }
@@ -703,7 +1034,9 @@ impl ProducerManager {
                     "unregister a producer group[{}] from groupChannelTable (Fast Path)",
                     group
                 );
-                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+                if !self.group_online(&group) {
+                    self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+                }
             }
         }
 
@@ -777,7 +1110,9 @@ impl ProducerManager {
                 .remove_if(&group, |_, channel_map| channel_map.is_empty());
             if removed.is_some() {
                 info!("unregister a producer group[{}] from groupChannelTable", group);
-                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+                if !self.group_online(&group) {
+                    self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+                }
             }
         }
 
@@ -818,8 +1153,10 @@ impl ProducerManager {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Barrier;
 
     use rocketmq_protocol::protocol::LanguageCode;
+    use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::Connection;
     use tokio::net::TcpStream;
 
@@ -897,5 +1234,317 @@ mod tests {
         let registry_source = &source[registry_start..registry_end];
 
         assert!(!registry_source.contains("broker_config"));
+    }
+
+    #[test]
+    fn producer_session_metadata_is_live_in_indexes_metrics_and_snapshots() {
+        let manager = ProducerManager::new();
+        let group = CheetahString::from_static_str("session-producer");
+        let session_id = session_id_for_test(61);
+        manager.register_producer_session(
+            &group,
+            ClientSessionInfo::new(
+                session_id,
+                "session-client".into(),
+                Some("127.0.0.1:10611".into()),
+                LanguageCode::RUST,
+                7,
+            ),
+        );
+
+        assert_eq!(
+            manager.client_session_table.get("session-client").map(|entry| *entry),
+            Some(session_id)
+        );
+        assert_eq!(
+            manager.session_to_groups.get(&session_id).map(|groups| groups.len()),
+            Some(1)
+        );
+        assert_eq!(
+            manager.connection_count_by_client_attrs(),
+            vec![(LanguageCode::RUST, 7, 1)]
+        );
+        for snapshot in [
+            manager.get_producer_table(),
+            manager.channel_registry().producer_table(),
+        ] {
+            let producers = snapshot
+                .data()
+                .get(group.as_str())
+                .expect("V2 group in producer snapshot");
+            assert_eq!(producers.len(), 1);
+            assert_eq!(producers[0].client_id(), "session-client");
+            assert_eq!(producers[0].remote_ip(), "127.0.0.1:10611");
+            assert_eq!(producers[0].version(), 7);
+        }
+
+        manager.unregister_producer_session(group.as_str(), session_id);
+        assert!(!manager.client_session_table.contains_key("session-client"));
+        assert!(!manager.session_to_groups.contains_key(&session_id));
+    }
+
+    #[test]
+    fn producer_session_reconnect_and_stale_disconnect_preserve_the_new_session() {
+        let manager = ProducerManager::new();
+        let old_session = session_id_for_test(62);
+        let new_session = session_id_for_test(63);
+        let group_a = CheetahString::from_static_str("producer-reconnect-a");
+        let group_b = CheetahString::from_static_str("producer-reconnect-b");
+        for group in [&group_a, &group_b] {
+            manager.register_producer_session(
+                group,
+                ClientSessionInfo::new(old_session, "same-client".into(), None, LanguageCode::RUST, 1),
+            );
+        }
+        assert_eq!(
+            manager.session_to_groups.get(&old_session).map(|groups| groups.len()),
+            Some(2)
+        );
+
+        manager.register_producer_session(
+            &group_a,
+            ClientSessionInfo::new(new_session, "same-client".into(), None, LanguageCode::RUST, 2),
+        );
+        assert!(!manager.session_to_groups.contains_key(&old_session));
+        assert!(!manager.group_online(group_b.as_str()));
+        assert_eq!(
+            manager.client_session_table.get("same-client").map(|entry| *entry),
+            Some(new_session)
+        );
+
+        manager.unregister_producer_session(group_a.as_str(), old_session);
+        assert!(manager.group_online(group_a.as_str()));
+        let snapshot = manager.get_producer_table();
+        let producers = snapshot
+            .data()
+            .get(group_a.as_str())
+            .expect("replacement group snapshot");
+        assert_eq!(producers.len(), 1);
+        assert_eq!(producers[0].version(), 2);
+
+        manager.unregister_producer_session(group_a.as_str(), new_session);
+        assert!(!manager.group_online(group_a.as_str()));
+        assert!(!manager.client_session_table.contains_key("same-client"));
+    }
+
+    #[test]
+    fn concurrent_producer_reconnect_has_one_canonical_session() {
+        let manager = ProducerManager::new();
+        let first_registration = manager.client_registration();
+        let second_registration = first_registration.clone();
+        let group = CheetahString::from_static_str("concurrent-producer-group");
+        let first_session = session_id_for_test(6_501);
+        let second_session = session_id_for_test(6_502);
+        let barrier = Arc::new(Barrier::new(2));
+
+        std::thread::scope(|scope| {
+            let first_group = group.clone();
+            let first_barrier = Arc::clone(&barrier);
+            scope.spawn(move || {
+                first_barrier.wait();
+                first_registration.register_producer_session(
+                    &first_group,
+                    ClientSessionInfo::new(first_session, "concurrent-client".into(), None, LanguageCode::RUST, 1),
+                );
+            });
+            let second_group = group.clone();
+            let second_barrier = Arc::clone(&barrier);
+            scope.spawn(move || {
+                second_barrier.wait();
+                second_registration.register_producer_session(
+                    &second_group,
+                    ClientSessionInfo::new(second_session, "concurrent-client".into(), None, LanguageCode::RUST, 2),
+                );
+            });
+        });
+
+        let canonical = *manager
+            .client_session_table
+            .get("concurrent-client")
+            .expect("one canonical producer session");
+        let loser = if canonical == first_session {
+            second_session
+        } else {
+            first_session
+        };
+        let sessions = manager
+            .group_session_table
+            .get(&group)
+            .expect("producer group remains live");
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions.contains_key(&canonical));
+        assert!(!sessions.contains_key(&loser));
+        drop(sessions);
+        assert!(!manager.session_to_groups.contains_key(&loser));
+
+        manager
+            .client_registration()
+            .unregister_producer_session(group.as_str(), loser);
+        assert_eq!(
+            manager
+                .client_session_table
+                .get("concurrent-client")
+                .map(|entry| *entry),
+            Some(canonical)
+        );
+    }
+
+    #[tokio::test]
+    async fn producer_group_lives_until_both_channel_and_session_tables_are_empty() {
+        let manager = ProducerManager::new();
+        let group = CheetahString::from_static_str("mixed-producer-group");
+        let channel = create_test_channel().await;
+        let legacy = ClientChannelInfo::new(channel, "legacy-client".into(), LanguageCode::RUST, 1);
+        manager.register_producer(&group, &legacy);
+        let session_id = session_id_for_test(64);
+        manager.register_producer_session(
+            &group,
+            ClientSessionInfo::new(session_id, "session-client".into(), None, LanguageCode::RUST, 2),
+        );
+
+        manager.unregister_producer(group.as_str(), &legacy);
+        assert!(manager.group_online(group.as_str()));
+        assert_eq!(manager.get_producer_table().data()[group.as_str()].len(), 1);
+        manager.unregister_producer_session(group.as_str(), session_id);
+        assert!(!manager.group_online(group.as_str()));
+    }
+
+    #[test]
+    fn rejected_producer_session_registration_creates_no_empty_tables() {
+        let manager = ProducerManager::new();
+        manager.set_broker_config(Arc::new(BrokerConfig {
+            enable_register_producer: false,
+            reject_transaction_message: true,
+            ..BrokerConfig::default()
+        }));
+        manager.register_producer_session(
+            &CheetahString::from_static_str("rejected-session-group"),
+            ClientSessionInfo::new(
+                session_id_for_test(65),
+                "rejected-client".into(),
+                None,
+                LanguageCode::RUST,
+                1,
+            ),
+        );
+
+        assert!(manager.group_session_table.is_empty());
+        assert!(manager.client_session_table.is_empty());
+        assert!(manager.session_client_table.is_empty());
+        assert!(manager.session_to_groups.is_empty());
+        assert_eq!(manager.group_size(), 0);
+        assert!(manager.get_producer_table().data().is_empty());
+        assert!(manager.connection_count_by_client_attrs().is_empty());
+    }
+
+    #[test]
+    fn concurrent_producer_heartbeat_batches_preserve_every_winning_group() {
+        let manager = ProducerManager::new();
+        let first_registration = manager.client_registration();
+        let second_registration = first_registration.clone();
+        let groups = vec![
+            CheetahString::from_static_str("batch-producer-a"),
+            CheetahString::from_static_str("batch-producer-b"),
+        ];
+        let first_session = session_id_for_test(6_601);
+        let second_session = session_id_for_test(6_602);
+        let barrier = Arc::new(Barrier::new(2));
+
+        std::thread::scope(|scope| {
+            let first_groups = groups.clone();
+            let first_barrier = Arc::clone(&barrier);
+            scope.spawn(move || {
+                first_barrier.wait();
+                first_registration.register_producer_sessions(
+                    first_groups,
+                    ClientSessionInfo::new(first_session, "batch-client".into(), None, LanguageCode::RUST, 1),
+                );
+            });
+            let second_groups = groups.clone();
+            let second_barrier = Arc::clone(&barrier);
+            scope.spawn(move || {
+                second_barrier.wait();
+                second_registration.register_producer_sessions(
+                    second_groups,
+                    ClientSessionInfo::new(second_session, "batch-client".into(), None, LanguageCode::RUST, 2),
+                );
+            });
+        });
+
+        let canonical = *manager
+            .client_session_table
+            .get("batch-client")
+            .expect("canonical batch producer session");
+        let loser = if canonical == first_session {
+            second_session
+        } else {
+            first_session
+        };
+        for group in &groups {
+            let sessions = manager.group_session_table.get(group).expect("winning group remains");
+            assert_eq!(sessions.len(), 1);
+            assert!(sessions.contains_key(&canonical));
+            assert!(!sessions.contains_key(&loser));
+        }
+        assert_eq!(
+            manager.session_to_groups.get(&canonical).map(|entry| entry.len()),
+            Some(2)
+        );
+        assert!(!manager.session_to_groups.contains_key(&loser));
+        assert!(!manager.session_client_table.contains_key(&loser));
+    }
+
+    #[test]
+    fn producer_session_close_cleans_all_groups_and_stale_close_preserves_replacement() {
+        let manager = ProducerManager::new();
+        let registration = manager.client_registration();
+        let housekeeping = manager.connection_housekeeping();
+        let groups = vec![
+            CheetahString::from_static_str("close-producer-a"),
+            CheetahString::from_static_str("close-producer-b"),
+        ];
+        let old_session = session_id_for_test(6_701);
+        registration.register_producer_sessions(
+            groups.clone(),
+            ClientSessionInfo::new(old_session, "close-client".into(), None, LanguageCode::RUST, 1),
+        );
+        assert!(housekeeping.do_session_close_event(old_session));
+        assert!(groups.iter().all(|group| !manager.group_online(group)));
+        assert!(!manager.session_to_groups.contains_key(&old_session));
+
+        let new_session = session_id_for_test(6_702);
+        registration.register_producer_sessions(
+            groups.clone(),
+            ClientSessionInfo::new(new_session, "close-client".into(), None, LanguageCode::RUST, 2),
+        );
+        assert!(!housekeeping.do_session_close_event(old_session));
+        assert!(groups.iter().all(|group| manager.group_online(group)));
+        assert_eq!(
+            manager.client_session_table.get("close-client").map(|entry| *entry),
+            Some(new_session)
+        );
+    }
+
+    #[test]
+    fn producer_session_identity_is_immutable() {
+        let manager = ProducerManager::new();
+        let session_id = session_id_for_test(6_801);
+        let group = CheetahString::from_static_str("identity-producer-a");
+        manager.register_producer_session(
+            &group,
+            ClientSessionInfo::new(session_id, "identity-a".into(), None, LanguageCode::RUST, 1),
+        );
+        manager.register_producer_session(
+            &CheetahString::from_static_str("identity-producer-b"),
+            ClientSessionInfo::new(session_id, "identity-b".into(), None, LanguageCode::RUST, 2),
+        );
+        assert_eq!(
+            manager.session_client_table.get(&session_id).map(|entry| entry.clone()),
+            Some("identity-a".into())
+        );
+        assert!(!manager.group_session_table.contains_key("identity-producer-b"));
+
+        manager.unregister_producer_session(group.as_str(), session_id);
+        assert!(!manager.session_client_table.contains_key(&session_id));
     }
 }

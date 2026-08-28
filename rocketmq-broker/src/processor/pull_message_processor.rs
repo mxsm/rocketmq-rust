@@ -316,12 +316,22 @@ where
         }
     }
 
-    #[allow(dead_code, reason = "installed by the forthcoming V2 Pull composition root")]
     pub(crate) fn install_session_client_lookup(
         &self,
         lookup: Arc<dyn PullSessionClientLookup>,
     ) -> Result<(), Arc<dyn PullSessionClientLookup>> {
         self.session_client_lookup.set(lookup)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_client_id_for_test(
+        &self,
+        session_id: SessionId,
+        consumer_group: &CheetahString,
+    ) -> Option<CheetahString> {
+        self.session_client_lookup
+            .get()
+            .and_then(|lookup| lookup.client_id(session_id, consumer_group))
     }
 
     pub(crate) fn set_wakeup_task_group(&self, task_group: TaskGroup) {

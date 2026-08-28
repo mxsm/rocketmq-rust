@@ -1171,12 +1171,18 @@ impl BrokerRuntime {
             broker_config.broker_identity.broker_id,
             broker_config.get_broker_addr().into(),
         );
-        let producer_manager = ProducerManager::new();
+        let client_session_transition_locks =
+            Arc::new(crate::client::session_transition_locks::ClientSessionTransitionLocks::default());
+        let producer_manager =
+            ProducerManager::new_with_session_transition_locks(Arc::clone(&client_session_transition_locks));
         let consumer_filter_manager = ConsumerFilterManager::new(broker_config.clone(), message_store_config.clone());
         let consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static> =
             Arc::new(DefaultConsumerIdsChangeListener::new(consumer_filter_manager.clone()));
-        let consumer_manager =
-            ConsumerManager::new_with_broker_stats(consumer_ids_change_listener.clone(), broker_config.clone());
+        let consumer_manager = ConsumerManager::new_with_broker_stats_and_session_transition_locks(
+            consumer_ids_change_listener.clone(),
+            broker_config.clone(),
+            client_session_transition_locks,
+        );
 
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);

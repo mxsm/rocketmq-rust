@@ -29,9 +29,9 @@ use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::warn;
 
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -108,10 +108,16 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
 }
 
 impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
-    pub(crate) async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_command(request).await
+    }
+
+    /// V2 leaf business contract; the subscription registry retains no raw session handle.
+    async fn process_command(
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let body = match request.body() {
@@ -181,7 +187,6 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
                     {
                         return Ok(Some(self.response_with_code(request, code, remark)));
                     }
-                    registry.update_client_channel(entry.client_id(), channel.clone());
                     self.context.event_dispatcher.touch_client(entry.client_id());
                     let removed_lmq_names = if group_config.lite_sub_exclusive() {
                         self.exclude_conflicting_subscriptions(
@@ -249,7 +254,6 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
                         Ok(group_config) => group_config,
                         Err((code, remark)) => return Ok(Some(self.response_with_code(request, code, remark))),
                     };
-                    registry.update_client_channel(entry.client_id(), channel.clone());
                     self.context.event_dispatcher.touch_client(entry.client_id());
                     registry.add_complete_subscription(
                         entry.client_id(),
@@ -275,14 +279,17 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     }
 }
 
-impl<MS: BrokerStorePort> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
+impl<MS: BrokerStorePort + 'static> RequestProcessorV2 for LiteSubscriptionCtlProcessor<MS> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.context.command_factory;
+        let result = self.process_command(request.command_mut()).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "LiteSubscriptionCtlProcessor V2 command dispatch completed without a response",
+        )
     }
 }
 
@@ -483,11 +490,19 @@ mod tests {
     use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::api::v1::RequestProcessor;
-    use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::HandlerOutcome;
+    use rocketmq_transport::api::v2::RemotingRequest;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
 
     use super::LiteSubscriptionCtlContext;
     use super::LiteSubscriptionCtlPolicy;
@@ -496,6 +511,26 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
     use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
+    use rocketmq_transport::api::v2::RequestProcessorV2;
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedLiteSubscriptionProcessor {
+        inner: Arc<tokio::sync::Mutex<LiteSubscriptionCtlProcessor<BrokerMessageStore>>>,
+    }
+
+    impl RequestProcessorV2 for SharedLiteSubscriptionProcessor {
+        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+            self.inner.lock().await.process(request).await
+        }
+    }
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -550,18 +585,29 @@ mod tests {
         ))
     }
 
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
+    async fn dispatch_v2(
+        processor: LiteSubscriptionCtlProcessor<BrokerMessageStore>,
+        command: RemotingCommand,
+    ) -> EmbeddedDispatchOutcome {
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            SharedLiteSubscriptionProcessor {
+                inner: Arc::new(tokio::sync::Mutex::new(processor)),
+            },
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            crate::test_task_group("lite-subscription-v2"),
+            Principal::new("lite-subscription-v2-test"),
+        )
+        .dispatch(None, command)
+        .await
+        .expect("Lite subscription V2 dispatch should complete")
     }
 
     fn seed_group_config(runtime: &mut BrokerRuntime, group: &str, attributes: HashMap<CheetahString, CheetahString>) {
@@ -586,6 +632,22 @@ mod tests {
         let policy = LiteSubscriptionCtlPolicy::from_config(&broker_config);
 
         assert_eq!(policy.max_lite_subscription_count, 37);
+    }
+
+    #[tokio::test]
+    async fn lite_subscription_v2_returns_illegal_operation_for_a_missing_body() {
+        let mut runtime = new_test_runtime("v2-missing-body").await;
+        let processor = lite_subscription_processor_for_test(&mut runtime);
+        let request =
+            RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {}).set_opaque(7_707);
+
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
+            panic!("Lite subscription V2 must return an inline response plan");
+        };
+
+        assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::IllegalOperation);
+        assert_eq!(plan.body_len(), 0);
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[test]
@@ -644,11 +706,9 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
-            .process_request(channel, ctx, &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request should succeed")
             .expect("processor should return a response");
@@ -695,12 +755,10 @@ mod tests {
             .with_lite_topic_set(HashSet::from([CheetahString::from_static_str("child-a")]))]);
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
-        let channel = create_test_channel().await;
-        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
 
         let response = processor
-            .process_request(channel, ctx, &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request")
             .expect("response");
@@ -737,11 +795,9 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
-            .process_request(channel.clone(), ctx.clone(), &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request should succeed")
             .expect("processor should return a response");
@@ -762,7 +818,7 @@ mod tests {
             );
 
         let stale_response = processor
-            .process_request(channel, ctx, &mut stale_request)
+            .process_command(&mut stale_request)
             .await
             .expect("processor stale request should succeed")
             .expect("processor should return a response");
@@ -819,11 +875,9 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
-            .process_request(channel, ctx, &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request should succeed")
             .expect("processor should return a response");
@@ -861,11 +915,9 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
-            .process_request(channel, ctx, &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request should succeed")
             .expect("processor should return a response");
@@ -920,11 +972,9 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
-            .process_request(channel, ctx, &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request should succeed")
             .expect("processor should return a response");
@@ -983,11 +1033,9 @@ mod tests {
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
-            .process_request(channel, ctx, &mut request)
+            .process_command(&mut request)
             .await
             .expect("processor request should succeed")
             .expect("processor should return a response");

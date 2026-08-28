@@ -185,44 +185,54 @@ where
         match self {
             BrokerProcessorType::Send(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Pull(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::Peek(processor) => processor.process_request_shared(channel, ctx, request).await,
+            BrokerProcessorType::Peek(processor) => {
+                processor
+                    .process_legacy(channel.remote_address().to_string(), request)
+                    .await
+            }
             BrokerProcessorType::Pop(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::PopLite(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::Ack(processor) => processor.process_request_shared(channel, ctx, request).await,
+            BrokerProcessorType::Ack(processor) => {
+                processor
+                    .process_legacy(channel.remote_address().to_string(), request)
+                    .await
+            }
             BrokerProcessorType::ChangeInvisible(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
+                processor
+                    .process_legacy(channel.remote_address().to_string(), request)
+                    .await
             }
             BrokerProcessorType::Notification(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
             BrokerProcessorType::PollingInfo(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
+                processor
+                    .process_legacy(channel.remote_address().to_string(), request)
+                    .await
             }
             BrokerProcessorType::Reply(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::Recall(processor) => processor.process_request_shared(channel, ctx, request).await,
+            BrokerProcessorType::Recall(processor) => processor.process_legacy(ctx.remote_address(), request).await,
             BrokerProcessorType::QueryMessage(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
             BrokerProcessorType::ClientManage(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
+                processor.legacy_adapter().process_legacy(channel, request).await
             }
             BrokerProcessorType::ConsumerManage(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
+                processor
+                    .process_legacy(channel.remote_address().to_string().into(), request)
+                    .await
             }
             BrokerProcessorType::QueryAssignment(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
+                processor
+                    .process_legacy(channel.remote_address().to_string(), request)
+                    .await
             }
-            BrokerProcessorType::LiteManager(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
-            }
-            BrokerProcessorType::LiteSubscriptionCtl(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
-            }
-            BrokerProcessorType::EndTransaction(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
-            }
+            BrokerProcessorType::LiteManager(processor) => processor.process_legacy(request).await,
+            BrokerProcessorType::LiteSubscriptionCtl(processor) => processor.process_legacy(request).await,
+            BrokerProcessorType::EndTransaction(processor) => processor.process_legacy(request).await,
             BrokerProcessorType::Maintenance(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
+                processor.legacy_adapter().process_legacy(&channel, request).await
             }
             BrokerProcessorType::AdminBroker(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
@@ -234,22 +244,22 @@ where
         match self {
             BrokerProcessorType::Send(processor) => processor.reject_request(code),
             BrokerProcessorType::Pull(processor) => processor.reject_request_shared(),
-            BrokerProcessorType::Peek(processor) => processor.reject_request(code),
+            BrokerProcessorType::Peek(_) => (false, None),
             BrokerProcessorType::Pop(processor) => processor.reject_request(code),
             BrokerProcessorType::PopLite(processor) => processor.reject_request(code),
-            BrokerProcessorType::Ack(processor) => processor.reject_request(code),
-            BrokerProcessorType::ChangeInvisible(processor) => processor.reject_request(code),
+            BrokerProcessorType::Ack(_) => (false, None),
+            BrokerProcessorType::ChangeInvisible(_) => (false, None),
             BrokerProcessorType::Notification(processor) => processor.reject_request(code),
-            BrokerProcessorType::PollingInfo(processor) => processor.reject_request(code),
+            BrokerProcessorType::PollingInfo(_) => (false, None),
             BrokerProcessorType::Reply(processor) => processor.reject_request(code),
-            BrokerProcessorType::Recall(processor) => processor.reject_request(code),
+            BrokerProcessorType::Recall(_) => (false, None),
             BrokerProcessorType::QueryMessage(processor) => processor.reject_request(code),
-            BrokerProcessorType::ClientManage(processor) => processor.reject_request(code),
-            BrokerProcessorType::ConsumerManage(processor) => processor.reject_request(code),
-            BrokerProcessorType::QueryAssignment(processor) => processor.reject_request(code),
-            BrokerProcessorType::LiteManager(processor) => processor.reject_request(code),
-            BrokerProcessorType::LiteSubscriptionCtl(processor) => processor.reject_request(code),
-            BrokerProcessorType::EndTransaction(processor) => processor.reject_request(code),
+            BrokerProcessorType::ClientManage(_) => (false, None),
+            BrokerProcessorType::ConsumerManage(_) => (false, None),
+            BrokerProcessorType::QueryAssignment(_) => (false, None),
+            BrokerProcessorType::LiteManager(_) => (false, None),
+            BrokerProcessorType::LiteSubscriptionCtl(_) => (false, None),
+            BrokerProcessorType::EndTransaction(_) => (false, None),
             BrokerProcessorType::Maintenance(_) => (false, None),
             BrokerProcessorType::AdminBroker(_) => (false, None),
         }

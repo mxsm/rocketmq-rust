@@ -43,9 +43,10 @@ use rocketmq_store::PopCheckPoint;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -249,17 +250,29 @@ pub struct ChangeInvisibleTimeProcessor<MS: BrokerReadWriteStore> {
     context: ChangeInvisibleTimeProcessorContext<MS>,
 }
 
-impl<MS> RequestProcessor for ChangeInvisibleTimeProcessor<MS>
+impl<MS> RequestProcessorV2 for ChangeInvisibleTimeProcessor<MS>
 where
-    MS: BrokerReadWriteStore,
+    MS: BrokerReadWriteStore + 'static,
 {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.context.command_factory;
+        let request_source = request_origin_label(request.origin());
+        let result = self.process_command(request.command_mut(), &request_source).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "ChangeInvisibleTimeProcessor V2 command dispatch completed without a response",
+        )
+    }
+}
+
+fn request_origin_label(origin: &RequestOrigin) -> String {
+    match origin {
+        RequestOrigin::Network { peer } => peer.address().to_string(),
+        RequestOrigin::Embedded { .. } => "embedded".to_owned(),
+        _ => "unrecognized-origin".to_owned(),
     }
 }
 
@@ -267,16 +280,24 @@ impl<MS> ChangeInvisibleTimeProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        request_source: String,
         request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_command(request, &request_source).await
+    }
+
+    /// V2 leaf business contract; the typed origin is reduced to a diagnostic source label.
+    async fn process_command(
+        &self,
+        request: &mut RemotingCommand,
+        request_source: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("ChangeInvisibleTimeProcessor received request code: {:?}", request_code);
         match request_code {
-            RequestCode::ChangeMessageInvisibleTime => self.process_request_(channel, ctx, request_code, request).await,
+            RequestCode::ChangeMessageInvisibleTime => self.process_command_inner(request, request_source).await,
             _ => {
                 warn!(
                     "ChangeInvisibleTimeProcessor received unknown request code: {:?}",
@@ -307,22 +328,10 @@ impl<MS> ChangeInvisibleTimeProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    async fn process_request_(
+    async fn process_command_inner(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_inner(channel, ctx, request, true).await
-    }
-
-    pub async fn process_request_inner(
-        &self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-        _broker_allow_suspend: bool,
+        request_source: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()?;
         if request_header
@@ -339,8 +348,7 @@ where
         if topic_config.is_none() {
             error!(
                 "The topic {} not exist, consumer: {} ",
-                request_header.topic,
-                channel.remote_address()
+                request_header.topic, request_source
             );
 
             return Ok(Some(
@@ -358,10 +366,7 @@ where
         if request_header.queue_id >= topic_config.read_queue_nums as i32 || request_header.queue_id < 0 {
             let error_info = format!(
                 "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{}]",
-                request_header.queue_id,
-                request_header.topic,
-                topic_config.read_queue_nums,
-                channel.remote_address()
+                request_header.queue_id, request_header.topic, topic_config.read_queue_nums, request_source
             );
 
             error!("{}", error_info);
@@ -387,11 +392,7 @@ where
         if request_header.offset < mix_offset || request_header.offset > max_offset {
             let info = format!(
                 "request offset[{}] not in queue offset range[{}-{}], topic:[{}] consumer:[{}]",
-                request_header.offset,
-                mix_offset,
-                max_offset,
-                request_header.topic,
-                channel.remote_address()
+                request_header.offset, mix_offset, max_offset, request_header.topic, request_source
             );
 
             info!("{}", info);
@@ -743,8 +744,138 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use rocketmq_error::RocketMQResult;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
+    use rocketmq_store::StoreRuntimeConfig;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchError;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+
+    use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+
+    struct TestLeafProcessor<P> {
+        processor: Arc<tokio::sync::Mutex<P>>,
+    }
+
+    impl<P> Clone for TestLeafProcessor<P> {
+        fn clone(&self) -> Self {
+            Self {
+                processor: Arc::clone(&self.processor),
+            }
+        }
+    }
+
+    impl<P> TestLeafProcessor<P> {
+        fn new(processor: P) -> Self {
+            Self {
+                processor: Arc::new(tokio::sync::Mutex::new(processor)),
+            }
+        }
+    }
+
+    impl<P> RequestProcessorV2 for TestLeafProcessor<P>
+    where
+        P: RequestProcessorV2 + Send,
+    {
+        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+            self.processor.lock().await.process(request).await
+        }
+    }
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    async fn dispatch_embedded_v2<P>(
+        processor: P,
+        command: RemotingCommand,
+    ) -> Result<EmbeddedDispatchOutcome, EmbeddedDispatchError>
+    where
+        P: RequestProcessorV2 + Send + 'static,
+    {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("change-invisible-v2-test"))
+            .expect("ChangeInvisibleTime V2 test runtime");
+        let context = owner.root_context().component("change-invisible-v2-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            TestLeafProcessor::new(processor),
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let harness = EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            context.task_group().clone(),
+            Principal::new("change-invisible-v2-test"),
+        );
+        let outcome = harness.dispatch(None, command).await;
+
+        drop(harness);
+        drop(context);
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+        outcome
+    }
+
+    fn v2_test_processor() -> ChangeInvisibleTimeProcessor<StorePorts> {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let topic_config_manager = Arc::new(TopicConfigManager::new(
+            broker_config.as_ref(),
+            message_store_config.as_ref(),
+            true,
+            None,
+        ));
+        let consumer_offset_manager = Arc::new(ConsumerOffsetManager::new(
+            Arc::clone(&broker_config),
+            Arc::clone(&message_store_config),
+        ));
+        let stats_context = crate::test_service_context("change-invisible-v2-stats");
+        let broker_stats_manager = Arc::new(BrokerStatsManager::new(
+            Arc::new(StoreRuntimeConfig::default()),
+            stats_context.task_group().clone(),
+        ));
+        let store_host = "127.0.0.1:10911".parse().expect("valid store host");
+        let context = ChangeInvisibleTimeProcessorContext::new(
+            ChangeInvisibleTimePolicy::from_config(broker_config.as_ref(), store_host),
+            topic_config_manager,
+            consumer_offset_manager.query_capability(),
+            ChangeInvisibleTimeOrderCapability { manager: Weak::new() },
+            ChangeInvisibleTimeLiteCapability { processor: Weak::new() },
+            broker_stats_manager,
+            ChangeInvisibleTimeStoreCapability {
+                escape_bridge: Weak::new(),
+            },
+            ChangeInvisibleTimePopCapability {
+                merge_service: Weak::new(),
+            },
+            QueueLockManager::new(),
+        );
+        ChangeInvisibleTimeProcessor::new(context)
+    }
 
     #[test]
     fn change_invisible_time_policy_captures_only_required_startup_values() {
@@ -793,5 +924,21 @@ mod tests {
         assert!(source.contains("Weak<PopBufferMergeService<MS>>"));
         assert!(source.contains("Weak<ConsumerOrderInfoManager>"));
         assert!(source.contains("queue_lock_manager: QueueLockManager"));
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_unknown_request_returns_a_reply_plan() {
+        let outcome = dispatch_embedded_v2(
+            v2_test_processor(),
+            RemotingCommand::create_remoting_command(-98_452).set_opaque(318),
+        )
+        .await
+        .expect("embedded ChangeInvisibleTime V2 response");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("ChangeInvisibleTime V2 unknown request must return a reply plan");
+        };
+
+        assert_eq!(plan.response_code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
     }
 }

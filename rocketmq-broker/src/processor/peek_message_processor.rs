@@ -36,9 +36,10 @@ use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_transport::api::v1::command_from_error_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::error;
 use tracing::warn;
 
@@ -198,33 +199,43 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     }
 }
 
-impl<MS: BrokerReadWriteStore> RequestProcessor for PeekMessageProcessor<MS> {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_internal(channel, ctx, request, true).await
+impl<MS: BrokerReadWriteStore + 'static> RequestProcessorV2 for PeekMessageProcessor<MS> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_opaque = request.original_identity().original_opaque();
+        let command_factory = self.context.command_factory;
+        let request_source = request_origin_label(request.origin());
+        let result = self.process_command(request.command_mut(), &request_source).await;
+        crate::processor::response_plan::immediate_outcome_from_command_result(
+            &command_factory,
+            result,
+            original_opaque,
+            "PeekMessageProcessor V2 command dispatch completed without a response",
+        )
+    }
+}
+
+fn request_origin_label(origin: &RequestOrigin) -> String {
+    match origin {
+        RequestOrigin::Network { peer } => peer.address().to_string(),
+        RequestOrigin::Embedded { .. } => "embedded".to_owned(),
+        _ => "unrecognized-origin".to_owned(),
     }
 }
 
 impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
-    pub async fn process_request_shared(
+    pub(crate) async fn process_legacy(
         &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        request_source: String,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_internal(channel, ctx, request, true).await
+        self.process_command(request, &request_source).await
     }
 
-    async fn process_request_internal(
+    /// V2 leaf business contract; the typed origin is reduced to a diagnostic source label.
+    async fn process_command(
         &self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-        _broker_allow_suspend: bool,
+        request_source: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = self.context.message_store.now();
 
@@ -240,8 +251,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
             Err(e) => {
                 error!(
                     "Failed to decode PeekMessageRequestHeader: {:?}, channel: {}",
-                    e,
-                    channel.remote_address()
+                    e, request_source
                 );
                 let remark = format!("decode request header failed: {:?}", e);
                 let error = RocketMQError::request_header_error(remark.clone());
@@ -270,8 +280,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         if topic_config.is_none() {
             error!(
                 "The topic {} not exist, consumer: {}",
-                request_header.topic,
-                channel.remote_address()
+                request_header.topic, request_source
             );
             let response = response.set_code(ResponseCode::TopicNotExist).set_remark(format!(
                 "topic[{}] not exist, apply first please! {}",
@@ -294,10 +303,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         if request_header.queue_id >= topic_config.read_queue_nums as i32 {
             let error_info = format!(
                 "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{}]",
-                request_header.queue_id,
-                request_header.topic,
-                topic_config.read_queue_nums,
-                channel.remote_address()
+                request_header.queue_id, request_header.topic, topic_config.read_queue_nums, request_source
             );
             warn!("{}", error_info);
             let response = response.set_code(ResponseCode::SystemError).set_remark(error_info);
@@ -342,14 +348,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
 
         if need_retry {
             rest_num = self
-                .peek_retry_topic(
-                    &request_header,
-                    &mut get_message_result,
-                    random_q,
-                    revive_qid,
-                    &channel,
-                    pop_time,
-                )
+                .peek_retry_topic(&request_header, &mut get_message_result, random_q, revive_qid, pop_time)
                 .await;
         }
 
@@ -364,7 +363,6 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
                         queue_id,
                         rest_num,
                         revive_qid,
-                        &channel,
                         pop_time,
                     )
                     .await;
@@ -378,7 +376,6 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
                     request_header.queue_id,
                     rest_num,
                     revive_qid,
-                    &channel,
                     pop_time,
                 )
                 .await;
@@ -386,14 +383,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
 
         if !need_retry && get_message_result.message_mapped_list().len() < request_header.max_msg_nums as usize {
             rest_num = self
-                .peek_retry_topic(
-                    &request_header,
-                    &mut get_message_result,
-                    random_q,
-                    revive_qid,
-                    &channel,
-                    pop_time,
-                )
+                .peek_retry_topic(&request_header, &mut get_message_result, random_q, revive_qid, pop_time)
                 .await;
         }
 
@@ -478,7 +468,6 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         get_message_result: &mut GetMessageResult,
         random_q: u32,
         revive_qid: i32,
-        channel: &Channel,
         pop_time: i64,
     ) -> i64 {
         let mut rest_num = 0i64;
@@ -499,7 +488,6 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
                             queue_id,
                             rest_num,
                             revive_qid,
-                            channel,
                             pop_time,
                         )
                         .await;
@@ -521,7 +509,6 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         queue_id: i32,
         mut rest_num: i64,
         _revive_qid: i32,
-        _channel: &Channel,
         _pop_time: i64,
     ) -> i64 {
         // Determine topic (retry or normal)
@@ -647,8 +634,149 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use rocketmq_error::RocketMQResult;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::StateMachineVersionView;
     use rocketmq_store::StorePorts;
+    use rocketmq_store::StoreRuntimeConfig;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchError;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponseBodyKind;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+
+    use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+    use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+    use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
+
+    struct TestLeafProcessor<P> {
+        processor: Arc<tokio::sync::Mutex<P>>,
+    }
+
+    impl<P> Clone for TestLeafProcessor<P> {
+        fn clone(&self) -> Self {
+            Self {
+                processor: Arc::clone(&self.processor),
+            }
+        }
+    }
+
+    impl<P> TestLeafProcessor<P> {
+        fn new(processor: P) -> Self {
+            Self {
+                processor: Arc::new(tokio::sync::Mutex::new(processor)),
+            }
+        }
+    }
+
+    impl<P> RequestProcessorV2 for TestLeafProcessor<P>
+    where
+        P: RequestProcessorV2 + Send,
+    {
+        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+            self.processor.lock().await.process(request).await
+        }
+    }
+
+    struct AllowEmbeddedPolicy;
+
+    impl RequestPolicy for AllowEmbeddedPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    async fn dispatch_embedded_v2<P>(
+        processor: P,
+        command: RemotingCommand,
+    ) -> Result<EmbeddedDispatchOutcome, EmbeddedDispatchError>
+    where
+        P: RequestProcessorV2 + Send + 'static,
+    {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("peek-message-v2-test"))
+            .expect("PeekMessage V2 test runtime");
+        let context = owner.root_context().component("peek-message-v2-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            TestLeafProcessor::new(processor),
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let harness = EmbeddedRequestHarnessV2::new(
+            dispatcher,
+            context.task_group().clone(),
+            Principal::new("peek-message-v2-test"),
+        );
+        let outcome = harness.dispatch(None, command).await;
+
+        drop(harness);
+        drop(context);
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+        outcome
+    }
+
+    fn v2_test_processor() -> PeekMessageProcessor<StorePorts> {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let topic_config_manager = Arc::new(TopicConfigManager::new(
+            broker_config.as_ref(),
+            message_store_config.as_ref(),
+            true,
+            None,
+        ));
+        let subscription_group_manager = SubscriptionGroupManager::new(
+            SubscriptionGroupManagerConfig::from_configs(broker_config.as_ref(), message_store_config.as_ref()),
+            StateMachineVersionView::default(),
+            None,
+        );
+        let consumer_offset_manager = Arc::new(ConsumerOffsetManager::new(
+            Arc::clone(&broker_config),
+            Arc::clone(&message_store_config),
+        ));
+        let stats_context = crate::test_service_context("peek-message-v2-stats");
+        let broker_stats_manager = Arc::new(BrokerStatsManager::new(
+            Arc::new(StoreRuntimeConfig::default()),
+            stats_context.task_group().clone(),
+        ));
+        let context = PeekMessageProcessorContext::new(
+            PeekMessagePolicy::from_config(broker_config.as_ref()),
+            PopPolicyState::from_configs(
+                broker_config.as_ref(),
+                message_store_config.as_ref(),
+                "127.0.0.1:10911".parse().expect("valid store host"),
+            ),
+            topic_config_manager,
+            subscription_group_manager.config_lookup(),
+            consumer_offset_manager.query_capability(),
+            broker_stats_manager,
+            PeekMessageStoreCapability {
+                escape_bridge: Weak::new(),
+            },
+            PeekPopOffsetCapability {
+                merge_service: Weak::new(),
+            },
+        );
+        PeekMessageProcessor::new(context)
+    }
 
     #[test]
     fn peek_policy_captures_only_required_startup_values() {
@@ -710,5 +838,21 @@ mod tests {
         assert!(source.contains("Weak<EscapeBridge<MS>>"));
         assert!(source.contains("Weak<PopBufferMergeService<MS>>"));
         assert!(source.contains("ConsumerOffsetQueryCapability<MS>"));
+    }
+
+    #[tokio::test]
+    async fn v2_embedded_header_error_returns_a_reply_plan() {
+        let outcome = dispatch_embedded_v2(
+            v2_test_processor(),
+            RemotingCommand::create_remoting_command(RequestCode::PeekMessage).set_opaque(319),
+        )
+        .await
+        .expect("embedded PeekMessage V2 response");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("PeekMessage V2 header error must return a reply plan");
+        };
+
+        assert_eq!(plan.response_code(), ResponseCode::InvalidParameter as i32);
+        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
     }
 }

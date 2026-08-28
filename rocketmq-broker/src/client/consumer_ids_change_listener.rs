@@ -14,7 +14,22 @@
 
 use std::any::Any;
 
+use cheetah_string::CheetahString;
+use rocketmq_transport::api::v2::SessionId;
+
 use crate::client::consumer_group_event::ConsumerGroupEvent;
+
+/// Stable identity of a consumer group member without transport write authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConsumerConnectionIdentity {
+    Legacy {
+        client_id: CheetahString,
+    },
+    Session {
+        session_id: SessionId,
+        client_id: CheetahString,
+    },
+}
 
 /// Trait for listening to consumer ID changes.
 ///
@@ -33,6 +48,16 @@ pub trait ConsumerIdsChangeListener {
     /// * `group` - The name of the consumer group affected by the event.
     /// * `args` - Additional arguments or context provided with the event.
     fn handle(&self, event: ConsumerGroupEvent, group: &str, args: &[&dyn Any]);
+
+    /// Handles a V2 consumer membership change using stable identities instead of raw channels.
+    ///
+    /// The default implementation preserves compatibility for existing listeners. Implementors
+    /// that trigger rebalance or server push can opt in without receiving a `Channel` or request
+    /// context.
+    fn handle_connection_change(&self, group: &str, members: &[ConsumerConnectionIdentity]) {
+        let members = members.to_vec();
+        self.handle(ConsumerGroupEvent::Change, group, &[&members as &dyn Any]);
+    }
 
     /// Performs cleanup actions before shutdown.
     ///

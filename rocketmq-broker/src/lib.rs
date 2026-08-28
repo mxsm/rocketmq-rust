@@ -401,6 +401,7 @@ pub mod bench_support {
     pub use crate::client::client_channel_info::ClientChannelInfo;
     pub use crate::client::consumer_group_event::ConsumerGroupEvent;
     pub use crate::client::consumer_group_info::ConsumerGroupInfo;
+    pub use crate::client::consumer_ids_change_listener::ConsumerConnectionIdentity;
     pub use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
     pub use crate::client::manager::consumer_manager::ConsumerManager;
     pub use crate::filter::manager::consumer_filter_manager::ConsumerFilterManagerStatsSnapshot;

@@ -98,6 +98,60 @@ fn response_parts_reject_every_invalid_head_before_storing_an_owner() {
 }
 
 #[test]
+fn legacy_command_conversion_extracts_the_body_before_plan_validation() {
+    let parts = BrokerResponseParts::from_command(response_head().set_body(Bytes::from_static(b"body")))
+        .expect("legacy response body should become the affine bytes owner");
+    let BrokerResponseBodyOwner::Bytes(body) = parts.body() else {
+        panic!("legacy response bytes must be extracted from the head");
+    };
+    assert_eq!(body.as_ref(), b"body");
+
+    let plan = parts
+        .into_response_plan()
+        .expect("converted command should build a response plan");
+    assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
+    assert_eq!(plan.body_len(), 4);
+}
+
+#[test]
+fn immediate_leaf_mapper_turns_only_typed_header_failures_into_replies() {
+    let header_error = RocketMQError::request_header_error("malformed leaf header");
+    let expected_response_code = header_error.boundary_view().remoting().code.as_i32();
+    let outcome = immediate_outcome_from_command_result(
+        &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
+        Err(header_error),
+        9845,
+        "ordinary leaf returned no response",
+    )
+    .expect("typed request-header failures should become a Broker reply");
+    let HandlerOutcome::Reply(plan) = outcome else {
+        panic!("ordinary leaf error mapping must produce one reply")
+    };
+    assert_eq!(plan.response_code(), expected_response_code);
+
+    let non_header = RocketMQError::illegal_argument("business failure");
+    let result = immediate_outcome_from_command_result(
+        &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
+        Err(non_header),
+        9845,
+        "ordinary leaf returned no response",
+    );
+    assert!(result.is_err(), "non-header errors remain visible to the dispatcher");
+}
+
+#[test]
+fn immediate_leaf_mapper_rejects_legacy_none_semantics() {
+    let result = immediate_outcome_from_command_result(
+        &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
+        Ok(None),
+        9845,
+        "ordinary leaf returned no response",
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn bytes_owner_moves_into_the_plan_without_a_builder_copy() {
     let drops = Arc::new(AtomicUsize::new(0));
     let body = Bytes::from_owner(DropBytes {

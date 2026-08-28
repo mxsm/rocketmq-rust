@@ -25,6 +25,8 @@ pub(super) struct BrokerRequestPipeline {
     pub(super) auth_admin_service: Option<Arc<AuthAdminService>>,
     pub(super) consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     pub(super) processor_wiring_complete: bool,
+    #[cfg(test)]
+    pub(super) pull_message_processor_for_test: Option<Arc<PullMessageProcessor<BrokerMessageStore>>>,
 }
 
 impl BrokerRequestPipeline {
@@ -39,6 +41,8 @@ impl BrokerRequestPipeline {
             auth_admin_service: None,
             consumer_ids_change_listener,
             processor_wiring_complete: false,
+            #[cfg(test)]
+            pull_message_processor_for_test: None,
         }
     }
 }
@@ -139,6 +143,19 @@ impl BrokerRuntime {
             pull_message_result_handler,
             Arc::clone(&pull_message_context),
         ));
+        let session_client_lookup: Arc<dyn crate::long_polling::pull_deferred::PullSessionClientLookup> =
+            Arc::new(self.composition.state.consumer_manager().session_registry());
+        pull_message_processor
+            .install_session_client_lookup(session_client_lookup)
+            .map_err(|_| BrokerStartupError::Initialization {
+                component: "pull_session_client_lookup",
+                detail: "Pull session client lookup was already installed".to_owned(),
+            })?;
+        #[cfg(test)]
+        {
+            self.composition.request_pipeline.pull_message_processor_for_test =
+                Some(Arc::clone(&pull_message_processor));
+        }
 
         let consumer_manage_processor = self.composition.state.build_consumer_manage_processor();
         let pull_request_hold_service = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_message_processor)));
