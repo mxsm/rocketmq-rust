@@ -1128,22 +1128,7 @@ impl RequestProcessor for ControllerRequestProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cheetah_string::CheetahString;
     use rocketmq_error::ErrorKind;
-
-    #[test]
-    fn test_config_blacklist() {
-        // Test configuration blacklist initialization
-        let blacklist = HashSet::from([
-            "configBlackList".to_string(),
-            "configStorePath".to_string(),
-            "rocketmqHome".to_string(),
-        ]);
-
-        assert!(blacklist.contains("configBlackList"));
-        assert!(blacklist.contains("configStorePath"));
-        assert!(blacklist.contains("rocketmqHome"));
-    }
 
     #[tokio::test]
     async fn parse_properties_from_string_rejects_invalid_utf8_as_request_body() {
@@ -1167,79 +1152,5 @@ mod tests {
         let source = std::error::Error::source(&error).expect("serde source must be retained");
         assert!(source.downcast_ref::<serde_json::Error>().is_some());
         assert!(!error.boundary_view().context().to_string().contains("expected ident"));
-    }
-
-    #[test]
-    fn test_apply_broker_id_request_header_validation() {
-        // Test that ApplyBrokerIdRequestHeader can be created properly
-        let header = ApplyBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str("test_cluster"),
-            broker_name: CheetahString::from_static_str("test_broker"),
-            applied_broker_id: 1,
-            register_check_code: CheetahString::from_static_str("check_code_123"),
-        };
-
-        assert_eq!(header.cluster_name.as_str(), "test_cluster");
-        assert_eq!(header.broker_name.as_str(), "test_broker");
-        assert_eq!(header.applied_broker_id, 1);
-        assert_eq!(header.register_check_code.as_str(), "check_code_123");
-    }
-
-    #[test]
-    fn test_apply_broker_id_request_header_with_zero_id() {
-        // Test with broker ID 0 (master)
-        let header = ApplyBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str("production"),
-            broker_name: CheetahString::from_static_str("broker-group-1"),
-            applied_broker_id: 0,
-            register_check_code: CheetahString::from_static_str("master_check"),
-        };
-
-        assert_eq!(header.applied_broker_id, 0);
-        // Broker ID 0 is valid (represents master)
-        assert!(header.applied_broker_id >= 0);
-    }
-
-    #[test]
-    fn test_apply_broker_id_request_header_with_negative_id() {
-        // Test with negative broker ID (should be invalid)
-        let header = ApplyBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str("test"),
-            broker_name: CheetahString::from_static_str("broker"),
-            applied_broker_id: -1,
-            register_check_code: CheetahString::from_static_str(""),
-        };
-
-        // Negative ID should be rejected
-        assert!(header.applied_broker_id < 0);
-    }
-
-    #[test]
-    fn test_apply_broker_id_request_header_empty_fields() {
-        // Test with empty cluster_name and broker_name
-        let header = ApplyBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str(""),
-            broker_name: CheetahString::from_static_str(""),
-            applied_broker_id: 1,
-            register_check_code: CheetahString::from_static_str(""),
-        };
-
-        // Empty fields should be rejected in handler
-        assert!(header.cluster_name.is_empty());
-        assert!(header.broker_name.is_empty());
-    }
-
-    #[test]
-    fn test_apply_broker_id_request_header_large_broker_id() {
-        // Test with large broker ID
-        let header = ApplyBrokerIdRequestHeader {
-            cluster_name: CheetahString::from_static_str("cluster"),
-            broker_name: CheetahString::from_static_str("broker"),
-            applied_broker_id: i64::MAX,
-            register_check_code: CheetahString::from_static_str(""),
-        };
-
-        assert_eq!(header.applied_broker_id, i64::MAX);
-        assert!(header.applied_broker_id > 0);
     }
 }

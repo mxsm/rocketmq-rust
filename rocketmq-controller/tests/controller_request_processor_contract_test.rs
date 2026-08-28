@@ -412,6 +412,36 @@ async fn controller_request_contract_apply_broker_id() {
 }
 
 #[tokio::test]
+async fn controller_request_contract_rejects_invalid_apply_broker_id_headers() {
+    let mut harness = ProcessorHarness::new().await;
+    let invalid_request = ResponseCode::ControllerInvalidRequest;
+    let invalid_broker_id = ResponseCode::ControllerBrokerIdInvalid;
+
+    for (cluster_name, broker_name, broker_id, expected_code, expected_remark) in [
+        ("", BROKER_NAME, 1, invalid_request, "cluster_name"),
+        (CLUSTER_NAME, "", 1, invalid_request, "broker_name"),
+        (CLUSTER_NAME, BROKER_NAME, -1, invalid_broker_id, "non-negative"),
+    ] {
+        let response = harness
+            .send(RemotingCommand::create_request_command(
+                RequestCode::ControllerApplyBrokerId,
+                ApplyBrokerIdRequestHeader {
+                    cluster_name: CheetahString::from(cluster_name),
+                    broker_name: CheetahString::from(broker_name),
+                    applied_broker_id: broker_id,
+                    register_check_code: CheetahString::default(),
+                },
+            ))
+            .await;
+
+        assert_eq!(ResponseCode::from(response.code()), expected_code);
+        assert!(response.remark().is_some_and(|remark| remark.contains(expected_remark)));
+    }
+
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn controller_request_contract_register_broker() {
     let mut harness = ProcessorHarness::new().await;
     let broker_id = FIRST_BROKER_CONTROLLER_ID as i64;
@@ -721,6 +751,17 @@ async fn controller_request_contract_update_controller_config() {
         1234
     );
     assert!(!harness.manager.controller_config().notify_broker_role_changed);
+
+    for key in ["configBlackList", "configStorePath", "rocketmqHome"] {
+        let response = harness
+            .send(
+                RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig)
+                    .set_body(format!("{key}=blocked").into_bytes()),
+            )
+            .await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission, "{key}");
+    }
 
     harness.shutdown().await;
 }
