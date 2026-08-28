@@ -33,7 +33,6 @@ use crate::clients::client::SessionConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
-use crate::runtime::processor::RequestProcessor;
 
 enum ConnectFlightState<PR> {
     Connecting,
@@ -49,7 +48,7 @@ pub(super) struct ConnectFlight<PR> {
 
 impl<PR> ConnectFlight<PR>
 where
-    PR: RequestProcessor + Sync + Clone + Send + 'static,
+    PR: Sync + Clone + Send + 'static,
 {
     pub(super) fn new(lease: Option<EndpointLease>) -> Self {
         Self {
@@ -115,7 +114,7 @@ where
 /// unpolled future cannot strand its waiters behind a removed worker task.
 struct FlightCompletionGuard<PR>
 where
-    PR: RequestProcessor + Sync + Clone + Send + 'static,
+    PR: Sync + Clone + Send + 'static,
 {
     registry: Arc<ConnectionRegistry<PR>>,
     target: CheetahString,
@@ -124,7 +123,7 @@ where
 
 impl<PR> FlightCompletionGuard<PR>
 where
-    PR: RequestProcessor + Sync + Clone + Send + 'static,
+    PR: Sync + Clone + Send + 'static,
 {
     fn new(registry: Arc<ConnectionRegistry<PR>>, target: CheetahString, flight: Arc<ConnectFlight<PR>>) -> Self {
         Self {
@@ -137,7 +136,7 @@ where
 
 impl<PR> Drop for FlightCompletionGuard<PR>
 where
-    PR: RequestProcessor + Sync + Clone + Send + 'static,
+    PR: Sync + Clone + Send + 'static,
 {
     fn drop(&mut self) {
         self.flight.complete_not_started();
@@ -145,7 +144,7 @@ where
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// Get an existing healthy client or create a new connection.
     pub(super) async fn get_and_create_client_until(
         &self,
@@ -418,7 +417,7 @@ mod tests {
     use tokio::task::JoinSet;
 
     use super::*;
-    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 
     async fn assert_connect_flight_preserves_failure(error: RocketMQError) {
         const WAITERS: usize = 3;

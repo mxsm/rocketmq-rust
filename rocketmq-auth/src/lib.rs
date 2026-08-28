@@ -22,6 +22,7 @@ mod layered_authorization;
 mod maintenance;
 mod migration;
 mod permission;
+mod remoting_auth_context;
 mod runtime;
 mod secret_provider;
 /// Runtime-neutral contracts implemented by authentication and authorization providers.
@@ -198,6 +199,7 @@ pub use maintenance::MaintenanceRoleGrant;
 )]
 pub use maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
 pub use permission::Permission;
+pub use remoting_auth_context::RemotingAuthContext;
 pub use rocketmq_observability::metrics::auth::AuthMetricSample;
 pub use rocketmq_observability::metrics::auth::AuthMetrics;
 pub use rocketmq_observability::metrics::auth::AuthMetricsSnapshot;

@@ -31,7 +31,7 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::clients::rocketmq_tokio_client::TransportClient;
-use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 use crate::runtime::config::client_config::TransportClientConfig;
 
 use self::runtime_test_support::test_service_context;

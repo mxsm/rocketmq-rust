@@ -30,6 +30,7 @@ use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
 use rocketmq_transport::api::v2::ClaimedDeferred;
+use rocketmq_transport::api::v2::DefaultRequestProcessor as V2DefaultRequestProcessor;
 use rocketmq_transport::api::v2::DeferredCancellationReason;
 use rocketmq_transport::api::v2::DeferredClaimError;
 use rocketmq_transport::api::v2::DeferredClaimErrorKind;
@@ -73,6 +74,8 @@ use rocketmq_transport::api::v2::ProtocolNoResponseError;
 use rocketmq_transport::api::v2::ProtocolNoResponseReason;
 use rocketmq_transport::api::v2::ProxyInfoSnapshot;
 use rocketmq_transport::api::v2::RejectRequestDecision;
+use rocketmq_transport::api::v2::RemotingClient as V2RemotingClient;
+use rocketmq_transport::api::v2::RemotingClientV2Builder;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestControlView;
 use rocketmq_transport::api::v2::RequestDeadline as V2RequestDeadline;
@@ -94,7 +97,11 @@ use rocketmq_transport::api::v2::ResponseWritePath;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::SessionStateView;
 use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::v2::TransportClient as V2TransportClient;
+use rocketmq_transport::api::v2::TransportClientV2Builder;
 use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::V2SessionEvent;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use rocketmq_transport::api::v2::WriteProgress;
 
 fn assert_same_deadline_type(_: &V1RequestDeadline, _: &V2RequestDeadline) {}
@@ -636,4 +643,21 @@ fn v2_network_dispatcher_and_server_are_public_nameable_facades() {
         service_context,
         dispatcher,
     );
+}
+
+#[test]
+fn v2_client_facade_defaults_and_builders_are_v2_native() {
+    fn assert_v2_transport<PR: RequestProcessorV2>(_: Option<V2TransportClient<PR>>) {}
+    fn assert_v2_remoting<PR: RequestProcessorV2>(_: Option<V2RemotingClient<PR>>) {}
+
+    let transport: Option<V2TransportClient> = None;
+    let remoting: Option<V2RemotingClient> = None;
+    assert_v2_transport(transport);
+    assert_v2_remoting(remoting);
+
+    let _: Option<TransportClientV2Builder<V2DefaultRequestProcessor>> = None;
+    let _: Option<RemotingClientV2Builder<V2DefaultRequestProcessor>> = None;
+    let registry = V2SessionRegistry::new();
+    assert!(registry.is_empty());
+    let _: tokio::sync::broadcast::Receiver<V2SessionEvent> = registry.subscribe();
 }

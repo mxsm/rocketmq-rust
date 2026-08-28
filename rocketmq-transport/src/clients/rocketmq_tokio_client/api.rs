@@ -28,12 +28,13 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestUsage;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
+use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
-use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::GoAwayPolicy;
 use crate::runtime::config::client_config::TransportClientConfig;
 use crate::runtime::processor::RequestProcessor;
+use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::telemetry::TransportTelemetry;
@@ -105,6 +106,68 @@ where
     }
 }
 
+/// Builds a persistent endpoint client with an explicit V2 inbound processor.
+pub struct TransportClientV2Builder<PR> {
+    config: Arc<TransportClientConfig>,
+    processor: PR,
+    service_context: ChildServiceContext,
+    connection_events: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+    transport_security: Option<Arc<TransportSecurity>>,
+    telemetry: TransportTelemetry,
+    frame_limits: FrameLimits,
+    go_away_policy: GoAwayPolicy,
+}
+
+impl<PR> TransportClientV2Builder<PR>
+where
+    PR: RequestProcessorV2 + Sync + Clone + 'static,
+{
+    pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
+        self.connection_events = Some(events);
+        self
+    }
+
+    pub fn transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport_security = Some(transport_security);
+        self
+    }
+
+    pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    /// Applies one validated frame profile to every connection created by this client.
+    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        frame_limits.validate()?;
+        self.frame_limits = frame_limits;
+        Ok(self)
+    }
+
+    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
+    #[must_use]
+    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
+        self.go_away_policy = policy;
+        self
+    }
+
+    pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
+        let mut client = TransportClient::build_inner_v2(
+            self.config,
+            self.processor,
+            self.connection_events,
+            self.service_context,
+            self.telemetry,
+            self.frame_limits,
+            self.go_away_policy,
+        )?;
+        if let Some(transport_security) = self.transport_security {
+            client = client.with_transport_security(transport_security);
+        }
+        Ok(client)
+    }
+}
+
 /// Nameserver-aware remoting client.
 ///
 /// This type composes the canonical persistent [`TransportClient`]. It never
@@ -127,7 +190,27 @@ where
             transport: TransportClient::builder(config, processor, service_context),
         }
     }
+}
 
+impl<PR> RemotingClient<PR>
+where
+    PR: RequestProcessorV2 + Sync + Clone + 'static,
+{
+    pub fn builder_v2(
+        config: Arc<TransportClientConfig>,
+        processor: PR,
+        service_context: ChildServiceContext,
+    ) -> RemotingClientV2Builder<PR> {
+        RemotingClientV2Builder {
+            transport: TransportClient::builder_v2(config, processor, service_context),
+        }
+    }
+}
+
+impl<PR> RemotingClient<PR>
+where
+    PR: Send + Sync + Clone + 'static,
+{
     pub fn transport_client(&self) -> Arc<TransportClient<PR>> {
         Arc::clone(&self.transport)
     }
@@ -160,6 +243,49 @@ pub struct RemotingClientBuilder<PR> {
 impl<PR> RemotingClientBuilder<PR>
 where
     PR: RequestProcessor + Sync + Clone + 'static,
+{
+    pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
+        self.transport = self.transport.connection_events(events);
+        self
+    }
+
+    pub fn transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport = self.transport.transport_security(transport_security);
+        self
+    }
+
+    pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.transport = self.transport.telemetry(telemetry);
+        self
+    }
+
+    /// Applies one validated frame profile to every connection created by this client.
+    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        self.transport = self.transport.frame_limits(frame_limits)?;
+        Ok(self)
+    }
+
+    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
+    #[must_use]
+    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
+        self.transport = self.transport.go_away_policy(policy);
+        self
+    }
+
+    pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
+        Ok(RemotingClient {
+            transport: Arc::new(self.transport.build()?),
+        })
+    }
+}
+
+pub struct RemotingClientV2Builder<PR> {
+    transport: TransportClientV2Builder<PR>,
+}
+
+impl<PR> RemotingClientV2Builder<PR>
+where
+    PR: RequestProcessorV2 + Sync + Clone + 'static,
 {
     pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
         self.transport = self.transport.connection_events(events);
@@ -284,7 +410,28 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             go_away_policy: GoAwayPolicy::default(),
         }
     }
+}
 
+impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
+    pub fn builder_v2(
+        tokio_client_config: Arc<TransportClientConfig>,
+        processor: PR,
+        service_context: ChildServiceContext,
+    ) -> TransportClientV2Builder<PR> {
+        TransportClientV2Builder {
+            config: tokio_client_config,
+            processor,
+            service_context,
+            connection_events: None,
+            transport_security: None,
+            telemetry: TransportTelemetry::noop(),
+            frame_limits: FrameLimits::java_compatibility(),
+            go_away_policy: GoAwayPolicy::default(),
+        }
+    }
+}
+
+impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// Installs an optional transport signer for newly created outbound sessions.
     pub fn with_transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
         self.transport_security = Some(transport_security);
@@ -478,8 +625,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     pub fn close_clients(&self, addrs: Vec<String>) {
         self.close_clients_inner(addrs);
     }
+}
 
-    /// Retained compatibility facade for request processors fixed at construction.
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    /// Retained V1 compatibility facade for request processors fixed at construction.
     ///
     /// Use [`TransportClient::builder`] or [`RemotingClient::builder`] and
     /// propagate the fallible `build()?` result instead.

@@ -30,9 +30,9 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::debug;
 use tracing::warn;
 
@@ -62,15 +62,11 @@ pub struct ClientRequestProcessor {
     startup_time_millis: u64,
 }
 
-impl RequestProcessor for ClientRequestProcessor {
+impl RequestProcessorV2 for ClientRequestProcessor {
     #[inline]
-    async fn process_request(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.handle_request(request).await
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let response = self.handle_request(request.command_mut()).await?;
+        crate::processor::response_outcome(response)
     }
 }
 

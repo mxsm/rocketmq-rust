@@ -78,6 +78,7 @@ pub(super) struct V2ConnectionHandler<P> {
     pub(super) shutdown_complete_tx: mpsc::Sender<()>,
     pub(super) conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     pub(super) dispatcher: Arc<AuthorizedCommandDispatcherV2<P>>,
+    pub(super) session_registry: Option<Arc<crate::v2_session_registry::V2SessionRegistry>>,
 }
 
 pub(crate) struct V2NetworkRouteState {
@@ -257,6 +258,9 @@ where
     type SessionState = V2NetworkRouteState;
 
     async fn connected(&self, session: crate::server::SessionHandle) -> Option<Self::SessionState> {
+        if let Some(registry) = &self.session_registry {
+            registry.register(&session);
+        }
         Some(V2NetworkRouteState {
             _shutdown_complete: self.shutdown_complete_tx.clone(),
             deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id()),
@@ -304,6 +308,9 @@ where
     }
 
     async fn disconnected(&self, _state: Self::SessionState, session: crate::server::SessionHandle) {
+        if let Some(registry) = &self.session_registry {
+            registry.unregister(&session);
+        }
         if let Some(notify) = &self.conn_disconnect_notify {
             let _ = notify.send(session.remote_addr());
         }

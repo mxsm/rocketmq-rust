@@ -15,9 +15,8 @@
 use std::fmt;
 
 use cheetah_string::CheetahString;
-use rocketmq_transport::api::v1::Channel;
 
-pub trait RemotingChannel: Send + Sync {}
+use crate::controller::broker_heartbeat_manager::BrokerSession;
 
 #[derive(Clone)]
 pub struct BrokerLiveInfo {
@@ -27,7 +26,7 @@ pub struct BrokerLiveInfo {
 
     heartbeat_timeout_millis: u64,
 
-    channel: Channel,
+    session: BrokerSession,
 
     broker_id: i64,
     last_update_timestamp: u64,
@@ -46,7 +45,7 @@ impl BrokerLiveInfo {
         broker_id: i64,
         last_update_timestamp: u64,
         heartbeat_timeout_millis: u64,
-        channel: Channel,
+        session: BrokerSession,
         epoch: i32,
         max_offset: i64,
         election_priority: Option<i32>,
@@ -58,7 +57,7 @@ impl BrokerLiveInfo {
             broker_id,
             last_update_timestamp,
             heartbeat_timeout_millis,
-            channel,
+            session,
             epoch,
             max_offset,
             confirm_offset: confirm_offset.unwrap_or(0),
@@ -105,8 +104,8 @@ impl BrokerLiveInfo {
         self.election_priority
     }
 
-    pub fn channel(&self) -> &Channel {
-        &self.channel
+    pub fn session(&self) -> &BrokerSession {
+        &self.session
     }
 
     // setters
@@ -138,8 +137,8 @@ impl BrokerLiveInfo {
         self.broker_addr = addr.into();
     }
 
-    pub fn set_channel(&mut self, channel: Channel) {
-        self.channel = channel;
+    pub fn set_session(&mut self, session: BrokerSession) {
+        self.session = session;
     }
 }
 
@@ -161,43 +160,24 @@ impl fmt::Debug for BrokerLiveInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-
-    use rocketmq_transport::test_support::Connection;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     use super::*;
 
-    async fn create_test_channel() -> Channel {
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let listener = std::net::TcpListener::bind(addr).unwrap();
-        let local_addr = listener.local_addr().unwrap();
-        let std_stream = std::net::TcpStream::connect(local_addr).unwrap();
-        std_stream.set_nonblocking(true).unwrap();
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).unwrap();
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(
-            connection,
-            rocketmq_runtime::RuntimeContext::from_current("broker-live-info-test")
-                .service_context("test-channel")
-                .task_group()
-                .clone(),
-        )
-        .addresses(local_addr, local_addr)
-        .build()
-        .expect("build test channel")
+    fn test_session(id: u64) -> BrokerSession {
+        BrokerSession::for_test(id, Arc::new(AtomicBool::new(false)))
     }
 
-    #[tokio::test]
-    async fn broker_live_info_new() {
-        let channel = create_test_channel().await;
+    #[test]
+    fn broker_live_info_new() {
         let info = BrokerLiveInfo::new(
             "test_broker",
             "127.0.0.1:10911",
             0,
             1000,
             3000,
-            channel,
+            test_session(1),
             1,
             100,
             Some(10),
@@ -215,16 +195,15 @@ mod tests {
         assert_eq!(info.election_priority(), Some(10));
     }
 
-    #[tokio::test]
-    async fn broker_live_info_setters_and_getters() {
-        let channel = create_test_channel().await;
+    #[test]
+    fn broker_live_info_setters_and_getters() {
         let mut info = BrokerLiveInfo::new(
             "test_broker",
             "127.0.0.1:10911",
             0,
             1000,
             3000,
-            channel.clone(),
+            test_session(1),
             1,
             100,
             Some(10),
@@ -255,22 +234,22 @@ mod tests {
         info.set_broker_addr("192.168.1.100:10911");
         assert_eq!(info.broker_addr(), "192.168.1.100:10911");
 
-        let new_channel = create_test_channel().await;
-        let expected_channel = new_channel.clone();
-        info.set_channel(new_channel);
-        assert_eq!(info.channel(), &expected_channel);
+        info.set_session(test_session(2));
+        assert_eq!(
+            info.session().id(),
+            crate::controller::broker_heartbeat_manager::BrokerSessionId::for_test(2)
+        );
     }
 
-    #[tokio::test]
-    async fn broker_live_info_clone() {
-        let channel = create_test_channel().await;
+    #[test]
+    fn broker_live_info_clone() {
         let info = BrokerLiveInfo::new(
             "test_broker",
             "127.0.0.1:10911",
             0,
             1000,
             3000,
-            channel,
+            test_session(1),
             1,
             100,
             Some(10),
@@ -285,16 +264,15 @@ mod tests {
         assert_eq!(cloned.max_offset(), info.max_offset());
     }
 
-    #[tokio::test]
-    async fn broker_live_info_debug_format() {
-        let channel = create_test_channel().await;
+    #[test]
+    fn broker_live_info_debug_format() {
         let info = BrokerLiveInfo::new(
             "test_broker",
             "127.0.0.1:10911",
             0,
             1000,
             3000,
-            channel,
+            test_session(1),
             1,
             100,
             Some(10),

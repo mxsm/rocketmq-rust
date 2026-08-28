@@ -59,7 +59,6 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::LayerRequirement;
 use rocketmq_security_api::Principal;
-use rocketmq_transport::api::v1::ChannelEventListener;
 #[cfg(test)]
 use rocketmq_transport::api::v1::ClientShutdownReport;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
@@ -68,8 +67,9 @@ use rocketmq_transport::api::v1::RemotingClient;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportSecurity;
-use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
+use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::debug;
@@ -139,7 +139,7 @@ struct NameServerRuntime {
     scheduled_tasks: Option<ScheduledTaskGroup>,
     shutdown_tx: Option<watch::Sender<bool>>,
     shutdown_rx: Option<watch::Receiver<bool>>,
-    server_inner: Option<TransportServer<NameServerRequestProcessor>>,
+    server_inner: Option<TransportServerV2<NameServerRequestProcessor>>,
     /// Server task group for graceful shutdown
     server_task_group: Option<TaskGroup>,
     server_report_rx: Option<oneshot::Receiver<Option<ShutdownReport>>>,
@@ -593,11 +593,13 @@ impl NameServerRuntime {
             .service_context
             .as_ref()
             .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let mut server = TransportServer::new_with_telemetry(
+        let mut server = TransportServerV2::new_with_telemetry(
             config,
             context.component("namesrv.remoting-server"),
+            self.init_processors(),
             self.inner.transport_telemetry.clone(),
-        );
+        )
+        .with_session_registry(Arc::clone(&self.inner.session_registry));
         if let Some(transport_security) = &self.inner.transport_security {
             server =
                 server.with_transport_security(Arc::clone(transport_security), self.inner.transport_principal.clone());
@@ -613,6 +615,20 @@ impl NameServerRuntime {
     ///
     /// Schedules periodic broker health checks to detect and remove inactive brokers
     fn start_schedule_service(&mut self) -> RocketMQResult<()> {
+        let session_events = self.inner.session_registry.subscribe();
+        let session_shutdown = self
+            .shutdown_tx
+            .as_ref()
+            .ok_or_else(|| namesrv_runtime_state_error("shutdown channel is not initialized"))?
+            .subscribe();
+        let housekeeping = self.inner.broker_housekeeping_service();
+        self.inner
+            .component_task_group("namesrv.broker-session-observer")
+            .spawn_service("namesrv.broker-session-observer", async move {
+                housekeeping.run(session_events, session_shutdown).await;
+            })
+            .map_err(|error| namesrv_startup_failed("start broker session observer", error))?;
+
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
         let name_server_runtime_inner = NameServerRuntimeHandle::new(&self.inner);
         let task_group = self.inner.component_task_group("namesrv.scheduled");
@@ -679,19 +695,14 @@ impl NameServerRuntime {
 
         info!("Starting NameServer main loop...");
 
-        let request_processor = self.init_processors();
-
         // Take server instance for async execution
-        let mut server = self
+        let server = self
             .server_inner
             .take()
             .expect("Server not initialized - call initialize() first");
 
         // Start route info manager service
         self.inner.route_info_manager().start();
-
-        // Get broker housekeeping service for server
-        let channel_event_listener = Some(self.inner.broker_housekeeping_service() as Arc<dyn ChannelEventListener>);
 
         // Spawn server task and retain handle for graceful shutdown
         let mut server_shutdown_rx = self
@@ -707,8 +718,6 @@ impl NameServerRuntime {
                 debug!("Server task started");
                 let report = server
                     .try_run_with_shutdown_report_and_startup(
-                        request_processor,
-                        channel_event_listener,
                         async move {
                             signals::wait(&mut server_shutdown_rx).await;
                         },
@@ -1249,6 +1258,7 @@ impl Builder {
             }
         });
         let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
+        let session_registry = Arc::new(V2SessionRegistry::new());
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
@@ -1263,6 +1273,7 @@ impl Builder {
             let runtime_handle = NameServerRuntimeHandle::from_weak(weak_inner.clone());
             let route_info_manager = RouteInfoManager::new(
                 runtime_handle.clone(),
+                Arc::clone(&session_registry),
                 unregister_broker_queue_capacity,
                 unregister_broker_batch_size,
                 unregister_broker_batch_time,
@@ -1294,6 +1305,7 @@ impl Builder {
                 )),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
+                session_registry: Arc::clone(&session_registry),
                 #[cfg(feature = "embedded-controller")]
                 controller_manager: OnceLock::new(),
                 cluster_test_route_lookup,
@@ -1344,6 +1356,7 @@ pub(crate) struct NameServerRuntimeInner {
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
+    session_registry: Arc<V2SessionRegistry>,
     #[cfg(feature = "embedded-controller")]
     controller_manager: OnceLock<Arc<ControllerManager>>,
     #[cfg(feature = "embedded-controller")]
@@ -1968,14 +1981,16 @@ mod tests {
     use rocketmq_security_api::SecurityBootstrapProfile;
     use rocketmq_transport::api::v1::AdmissionController;
     use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::v1::ConnectionState;
     use rocketmq_transport::api::v1::RPCHook;
-    use rocketmq_transport::api::v1::RequestContext;
-    use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::api::v1::ServerConfig;
     use rocketmq_transport::api::v1::TlsMode;
-    use rocketmq_transport::api::v1::TransportTelemetry;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::SessionId;
+    use rocketmq_transport::api::v2::V2SessionEvent;
+    use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::oneshot;
@@ -2010,6 +2025,7 @@ mod tests {
     }
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
+    use crate::route::types::BrokerSession;
 
     fn test_service_context() -> ChildServiceContext {
         static OWNER: std::sync::OnceLock<rocketmq_runtime::RuntimeOwner> = std::sync::OnceLock::new();
@@ -2036,7 +2052,7 @@ mod tests {
 
     struct LayeredDispatchFixture {
         service: ChildServiceContext,
-        dispatcher: Arc<AuthorizedCommandDispatcher<NameServerRequestProcessor>>,
+        dispatcher: Arc<AuthorizedCommandDispatcherV2<NameServerRequestProcessor>>,
         auth_runtime: Option<Arc<AuthRuntime>>,
         bootstrap: NameServerBootstrap,
     }
@@ -2059,22 +2075,16 @@ mod tests {
             .await
             .expect("test NameServer auth runtime should initialize");
         let processor = bootstrap.name_server_runtime.init_processors();
-        let process_budget = service.process_budget();
         let admission = Arc::new(
-            AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+            AdmissionController::try_new_with_budget(AdmissionLimits::default(), &service.process_budget())
                 .expect("test admission limits should be valid"),
         );
-        let dispatcher = Arc::new(
-            AuthorizedCommandDispatcher::try_new(
-                processor,
-                Vec::new(),
-                &process_budget,
-                TransportTelemetry::noop(),
-                transport_security,
-                admission,
-            )
-            .expect("test dispatcher should fit the process budget"),
-        );
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            processor,
+            Vec::new(),
+            transport_security,
+            admission,
+        ));
 
         LayeredDispatchFixture {
             service,
@@ -2094,17 +2104,23 @@ mod tests {
         request
     }
 
-    async fn dispatch_layered_request(fixture: &LayeredDispatchFixture, request: RemotingCommand) -> RemotingCommand {
-        fixture
-            .dispatcher
-            .dispatch_embedded(
-                fixture.service.task_group(),
-                RequestContext::try_embedded(Some(Principal::new("namesrv-layered-test")), None)
-                    .expect("test embedded identity should be accepted"),
-                request,
-            )
+    async fn dispatch_layered_request(
+        fixture: &LayeredDispatchFixture,
+        request: RemotingCommand,
+    ) -> rocketmq_transport::api::v2::ResponsePlan {
+        let harness = EmbeddedRequestHarnessV2::new(
+            Arc::clone(&fixture.dispatcher),
+            fixture.service.task_group().clone(),
+            Principal::new("namesrv-layered-test"),
+        );
+        let outcome = harness
+            .dispatch(None, request)
             .await
-            .expect("layered dispatch should return a response")
+            .expect("layered dispatch should return a response");
+        match outcome {
+            EmbeddedDispatchOutcome::Reply(plan) => plan,
+            _ => panic!("layered NameServer request must reply"),
+        }
     }
 
     async fn shutdown_layered_dispatch_fixture(fixture: LayeredDispatchFixture) {
@@ -2167,7 +2183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn layered_dispatch_uses_production_ingress_and_detailed_authorization_pipeline() {
+    async fn layered_embedded_dispatch_uses_production_ingress_and_fails_closed_without_policy() {
         let runtime = RuntimeContext::from_current("namesrv-layered-dispatch-test");
 
         let secure_without_auth = layered_dispatch_fixture(
@@ -2182,21 +2198,15 @@ mod tests {
             RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(0x7101),
         )
         .await;
-        assert_eq!(ResponseCode::from(coarse_denied.code()), ResponseCode::NoPermission);
         assert_eq!(
-            coarse_denied.remark().map(CheetahString::as_str),
-            Some(rocketmq_security_api::LAYERED_AUTHORIZATION_DENIED_REASON)
+            ResponseCode::from(coarse_denied.response_code()),
+            ResponseCode::NoPermission
         );
 
         let required_abstention = dispatch_layered_request(&secure_without_auth, layered_route_request(0x7102)).await;
         assert_eq!(
-            ResponseCode::from(required_abstention.code()),
+            ResponseCode::from(required_abstention.response_code()),
             ResponseCode::NoPermission
-        );
-        assert_ne!(
-            required_abstention.remark().map(CheetahString::as_str),
-            Some(rocketmq_security_api::LAYERED_AUTHORIZATION_DENIED_REASON),
-            "a known request must have passed coarse ingress and been rejected by required detailed authorization"
         );
         shutdown_layered_dispatch_fixture(secure_without_auth).await;
 
@@ -2218,7 +2228,10 @@ mod tests {
         )
         .await;
         let whitelisted = dispatch_layered_request(&secure_with_whitelist, layered_route_request(0x7103)).await;
-        assert_eq!(ResponseCode::from(whitelisted.code()), ResponseCode::TopicNotExist);
+        assert_eq!(
+            ResponseCode::from(whitelisted.response_code()),
+            ResponseCode::TopicNotExist
+        );
         shutdown_layered_dispatch_fixture(secure_with_whitelist).await;
 
         let disabled = layered_dispatch_fixture(
@@ -2233,8 +2246,8 @@ mod tests {
         .await;
         let optional_abstention = dispatch_layered_request(&disabled, layered_route_request(0x7104)).await;
         assert_eq!(
-            ResponseCode::from(optional_abstention.code()),
-            ResponseCode::TopicNotExist
+            ResponseCode::from(optional_abstention.response_code()),
+            ResponseCode::NoPermission
         );
         shutdown_layered_dispatch_fixture(disabled).await;
 
@@ -2247,8 +2260,8 @@ mod tests {
         .await;
         let development_response = dispatch_layered_request(&development, layered_route_request(0x7105)).await;
         assert_eq!(
-            ResponseCode::from(development_response.code()),
-            ResponseCode::TopicNotExist
+            ResponseCode::from(development_response.response_code()),
+            ResponseCode::NoPermission
         );
         shutdown_layered_dispatch_fixture(development).await;
     }
@@ -2486,8 +2499,8 @@ mod tests {
         second_writer.await.expect("second config writer should not panic");
     }
 
-    #[test]
-    fn runtime_owned_service_clones_do_not_keep_root_alive() {
+    #[tokio::test]
+    async fn runtime_owned_service_clones_do_not_keep_root_alive() {
         let bootstrap = build_default_bootstrap();
         let request_processor = bootstrap.name_server_runtime.init_processors();
         let runtime = bootstrap.runtime_inner();
@@ -2744,10 +2757,12 @@ mod tests {
         harness: &LocalRequestHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
-        let mut processor =
+        let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let broker_session = (request.code() == RequestCode::RegisterBroker as i32)
+            .then(|| BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()));
         processor
-            .process_request(harness.channel(), harness.context(), request)
+            .handle_command(request, broker_session)
             .await
             .expect("request processing should succeed")
             .expect("processor should always return a response")
@@ -2755,13 +2770,12 @@ mod tests {
 
     async fn process_with_client_processor(
         bootstrap: &NameServerBootstrap,
-        harness: &LocalRequestHarness,
+        _harness: &LocalRequestHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
-        let mut processor =
-            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         processor
-            .process_request(harness.channel(), harness.context(), request)
+            .handle_request(request)
             .await
             .expect("request processing should succeed")
             .expect("processor should always return a response")
@@ -2773,8 +2787,14 @@ mod tests {
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let mut processor = bootstrap.name_server_runtime.init_processors();
+        let broker_session = (request.code() == RequestCode::RegisterBroker as i32)
+            .then(|| BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()));
+        let auth_context = rocketmq_auth::RemotingAuthContext::new(
+            Some(harness.channel().remote_address().ip().to_string()),
+            Some(harness.channel().channel_id().to_owned()),
+        );
         processor
-            .process_request(harness.channel(), harness.context(), request)
+            .process_command(&auth_context, request, broker_session)
             .await
             .expect("request processing should succeed")
             .expect("processor should always return a response")
@@ -2890,7 +2910,7 @@ mod tests {
             .name_server_runtime
             .inner
             .route_info_manager()
-            .register_broker(
+            .register_broker_session(
                 cluster_name.clone(),
                 broker_addr.clone(),
                 broker_name.clone(),
@@ -2901,7 +2921,7 @@ mod tests {
                 Some(enable_acting_master),
                 topic_config_wrapper,
                 filter_server_list,
-                harness.channel(),
+                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
             );
 
         assert!(result.is_ok());
@@ -3813,7 +3833,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scan_not_active_broker_closes_expired_connection_before_batch_unregister() {
+    async fn scan_not_active_broker_unregisters_detached_test_registration_without_channel_authority() {
         let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
@@ -3850,16 +3870,17 @@ mod tests {
             .scan_not_active_broker();
         assert_eq!(expired_count, 1);
 
-        wait_until("expired broker connection close", || {
-            harness.channel().connection_ref().state() == ConnectionState::Closed
-        })
-        .await;
+        assert_eq!(
+            harness.channel().connection_ref().state(),
+            ConnectionState::Healthy,
+            "detached test registrations intentionally carry no channel close authority"
+        );
 
         shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
-    async fn connection_disconnected_by_socket_addr_matches_channel_destroy_cleanup() {
+    async fn connection_disconnected_by_socket_addr_cleans_routes_without_connection_authority() {
         let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
@@ -3896,8 +3917,7 @@ mod tests {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
 
-            harness.channel().connection_ref().state() == ConnectionState::Closed
-                && route_manager.pickup_topic_route_data(&topic_name).is_err()
+            route_manager.pickup_topic_route_data(&topic_name).is_err()
                 && route_manager
                     .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                     .is_none()
@@ -3973,12 +3993,12 @@ mod tests {
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_destroy(&master_channel);
+            .on_channel_id_destroy(&master_channel.channel_id_owned());
         bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_destroy(&master_channel);
+            .on_channel_id_destroy(&master_channel.channel_id_owned());
 
         start_unregister_service(&bootstrap);
 
@@ -4079,7 +4099,7 @@ mod tests {
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_destroy(&removed_channel);
+            .on_channel_id_destroy(&removed_channel.channel_id_owned());
 
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
@@ -4180,7 +4200,7 @@ mod tests {
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_destroy(&master_channel);
+            .on_channel_id_destroy(&master_channel.channel_id_owned());
 
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
@@ -4418,6 +4438,226 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn v2_server_routes_a_real_topic_request_and_response() {
+        let server_config = namesrv_server_config();
+        let addr = format!("127.0.0.1:{}", server_config.listen_port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (namesrv_config, namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_name_server_config(namesrv_config)
+            .set_server_config(server_config)
+            .build();
+        let server_task = tokio::spawn(async move {
+            let _namesrv_root = namesrv_root;
+            bootstrap
+                .boot_with_shutdown_report(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        let stream = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match TokioTcpStream::connect(&addr).await {
+                    Ok(stream) => break stream,
+                    Err(_) => sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("V2 NameServer should accept a real TCP connection");
+        let mut client = Connection::new(stream);
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("missing-v2-topic"), Some(true)),
+        )
+        .set_opaque(0x72a1);
+        request.make_custom_header_to_net();
+        client
+            .send_command(request)
+            .await
+            .expect("real V2 NameServer request should be written");
+        let response = tokio::time::timeout(Duration::from_secs(2), client.receive_command())
+            .await
+            .expect("real V2 NameServer response deadline")
+            .expect("real V2 NameServer connection should remain open")
+            .expect("real V2 NameServer response frame should decode");
+
+        assert_eq!(response.opaque(), 0x72a1);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+
+        drop(client);
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("V2 NameServer should stop before the deadline")
+            .expect("V2 NameServer task should not panic")
+            .expect("V2 NameServer should return a shutdown report");
+        assert!(report.is_healthy(), "{report:?}");
+    }
+
+    #[tokio::test]
+    async fn v2_broker_registration_disconnect_keeps_replacement_then_cleans_routes() {
+        let server_config = namesrv_server_config();
+        let addr = format!("127.0.0.1:{}", server_config.listen_port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (namesrv_config, namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_name_server_config(namesrv_config)
+            .set_server_config(server_config)
+            .build();
+        let runtime = bootstrap.runtime_inner();
+        let mut session_events = runtime.session_registry.subscribe();
+        let server_task = tokio::spawn(async move {
+            let _namesrv_root = namesrv_root;
+            bootstrap
+                .boot_with_shutdown_report(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        async fn connect(addr: &str) -> Connection {
+            let stream = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    match TokioTcpStream::connect(addr).await {
+                        Ok(stream) => break stream,
+                        Err(_) => sleep(Duration::from_millis(10)).await,
+                    }
+                }
+            })
+            .await
+            .expect("V2 NameServer should accept broker connections");
+            Connection::new(stream)
+        }
+
+        async fn send_registration(client: &mut Connection, request: RemotingCommand) {
+            client
+                .send_command(request)
+                .await
+                .expect("real V2 broker registration should be written");
+            let response = tokio::time::timeout(Duration::from_secs(2), client.receive_command())
+                .await
+                .expect("real V2 broker registration response deadline")
+                .expect("real V2 broker connection should remain open")
+                .expect("real V2 broker registration response should decode");
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        }
+
+        async fn next_connected(receiver: &mut tokio::sync::broadcast::Receiver<V2SessionEvent>) -> SessionId {
+            loop {
+                if let V2SessionEvent::Connected(session) = receiver.recv().await.expect("session connected event") {
+                    return session.id();
+                }
+            }
+        }
+
+        async fn wait_for_disconnect(
+            receiver: &mut tokio::sync::broadcast::Receiver<V2SessionEvent>,
+            expected: SessionId,
+        ) {
+            loop {
+                if let V2SessionEvent::Disconnected(session_id) =
+                    receiver.recv().await.expect("session disconnected event")
+                {
+                    if session_id == expected {
+                        return;
+                    }
+                }
+            }
+        }
+
+        let cluster_name = CheetahString::from_static_str("v2-disconnect-cluster");
+        let broker_name = CheetahString::from_static_str("v2-disconnect-broker");
+        let broker_addr = CheetahString::from_static_str("10.0.0.7:10911");
+        let ha_server_addr = CheetahString::from_static_str("10.0.0.7:10912");
+        let zone_name = CheetahString::from_static_str("zone-v2");
+        let topic_name = CheetahString::from_static_str("v2-disconnect-topic");
+        let registration = || {
+            register_broker_request(
+                &cluster_name,
+                &broker_name,
+                &broker_addr,
+                MASTER_ID,
+                &ha_server_addr,
+                &zone_name,
+                false,
+                topic_config_wrapper(&[("v2-disconnect-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+                Vec::new(),
+            )
+        };
+
+        let mut first = connect(&addr).await;
+        send_registration(&mut first, registration().set_opaque(0x72b1)).await;
+        let first_session = tokio::time::timeout(Duration::from_secs(2), next_connected(&mut session_events))
+            .await
+            .expect("first V2 broker session should publish connect");
+        assert!(runtime
+            .route_info_manager()
+            .pickup_topic_route_data(&topic_name)
+            .is_ok());
+
+        let mut replacement = connect(&addr).await;
+        send_registration(&mut replacement, registration().set_opaque(0x72b2)).await;
+        let replacement_session = tokio::time::timeout(Duration::from_secs(2), next_connected(&mut session_events))
+            .await
+            .expect("replacement V2 broker session should publish connect");
+        assert_ne!(first_session, replacement_session);
+        wait_until("housekeeping should observe both V2 sessions", || {
+            runtime.broker_housekeeping_service().active_session_count() == 2
+        })
+        .await;
+
+        drop(first);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_disconnect(&mut session_events, first_session),
+        )
+        .await
+        .expect("old V2 session should publish disconnect");
+        wait_until("housekeeping should process the old V2 session disconnect", || {
+            runtime.broker_housekeeping_service().active_session_count() == 1
+        })
+        .await;
+        assert!(
+            runtime
+                .route_info_manager()
+                .pickup_topic_route_data(&topic_name)
+                .is_ok(),
+            "an old session disconnect must not remove its replacement registration"
+        );
+
+        drop(replacement);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_disconnect(&mut session_events, replacement_session),
+        )
+        .await
+        .expect("replacement V2 session should publish disconnect");
+        wait_until(
+            "housekeeping should process the replacement V2 session disconnect",
+            || runtime.broker_housekeeping_service().active_session_count() == 0,
+        )
+        .await;
+        wait_until("replacement disconnect route cleanup", || {
+            runtime
+                .route_info_manager()
+                .pickup_topic_route_data(&topic_name)
+                .is_err()
+        })
+        .await;
+
+        drop(runtime);
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("V2 NameServer should stop before the deadline")
+            .expect("V2 NameServer task should not panic")
+            .expect("V2 NameServer should return a shutdown report");
+        assert!(report.is_healthy(), "{report:?}");
+    }
+
     #[cfg(feature = "embedded-controller")]
     #[tokio::test]
     async fn enable_controller_in_namesrv_rejects_conflicting_listen_addr() {
@@ -4506,15 +4746,12 @@ mod tests {
     #[tokio::test]
     async fn unsupported_request_code_returns_request_code_not_supported() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
-            .await
-            .unwrap();
         let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage);
 
         let response = processor
-            .process_request_inner(harness.channel(), RequestCode::SendMessage, &mut request)
+            .process_request_inner_v2(None, RequestCode::SendMessage, &mut request)
             .await
             .expect("request should be handled")
             .expect("processor should return a response");
@@ -4713,9 +4950,6 @@ mod tests {
     async fn update_namesrv_config_rejects_unknown_key_atomically() {
         let (config, _root) = isolated_namesrv_config(NamesrvConfig::default());
         let bootstrap = build_bootstrap_with_config(config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
-            .await
-            .unwrap();
         let before = bootstrap.name_server_runtime.inner.config_snapshot();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
             b"listenPort=19876\nbindAddress=127.0.0.2\nconnectTimeoutMillis=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
@@ -4725,7 +4959,7 @@ mod tests {
         let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let result = processor
-            .process_request_inner(harness.channel(), RequestCode::UpdateNamesrvConfig, &mut request)
+            .process_request_inner_v2(None, RequestCode::UpdateNamesrvConfig, &mut request)
             .await;
 
         assert!(result.is_err());
@@ -4972,9 +5206,6 @@ mod tests {
     async fn noop_metrics_skip_freshness_lookup() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
         let bootstrap = build_bootstrap_with_config(namesrv_config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-freshness-gate-test"))
-            .await
-            .unwrap();
         register_test_broker(
             &bootstrap,
             &CheetahString::from_static_str("freshness-cluster"),
@@ -4987,8 +5218,7 @@ mod tests {
         )
         .await;
         let route_manager = bootstrap.runtime_inner().route_info_manager();
-        let mut processor =
-            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
             GetRouteInfoRequestHeader::new(CheetahString::from_static_str("freshness-topic"), Some(true)),
@@ -4996,7 +5226,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .handle_request(&mut request)
             .await
             .expect("route processing should succeed")
             .expect("route processing should return a response");
@@ -5009,9 +5239,6 @@ mod tests {
     async fn next_request_observes_effective_config_generation() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
         let bootstrap = build_bootstrap_with_config(namesrv_config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-live-route-config-test"))
-            .await
-            .unwrap();
         let topic = CheetahString::from_static_str("live-route-config-topic");
         let order_conf = CheetahString::from_static_str("live-route-config-broker:4");
         register_test_broker(
@@ -5036,19 +5263,14 @@ mod tests {
             )
             .await
             .unwrap();
-        let mut processor =
-            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
 
         let mut before_request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
             GetRouteInfoRequestHeader::new(topic.clone(), Some(true)),
         );
         before_request.make_custom_header_to_net();
-        let before = processor
-            .process_request(harness.channel(), harness.context(), &mut before_request)
-            .await
-            .unwrap()
-            .unwrap();
+        let before = processor.handle_request(&mut before_request).await.unwrap().unwrap();
         let before_route =
             TopicRouteData::decode(before.body().expect("route response should include a body")).unwrap();
         assert!(before_route.order_topic_conf.is_none());
@@ -5069,11 +5291,7 @@ mod tests {
             GetRouteInfoRequestHeader::new(topic, Some(true)),
         );
         after_request.make_custom_header_to_net();
-        let after = processor
-            .process_request(harness.channel(), harness.context(), &mut after_request)
-            .await
-            .unwrap()
-            .unwrap();
+        let after = processor.handle_request(&mut after_request).await.unwrap().unwrap();
         let after_route = TopicRouteData::decode(after.body().expect("route response should include a body")).unwrap();
         assert_eq!(after_route.order_topic_conf.as_ref(), Some(&order_conf));
     }
@@ -5085,9 +5303,6 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let bootstrap = build_bootstrap_with_config(namesrv_config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-typed-zone-test"))
-            .await
-            .unwrap();
         let topic_wrapper =
             || topic_config_wrapper(&[("typed-zone-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]);
         register_test_broker(
@@ -5112,8 +5327,7 @@ mod tests {
             topic_wrapper(),
         )
         .await;
-        let mut processor =
-            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
             GetRouteInfoRequestHeader::new(CheetahString::from_static_str("typed-zone-topic"), Some(true)),
@@ -5125,11 +5339,7 @@ mod tests {
         crate::processor::client_request_processor::reset_route_encode_count();
         crate::route::zone_route_rpc_hook::reset_zone_hook_decode_count();
 
-        let mut response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
-            .await
-            .unwrap()
-            .unwrap();
+        let mut response = processor.handle_request(&mut request).await.unwrap().unwrap();
         ZoneRouteRPCHook::default()
             .do_after_response(SocketAddr::from(([127, 0, 0, 1], 10911)), &request, &mut response)
             .unwrap();
@@ -5148,9 +5358,6 @@ mod tests {
     async fn cache_disabled_uses_live_encode() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
         let bootstrap = build_bootstrap_with_config(namesrv_config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-cache-disabled-test"))
-            .await
-            .unwrap();
         register_test_broker(
             &bootstrap,
             &CheetahString::from_static_str("cache-disabled-cluster"),
@@ -5162,8 +5369,7 @@ mod tests {
             topic_config_wrapper(&[("cache-disabled-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
         )
         .await;
-        let mut processor =
-            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         crate::processor::client_request_processor::reset_route_encode_count();
 
         for _ in 0..2 {
@@ -5172,11 +5378,7 @@ mod tests {
                 GetRouteInfoRequestHeader::new(CheetahString::from_static_str("cache-disabled-topic"), Some(true)),
             );
             request.make_custom_header_to_net();
-            let response = processor
-                .process_request(harness.channel(), harness.context(), &mut request)
-                .await
-                .unwrap()
-                .unwrap();
+            let response = processor.handle_request(&mut request).await.unwrap().unwrap();
             assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         }
 
@@ -5193,9 +5395,6 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let bootstrap = build_bootstrap_with_config(namesrv_config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-cache-hit-test"))
-            .await
-            .unwrap();
         register_test_broker(
             &bootstrap,
             &CheetahString::from_static_str("cache-hit-cluster"),
@@ -5207,8 +5406,7 @@ mod tests {
             topic_config_wrapper(&[("cache-hit-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
         )
         .await;
-        let mut processor =
-            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         crate::processor::client_request_processor::reset_route_encode_count();
         let mut bodies = Vec::new();
 
@@ -5218,11 +5416,7 @@ mod tests {
                 GetRouteInfoRequestHeader::new(CheetahString::from_static_str("cache-hit-topic"), Some(true)),
             );
             request.make_custom_header_to_net();
-            let response = processor
-                .process_request(harness.channel(), harness.context(), &mut request)
-                .await
-                .unwrap()
-                .unwrap();
+            let response = processor.handle_request(&mut request).await.unwrap().unwrap();
             bodies.push(response.body().expect("route response should include a body").clone());
         }
 

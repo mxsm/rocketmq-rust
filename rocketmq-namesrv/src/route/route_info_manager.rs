@@ -40,8 +40,9 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelId;
+use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -62,6 +63,7 @@ use crate::route::topic_route_snapshot::RouteMutationCoordinator;
 use crate::route::topic_route_snapshot::RouteMutationGuard;
 use crate::route::topic_route_snapshot::TopicRouteView;
 use crate::route::types::BrokerName;
+use crate::route::types::BrokerSession;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
@@ -119,6 +121,7 @@ pub struct RouteInfoManager {
 
     // Runtime and lifecycle components
     name_server_runtime_inner: NameServerRuntimeHandle,
+    session_registry: Arc<V2SessionRegistry>,
     un_register_service: Arc<BatchUnregistrationService>,
     metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     expiry_safety_scan_interval: u64,
@@ -137,6 +140,7 @@ impl RouteInfoManager {
     /// Create a route manager with mutable source tables and snapshot publication.
     pub(crate) fn new(
         name_server_runtime_inner: NameServerRuntimeHandle,
+        session_registry: Arc<V2SessionRegistry>,
         queue_capacity: usize,
         unregister_batch_size: usize,
         unregister_batch_time: std::time::Duration,
@@ -164,6 +168,7 @@ impl RouteInfoManager {
             route_mutations: RouteMutationCoordinator::with_metrics(metrics.clone()),
 
             name_server_runtime_inner,
+            session_registry,
             un_register_service,
             metrics,
             expiry_safety_scan_interval,
@@ -258,10 +263,13 @@ impl RouteInfoManager {
         self.un_register_service.start();
     }
 
-    /// Find broker info by channel identity
+    /// Find broker info by stable transport session identity.
     #[inline]
-    fn find_broker_by_channel(broker_live_table: &BrokerLiveTable, channel: &Channel) -> Option<Arc<BrokerAddrInfo>> {
-        broker_live_table.get_broker_info_by_channel(channel)
+    fn find_broker_by_session_id(
+        broker_live_table: &BrokerLiveTable,
+        session_id: SessionId,
+    ) -> Option<Arc<BrokerAddrInfo>> {
+        broker_live_table.get_broker_info_by_session_id(session_id)
     }
 
     /// Find broker info and live state by remote socket address.
@@ -277,9 +285,9 @@ impl RouteInfoManager {
     /// 1. Find broker info by socket address
     /// 2. Setup unregister request
     /// 3. Submit to batch unregistration service
-    pub fn on_channel_destroy(&self, channel: &Channel) {
+    pub fn on_session_destroy(&self, session_id: SessionId) {
         let mut unregister_request = UnRegisterBrokerRequestHeader::default();
-        let Some(broker_addr_info) = Self::find_broker_by_channel(&self.broker_live_table, channel) else {
+        let Some(broker_addr_info) = Self::find_broker_by_session_id(&self.broker_live_table, session_id) else {
             return;
         };
         let Some(live_info) = self.broker_live_table.get(&broker_addr_info) else {
@@ -302,14 +310,38 @@ impl RouteInfoManager {
         }
     }
 
+    /// Retained V1 compatibility boundary for channel lifecycle callbacks.
+    ///
+    /// The channel is used only to project its stable identifier; it is never
+    /// retained by the V2 route state.
+    #[deprecated(since = "1.0.0", note = "use the V2 session lifecycle registry")]
+    pub fn on_channel_destroy(&self, channel: &rocketmq_transport::api::v1::Channel) {
+        let channel_id = channel.channel_id_owned();
+        let Some(broker_addr_info) = self.broker_live_table.get_broker_info_by_channel_id(&channel_id) else {
+            return;
+        };
+        let Some(live_info) = self.broker_live_table.get(&broker_addr_info) else {
+            return;
+        };
+        self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn on_channel_id_destroy(&self, channel_id: &ChannelId) {
+        let Some(broker_addr_info) = self.broker_live_table.get_broker_info_by_channel_id(channel_id) else {
+            return;
+        };
+        let Some(live_info) = self.broker_live_table.get(&broker_addr_info) else {
+            return;
+        };
+        self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
+    }
+
     /// Handle broker disconnection when only the remote socket address is available.
     pub fn connection_disconnected(&self, socket_addr: SocketAddr) {
         if let Some((broker_addr_info, live_info)) =
             Self::find_broker_by_remote_addr(&self.broker_live_table, socket_addr)
         {
-            if let Some(channel) = live_info.channel.as_ref() {
-                channel.connection_ref().close();
-            }
             self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
         }
     }
@@ -347,11 +379,15 @@ impl RouteInfoManager {
     /// * `enable_acting_master` - Whether to enable acting master mode
     /// * `topic_config_wrapper` - Topic configurations
     /// * `filter_server_list` - Message filter servers
-    /// * `channel` - Network channel for communication
+    /// * `channel` - Legacy transport channel projected immediately to owned session facts
     ///
     /// # Returns
     /// Result containing RegisterBrokerResult or RocketMQError
     #[allow(clippy::too_many_arguments)]
+    #[deprecated(
+        since = "1.0.0",
+        note = "production V2 ingress uses the typed broker-session registration boundary"
+    )]
     pub fn register_broker(
         &self,
         cluster_name: CheetahString,
@@ -364,7 +400,37 @@ impl RouteInfoManager {
         enable_acting_master: Option<bool>,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
-        channel: Channel,
+        channel: rocketmq_transport::api::v1::Channel,
+    ) -> RouteResult<RegisterBrokerResult> {
+        self.register_broker_session(
+            cluster_name,
+            broker_addr,
+            broker_name,
+            broker_id,
+            ha_server_addr,
+            zone_name,
+            timeout_millis,
+            enable_acting_master,
+            topic_config_wrapper,
+            filter_server_list,
+            BrokerSession::from_legacy_channel(&channel),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_broker_session(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: u64,
+        ha_server_addr: CheetahString,
+        zone_name: Option<CheetahString>,
+        timeout_millis: Option<u64>,
+        enable_acting_master: Option<bool>,
+        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
+        filter_server_list: Vec<CheetahString>,
+        broker_session: BrokerSession,
     ) -> RouteResult<RegisterBrokerResult> {
         let registration_span = rocketmq_observability::trace::namesrv::broker_registration_span();
         let _registration_guard = registration_span.enter();
@@ -467,7 +533,7 @@ impl RouteInfoManager {
                 .topic_config_serialize_wrapper()
                 .data_version()
                 .clone(),
-            channel,
+            broker_session,
             ha_server_addr.clone(),
         )?;
 
@@ -852,7 +918,7 @@ impl RouteInfoManager {
         broker_addr: CheetahString,
         timeout_millis: Option<u64>,
         data_version: DataVersion,
-        channel: Channel,
+        broker_session: BrokerSession,
         ha_server_addr: CheetahString,
     ) -> RouteResult<Option<Arc<BrokerLiveInfo>>> {
         let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr));
@@ -864,8 +930,9 @@ impl RouteInfoManager {
             let is_unchanged = existing.heartbeat_timeout_millis == timeout
                 && existing.data_version == data_version
                 && existing.ha_server_addr.as_ref() == Some(&ha_server_addr)
-                && existing.remote_addr == channel.remote_address()
-                && existing.channel_id == channel.channel_id_owned()
+                && existing.remote_addr == broker_session.remote_addr
+                && existing.channel_id == broker_session.channel_id
+                && existing.session_id == broker_session.id
                 && existing.broker_name.as_ref() == Some(&broker_name)
                 && existing.broker_id == Some(broker_id);
             if is_unchanged {
@@ -878,10 +945,10 @@ impl RouteInfoManager {
         let live_info = BrokerLiveInfo::new(
             current_time,
             data_version,
-            channel.remote_address(),
-            channel.channel_id_owned(),
+            broker_session.remote_addr,
+            broker_session.channel_id.clone(),
         )
-        .with_channel(channel.clone())
+        .with_session(broker_session)
         .with_broker_identity(broker_name, broker_id)
         .with_timeout(timeout)
         .with_ha_server(ha_server_addr);
@@ -1785,9 +1852,10 @@ impl RouteInfoManager {
                         broker_addr_info, live_info.heartbeat_timeout_millis
                     );
 
-                    if let Some(channel) = live_info.channel.as_ref() {
-                        channel.connection_ref().close();
+                    if let Some(session_id) = live_info.session_id {
+                        self.session_registry.close_now(session_id);
                     }
+
                     self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
                     continue;
                 }
@@ -2155,7 +2223,7 @@ mod tests {
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
 
         manager
-            .register_broker(
+            .register_broker_session(
                 cluster_name.clone(),
                 broker_addr.clone(),
                 broker_name.clone(),
@@ -2166,7 +2234,7 @@ mod tests {
                 Some(false),
                 registration_wrapper(&topic, 1, 4),
                 Vec::new(),
-                harness.channel(),
+                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
             )
             .expect("first registration should succeed");
         let first_version = manager
@@ -2178,7 +2246,7 @@ mod tests {
             .expect("first registration should create live info");
 
         manager
-            .register_broker(
+            .register_broker_session(
                 cluster_name.clone(),
                 broker_addr.clone(),
                 broker_name.clone(),
@@ -2189,7 +2257,7 @@ mod tests {
                 Some(false),
                 registration_wrapper(&topic, 1, 4),
                 Vec::new(),
-                harness.channel(),
+                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
             )
             .expect("unchanged registration should succeed");
 
@@ -2205,7 +2273,7 @@ mod tests {
         assert_eq!(second_live.heartbeat_generation(), 1);
 
         manager
-            .register_broker(
+            .register_broker_session(
                 cluster_name,
                 broker_addr.clone(),
                 broker_name,
@@ -2216,7 +2284,7 @@ mod tests {
                 Some(false),
                 registration_wrapper(&second_topic, 1, 8),
                 Vec::new(),
-                harness.channel(),
+                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
             )
             .expect("changed registration should succeed");
         assert_eq!(
@@ -2441,8 +2509,8 @@ mod tests {
         assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
     }
 
-    #[test]
-    fn mass_expiry_uses_known_identity() {
+    #[tokio::test]
+    async fn mass_expiry_uses_known_identity() {
         let (_bootstrap, manager) = test_route_manager();
         let cluster_name = CheetahString::from_static_str("mass-expiry-cluster");
         const BROKER_COUNT: usize = 128;
@@ -2480,8 +2548,8 @@ mod tests {
         assert_eq!(manager.un_register_service.queue_length(), BROKER_COUNT);
     }
 
-    #[test]
-    fn active_expiry_index_finds_deadlines_without_safety_scan() {
+    #[tokio::test]
+    async fn active_expiry_index_finds_deadlines_without_safety_scan() {
         let config = crate::NamesrvConfig {
             expiry_index_mode: crate::config::ExpiryIndexMode::Active,
             ..Default::default()

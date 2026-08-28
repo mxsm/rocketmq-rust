@@ -36,6 +36,9 @@ use tracing::warn;
 use crate::config::ControllerConfig;
 use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+use crate::controller::broker_heartbeat_manager::BrokerSession;
+use crate::controller::broker_heartbeat_manager::BrokerSessionHeartbeatManager;
+use crate::controller::broker_heartbeat_manager::BrokerSessionId;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
 use crate::heartbeat::broker_identity_info::BrokerIdentityInfo;
 use crate::heartbeat::broker_live_info::BrokerLiveInfo;
@@ -178,7 +181,7 @@ impl DefaultBrokerHeartbeatManager {
         listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     ) {
         let now_millis = current_millis();
-        let mut to_remove = Vec::new();
+        let mut candidates = Vec::new();
 
         // Collect brokers to remove
         for entry in broker_live_table.iter() {
@@ -188,22 +191,33 @@ impl DefaultBrokerHeartbeatManager {
             let last_update_timestamp = live_info.last_update_timestamp();
             let timeout_millis = live_info.heartbeat_timeout_millis();
 
-            // Check if broker has expired
-            if now_millis > last_update_timestamp.saturating_add(timeout_millis) {
-                to_remove.push((broker_identity.clone(), live_info.broker_id()));
+            // A closed canonical session is terminal even when its last heartbeat
+            // remains inside the configured timeout window.
+            if live_info.session().is_closed() || now_millis > last_update_timestamp.saturating_add(timeout_millis) {
+                candidates.push(broker_identity.clone());
             }
         }
-        // Remove expired brokers and notify the latest registered listeners.
+        // Recheck while holding the map entry so a replacement heartbeat cannot
+        // be removed after the scan observed an older session.
         let listeners = listeners.read().clone();
-        for (identity, broker_id) in to_remove {
-            broker_live_table.remove(&identity);
+        for identity in candidates {
+            let removed = broker_live_table.remove_if(&identity, |_, live_info| {
+                live_info.session().is_closed()
+                    || now_millis
+                        > live_info
+                            .last_update_timestamp()
+                            .saturating_add(live_info.heartbeat_timeout_millis())
+            });
+            let Some((_, live_info)) = removed else {
+                continue;
+            };
 
             // Notify all listeners
             for listener in listeners.iter() {
                 listener.on_broker_inactive(
                     Some(identity.cluster_name.as_str()),
                     identity.broker_name.as_str(),
-                    Some(broker_id),
+                    Some(live_info.broker_id()),
                 );
             }
         }
@@ -274,6 +288,101 @@ impl DefaultBrokerHeartbeatManager {
     }
 }
 
+impl DefaultBrokerHeartbeatManager {
+    #[allow(clippy::too_many_arguments)]
+    fn record_broker_heartbeat(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        broker_addr: &str,
+        broker_id: i64,
+        timeout_millis: Option<u64>,
+        session: BrokerSession,
+        epoch: Option<i32>,
+        max_offset: Option<i64>,
+        confirm_offset: Option<i64>,
+        election_priority: Option<i32>,
+    ) {
+        let broker_identity = BrokerIdentityInfo::new(
+            cluster_name.to_string(),
+            broker_name.to_string(),
+            Some(broker_id as u64),
+        );
+        let real_epoch = epoch.unwrap_or(-1);
+        let real_max_offset = max_offset.unwrap_or(-1);
+        let real_confirm_offset = confirm_offset.unwrap_or(-1);
+        let real_timeout_millis = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
+        let real_election_priority = election_priority.or(Some(i32::MAX));
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        if let Some(mut previous) = self.broker_live_table.get_mut(&broker_identity) {
+            previous.set_last_update_timestamp(now_millis);
+            previous.set_heartbeat_timeout_millis(real_timeout_millis);
+            previous.set_election_priority(real_election_priority);
+            previous.set_session(session);
+            if real_epoch > previous.epoch()
+                || (real_epoch == previous.epoch() && real_max_offset > previous.max_offset())
+            {
+                previous.set_epoch(real_epoch);
+                previous.set_max_offset(real_max_offset);
+                previous.set_confirm_offset(real_confirm_offset);
+            }
+            return;
+        }
+
+        let live_info = BrokerLiveInfo::new(
+            broker_name.to_string(),
+            broker_addr.to_string(),
+            broker_id,
+            now_millis,
+            real_timeout_millis,
+            session,
+            real_epoch,
+            real_max_offset,
+            real_election_priority,
+            Some(real_confirm_offset),
+        );
+        self.broker_live_table.insert(broker_identity.clone(), live_info);
+        info!("new broker registered, {}, brokerId:{}", broker_identity, broker_id);
+    }
+
+    fn remove_broker_session(&self, session_id: BrokerSessionId) {
+        let mut broker_identity_to_remove = None;
+        for entry in self.broker_live_table.iter() {
+            if entry.value().session().id() == session_id {
+                let identity = entry.key().clone();
+                let live_info = entry.value();
+                info!(
+                    "Session inactive, broker {}, addr:{}, id:{}",
+                    live_info.broker_name(),
+                    live_info.broker_addr(),
+                    live_info.broker_id()
+                );
+                broker_identity_to_remove = Some(identity);
+                break;
+            }
+        }
+
+        if let Some(identity) = broker_identity_to_remove {
+            if let Some((_, live_info)) = self
+                .broker_live_table
+                .remove_if(&identity, |_, live_info| live_info.session().id() == session_id)
+            {
+                let listeners = self.lifecycle_listeners.read().clone();
+                Self::notify_broker_inactive(
+                    listeners,
+                    identity.cluster_name.as_str(),
+                    live_info.broker_name(),
+                    live_info.broker_id(),
+                );
+            }
+        }
+    }
+}
+
 impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
     fn initialize(&mut self) {
         self.initialize_shared();
@@ -292,55 +401,18 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
         confirm_offset: Option<i64>,
         election_priority: Option<i32>,
     ) {
-        let broker_identity = BrokerIdentityInfo::new(
-            cluster_name.to_string(),
-            broker_name.to_string(),
-            Some(broker_id as u64),
+        self.record_broker_heartbeat(
+            cluster_name,
+            broker_name,
+            broker_addr,
+            broker_id,
+            timeout_millis,
+            BrokerSession::from_legacy_channel(&channel),
+            epoch,
+            max_offset,
+            confirm_offset,
+            election_priority,
         );
-
-        let real_epoch = epoch.unwrap_or(-1);
-        let real_max_offset = max_offset.unwrap_or(-1);
-        let real_confirm_offset = confirm_offset.unwrap_or(-1);
-        let real_timeout_millis = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
-        let real_election_priority = election_priority.or(Some(i32::MAX));
-
-        // Get current timestamp in milliseconds
-        let now_millis = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-
-        if let Some(mut prev) = self.broker_live_table.get_mut(&broker_identity) {
-            // Update existing broker info
-            prev.set_last_update_timestamp(now_millis);
-            prev.set_heartbeat_timeout_millis(real_timeout_millis);
-            prev.set_election_priority(real_election_priority);
-
-            // Only update epoch/offset if they're newer
-            if real_epoch > prev.epoch() || (real_epoch == prev.epoch() && real_max_offset > prev.max_offset()) {
-                prev.set_epoch(real_epoch);
-                prev.set_max_offset(real_max_offset);
-                prev.set_confirm_offset(real_confirm_offset);
-            }
-        } else {
-            // Register new broker
-            let live_info = BrokerLiveInfo::new(
-                broker_name.to_string(),
-                broker_addr.to_string(),
-                broker_id,
-                now_millis,
-                real_timeout_millis,
-                channel,
-                real_epoch,
-                real_max_offset,
-                real_election_priority,
-                Some(real_confirm_offset),
-            );
-
-            self.broker_live_table.insert(broker_identity.clone(), live_info);
-
-            info!("new broker registered, {}, brokerId:{}", broker_identity, broker_id);
-        }
     }
 
     fn start(&mut self) {
@@ -356,40 +428,7 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
     }
 
     fn on_broker_channel_close(&self, channel: &Channel) {
-        let mut broker_identity_to_remove = None;
-        let mut broker_info_for_notify = None;
-        // Find the broker with this channel
-        for entry in self.broker_live_table.iter() {
-            if entry.value().channel() == channel {
-                let identity = entry.key().clone();
-                let live_info = entry.value();
-
-                info!(
-                    "Channel inactive, broker {}, addr:{}, id:{}",
-                    live_info.broker_name(),
-                    live_info.broker_addr(),
-                    live_info.broker_id()
-                );
-
-                broker_identity_to_remove = Some(identity.clone());
-                broker_info_for_notify = Some((
-                    identity.cluster_name.to_string(),
-                    live_info.broker_name().to_string(),
-                    live_info.broker_id(),
-                ));
-                break;
-            }
-        }
-
-        // Remove broker and notify listeners
-        if let Some(identity) = broker_identity_to_remove {
-            self.broker_live_table.remove(&identity);
-
-            if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
-                let listeners = self.lifecycle_listeners.read().clone();
-                Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id);
-            }
-        }
+        self.remove_broker_session(BrokerSessionId::legacy(channel.channel_id_owned()));
     }
 
     fn get_broker_live_info(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> Option<BrokerLiveInfo> {
@@ -418,7 +457,7 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
             let last = info.last_update_timestamp();
             let timeout_millis = info.heartbeat_timeout_millis();
 
-            return (last + timeout_millis) >= now_millis;
+            return !info.session().is_closed() && last.saturating_add(timeout_millis) >= now_millis;
         }
 
         false
@@ -449,6 +488,39 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
     }
 }
 
+impl BrokerSessionHeartbeatManager for DefaultBrokerHeartbeatManager {
+    fn on_broker_session_heartbeat(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        broker_addr: &str,
+        broker_id: i64,
+        timeout_millis: Option<u64>,
+        session: BrokerSession,
+        epoch: Option<i32>,
+        max_offset: Option<i64>,
+        confirm_offset: Option<i64>,
+        election_priority: Option<i32>,
+    ) {
+        self.record_broker_heartbeat(
+            cluster_name,
+            broker_name,
+            broker_addr,
+            broker_id,
+            timeout_millis,
+            session,
+            epoch,
+            max_offset,
+            confirm_offset,
+            election_priority,
+        );
+    }
+
+    fn on_broker_session_close(&self, session_id: BrokerSessionId) {
+        self.remove_broker_session(session_id);
+    }
+}
+
 impl BrokerValidPredicate for DefaultBrokerHeartbeatManager {
     fn check(&self, cluster_name: &str, broker_name: &str, broker_id: Option<i64>) -> bool {
         self.is_broker_active(cluster_name, broker_name, broker_id.unwrap_or_default())
@@ -463,6 +535,8 @@ impl Drop for DefaultBrokerHeartbeatManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::sync::OnceLock;
 
     use rocketmq_runtime::RuntimeConfig;
@@ -483,26 +557,111 @@ mod tests {
             .clone()
     }
 
-    // Note: These tests are disabled because creating Channel instances requires
-    // complex setup with Connection and ResponseTable. Once proper test infrastructure
-    // is available, these tests should be enabled.
+    fn test_session(id: u64) -> (BrokerSession, Arc<AtomicBool>) {
+        let closed = Arc::new(AtomicBool::new(false));
+        (BrokerSession::for_test(id, Arc::clone(&closed)), closed)
+    }
 
-    #[tokio::test]
-    #[ignore]
-    async fn test_broker_heartbeat_registration() {
-        // TODO: Implement with proper Channel mock/fixture
+    #[test]
+    fn test_broker_heartbeat_registration() {
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
+        let manager = DefaultBrokerHeartbeatManager::new(config, test_task_group("registration"));
+        let (session, _) = test_session(11);
+
+        manager.on_broker_session_heartbeat(
+            "cluster",
+            "broker",
+            "127.0.0.1:10911",
+            1,
+            Some(60_000),
+            session,
+            Some(1),
+            Some(10),
+            Some(9),
+            Some(3),
+        );
+
+        let live = manager
+            .get_broker_live_info("cluster", "broker", 1)
+            .expect("heartbeat should register broker");
+        assert_eq!(live.session().id(), BrokerSessionId::for_test(11));
+        assert!(manager.is_broker_active("cluster", "broker", 1));
     }
 
     #[tokio::test]
-    #[ignore]
-    async fn test_broker_heartbeat_update() {
-        // TODO: Implement with proper Channel mock/fixture
+    async fn replacement_session_survives_old_session_cleanup() {
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
+        let manager = DefaultBrokerHeartbeatManager::new(config, test_task_group("update"));
+        let (first, first_closed) = test_session(21);
+        manager.on_broker_session_heartbeat(
+            "cluster",
+            "broker",
+            "127.0.0.1:10911",
+            1,
+            Some(60_000),
+            first,
+            Some(1),
+            Some(10),
+            Some(9),
+            None,
+        );
+        let (replacement, _) = test_session(22);
+        manager.on_broker_session_heartbeat(
+            "cluster",
+            "broker",
+            "127.0.0.1:10911",
+            1,
+            Some(60_000),
+            replacement,
+            Some(2),
+            Some(20),
+            Some(19),
+            None,
+        );
+        first_closed.store(true, Ordering::Release);
+        manager.on_broker_session_close(BrokerSessionId::for_test(21));
+        DefaultBrokerHeartbeatManager::scan_not_active_broker(
+            Arc::clone(&manager.broker_live_table),
+            Arc::clone(&manager.lifecycle_listeners),
+        )
+        .await;
+
+        let live = manager
+            .get_broker_live_info("cluster", "broker", 1)
+            .expect("replacement heartbeat should remain registered");
+        assert_eq!(live.session().id(), BrokerSessionId::for_test(22));
+        assert_eq!(live.epoch(), 2);
+        assert!(manager.is_broker_active("cluster", "broker", 1));
     }
 
     #[tokio::test]
-    #[ignore]
-    async fn test_get_active_brokers_num() {
-        // TODO: Implement with proper Channel mock/fixture
+    async fn closed_session_is_removed_without_waiting_for_heartbeat_timeout() {
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
+        let manager = DefaultBrokerHeartbeatManager::new(config, test_task_group("closed-session"));
+        let (session, closed) = test_session(31);
+        manager.on_broker_session_heartbeat(
+            "cluster",
+            "broker",
+            "127.0.0.1:10911",
+            1,
+            Some(60_000),
+            session,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(manager.get_active_brokers_num()["cluster"]["broker"], 1);
+
+        closed.store(true, Ordering::Release);
+        DefaultBrokerHeartbeatManager::scan_not_active_broker(
+            Arc::clone(&manager.broker_live_table),
+            Arc::clone(&manager.lifecycle_listeners),
+        )
+        .await;
+
+        assert!(manager.get_broker_live_info("cluster", "broker", 1).is_none());
+        assert!(manager.get_active_brokers_num().is_empty());
     }
 
     #[test]

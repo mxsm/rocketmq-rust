@@ -44,7 +44,7 @@ impl MQClientAPIImpl {
             let _ = telemetry_handle;
             TransportTelemetry::noop()
         };
-        let mut builder = RemotingClient::builder(
+        let mut builder = RemotingClient::builder_v2(
             Arc::new(remoting_config),
             client_remoting_processor,
             service_context.component("transport"),

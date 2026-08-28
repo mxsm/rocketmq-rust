@@ -378,18 +378,23 @@ fn route_lookup_cancelled() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::future::Future;
-    use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_transport::test_support::SessionProcessor as RequestProcessor;
-    use rocketmq_transport::test_support::SessionTransportServer;
-    use rocketmq_transport::test_support::SessionTransportServerConfig;
+    use rocketmq_runtime::ShutdownReport;
+    use rocketmq_transport::api::v1::ServerConfig;
+    use rocketmq_transport::api::v1::ServerStartError;
+    use rocketmq_transport::api::v2::HandlerOutcome;
+    use rocketmq_transport::api::v2::RemotingRequest;
+    use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::api::v2::ResponsePlan;
+    use rocketmq_transport::api::v2::TransportServerV2;
+    use tokio::sync::oneshot;
     use tokio::sync::Notify;
 
     use super::*;
@@ -434,46 +439,108 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct RouteProcessor {
         route: TopicRouteData,
     }
 
-    impl RequestProcessor for RouteProcessor {
-        fn process(
-            &self,
-            request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
-            Box::pin(async move {
-                assert_eq!(request.code(), RequestCode::GetRouteinfoByTopic as i32);
-                let header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
-                assert_eq!(header.topic, CheetahString::from("missing-topic"));
-                Ok(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                        .set_opaque(request.opaque())
-                        .set_body(self.route.encode()?),
-                )
-            })
+    impl RequestProcessorV2 for RouteProcessor {
+        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+            assert_eq!(request.command().code(), RequestCode::GetRouteinfoByTopic as i32);
+            let header = request
+                .command()
+                .decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
+            assert_eq!(header.topic, CheetahString::from("missing-topic"));
+            let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_body(self.route.encode()?);
+            response_outcome(response)
         }
     }
 
+    #[derive(Clone)]
     struct BlockingRouteProcessor {
         entered: Arc<Notify>,
         release: Arc<Notify>,
     }
 
-    impl RequestProcessor for BlockingRouteProcessor {
-        fn process(
-            &self,
-            request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
-            Box::pin(async move {
-                self.entered.notify_one();
-                self.release.notified().await;
-                Ok(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                        .set_opaque(request.opaque()),
-                )
-            })
+    impl RequestProcessorV2 for BlockingRouteProcessor {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            response_outcome(RemotingCommand::create_response_command_with_code(
+                ResponseCode::Success,
+            ))
+        }
+    }
+
+    fn response_outcome(response: RemotingCommand) -> RocketMQResult<HandlerOutcome> {
+        let plan = ResponsePlan::from_command(response).map_err(|error| {
+            RocketMQError::response_process_failed("namesrv.route_lookup_test.response_plan", error.to_string())
+        })?;
+        Ok(HandlerOutcome::Reply(plan))
+    }
+
+    struct RunningV2RouteServer {
+        local_addr: SocketAddr,
+        shutdown: Option<oneshot::Sender<()>>,
+        result: oneshot::Receiver<Result<ShutdownReport, ServerStartError>>,
+    }
+
+    impl RunningV2RouteServer {
+        async fn bind<P>(service: ChildServiceContext, processor: P) -> Self
+        where
+            P: RequestProcessorV2 + Clone + Sync + 'static,
+        {
+            let config = Arc::new(ServerConfig {
+                bind_address: "127.0.0.1".to_owned(),
+                listen_port: 0,
+                ..ServerConfig::default()
+            });
+            let server = TransportServerV2::new(config, service.component("server"), processor);
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (startup_tx, startup_rx) = oneshot::channel();
+            let (result_tx, result_rx) = oneshot::channel();
+            service
+                .component("runner")
+                .spawn_service("namesrv.route-lookup-v2-test-server", async move {
+                    let result = server
+                        .try_run_with_shutdown_report_and_startup(
+                            async move {
+                                let _ = shutdown_rx.await;
+                            },
+                            startup_tx,
+                        )
+                        .await;
+                    let _ = result_tx.send(result);
+                })
+                .expect("V2 route lookup test server should be lifecycle-owned");
+            let local_addr = startup_rx
+                .await
+                .expect("V2 route lookup startup channel")
+                .expect("V2 route lookup server should start");
+            Self {
+                local_addr,
+                shutdown: Some(shutdown_tx),
+                result: result_rx,
+            }
+        }
+
+        fn local_addr(&self) -> SocketAddr {
+            self.local_addr
+        }
+
+        async fn shutdown(mut self) {
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
+            }
+            let report = self
+                .result
+                .await
+                .expect("V2 route lookup server report channel")
+                .expect("V2 route lookup server should stop cleanly");
+            report
+                .assert_no_task_leak()
+                .expect("V2 route lookup server should not leak tasks");
         }
     }
 
@@ -510,16 +577,12 @@ mod tests {
     #[tokio::test]
     async fn transport_lookup_decodes_route_and_caches_resolved_endpoints() {
         let runtime = RuntimeContext::from_current("namesrv-route-lookup-success-test");
-        let server = SessionTransportServer::bind(
+        let server = RunningV2RouteServer::bind(
             runtime.service_context("route-server"),
-            SessionTransportServerConfig::loopback(),
-            Arc::new(RouteProcessor { route: sample_route() }),
-            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            RouteProcessor { route: sample_route() },
         )
-        .await
-        .unwrap();
+        .await;
         let address = server.local_addr();
-        server.start().unwrap();
 
         let resolver = Arc::new(FixedEndpointResolver::new(vec![address]));
         let lookup = TransportClusterTestRouteLookup::with_resolver(
@@ -543,11 +606,7 @@ mod tests {
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
 
         lookup.shutdown().await.unwrap();
-        server
-            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
-            .await
-            .assert_no_task_leak()
-            .unwrap();
+        server.shutdown().await;
         runtime
             .shutdown_tasks(Duration::from_secs(1))
             .await
@@ -560,19 +619,15 @@ mod tests {
         let runtime = RuntimeContext::from_current("namesrv-route-lookup-timeout-test");
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let server = SessionTransportServer::bind(
+        let server = RunningV2RouteServer::bind(
             runtime.service_context("hung-route-server"),
-            SessionTransportServerConfig::loopback(),
-            Arc::new(BlockingRouteProcessor {
+            BlockingRouteProcessor {
                 entered: entered.clone(),
                 release: release.clone(),
-            }),
-            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            },
         )
-        .await
-        .unwrap();
+        .await;
         let address = server.local_addr();
-        server.start().unwrap();
 
         let lookup = Arc::new(TransportClusterTestRouteLookup::with_resolver(
             runtime.service_context("route-lookup"),
@@ -590,11 +645,7 @@ mod tests {
         release.notify_waiters();
 
         lookup.shutdown().await.unwrap();
-        server
-            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
-            .await
-            .assert_no_task_leak()
-            .unwrap();
+        server.shutdown().await;
         runtime
             .shutdown_tasks(Duration::from_secs(1))
             .await

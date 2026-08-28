@@ -35,7 +35,7 @@ pub enum CachedConnectionState {
     Absent,
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     pub(super) fn reconcile_cached_connection_inner(&self, addr: &CheetahString) -> CachedConnectionState {
         self.connection_registry.reconcile_direct_session(addr)
     }
@@ -72,7 +72,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
     use crate::runtime::config::client_config::TransportClientConfig;
 
     #[tokio::test]

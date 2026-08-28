@@ -204,6 +204,14 @@ where
         self.core.register_rpc_hook(hook);
     }
 
+    pub(crate) fn clear_rpc_hook(&self) {
+        self.core.clear_rpc_hook();
+    }
+
+    pub(crate) fn hook_snapshot(&self) -> Option<Arc<crate::hook_registry::HookSnapshot>> {
+        self.core.hook_snapshot()
+    }
+
     pub(crate) async fn dispatch_network(
         &self,
         authorized_session: &AuthorizedDispatchSession,

@@ -38,7 +38,6 @@ use crate::clients::reconnect::CircuitBreaker;
 use crate::clients::reconnect::CircuitState;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
-use crate::runtime::processor::RequestProcessor;
 use crate::telemetry::TransportNameServerFailoverReason;
 
 struct CircuitRecord {
@@ -271,7 +270,7 @@ impl Drop for DrainingEndpointGuard {
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// Records request completion only while the selected endpoint lease is current.
     pub(super) fn record_nameserver_outcome(
         &self,

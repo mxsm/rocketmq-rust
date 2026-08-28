@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::net::channel::Channel;
-use crate::runtime::connection_handler_context::ConnectionHandlerContext;
-use crate::runtime::processor::RequestProcessor;
+use crate::dispatch::HandlerOutcome;
+use crate::dispatch::RemotingRequest;
+use crate::dispatch::ResponsePlan;
+use crate::runtime::processor_v2::RequestProcessorV2;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 #[derive(Clone)]
 pub struct DefaultRequestProcessor;
 
-impl RequestProcessor for DefaultRequestProcessor {
+impl RequestProcessorV2 for DefaultRequestProcessor {
     #[inline]
-    async fn process_request(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        Ok(Some(RemotingCommand::create_response_command_with_code(request.code())))
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let response = RemotingCommand::create_response_command_with_code(request.command().code());
+        let plan = ResponsePlan::command(response).map_err(|error| {
+            rocketmq_error::RocketMQError::response_process_failed(
+                "default_request_processor.response_plan",
+                error.to_string(),
+            )
+        })?;
+        Ok(HandlerOutcome::Reply(plan))
     }
 }

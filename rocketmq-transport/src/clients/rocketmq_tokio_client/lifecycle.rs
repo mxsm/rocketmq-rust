@@ -42,7 +42,6 @@ use tokio::sync::Notify;
 use super::ClientShutdownReport;
 use super::ClientStartReport;
 use super::ConnectionShutdownReport;
-use super::RequestProcessor;
 use super::TransportClient;
 use crate::error_helpers::remote_error;
 
@@ -437,7 +436,7 @@ impl ShutdownFlight {
 
 struct ShutdownOwnerGuard<'client, PR>
 where
-    PR: RequestProcessor + Sync + Clone + 'static,
+    PR: Send + Sync + Clone + 'static,
 {
     client: &'client TransportClient<PR>,
     flight: Arc<ShutdownFlight>,
@@ -446,7 +445,7 @@ where
 
 impl<'client, PR> ShutdownOwnerGuard<'client, PR>
 where
-    PR: RequestProcessor + Sync + Clone + 'static,
+    PR: Send + Sync + Clone + 'static,
 {
     fn new(client: &'client TransportClient<PR>, flight: Arc<ShutdownFlight>) -> Self {
         Self {
@@ -463,7 +462,7 @@ where
 
 impl<PR> Drop for ShutdownOwnerGuard<'_, PR>
 where
-    PR: RequestProcessor + Sync + Clone + 'static,
+    PR: Send + Sync + Clone + 'static,
 {
     fn drop(&mut self) {
         if !self.armed {
@@ -477,7 +476,7 @@ where
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     pub(crate) fn spawn_worker_task<F>(&self, name: impl Into<Arc<str>>, future: F) -> Option<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,

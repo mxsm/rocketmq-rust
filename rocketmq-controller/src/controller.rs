@@ -88,7 +88,6 @@
 //! ```
 
 pub mod broker_heartbeat_manager;
-pub mod broker_housekeeping_service;
 pub(crate) mod broker_role_notifier;
 pub mod controller_manager;
 pub mod membership;

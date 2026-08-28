@@ -31,6 +31,7 @@ pub struct TransportServerV2<P> {
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
+    session_registry: Option<Arc<crate::v2_session_registry::V2SessionRegistry>>,
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
     proxy_protocol: ProxyProtocolConfig,
@@ -50,6 +51,7 @@ struct PreparedV2Server<P> {
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
     proxy_protocol: ProxyProtocolConfig,
+    session_registry: Option<Arc<crate::v2_session_registry::V2SessionRegistry>>,
     #[cfg(test)]
     write_preflight_barrier: Option<crate::write_strategy::WritePreflightBarrier>,
     #[cfg(test)]
@@ -72,6 +74,7 @@ where
             transport_security: None,
             transport_principal: None,
             admission: None,
+            session_registry: None,
             telemetry: TransportTelemetry::noop(),
             frame_limits: FrameLimits::java_compatibility(),
             proxy_protocol: ProxyProtocolConfig::default(),
@@ -122,6 +125,7 @@ where
             transport_security: None,
             transport_principal: None,
             admission: None,
+            session_registry: None,
             telemetry: TransportTelemetry::noop(),
             frame_limits: FrameLimits::java_compatibility(),
             proxy_protocol: ProxyProtocolConfig::default(),
@@ -178,6 +182,13 @@ where
     #[must_use]
     pub fn with_admission_controller(mut self, admission: Arc<AdmissionController>) -> Self {
         self.admission = Some(admission);
+        self
+    }
+
+    /// Publishes V2 session lifecycle into a composition-owned registry.
+    #[must_use]
+    pub fn with_session_registry(mut self, registry: Arc<crate::v2_session_registry::V2SessionRegistry>) -> Self {
+        self.session_registry = Some(registry);
         self
     }
 
@@ -452,6 +463,7 @@ where
             telemetry: self.telemetry,
             frame_limits: self.frame_limits,
             proxy_protocol: self.proxy_protocol,
+            session_registry: self.session_registry,
             #[cfg(test)]
             write_preflight_barrier: self.write_preflight_barrier,
             #[cfg(test)]
@@ -507,6 +519,7 @@ where
         telemetry,
         frame_limits,
         proxy_protocol,
+        session_registry,
         #[cfg(test)]
         write_preflight_barrier,
         #[cfg(test)]
@@ -517,6 +530,7 @@ where
         shutdown_complete_tx: shutdown_complete_tx.clone(),
         conn_disconnect_notify,
         dispatcher: dispatcher.clone(),
+        session_registry,
     });
     let transport = TransportListener::new(
         listener,

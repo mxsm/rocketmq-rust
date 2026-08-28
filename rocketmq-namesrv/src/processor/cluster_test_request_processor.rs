@@ -19,9 +19,9 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 use tracing::debug;
 use tracing::info;
 
@@ -152,14 +152,10 @@ impl ClusterTestRequestProcessor {
     }
 }
 
-impl RequestProcessor for ClusterTestRequestProcessor {
-    async fn process_request(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.handle_request(request).await
+impl RequestProcessorV2 for ClusterTestRequestProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let response = self.handle_request(request.command_mut()).await?;
+        crate::processor::response_outcome(response)
     }
 }
 
@@ -176,8 +172,6 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_protocol::protocol::RemotingSerializable;
-    use rocketmq_transport::api::v1::RequestProcessor;
-    use rocketmq_transport::test_support::LocalRequestHarness;
 
     use super::route_lookup::ClusterTestLookupFuture;
 
@@ -244,16 +238,8 @@ mod tests {
         .set_cluster_test_route_lookup(mock_lookup)
         .build();
 
-        let harness = LocalRequestHarness::new(
-            runtime
-                .service_context("cluster-test-local-harness")
-                .task_group()
-                .clone(),
-        )
-        .await
-        .unwrap();
         let runtime = bootstrap.runtime_inner();
-        let mut processor = ClusterTestRequestProcessor::new(NameServerRuntimeHandle::new(&runtime));
+        let processor = ClusterTestRequestProcessor::new(NameServerRuntimeHandle::new(&runtime));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
             GetRouteInfoRequestHeader::new(CheetahString::from("missing-topic"), Some(true)),
@@ -261,7 +247,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+            .handle_request(&mut request)
             .await
             .expect("request should succeed")
             .expect("processor should always return a response");
