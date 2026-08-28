@@ -39,27 +39,26 @@ use rocketmq_protocol::protocol::topic::OffsetMovedEvent;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
-use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::StatsType;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::long_polling::pull_request::PullRequest;
+use crate::long_polling::pull_deferred::PullHookMetadata;
+use crate::long_polling::pull_deferred::PullSuspendTiming;
 use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
-use crate::processor::pull_message_processor::is_broadcast;
 use crate::processor::pull_message_processor::rewrite_response_for_static_topic;
 use crate::processor::pull_message_processor::static_topic_rewrite_error_response;
 use crate::processor::pull_message_processor::StaticTopicRewriteError;
 use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
+use crate::processor::pull_message_result_handler::PullResponseContext;
+use crate::processor::pull_message_result_handler::PullSuspension;
 use crate::processor::response_plan::store_response_parts;
 use crate::processor::response_plan::BrokerResponseParts;
 
@@ -87,19 +86,15 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
     async fn handle(
         &self,
         get_message_result: GetMessageResult,
-        request: &mut RemotingCommand,
         request_header: PullMessageRequestHeader,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: &SubscriptionGroupConfig,
-        broker_allow_suspend: bool,
         message_filter: ArcMessageFilter,
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
-        _begin_time_mills: u64,
+        response_context: PullResponseContext<'_>,
     ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
-        let client_address = channel.remote_address().to_string();
+        let client_address = response_context.effective_peer.to_string();
         let policy = self.context.policy();
         let topic_config = self.context.topics().select_topic_config(request_header.topic.as_ref());
         let topic_sys_flag = topic_config.as_ref().map(|tc| tc.topic_sys_flag as i32).unwrap_or(0);
@@ -114,10 +109,10 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
         );
         let code = From::from(response.code());
         self.execute_consume_message_hook_before(
-            request,
+            response_context.hook_metadata,
             &request_header,
             &get_message_result,
-            broker_allow_suspend,
+            response_context.allow_legacy_suspend,
             code,
         );
         {
@@ -151,15 +146,15 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
             request_header.consumer_group.as_ref(),
             request_header.queue_id,
             &request_header,
-            &channel,
+            response_context.broadcast_client_resolver,
             Some(&mut response),
             get_message_result.next_begin_offset(),
-        );
+        )?;
         self.try_commit_offset(
-            broker_allow_suspend,
+            response_context.allow_legacy_suspend,
             &request_header,
             get_message_result.next_begin_offset(),
-            channel.remote_address(),
+            response_context.effective_peer,
         );
 
         match code {
@@ -206,7 +201,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                         request_header.queue_id,
                     );
                     // Record group get latency
-                    let latency = (current_millis() - _begin_time_mills) as i32;
+                    let latency = (current_millis() - response_context.begin_time_millis) as i32;
                     self.context.broker_stats().inc_group_get_latency(
                         request_header.consumer_group.as_str(),
                         request_header.topic.as_str(),
@@ -225,29 +220,21 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                 } else {
                     0
                 };
-                if broker_allow_suspend && has_suspend_flag {
-                    let mut polling_time_mills = suspend_timeout_millis_long;
-                    if !policy.long_polling_enable {
-                        polling_time_mills = policy.short_polling_time_millis;
-                    }
-                    let topic = request_header.topic.as_str();
-                    let queue_id = request_header.queue_id;
-                    let offset = request_header.queue_offset;
-
-                    let pull_request = PullRequest::new(
-                        request.clone(),
-                        channel,
-                        ctx,
-                        polling_time_mills,
+                if response_context.allow_legacy_suspend && has_suspend_flag {
+                    let timing = PullSuspendTiming::from_policy(
                         current_millis(),
-                        offset,
+                        tokio::time::Instant::now(),
+                        policy.long_polling_enable,
+                        suspend_timeout_millis_long,
+                        policy.short_polling_time_millis,
+                    );
+                    return Ok(PullMessageResult::Suspend(Box::new(PullSuspension {
+                        timing,
+                        request_header,
                         subscription_data,
                         message_filter,
-                    );
-                    let suspended = self.context.suspend_pull_request(topic, queue_id, pull_request);
-                    if suspended {
-                        return Ok(PullMessageResult::Suspended);
-                    }
+                        fallback: BrokerResponseParts::command(response)?,
+                    })));
                 }
                 command_result(response)
             }
@@ -417,18 +404,17 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
 
     fn execute_consume_message_hook_before(
         &self,
-        request: &RemotingCommand,
+        hook_metadata: &PullHookMetadata,
         request_header: &PullMessageRequestHeader,
         get_message_result: &GetMessageResult,
         broker_allow_suspend: bool,
         response_code: ResponseCode,
     ) {
         if self.has_consume_message_hook() {
-            let ext_fields = request.get_ext_fields().unwrap();
-            let owner = ext_fields.get(BrokerStatsManager::COMMERCIAL_OWNER);
-            let auth_type = ext_fields.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE);
-            let owner_parent = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT);
-            let owner_self = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF);
+            let owner = hook_metadata.commercial_owner();
+            let auth_type = hook_metadata.account_auth_type();
+            let owner_parent = hook_metadata.account_owner_parent();
+            let owner_self = hook_metadata.account_owner_self();
 
             let namespace =
                 CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(&request_header.topic));
@@ -650,44 +636,26 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
         group: &CheetahString,
         queue_id: i32,
         request_header: &PullMessageRequestHeader,
-        channel: &Channel,
+        client_resolver: &crate::processor::pull_message_result_handler::PullBroadcastClientResolver<'_>,
         response: Option<&mut RemotingCommand>,
         next_begin_offset: i64,
-    ) {
+    ) -> rocketmq_error::RocketMQResult<()> {
         if response.is_none() || !self.context.policy().enable_broadcast_offset_store {
-            return;
+            return Ok(());
         }
         let proxy_pull_broadcast = request_header.request_source == Some(RequestSource::ProxyForBroadcast.get_value());
-        let consumer_group_info = self.context.consumers().get_consumer_group_info(group);
-
-        if is_broadcast(proxy_pull_broadcast, consumer_group_info.as_ref()) {
-            let mut offset = request_header.queue_offset;
-            if let Some(response) = response {
-                if ResponseCode::from(response.code()) == ResponseCode::PullOffsetMoved {
-                    offset = next_begin_offset;
-                }
+        let Some(client_id) = client_resolver(request_header)? else {
+            return Ok(());
+        };
+        let mut offset = request_header.queue_offset;
+        if let Some(response) = response {
+            if ResponseCode::from(response.code()) == ResponseCode::PullOffsetMoved {
+                offset = next_begin_offset;
             }
-
-            let client_id = if proxy_pull_broadcast {
-                request_header.proxy_forward_client_id.clone().unwrap_or_default()
-            } else if let Some(ref consumer_group_info) = consumer_group_info {
-                if let Some(ref client_channel_info) = consumer_group_info.find_channel_by_channel(channel) {
-                    client_channel_info.client_id().clone()
-                } else {
-                    return;
-                }
-            } else {
-                return;
-            };
-            self.context.update_broadcast_offset(
-                topic,
-                group,
-                queue_id,
-                offset,
-                client_id.as_str(),
-                proxy_pull_broadcast,
-            );
         }
+        self.context
+            .update_broadcast_offset(topic, group, queue_id, offset, client_id.as_str(), proxy_pull_broadcast);
+        Ok(())
     }
 }
 
@@ -716,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn pull_result_distinguishes_immediate_reply_from_suspension() {
+    fn pull_result_preserves_explicit_immediate_reply() {
         let immediate = command_result(response_head()).expect("valid immediate Pull result");
         assert!(matches!(&immediate, PullMessageResult::Reply(_)));
         let PullMessageResult::Reply(parts) = immediate else {
@@ -725,10 +693,7 @@ mod tests {
         let HandlerOutcome::Reply(plan) = parts.into_handler_outcome().expect("valid empty Pull plan") else {
             panic!("immediate Pull parts must map to a Reply outcome");
         };
-        let suspended = PullMessageResult::Suspended;
-
         assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
-        assert!(matches!(suspended, PullMessageResult::Suspended));
     }
 
     #[test]
