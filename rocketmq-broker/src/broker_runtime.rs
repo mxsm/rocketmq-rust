@@ -139,12 +139,8 @@ use crate::lifecycle::StartupJournal;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
 use crate::lite::lite_sharding::LiteShardingView;
-use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingPolicy;
-use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::long_polling::notify_message_arriving_listener::NotifyMessageArrivingListener;
+use crate::long_polling::pop_deferred::service::PollingCountProvider;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::broadcast_offset_manager::SCAN_INTERVAL;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
@@ -230,8 +226,6 @@ use crate::processor::send_message_processor::capability::SendMessageTopicCapabi
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::v2::BrokerProcessorTypeV2;
 use crate::processor::v2::BrokerRequestProcessorV2;
-use crate::processor::BrokerProcessorType;
-use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveMasterAddress;
 use crate::slave::slave_synchronize::SlaveSynchronize;
@@ -284,12 +278,6 @@ pub(crate) use shutdown_report::BrokerShutdownComponentReport;
 use shutdown_report::BrokerShutdownProgress;
 
 pub(crate) type BrokerMessageStore = StorePorts;
-
-type DefaultServerProcessor =
-    BrokerRequestProcessor<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>;
-
-type FasterServerProcessor =
-    BrokerRequestProcessor<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>;
 
 pub(crate) type DefaultServerProcessorV2 = BrokerRequestProcessorV2<
     BrokerProcessorTypeV2<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,
@@ -765,7 +753,6 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     update_master_haserver_addr_periodically: bool,
     should_start_time: Arc<AtomicU64>,
     online_role_state: Arc<BrokerOnlineRoleState>,
-    pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
     rebalance_lock_manager: RebalanceLockManager,
     broker_member_group: BrokerMembershipState,
     transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener>,

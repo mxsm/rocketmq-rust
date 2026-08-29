@@ -57,7 +57,8 @@ use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
+use crate::long_polling::pop_deferred::index::PopFanoutCursor;
+use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
@@ -196,7 +197,7 @@ impl<MS: BrokerReadWriteStore> AckMessageOffsetCapability<MS> {
 
 pub(crate) struct AckMessagePopCapability<MS: BrokerReadWriteStore> {
     merge_service: Weak<PopBufferMergeService<MS>>,
-    notification_service: Weak<PopLongPollingService<PopMessageProcessor<MS>>>,
+    notification_service: Weak<PopDeferredService>,
     queue_lock_manager: QueueLockManager,
 }
 
@@ -204,10 +205,7 @@ impl<MS: BrokerReadWriteStore> AckMessagePopCapability<MS> {
     pub(crate) fn new(processor: &Arc<PopMessageProcessor<MS>>) -> Self {
         Self {
             merge_service: Arc::downgrade(processor.pop_buffer_merge_service()),
-            notification_service: processor
-                .pop_long_polling_service()
-                .map(Arc::downgrade)
-                .unwrap_or_default(),
+            notification_service: processor.pop_deferred_service().map(Arc::downgrade).unwrap_or_default(),
             queue_lock_manager: processor.queue_lock_manager().clone(),
         }
     }
@@ -222,8 +220,18 @@ impl<MS: BrokerReadWriteStore> AckMessagePopCapability<MS> {
         let Some(service) = self.notification_service.upgrade() else {
             return false;
         };
-        service.notify_message_arriving(topic, queue_id, consumer_group, None, 0, None, None);
-        true
+        let _ = consumer_group;
+        service
+            .latch_arrival(
+                topic,
+                queue_id,
+                None,
+                current_millis() as i64,
+                None,
+                None,
+                PopFanoutCursor::new(),
+            )
+            .is_ok()
     }
 }
 

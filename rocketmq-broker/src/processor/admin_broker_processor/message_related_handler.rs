@@ -502,25 +502,20 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
-    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
     use rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
     use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::DispatchRequest;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
 
     use super::cq_ext_unit_response_serialize_error;
     use super::MessageRelatedHandler;
     use crate::broker_runtime::BrokerRuntime;
-    use crate::client::client_channel_info::ClientChannelInfo;
     use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
@@ -556,20 +551,6 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
     }
 
     #[test]
@@ -631,7 +612,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_consume_queue_returns_queue_data_and_online_subscription() {
+    async fn query_consume_queue_returns_queue_data_and_subscription() {
         let mut runtime = new_test_runtime("query-consume-queue").await;
         runtime
             .start_message_store_for_test()
@@ -641,26 +622,21 @@ mod tests {
         let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
-        let register_channel = create_test_channel().await;
-        let client_channel_info = ClientChannelInfo::new(
-            register_channel.clone(),
-            CheetahString::from_static_str("client-a"),
-            LanguageCode::RUST,
-            100,
-        );
-        admin.consumer_manager().register_consumer(
-            &CheetahString::from_static_str("group-a"),
-            client_channel_info,
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+        let subscription = SubscriptionData {
+            topic: topic.clone(),
+            sub_string: CheetahString::from_static_str("*"),
+            ..Default::default()
+        };
+        admin.consumer_manager().compensate_basic_consumer_info(
+            &group,
             ConsumeType::ConsumePassively,
             MessageModel::Clustering,
-            rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
-            std::collections::HashSet::from([SubscriptionData {
-                topic: CheetahString::from_static_str("topic-a"),
-                sub_string: CheetahString::from_static_str("*"),
-                ..Default::default()
-            }]),
-            false,
         );
+        admin
+            .consumer_manager()
+            .compensate_subscribe_data(&group, &topic, &subscription);
 
         let consume_queue = admin
             .message_store()
@@ -713,49 +689,6 @@ mod tests {
         assert_eq!(body.filter_data, Some(CheetahString::from_static_str("null")));
         assert_eq!(body.subscription_data.expect("subscription data").topic, "topic-a");
         assert_eq!(body.queue_data.expect("queue data").len(), 1);
-
-        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
-    }
-
-    #[tokio::test]
-    async fn pop_rollback_drains_pop_buffer_and_restarts_service() {
-        let mut runtime = new_test_runtime("pop-rollback").await;
-        runtime.init_processor_for_test();
-        let admin = runtime.admin_runtime_for_test();
-        let pop_message_processor = admin
-            .pop_message_processor()
-            .cloned()
-            .expect("pop message processor should exist");
-
-        let service = pop_message_processor.pop_buffer_merge_service().clone();
-        service
-            .add_ck_mock(
-                CheetahString::from_static_str("group-a"),
-                CheetahString::from_static_str("topic-a"),
-                0,
-                1,
-                60_000,
-                rocketmq_runtime::common::time_utils::current_millis() as u64,
-                0,
-                1,
-                admin.broker_config().broker_name().clone(),
-            )
-            .await;
-        assert!(service.get_offset_total_size().await > 0);
-        pop_message_processor.start().await;
-
-        let handler = MessageRelatedHandler::new();
-        let mut request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader::default());
-        request.make_custom_header_to_net();
-
-        let response = handler
-            .pop_rollback(&admin, RequestCode::PopRollback, &mut request)
-            .await
-            .expect("pop rollback should succeed")
-            .expect("pop rollback should return response");
-
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert_eq!(service.get_offset_total_size().await, 0);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

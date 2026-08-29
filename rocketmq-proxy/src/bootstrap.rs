@@ -226,9 +226,9 @@ impl ProxyRuntimeBuilder {
             .metrics
             .unwrap_or_else(|| ProxyMetrics::from_telemetry(&telemetry, &self.config));
         #[cfg(any(feature = "observability", feature = "otel-traces"))]
-        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::from_handle(&telemetry);
+        let transport_telemetry = rocketmq_transport::api::v2::TransportTelemetry::from_handle(&telemetry);
         #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
-        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::noop();
+        let transport_telemetry = rocketmq_transport::api::v2::TransportTelemetry::noop();
         let backend = match self.service_manager {
             Some(service_manager) => DefaultBackend {
                 service_manager,
@@ -294,7 +294,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     local_mode_supported: bool,
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
-    transport_telemetry: rocketmq_transport::api::v1::TransportTelemetry,
+    transport_telemetry: rocketmq_transport::api::v2::TransportTelemetry,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     backend_context: Option<ChildServiceContext>,
     service_context: ChildServiceContext,
@@ -331,9 +331,9 @@ where
     ) -> ProxyResult<Self> {
         let metrics = ProxyMetrics::from_telemetry(&telemetry, &config);
         #[cfg(any(feature = "observability", feature = "otel-traces"))]
-        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::from_handle(&telemetry);
+        let transport_telemetry = rocketmq_transport::api::v2::TransportTelemetry::from_handle(&telemetry);
         #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
-        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::noop();
+        let transport_telemetry = rocketmq_transport::api::v2::TransportTelemetry::noop();
         Self::from_processor_with_local_mode_support(
             config,
             processor,
@@ -359,7 +359,7 @@ where
         auth_metadata_service: Option<Arc<dyn MetadataService>>,
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
-        transport_telemetry: rocketmq_transport::api::v1::TransportTelemetry,
+        transport_telemetry: rocketmq_transport::api::v2::TransportTelemetry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
@@ -395,7 +395,7 @@ where
         auth_metadata_service: Option<Arc<dyn MetadataService>>,
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
-        transport_telemetry: rocketmq_transport::api::v1::TransportTelemetry,
+        transport_telemetry: rocketmq_transport::api::v2::TransportTelemetry,
         grpc_guards: rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         backend_context: Option<ChildServiceContext>,

@@ -26,7 +26,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::Weak;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -35,8 +34,6 @@ use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::consume_init_mode::ConsumeInitMode;
-#[cfg(test)]
-use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -44,12 +41,9 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
-use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
-use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
@@ -62,9 +56,6 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::PopCheckPoint;
 use rocketmq_store::SelectMappedBufferResult;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
 use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
@@ -73,15 +64,8 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::deferred_generation_handoff::DeferredGenerationHandoff;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion;
-use crate::long_polling::polling_header::PollingHeader;
-use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
+use crate::long_polling::pop_deferred::service::PopWakeupCompletion;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustment;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::profile_store::PopConsumerProfileStore;
@@ -93,7 +77,6 @@ use crate::processor::pop_message_processor::capability::PopBufferMergeContext;
 use crate::processor::pop_message_processor::capability::PopMessageProcessorContext;
 use crate::processor::pop_message_processor::resume::PopCallerHost;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
-use crate::processor::response_plan::pop::deliver_pop_legacy;
 
 const BORN_TIME: &str = "bornTime";
 const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,7 +88,6 @@ pub(crate) type PopLagRefreshProducer =
 
 pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     ck_message_number: AtomicI64,
-    pop_long_polling_service: Arc<PopLongPollingService<PopMessageProcessor<MS>>>,
     pop_buffer_merge_service: Arc<PopBufferMergeService<MS>>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
@@ -121,7 +103,6 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
     pub(crate) fn new(
         context: Arc<PopMessageProcessorContext<MS>>,
         buffer_context: Arc<PopBufferMergeContext<MS>>,
-        long_polling_context: PopLongPollingServiceContext,
         queue_lock_manager: QueueLockManager,
     ) -> rocketmq_error::RocketMQResult<Arc<Self>> {
         let policy = context.policy.snapshot();
@@ -163,13 +144,8 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
             #[cfg(feature = "rocksdb_store")]
             pop_consumer_store,
         );
-        Ok(Arc::new_cyclic(|processor| PopMessageProcessor {
+        Ok(Arc::new(PopMessageProcessor {
             ck_message_number: Default::default(),
-            pop_long_polling_service: Arc::new(PopLongPollingService::new(
-                long_polling_context,
-                false,
-                processor.clone(),
-            )),
             pop_buffer_merge_service,
             queue_lock_manager,
             revive_topic,
@@ -193,6 +169,10 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         self.pop_deferred_service.set(service)
     }
 
+    pub(crate) fn pop_deferred_service(&self) -> Option<&Arc<PopDeferredService>> {
+        self.pop_deferred_service.get()
+    }
+
     #[cfg(test)]
     pub(crate) fn pop_deferred_service_is_installed_for_test(&self) -> bool {
         self.pop_deferred_service.get().is_some()
@@ -204,7 +184,6 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
 
     pub async fn start(&self) {
         let _lifecycle = self.lifecycle.lock().await;
-        PopLongPollingService::start(&self.pop_long_polling_service).await;
         PopBufferMergeService::start(self.pop_buffer_merge_service.clone());
         self.queue_lock_manager.start();
     }
@@ -284,95 +263,10 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
     }
 }
 
-impl<MS> RequestProcessor for PopMessageProcessor<MS>
-where
-    MS: BrokerReadWriteStore,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
-    }
-}
-
-impl<MS> PopLongPollingRequestProcessor for PopMessageProcessor<MS>
-where
-    MS: BrokerReadWriteStore,
-{
-    async fn process_request_when_wakeup(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, &mut request).await
-    }
-}
-
 impl<MS> PopMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    pub(crate) async fn process_request_shared(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        self._process_request(channel, ctx, request_code, request).await
-    }
-
-    pub async fn _process_request(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        match self.execute_pop_initial(request, channel.remote_address()).await? {
-            v2::PopInitialOutcome::Reply(parts) => deliver_pop_legacy(parts, &channel).await,
-            v2::PopInitialOutcome::Suspend(suspension) => {
-                let suspension = *suspension;
-                let mut head = suspension.head;
-                let polling_result = self.pop_long_polling_service.polling(
-                    ctx,
-                    request,
-                    PollingHeader::new_from_pop_message_request_header(&suspension.request_header),
-                    Some(suspension.subscription_data),
-                    suspension.message_filter,
-                );
-                match polling_result {
-                    PollingResult::PollingSuc => {
-                        if suspension.rest_num > 0 {
-                            self.pop_long_polling_service.notify_message_arriving(
-                                &suspension.request_header.topic,
-                                suspension.request_header.queue_id,
-                                &suspension.request_header.consumer_group,
-                                None,
-                                0,
-                                None,
-                                None,
-                            );
-                        }
-                        Ok(None)
-                    }
-                    PollingResult::PollingFull => {
-                        head.set_code_ref(ResponseCode::PollingFull);
-                        Ok(Some(head))
-                    }
-                    _ => {
-                        head.set_code_ref(ResponseCode::PollingTimeout);
-                        Ok(Some(head))
-                    }
-                }
-            }
-        }
-    }
-
     #[allow(
         clippy::too_many_arguments,
         reason = "existing POP topic execution context is tracked by the lint debt registry"
@@ -981,27 +875,6 @@ where
         &self.queue_lock_manager
     }
 
-    /// Get the pop long polling service
-    ///
-    /// # Returns
-    /// A reference to the PopLongPollingService instance
-    #[inline]
-    pub fn pop_long_polling_service(&self) -> Option<&Arc<PopLongPollingService<PopMessageProcessor<MS>>>> {
-        Some(&self.pop_long_polling_service)
-    }
-
-    pub(crate) fn install_deferred_generation_handoff(
-        &self,
-        handoff: Arc<DeferredGenerationHandoff>,
-    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
-        self.pop_long_polling_service.install_handoff(handoff)
-    }
-
-    pub(crate) fn polling_count_provider(&self) -> Weak<dyn PollingCountProvider> {
-        let provider: Arc<dyn PollingCountProvider> = self.pop_long_polling_service.clone();
-        Arc::downgrade(&provider)
-    }
-
     pub(crate) fn notify_message_arriving_before_lag(
         &self,
         topic: &CheetahString,
@@ -1011,7 +884,7 @@ where
         if let Some(producer) = producer {
             return producer(topic, consumer_group);
         }
-        self.notify_message_arriving_before_lag_legacy(topic, consumer_group)
+        None
     }
 
     pub(crate) fn install_lag_refresh_producer(
@@ -1037,15 +910,6 @@ where
             return true;
         }
         false
-    }
-
-    pub(crate) fn notify_message_arriving_before_lag_legacy(
-        &self,
-        topic: &CheetahString,
-        consumer_group: &CheetahString,
-    ) -> Option<PopWakeupCompletion> {
-        self.pop_long_polling_service
-            .notify_message_arriving_before_lag(topic, consumer_group)
     }
 
     pub(crate) async fn consumer_lag_adjustment(
@@ -1078,31 +942,6 @@ where
         })
     }
 
-    pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32, cid: &CheetahString) {
-        self.pop_long_polling_service
-            .notify_message_arriving(topic, queue_id, cid, None, 0, None, None);
-    }
-
-    pub fn notify_message_arriving_full(
-        &self,
-        topic: CheetahString,
-        queue_id: i32,
-        tags_code: Option<i64>,
-        msg_store_time: i64,
-        filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<CheetahString, CheetahString>>,
-    ) {
-        self.pop_long_polling_service
-            .notify_message_arriving_with_retry_topic_full(
-                topic,
-                queue_id,
-                tags_code,
-                msg_store_time,
-                filter_bit_map,
-                properties,
-            );
-    }
-
     fn read_get_message_result(
         &self,
         get_message_result: &GetMessageResult,
@@ -1117,26 +956,6 @@ where
         Some(bytes_mut.freeze())
     }
 
-    pub(crate) async fn stop_legacy_producer_until(
-        &self,
-        deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.pop_long_polling_service.stop_producer_until(deadline).await
-    }
-
-    pub(crate) async fn drain_legacy_executions_until(
-        &self,
-        deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.pop_long_polling_service.drain_executions_until(deadline).await
-    }
-
-    pub(crate) async fn finalize_legacy_shutdown(
-        &self,
-    ) -> crate::long_polling::long_polling_service::LegacyServiceFinalization {
-        self.pop_long_polling_service.finalize_shutdown().await
-    }
-
     pub(crate) async fn shutdown_auxiliary(&self) {
         let _lifecycle = self.lifecycle.lock().await;
         self.pop_buffer_merge_service.shutdown();
@@ -1148,21 +967,6 @@ where
             warn!(?error, "failed to gracefully shutdown PopBufferMergeService");
         }
         self.queue_lock_manager.shutdown().await;
-    }
-
-    pub async fn shutdown(&self) -> crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
-        let deadline = rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(5));
-        let producer = self.stop_legacy_producer_until(deadline).await;
-        let executions = self.drain_legacy_executions_until(deadline).await;
-        let finalization = self.finalize_legacy_shutdown().await;
-        self.shutdown_auxiliary().await;
-        crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
-            name: "pop_long_polling",
-            producer,
-            executions,
-            observed_after_session_drain: finalization.observed_after_session_drain,
-            resources: finalization.terminal,
-        }
     }
 }
 
@@ -1470,14 +1274,10 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_protocol::code::request_code::RequestCode;
-    use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::AckMsg;
     use rocketmq_store::LocalFileMessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
@@ -1522,38 +1322,6 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
-    }
-
-    fn pop_request(topic: &str, group: &str, expression: Option<&str>) -> PopMessageRequestHeader {
-        PopMessageRequestHeader {
-            consumer_group: group.into(),
-            topic: topic.into(),
-            queue_id: 0,
-            max_msg_nums: 1,
-            invisible_time: 30_000,
-            poll_time: 0,
-            born_time: current_millis(),
-            init_mode: ConsumeInitMode::MIN,
-            exp_type: expression.map(|_| CheetahString::from_static_str(ExpressionType::SQL92)),
-            exp: expression.map(CheetahString::from_slice),
-            order: Some(false),
-            attempt_id: None,
-            topic_request_header: None,
-        }
     }
 
     #[test]
@@ -1727,85 +1495,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pop_long_polling_service_uses_weak_processor_back_reference() {
-        fn assert_send_sync<T: Send + Sync>(_: &T) {}
-
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = runtime.pop_message_processor_for_test();
-        let processor_weak = Arc::downgrade(&processor);
-        let service = processor.pop_long_polling_service.clone();
-
-        assert_send_sync(&processor);
-        drop(processor);
-
-        assert!(processor_weak.upgrade().is_none());
-        assert_eq!(Arc::strong_count(&service), 1);
-    }
-
-    #[tokio::test]
-    async fn pop_long_polling_service_start_shutdown_and_restart_are_serialized() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = runtime.pop_message_processor_for_test();
-        let service = processor.pop_long_polling_service.clone();
-
-        PopLongPollingService::start(&service).await;
-        let first_task_group = service
-            .task_group_for_test()
-            .expect("long-polling task group should be installed");
-        PopLongPollingService::start(&service).await;
-        assert_eq!(
-            service
-                .task_group_for_test()
-                .expect("duplicate start should retain the task group")
-                .task_count(),
-            1
-        );
-        assert_eq!(first_task_group.task_count(), 1);
-        assert!(service.is_running());
-
-        service.shutdown().await;
-        assert!(!service.is_running());
-        assert!(service.task_group_for_test().is_none());
-
-        PopLongPollingService::start(&service).await;
-        let restarted_task_group = service
-            .task_group_for_test()
-            .expect("restart should install a task group");
-        assert_eq!(restarted_task_group.task_count(), 1);
-        assert!(!restarted_task_group.cancellation_token().is_cancelled());
-        service.shutdown().await;
-        assert!(!service.is_running());
-    }
-
-    #[tokio::test]
-    async fn active_pop_long_polling_scan_does_not_keep_owner_alive() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = runtime.pop_message_processor_for_test();
-        let service = processor.pop_long_polling_service.clone();
-        let processor_weak = Arc::downgrade(&processor);
-        let service_weak = Arc::downgrade(&service);
-
-        PopLongPollingService::start(&service).await;
-        drop(processor);
-        drop(service);
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while service_weak.upgrade().is_some() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("scan task should release the service owner");
-        assert!(processor_weak.upgrade().is_none());
-    }
-
-    #[tokio::test]
     async fn build_lock_key_formats_correctly() {
         let topic = CheetahString::from_static_str("test_topic");
         let consumer_group = CheetahString::from_static_str("test_group");
@@ -1813,56 +1502,6 @@ mod tests {
         let key = QueueLockManager::build_lock_key(&topic, &consumer_group, queue_id);
         let expected = "test_topic@test_group@1";
         assert_eq!(key, expected);
-    }
-
-    #[tokio::test]
-    async fn process_request_with_valid_sql_returns_polling_timeout_without_persisting_filter_data() {
-        let mut runtime = new_test_runtime("valid-sql-request-scoped").await;
-        runtime.seed_pop_topic_and_group_for_test("topic-a", "group-a");
-
-        let processor = runtime.pop_message_processor_for_test();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let request_header = pop_request("topic-a", "group-a", Some("color = 'blue'"));
-        let mut request = RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
-        request.make_custom_header_to_net();
-
-        let response = processor
-            ._process_request(channel, ctx, RequestCode::PopMessage, &mut request)
-            .await
-            .expect("pop request should succeed")
-            .expect("pop request should return a response");
-
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::PollingTimeout);
-        assert!(!runtime.has_pop_consumer_filter_data_for_test("topic-a", "group-a"));
-
-        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
-    }
-
-    #[tokio::test]
-    async fn process_request_with_invalid_sql_returns_subscription_parse_failed() {
-        let mut runtime = new_test_runtime("invalid-sql-parse-failed").await;
-        runtime.seed_pop_topic_and_group_for_test("topic-a", "group-a");
-
-        let processor = runtime.pop_message_processor_for_test();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let request_header = pop_request("topic-a", "group-a", Some("color ="));
-        let mut request = RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
-        request.make_custom_header_to_net();
-
-        let response = processor
-            ._process_request(channel, ctx, RequestCode::PopMessage, &mut request)
-            .await
-            .expect("invalid pop request should return an error response")
-            .expect("invalid pop request should return a response");
-
-        assert_eq!(
-            ResponseCode::from(response.code()),
-            ResponseCode::SubscriptionParseFailed
-        );
-
-        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]
@@ -1948,16 +1587,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_lock_cleanup_preserves_legacy_stale_lock_recovery() {
+    async fn queue_lock_cleanup_preserves_stale_lock_recovery() {
         let manager = QueueLockManager::new();
-        let key = CheetahString::from_static_str("legacy-stale-cleanup");
+        let key = CheetahString::from_static_str("stale-cleanup");
         assert!(manager.try_lock_with_key(key.clone()).await);
         manager
             .expired_local_cache
             .read()
             .await
             .get(&key)
-            .expect("legacy locked entry is indexed")
+            .expect("locked entry is indexed")
             .lock_time
             .store(0, Ordering::Relaxed);
 

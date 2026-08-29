@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -80,6 +81,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::LanguageCode;
+use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::identity::ResourceIdentity;
 pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
@@ -92,23 +94,22 @@ use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RejectRequestResponse;
-use rocketmq_transport::api::v1::RemotingDeserializable;
-use rocketmq_transport::api::v1::RequestProcessor;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TransportServer;
-use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RejectRequestDecision;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::v2::ServerConfig;
+use rocketmq_transport::api::v2::ServerPushCommand;
+use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::TransportTelemetry;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::warn;
 
 use crate::auth::is_auth_error;
@@ -130,12 +131,15 @@ use crate::processor::QueryOffsetRequest;
 use crate::processor::QueryRouteRequest;
 use crate::processor::SendMessageEntry;
 use crate::processor::SendMessageRequest;
+use crate::session::ClientSessionBindInstruction;
 use crate::session::ClientSessionRegistry;
+use crate::session::ProxySessionBinder;
 
 pub struct ProxyRequestProcessor<P> {
     dispatcher: Arc<ProxyRemotingDispatcher<P>>,
     auth_runtime: Option<ProxyAuthRuntime>,
     drain: ProxyDrainController,
+    session_binder: ProxySessionBinder,
 }
 
 impl<P> Clone for ProxyRequestProcessor<P> {
@@ -144,6 +148,7 @@ impl<P> Clone for ProxyRequestProcessor<P> {
             dispatcher: Arc::clone(&self.dispatcher),
             auth_runtime: self.auth_runtime.clone(),
             drain: self.drain.clone(),
+            session_binder: self.session_binder.clone(),
         }
     }
 }
@@ -216,6 +221,33 @@ where
         drain: ProxyDrainController,
         command_factory: RemotingCommandFactory,
     ) -> Self {
+        let session_binder = ProxySessionBinder::new(sessions.clone());
+        Self::new_with_session_binder(
+            config,
+            processor,
+            sessions,
+            auth_runtime,
+            remoting_backend,
+            drain,
+            command_factory,
+            session_binder,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "assembles the V2 request boundary with its independent session binder"
+    )]
+    fn new_with_session_binder(
+        config: Arc<ProxyConfig>,
+        processor: Arc<P>,
+        sessions: ClientSessionRegistry,
+        auth_runtime: Option<ProxyAuthRuntime>,
+        remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+        drain: ProxyDrainController,
+        command_factory: RemotingCommandFactory,
+        session_binder: ProxySessionBinder,
+    ) -> Self {
         Self {
             dispatcher: Arc::new(
                 ProxyRemotingDispatcher::new_with_drain_controller_and_remoting_command_factory(
@@ -225,83 +257,13 @@ where
                     remoting_backend,
                     drain.clone(),
                     command_factory,
-                ),
+                )
+                .with_session_binder(session_binder.clone()),
             ),
             auth_runtime,
             drain,
+            session_binder,
         }
-    }
-}
-
-impl<P> RequestProcessor for ProxyRequestProcessor<P>
-where
-    P: MessagingProcessor + 'static,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut context =
-            ProxyContext::from_remoting_request(RemotingIngressRoute::rpc_name(request.code()), &channel, request);
-        let drain_management = is_drain_management_request(request.code());
-        if drain_management && self.auth_runtime.is_none() {
-            return Ok(Some(authentication_required_response(
-                &self.dispatcher.command_factory,
-                request.opaque(),
-            )));
-        }
-        if let Some(auth_runtime) = &self.auth_runtime {
-            let source_ip = channel.remote_address().ip().to_string();
-            let auth_context = RemotingAuthContext::new(Some(source_ip), Some(channel.channel_id().to_owned()));
-            match auth_runtime.authenticate_remoting(request, &auth_context).await {
-                Ok(Some(principal)) => context.set_authenticated_principal(principal),
-                Ok(None) => {}
-                Err(error) => {
-                    return Ok(Some(auth_error_response(
-                        &self.dispatcher.command_factory,
-                        request.opaque(),
-                        error,
-                    )))
-                }
-            }
-            if drain_management && context.authenticated_principal().is_none() {
-                return Ok(Some(authentication_required_response(
-                    &self.dispatcher.command_factory,
-                    request.opaque(),
-                )));
-            }
-            if let Err(error) = auth_runtime.authorize_remoting(&auth_context, request).await {
-                return Ok(Some(auth_error_response(
-                    &self.dispatcher.command_factory,
-                    request.opaque(),
-                    error,
-                )));
-            }
-        }
-        let _drain_admission = if drain_management {
-            None
-        } else {
-            match self.drain.try_admit() {
-                Ok(admission) => Some(admission),
-                Err(_) => {
-                    return Ok(Some(
-                        self.dispatcher
-                            .command_factory
-                            .create_response_command_with_code(ResponseCode::ServiceNotAvailable)
-                            .set_remark("Proxy is draining and does not accept new requests")
-                            .set_opaque(request.opaque()),
-                    ));
-                }
-            }
-        };
-        self.dispatcher.bind_remoting_channel_if_heartbeat(&channel, request);
-        Ok(Some(self.dispatcher.dispatch(&context, request).await))
-    }
-
-    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
-        (false, None)
     }
 }
 
@@ -376,6 +338,90 @@ where
                 }
             }
         };
+
+        if RequestCode::from(original_code) == RequestCode::HeartBeat {
+            if let Err(error) = auth_command.decode_command_custom_header::<HeartbeatRequestHeader>() {
+                return response_plan(decode_error_response(
+                    &self.dispatcher.command_factory,
+                    request.original_identity().original_opaque(),
+                    "decode heartbeat header",
+                    error,
+                ));
+            }
+            let Some(body) = auth_command.body() else {
+                return response_plan(transport_error_response(
+                    &self.dispatcher.command_factory,
+                    request.original_identity().original_opaque(),
+                    "decode heartbeat body",
+                    "heartbeat request body is missing",
+                ));
+            };
+            let heartbeat = match SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body.as_ref()) {
+                Ok(heartbeat) => heartbeat,
+                Err(error) => {
+                    return response_plan(transport_error_response(
+                        &self.dispatcher.command_factory,
+                        request.original_identity().original_opaque(),
+                        "decode heartbeat body",
+                        error,
+                    ))
+                }
+            };
+            if heartbeat.client_id.is_empty() {
+                return response_plan(response_with_code(
+                    &self.dispatcher.command_factory,
+                    request.original_identity().original_opaque(),
+                    ResponseCode::SystemError,
+                    "heartbeat clientId is missing",
+                ));
+            }
+            let instruction = ClientSessionBindInstruction::new(
+                heartbeat.client_id.as_str(),
+                request.session().id(),
+                heartbeat
+                    .producer_data_set
+                    .iter()
+                    .map(|producer| producer.group_name.to_string())
+                    .collect(),
+                heartbeat
+                    .consumer_data_set
+                    .iter()
+                    .map(|consumer| consumer.group_name.to_string())
+                    .collect(),
+            );
+            let Some(commit) = self.session_binder.commit_heartbeat(&context, instruction) else {
+                return response_plan(response_with_code(
+                    &self.dispatcher.command_factory,
+                    request.original_identity().original_opaque(),
+                    ResponseCode::SystemError,
+                    "heartbeat session closed before capability binding",
+                ));
+            };
+            if let Some(retired) = commit.retired {
+                match retired.retire().await {
+                    crate::session::RetiredSessionRetirement::Graceful => debug!(
+                        retirement_outcome = "graceful",
+                        "retired superseded Proxy remoting client session"
+                    ),
+                    crate::session::RetiredSessionRetirement::Forced => warn!(
+                        retirement_outcome = "forced",
+                        "forced retirement of superseded Proxy remoting client session"
+                    ),
+                    crate::session::RetiredSessionRetirement::AlreadyDisconnected => debug!(
+                        retirement_outcome = "already_disconnected",
+                        "superseded Proxy remoting client session disconnected before retirement fallback"
+                    ),
+                }
+            }
+            let mut response = self
+                .dispatcher
+                .command_factory
+                .create_success_response_command()
+                .set_opaque(request.original_identity().original_opaque());
+            response.add_ext_field(IS_SUPPORT_HEART_BEAT_V2, true.to_string());
+            response.add_ext_field(IS_SUB_CHANGE, commit.membership_changed.to_string());
+            return response_plan(response);
+        }
 
         self.dispatcher.dispatch_v2(&context, request).await
     }
@@ -626,7 +672,14 @@ where
         message: format!("proxy remoting server failed to bind {addr}: {error}"),
     })?;
     let proxy_protocol = config.remoting.proxy_protocol.clone();
-    let request_processor = ProxyRequestProcessor::new_with_drain_controller_and_remoting_command_factory(
+    let session_binder = Arc::new(ProxySessionBinder::new(sessions.clone()));
+    let transport_sessions = Arc::new(V2SessionRegistry::with_lifecycle_listener(session_binder.clone()));
+    if !session_binder.attach(&transport_sessions) {
+        return Err(ProxyError::Transport {
+            message: "proxy remoting session binder was already attached".to_owned(),
+        });
+    }
+    let request_processor = ProxyRequestProcessor::new_with_session_binder(
         config,
         processor,
         sessions,
@@ -634,17 +687,17 @@ where
         remoting_backend,
         drain,
         command_factory,
+        session_binder.as_ref().clone(),
     );
-    let mut server = TransportServer::new(Arc::new(ServerConfig::default()), service_context)
+    let server = TransportServerV2::new(Arc::new(ServerConfig::default()), service_context, request_processor)
         .with_telemetry(telemetry)
-        .try_with_proxy_protocol(proxy_protocol)?;
+        .try_with_proxy_protocol(proxy_protocol)?
+        .with_session_registry(transport_sessions);
     let (startup_tx, mut startup_rx) = oneshot::channel();
     let readiness_cancellation = CancellationToken::new();
     let server_cancellation = readiness_cancellation.clone();
     let server_future = server.try_serve_bound_listener_until_with_startup(
         listener,
-        request_processor,
-        None,
         None,
         async move {
             tokio::select! {
@@ -724,6 +777,7 @@ pub struct ProxyRemotingDispatcher<P> {
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     drain: ProxyDrainController,
     command_factory: RemotingCommandFactory,
+    session_binder: Option<ProxySessionBinder>,
 }
 
 impl<P> ProxyRemotingDispatcher<P>
@@ -794,7 +848,13 @@ where
             remoting_backend,
             drain,
             command_factory,
+            session_binder: None,
         }
+    }
+
+    fn with_session_binder(mut self, session_binder: ProxySessionBinder) -> Self {
+        self.session_binder = Some(session_binder);
+        self
     }
 
     pub async fn dispatch(&self, context: &ProxyContext, request: &RemotingCommand) -> RemotingCommand {
@@ -802,8 +862,13 @@ where
             RemotingIngressRoute::QueryRoute => self.dispatch_query_route(context, request).await,
             RemotingIngressRoute::QueryAssignment => self.dispatch_query_assignment(context, request).await,
             RemotingIngressRoute::SendMessage => self.dispatch_send_message(context, request).await,
-            RemotingIngressRoute::Heartbeat => self.dispatch_heartbeat(context, request).await,
-            RemotingIngressRoute::UnregisterClient => self.dispatch_unregister_client(request).await,
+            RemotingIngressRoute::Heartbeat => response_with_code(
+                &self.command_factory,
+                request.opaque(),
+                ResponseCode::SystemError,
+                "heartbeat requires the V2 atomic session-binding boundary",
+            ),
+            RemotingIngressRoute::UnregisterClient => self.dispatch_unregister_client(request, None).await,
             RemotingIngressRoute::GetConsumerListByGroup => self.dispatch_get_consumer_list_by_group(request).await,
             RemotingIngressRoute::GetConsumerConnectionList => self.dispatch_get_consumer_connection_list(request),
             RemotingIngressRoute::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
@@ -852,6 +917,15 @@ where
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let route =
             rocketmq_proxy_core::remoting::classify_remoting_request(request.original_identity().original_code());
+        if matches!(route, RemotingIngressRoute::UnregisterClient) {
+            let mut dispatch_command = request.command().clone();
+            dispatch_command.set_code_ref(request.original_identity().original_code());
+            dispatch_command.set_opaque_mut(request.original_identity().original_opaque());
+            return response_plan(
+                self.dispatch_unregister_client(&dispatch_command, Some(request.session().id()))
+                    .await,
+            );
+        }
         if matches!(
             route,
             RemotingIngressRoute::ForwardBackend
@@ -1003,22 +1077,6 @@ where
         }
     }
 
-    fn bind_remoting_channel_if_heartbeat(&self, channel: &Channel, request: &RemotingCommand) {
-        if RequestCode::from(request.code()) != RequestCode::HeartBeat {
-            return;
-        }
-        let Some(body) = request.body() else {
-            return;
-        };
-        let Ok(heartbeat) = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body.as_ref()) else {
-            return;
-        };
-        if !heartbeat.client_id.is_empty() {
-            self.sessions
-                .bind_remoting_channel(heartbeat.client_id.as_str(), channel.clone());
-        }
-    }
-
     async fn dispatch_query_route(&self, context: &ProxyContext, request: &RemotingCommand) -> RemotingCommand {
         let header = match request.decode_command_custom_header::<GetRouteInfoRequestHeader>() {
             Ok(header) => header,
@@ -1123,61 +1181,11 @@ where
             .set_opaque(request.opaque())
     }
 
-    async fn dispatch_heartbeat(&self, context: &ProxyContext, request: &RemotingCommand) -> RemotingCommand {
-        if let Err(error) = request.decode_command_custom_header::<HeartbeatRequestHeader>() {
-            return decode_error_response(
-                &self.command_factory,
-                request.opaque(),
-                "decode heartbeat header",
-                error,
-            );
-        }
-
-        let Some(body) = request.body() else {
-            return transport_error_response(
-                &self.command_factory,
-                request.opaque(),
-                "decode heartbeat body",
-                "heartbeat request body is missing",
-            );
-        };
-        let heartbeat = match SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body.as_ref()) {
-            Ok(heartbeat) => heartbeat,
-            Err(error) => {
-                return transport_error_response(
-                    &self.command_factory,
-                    request.opaque(),
-                    "decode heartbeat body",
-                    error,
-                )
-            }
-        };
-
-        let changed = self.sessions.update_membership_from_remoting_heartbeat(
-            context,
-            heartbeat.client_id.as_str(),
-            heartbeat
-                .producer_data_set
-                .iter()
-                .map(|producer| producer.group_name.to_string())
-                .collect(),
-            heartbeat
-                .consumer_data_set
-                .iter()
-                .map(|consumer| consumer.group_name.to_string())
-                .collect(),
-        );
-
-        let mut response = self
-            .command_factory
-            .create_success_response_command()
-            .set_opaque(request.opaque());
-        response.add_ext_field(IS_SUPPORT_HEART_BEAT_V2, true.to_string());
-        response.add_ext_field(IS_SUB_CHANGE, changed.to_string());
-        response
-    }
-
-    async fn dispatch_unregister_client(&self, request: &RemotingCommand) -> RemotingCommand {
+    async fn dispatch_unregister_client(
+        &self,
+        request: &RemotingCommand,
+        caller_session_id: Option<SessionId>,
+    ) -> RemotingCommand {
         let header = match request.decode_command_custom_header::<UnregisterClientRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -1189,11 +1197,35 @@ where
                 )
             }
         };
-        self.sessions.unregister_client_groups(
-            header.client_id.as_str(),
-            header.producer_group.as_deref(),
-            header.consumer_group.as_deref(),
-        );
+        if let Some(session_binder) = &self.session_binder {
+            let Some(caller_session_id) = caller_session_id else {
+                return response_with_code(
+                    &self.command_factory,
+                    request.opaque(),
+                    ResponseCode::SystemError,
+                    "unregisterClient requires a typed V2 session identity",
+                );
+            };
+            if !session_binder.unregister_client_groups_for_session(
+                header.client_id.as_str(),
+                caller_session_id,
+                header.producer_group.as_deref(),
+                header.consumer_group.as_deref(),
+            ) {
+                return response_with_code(
+                    &self.command_factory,
+                    request.opaque(),
+                    ResponseCode::SystemError,
+                    "unregisterClient session does not own the client binding",
+                );
+            }
+        } else {
+            self.sessions.unregister_client_groups(
+                header.client_id.as_str(),
+                header.producer_group.as_deref(),
+                header.consumer_group.as_deref(),
+            );
+        }
         self.command_factory
             .create_success_response_command()
             .set_opaque(request.opaque())
@@ -1254,8 +1286,21 @@ where
                 );
             }
         };
-        let client_ids = self.sessions.consumer_client_ids(header.consumer_group.as_str());
-        if client_ids.is_empty() {
+        let bindings = self.session_binder.as_ref().map_or_else(
+            || {
+                self.sessions
+                    .consumer_client_ids(header.consumer_group.as_str())
+                    .into_iter()
+                    .filter_map(|client_id| {
+                        self.sessions
+                            .remoting_channel(client_id.as_str())
+                            .map(|capability| (client_id, capability))
+                    })
+                    .collect()
+            },
+            |session_binder| session_binder.consumer_bindings(header.consumer_group.as_str()),
+        );
+        if bindings.is_empty() {
             return response_with_code(
                 &self.command_factory,
                 request.opaque(),
@@ -1264,11 +1309,15 @@ where
             );
         }
         let mut forwarded = 0usize;
-        for client_id in client_ids {
-            let Some(client_channel) = self.sessions.remoting_channel(client_id.as_str()) else {
-                continue;
+        for (client_id, capability) in bindings {
+            let push = ServerPushCommand::NotifyConsumerIdsChanged {
+                header: NotifyConsumerIdsChangedRequestHeader {
+                    consumer_group: header.consumer_group.clone(),
+                    rpc_request_header: header.rpc_request_header.clone(),
+                },
+                opaque: Some(request.opaque()),
             };
-            if let Err(error) = client_channel.send_oneway(request.clone(), 10).await {
+            if let Err(error) = capability.send(push, Duration::from_millis(10)).await {
                 return response_with_code(
                     &self.command_factory,
                     request.opaque(),
@@ -1309,41 +1358,42 @@ where
                 );
             }
         };
-        if !self
-            .sessions
-            .consumer_client_ids(header.consumer_group.as_str())
-            .iter()
-            .any(|client_id| client_id.as_str() == header.client_id.as_str())
-        {
+        let capability = self.session_binder.as_ref().map_or_else(
+            || {
+                self.sessions
+                    .consumer_client_ids(header.consumer_group.as_str())
+                    .iter()
+                    .any(|client_id| client_id.as_str() == header.client_id.as_str())
+                    .then(|| self.sessions.remoting_channel(header.client_id.as_str()))
+                    .flatten()
+            },
+            |session_binder| session_binder.consumer_binding(header.client_id.as_str(), header.consumer_group.as_str()),
+        );
+        let Some(capability) = capability else {
             return response_with_code(
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
                 format!(
-                    "no matching lite consumer for group {}, clientId {}",
-                    header.consumer_group, header.client_id
-                ),
-            );
-        }
-        let Some(client_channel) = self.sessions.remoting_channel(header.client_id.as_str()) else {
-            return response_with_code(
-                &self.command_factory,
-                request.opaque(),
-                ResponseCode::ConsumerNotOnline,
-                format!(
-                    "no remoting channel for lite consumer group {}, clientId {}",
+                    "no matching remoting lite consumer for group {}, clientId {}",
                     header.consumer_group, header.client_id
                 ),
             );
         };
-        if let Err(error) = client_channel.send_oneway(request.clone(), 100).await {
+        let client_id = header.client_id.clone();
+        let consumer_group = header.consumer_group.clone();
+        let push = ServerPushCommand::NotifyUnsubscribeLite {
+            header,
+            opaque: Some(request.opaque()),
+        };
+        if let Err(error) = capability.send(push, Duration::from_millis(100)).await {
             return response_with_code(
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::SystemError,
                 format!(
                     "forward notifyUnsubscribeLite failed for group {}, clientId {}: {}",
-                    header.consumer_group, header.client_id, error
+                    consumer_group, client_id, error
                 ),
             );
         }
@@ -2399,8 +2449,6 @@ fn auth_error_response(command_factory: &RemotingCommandFactory, opaque: i32, er
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
-    #[cfg(feature = "local-mode")]
-    use std::net::TcpListener;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -2425,12 +2473,8 @@ mod tests {
     use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
     use rocketmq_model::common::message::message_single::Message;
     use rocketmq_model::common::message::MessageConst;
-    use rocketmq_model::common::mix_all::IS_SUB_CHANGE;
-    use rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
-    #[cfg(feature = "local-mode")]
-    use rocketmq_observability::TelemetryHandle;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
@@ -2443,7 +2487,6 @@ mod tests {
     use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
     use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-    use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
     use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
     use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
     use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
@@ -2456,7 +2499,6 @@ mod tests {
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
-    use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
     use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
     use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
     use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -2468,25 +2510,16 @@ mod tests {
     use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
     use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
     use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
-    use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
+    use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_protocol::protocol::SerializeType;
-    #[cfg(feature = "local-mode")]
-    use rocketmq_proxy_local::LocalBrokerFacadeClient;
-    #[cfg(feature = "local-mode")]
-    use rocketmq_proxy_local::LocalConfig;
-    #[cfg(feature = "local-mode")]
-    use rocketmq_proxy_local::LocalRemotingBackend;
-    #[cfg(feature = "local-mode")]
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeContext;
-    #[cfg(feature = "local-mode")]
-    use rocketmq_runtime::RuntimeOwner;
     use rocketmq_runtime::ServiceLifecycle;
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
@@ -2494,21 +2527,16 @@ mod tests {
     use rocketmq_security_api::Decision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::RemotingDeserializable;
-    use rocketmq_transport::api::v1::RemotingSerializable;
-    use rocketmq_transport::api::v1::RequestProcessor;
-    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AdmissionController;
+    use rocketmq_transport::api::v2::AdmissionLimits;
     use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
     use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
     use rocketmq_transport::api::v2::HandlerOutcome;
     use rocketmq_transport::api::v2::RejectRequestDecision;
     use rocketmq_transport::api::v2::RemotingRequest;
     use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::api::v2::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
-    use rocketmq_transport::test_support::LocalRequestHarness;
-    use tokio::time::timeout;
 
     use super::response_with_header;
     use super::ProxyDrainPhase;
@@ -2604,131 +2632,6 @@ mod tests {
             },
             ..ProxyConfig::default()
         })
-    }
-
-    #[cfg(feature = "local-mode")]
-    fn available_embedded_broker_port() -> u16 {
-        loop {
-            let broker = TcpListener::bind(("0.0.0.0", 0)).expect("reserve an ephemeral embedded Broker port");
-            let port = broker.local_addr().expect("read ephemeral Broker port").port();
-            let Some(fast_port) = port.checked_sub(2) else {
-                continue;
-            };
-            let Some(ha_port) = port.checked_add(1) else {
-                continue;
-            };
-            if port == 10_912 || fast_port == 10_912 {
-                continue;
-            }
-            let Ok(fast) = TcpListener::bind(("0.0.0.0", fast_port)) else {
-                continue;
-            };
-            let Ok(ha) = TcpListener::bind(("0.0.0.0", ha_port)) else {
-                continue;
-            };
-            drop((broker, fast, ha));
-            return port;
-        }
-    }
-
-    #[cfg(feature = "local-mode")]
-    #[test]
-    fn outer_v1_proxy_request_reaches_local_broker_v2_compatibility_path() {
-        let mut runtime_config = RuntimeConfig::server_default("proxy-v1-local-backend-v2-compatibility-test");
-        runtime_config.thread_stack_size = Some(16 * 1024 * 1024);
-        let owner = RuntimeOwner::new(runtime_config).expect("construct V2 compatibility test runtime");
-        owner.block_on(outer_v1_proxy_request_reaches_local_broker_v2_compatibility_path_body(
-            &owner,
-        ));
-        let report = owner
-            .shutdown_runtime_blocking()
-            .expect("V2 compatibility test runtime shuts down");
-        assert!(report.is_healthy(), "{}", report.to_json());
-    }
-
-    #[cfg(feature = "local-mode")]
-    async fn outer_v1_proxy_request_reaches_local_broker_v2_compatibility_path_body(owner: &RuntimeOwner) {
-        let service = owner
-            .root_context()
-            .component("proxy-v1-local-backend-v2-compatibility");
-        let store = tempfile::tempdir().expect("create embedded Broker store directory");
-        let local_client = LocalBrokerFacadeClient::new(
-            LocalConfig {
-                broker_listen_port: available_embedded_broker_port(),
-                store_root_dir: store.path().to_string_lossy().into_owned(),
-                command_queue_max_age_millis: 10_000,
-                ..LocalConfig::default()
-            },
-            &service,
-            TelemetryHandle::noop(),
-        )
-        .expect("construct production local Broker facade client");
-        let backend = Arc::new(LocalRemotingBackend::new(local_client));
-        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
-            LocalServiceManager::with_services(
-                Arc::new(StaticRouteService::default()),
-                Arc::new(StaticMetadataService::default()),
-                Arc::new(DefaultAssignmentService),
-                Arc::new(TestMessageService),
-                Arc::new(TestConsumerService),
-                Arc::new(DefaultTransactionService),
-            ),
-        )));
-        let mut request_processor = ProxyRequestProcessor::new(
-            Arc::new(ProxyConfig {
-                mode: ProxyMode::Local,
-                ..ProxyConfig::default()
-            }),
-            processor,
-            ClientSessionRegistry::default(),
-            None,
-            Some(backend),
-        );
-        let harness = LocalRequestHarness::new(service.component("outer-v1").task_group().clone())
-            .await
-            .expect("local remoting harness should start");
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::ConsumerSendMsgBack,
-            ConsumerSendMsgBackRequestHeader {
-                offset: 0,
-                group: CheetahString::from("missing-v2-compatibility-group"),
-                delay_level: 0,
-                ..ConsumerSendMsgBackRequestHeader::default()
-            },
-        )
-        .set_opaque(9_852);
-        request.make_custom_header_to_net();
-        assert_eq!(
-            request
-                .decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()
-                .expect("outer V1 fixture must carry wire header fields")
-                .group
-                .as_str(),
-            "missing-v2-compatibility-group"
-        );
-
-        let response = request_processor
-            .process_request(harness.channel(), harness.context(), &mut request)
-            .await
-            .expect("outer V1 Proxy dispatch succeeds")
-            .expect("ordinary request returns one compatibility response");
-
-        assert_eq!(response.opaque(), 9_852);
-        let remark = response.remark().map(CheetahString::as_str).unwrap_or_default();
-        assert_eq!(
-            ResponseCode::from(response.code()),
-            ResponseCode::SystemError,
-            "{remark}"
-        );
-        assert!(
-            remark.contains("look message by offset failed, the offset is 0"),
-            "{remark}"
-        );
-
-        drop(request_processor);
-        drop(harness);
-        let report = service.task_group().shutdown(Duration::from_secs(10)).await;
-        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
@@ -3111,7 +3014,7 @@ mod tests {
                 Arc::new(DefaultTransactionService),
             ),
         )));
-        let mut request_processor = ProxyRequestProcessor::new(
+        let request_processor = ProxyRequestProcessor::new(
             Arc::new(ProxyConfig {
                 mode: ProxyMode::Local,
                 ..ProxyConfig::default()
@@ -3121,23 +3024,34 @@ mod tests {
             None,
             None,
         );
-        let runtime = RuntimeContext::from_current("proxy-drain-auth-test");
-        let harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
-            .await
-            .expect("local remoting harness should start");
-        let mut request = RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState);
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            request_processor,
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedProxyPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let runtime = RuntimeContext::from_current("proxy-drain-auth-v2-test");
+        let service = runtime.service_context("proxy-drain-auth-v2");
+        let harness =
+            EmbeddedRequestHarnessV2::new(dispatcher, service.task_group().clone(), Principal::new("proxy-admin"));
 
-        let response = request_processor
-            .process_request(harness.channel(), harness.context(), &mut request)
+        let outcome = harness
+            .dispatch(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState),
+            )
             .await
-            .expect("request should be rejected with a wire response")
-            .expect("request should return a response");
+            .expect("V2 request should be rejected with a response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("drain authentication rejection must be a reply")
+        };
+        assert_eq!(plan.response_code(), ResponseCode::NoPermission.to_i32());
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
-        assert!(response
-            .remark()
-            .expect("authentication rejection should include a stable remark")
-            .contains("authenticated principal"));
+        let shutdown = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(shutdown.is_healthy(), "{}", shutdown.to_json());
     }
 
     #[tokio::test]
@@ -3361,7 +3275,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_heartbeat_and_get_consumer_list_tracks_membership() {
+    async fn consumer_queries_read_committed_membership() {
         let sessions = ClientSessionRegistry::default();
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
             LocalServiceManager::with_services(
@@ -3383,37 +3297,12 @@ mod tests {
             None,
         );
 
-        let heartbeat = HeartbeatData {
-            client_id: CheetahString::from("client-a"),
-            producer_data_set: HashSet::from([ProducerData {
-                group_name: CheetahString::from("ProducerA"),
-            }]),
-            consumer_data_set: HashSet::from([ConsumerData {
-                group_name: CheetahString::from("GroupA"),
-                ..ConsumerData::default()
-            }]),
-            heartbeat_fingerprint: 0,
-            is_without_sub: false,
-        };
-        let mut heartbeat_request =
-            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
-                .set_body(heartbeat.encode().expect("heartbeat should encode"));
-        heartbeat_request.make_custom_header_to_net();
-
-        let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
-        assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
-        assert_eq!(heartbeat_response.opaque(), heartbeat_request.opaque());
-        let heartbeat_ext_fields = heartbeat_response.ext_fields().expect("heartbeat response ext fields");
-        assert_eq!(
-            heartbeat_ext_fields
-                .get(IS_SUPPORT_HEART_BEAT_V2)
-                .map(CheetahString::as_str),
-            Some("true")
-        );
-        assert_eq!(
-            heartbeat_ext_fields.get(IS_SUB_CHANGE).map(CheetahString::as_str),
-            Some("true")
-        );
+        assert!(sessions.update_membership_from_remoting_heartbeat(
+            &test_context(),
+            "client-a",
+            ["ProducerA".to_owned()].into(),
+            ["GroupA".to_owned()].into(),
+        ));
         assert_eq!(sessions.consumer_client_ids("GroupA"), vec!["client-a".to_owned()]);
 
         let mut get_request = RemotingCommand::create_request_command(
@@ -3463,56 +3352,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_request_heartbeat_binds_remoting_channel() {
+    async fn dispatcher_heartbeat_route_cannot_mutate_membership() {
         let sessions = ClientSessionRegistry::default();
-        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
-            LocalServiceManager::with_services(
-                Arc::new(StaticRouteService::default()),
-                Arc::new(StaticMetadataService::default()),
-                Arc::new(DefaultAssignmentService),
-                Arc::new(TestMessageService),
-                Arc::new(TestConsumerService),
-                Arc::new(DefaultTransactionService),
-            ),
-        )));
-        let mut request_processor = ProxyRequestProcessor::new(
-            Arc::new(ProxyConfig {
-                mode: ProxyMode::Local,
-                ..ProxyConfig::default()
-            }),
-            processor,
+        let dispatcher = ProxyRemotingDispatcher::new(
+            Arc::new(ProxyConfig::default()),
+            Arc::new(DefaultMessagingProcessor::new(Arc::new(
+                LocalServiceManager::with_services(
+                    Arc::new(StaticRouteService::default()),
+                    Arc::new(StaticMetadataService::default()),
+                    Arc::new(DefaultAssignmentService),
+                    Arc::new(TestMessageService),
+                    Arc::new(TestConsumerService),
+                    Arc::new(DefaultTransactionService),
+                ),
+            ))),
             sessions.clone(),
             None,
-            None,
         );
-        let runtime = RuntimeContext::from_current("proxy-local-harness-test");
-        let harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
-            .await
-            .expect("local remoting harness should start");
         let heartbeat = HeartbeatData {
-            client_id: CheetahString::from_static_str("client-a"),
+            client_id: CheetahString::from("client-a"),
             producer_data_set: HashSet::new(),
             consumer_data_set: HashSet::from([ConsumerData {
-                group_name: CheetahString::from_static_str("GroupA"),
+                group_name: CheetahString::from("GroupA"),
                 ..ConsumerData::default()
             }]),
             heartbeat_fingerprint: 0,
             is_without_sub: false,
         };
-        let mut heartbeat_request =
+        let request =
             RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
                 .set_body(heartbeat.encode().expect("heartbeat should encode"));
-        heartbeat_request.make_custom_header_to_net();
 
-        let response = request_processor
-            .process_request(harness.channel(), harness.context(), &mut heartbeat_request)
-            .await
-            .expect("heartbeat should process")
-            .expect("heartbeat should return a response");
+        let response = dispatcher.dispatch(&test_context(), &request).await;
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert_eq!(sessions.consumer_client_ids("GroupA"), vec!["client-a".to_owned()]);
-        assert!(sessions.remoting_channel("client-a").is_some());
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert!(sessions.consumer_client_ids("GroupA").is_empty());
+        assert_eq!(sessions.remoting_channel_count(), 0);
     }
 
     #[tokio::test]
@@ -3538,22 +3413,12 @@ mod tests {
             None,
         );
 
-        let heartbeat = HeartbeatData {
-            client_id: CheetahString::from("client-a"),
-            producer_data_set: HashSet::new(),
-            consumer_data_set: HashSet::from([ConsumerData {
-                group_name: CheetahString::from("GroupA"),
-                ..ConsumerData::default()
-            }]),
-            heartbeat_fingerprint: 0,
-            is_without_sub: false,
-        };
-        let heartbeat_request =
-            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
-                .set_body(heartbeat.encode().expect("heartbeat should encode"));
-        let mut heartbeat_request = heartbeat_request;
-        heartbeat_request.make_custom_header_to_net();
-        let _ = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
+        assert!(sessions.update_membership_from_remoting_heartbeat(
+            &test_context(),
+            "client-a",
+            std::collections::BTreeSet::new(),
+            ["GroupA".to_owned()].into(),
+        ));
         assert_eq!(sessions.consumer_client_ids("GroupA"), vec!["client-a".to_owned()]);
 
         let mut unregister_request = RemotingCommand::create_request_command(
@@ -3728,183 +3593,6 @@ mod tests {
         let response = dispatcher.dispatch(&test_context(), &request).await;
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::ConsumerNotOnline);
-    }
-
-    #[tokio::test]
-    async fn dispatch_notify_consumer_ids_changed_forwards_to_remoting_consumers() {
-        let sessions = ClientSessionRegistry::default();
-        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
-            LocalServiceManager::with_services(
-                Arc::new(StaticRouteService::default()),
-                Arc::new(StaticMetadataService::default()),
-                Arc::new(DefaultAssignmentService),
-                Arc::new(TestMessageService),
-                Arc::new(TestConsumerService),
-                Arc::new(DefaultTransactionService),
-            ),
-        )));
-        let dispatcher = ProxyRemotingDispatcher::new(
-            Arc::new(ProxyConfig {
-                mode: ProxyMode::Local,
-                ..ProxyConfig::default()
-            }),
-            processor,
-            sessions.clone(),
-            None,
-        );
-
-        let heartbeat = HeartbeatData {
-            client_id: CheetahString::from_static_str("client-a"),
-            producer_data_set: HashSet::new(),
-            consumer_data_set: HashSet::from([ConsumerData {
-                group_name: CheetahString::from_static_str("GroupA"),
-                ..ConsumerData::default()
-            }]),
-            heartbeat_fingerprint: 0,
-            is_without_sub: false,
-        };
-        let mut heartbeat_request =
-            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
-                .set_body(heartbeat.encode().expect("heartbeat should encode"));
-        heartbeat_request.make_custom_header_to_net();
-        let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
-        assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
-
-        let mut missing_channel_request = RemotingCommand::create_request_command(
-            RequestCode::NotifyConsumerIdsChanged,
-            NotifyConsumerIdsChangedRequestHeader {
-                consumer_group: CheetahString::from_static_str("GroupA"),
-                rpc_request_header: None,
-            },
-        );
-        missing_channel_request.make_custom_header_to_net();
-        let missing_channel_response = dispatcher.dispatch(&test_context(), &missing_channel_request).await;
-        assert_eq!(
-            ResponseCode::from(missing_channel_response.code()),
-            ResponseCode::ConsumerNotOnline
-        );
-
-        let runtime = RuntimeContext::from_current("proxy-local-harness-test");
-        let mut harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
-            .await
-            .expect("local remoting harness should start");
-        sessions.bind_remoting_channel("client-a", harness.channel());
-
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::NotifyConsumerIdsChanged,
-            NotifyConsumerIdsChangedRequestHeader {
-                consumer_group: CheetahString::from_static_str("GroupA"),
-                rpc_request_header: None,
-            },
-        );
-        request.make_custom_header_to_net();
-
-        let response = dispatcher.dispatch(&test_context(), &request).await;
-
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let forwarded = timeout(std::time::Duration::from_secs(3), harness.receive_response())
-            .await
-            .expect("forwarded notify consumer ids changed should arrive before timeout")
-            .expect("forwarded notify consumer ids changed should decode")
-            .expect("forwarded notify consumer ids changed should be present");
-        assert_eq!(
-            RequestCode::from(forwarded.code()),
-            RequestCode::NotifyConsumerIdsChanged
-        );
-        assert!(forwarded.is_oneway_rpc());
-        let forwarded_header = forwarded
-            .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
-            .expect("forwarded notify header should decode");
-        assert_eq!(forwarded_header.consumer_group, "GroupA");
-    }
-
-    #[tokio::test]
-    async fn dispatch_notify_unsubscribe_lite_validates_matching_session() {
-        let sessions = ClientSessionRegistry::default();
-        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
-            LocalServiceManager::with_services(
-                Arc::new(StaticRouteService::default()),
-                Arc::new(StaticMetadataService::default()),
-                Arc::new(DefaultAssignmentService),
-                Arc::new(TestMessageService),
-                Arc::new(TestConsumerService),
-                Arc::new(DefaultTransactionService),
-            ),
-        )));
-        let dispatcher = ProxyRemotingDispatcher::new(
-            Arc::new(ProxyConfig {
-                mode: ProxyMode::Local,
-                ..ProxyConfig::default()
-            }),
-            processor,
-            sessions.clone(),
-            None,
-        );
-
-        let mut missing_request = RemotingCommand::create_request_command(
-            RequestCode::NotifyUnsubscribeLite,
-            NotifyUnsubscribeLiteRequestHeader {
-                lite_topic: CheetahString::from_static_str("LiteTopic"),
-                consumer_group: CheetahString::from_static_str("GroupA"),
-                client_id: CheetahString::from_static_str("client-a"),
-                rpc_request_header: None,
-            },
-        );
-        missing_request.make_custom_header_to_net();
-        let missing_response = dispatcher.dispatch(&test_context(), &missing_request).await;
-        assert_eq!(
-            ResponseCode::from(missing_response.code()),
-            ResponseCode::ConsumerNotOnline
-        );
-
-        let heartbeat = HeartbeatData {
-            client_id: CheetahString::from_static_str("client-a"),
-            producer_data_set: HashSet::new(),
-            consumer_data_set: HashSet::from([ConsumerData {
-                group_name: CheetahString::from_static_str("GroupA"),
-                ..ConsumerData::default()
-            }]),
-            heartbeat_fingerprint: 0,
-            is_without_sub: false,
-        };
-        let mut heartbeat_request =
-            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
-                .set_body(heartbeat.encode().expect("heartbeat should encode"));
-        heartbeat_request.make_custom_header_to_net();
-        let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
-        assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
-        let runtime = RuntimeContext::from_current("proxy-local-harness-test");
-        let mut harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
-            .await
-            .expect("local remoting harness should start");
-        sessions.bind_remoting_channel("client-a", harness.channel());
-
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::NotifyUnsubscribeLite,
-            NotifyUnsubscribeLiteRequestHeader {
-                lite_topic: CheetahString::from_static_str("LiteTopic"),
-                consumer_group: CheetahString::from_static_str("GroupA"),
-                client_id: CheetahString::from_static_str("client-a"),
-                rpc_request_header: None,
-            },
-        );
-        request.make_custom_header_to_net();
-
-        let response = dispatcher.dispatch(&test_context(), &request).await;
-
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let forwarded = timeout(std::time::Duration::from_secs(3), harness.receive_response())
-            .await
-            .expect("forwarded notify unsubscribe lite should arrive before timeout")
-            .expect("forwarded notify unsubscribe lite should decode")
-            .expect("forwarded notify unsubscribe lite should be present");
-        assert_eq!(RequestCode::from(forwarded.code()), RequestCode::NotifyUnsubscribeLite);
-        assert!(forwarded.is_oneway_rpc());
-        let forwarded_header = forwarded
-            .decode_command_custom_header::<NotifyUnsubscribeLiteRequestHeader>()
-            .expect("forwarded notify header should decode");
-        assert_eq!(forwarded_header.consumer_group, "GroupA");
-        assert_eq!(forwarded_header.client_id, "client-a");
     }
 
     #[tokio::test]

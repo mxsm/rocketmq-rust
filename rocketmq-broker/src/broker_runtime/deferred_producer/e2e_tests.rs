@@ -46,9 +46,7 @@ use rocketmq_transport::api::v2::RequestProcessorV2;
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::config::broker_config::BrokerConfig;
-use crate::deferred_generation_handoff::DeferredGeneration;
 use crate::deferred_generation_handoff::DeferredGenerationTarget;
-use crate::deferred_generation_handoff::DeferredGenerationV2Publisher;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -219,7 +217,7 @@ fn notification_request() -> RemotingCommand {
     request
 }
 
-fn publish_test_targets(runtime: &BrokerRuntime, producer: &Arc<super::BrokerDeferredProducer<BrokerMessageStore>>) {
+fn verify_canonical_target_accounting(runtime: &BrokerRuntime) {
     let deferred = runtime
         .composition
         .data_plane
@@ -245,18 +243,7 @@ fn publish_test_targets(runtime: &BrokerRuntime, producer: &Arc<super::BrokerDef
             .acquire_route(notification_target.clone())
             .expect("Notification route"),
     ];
-    let mut transaction = handoff.cutover_transaction().expect("test cutover transaction");
-    transaction.seal_legacy_acceptance().expect("seal legacy acceptance");
-    transaction
-        .publish_v2_aggregate(DeferredGenerationV2Publisher::nonblocking_atomic(|| Ok::<_, ()>(())))
-        .expect("publish installed V2 aggregate");
-    transaction.publish_default_new().expect("publish New default");
-    drop(transaction);
     drop(permits);
-    producer.advance_generation_handoff();
-    for target in [pull_target, pop_target, notification_target] {
-        assert_eq!(handoff.generation_for(&target), DeferredGeneration::New);
-    }
     assert!(handoff.zero_report().is_zero());
 }
 
@@ -291,7 +278,9 @@ async fn store_replay_workers_resume_three_canonical_sessions_exactly_once_and_r
         .start_message_store_for_test()
         .await
         .expect("start deferred producer Store");
-    runtime.init_processor_for_test();
+    runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     let (producer, controller) = {
         let deferred = runtime
@@ -347,7 +336,7 @@ async fn store_replay_workers_resume_three_canonical_sessions_exactly_once_and_r
         controller,
     )
     .await;
-    publish_test_targets(&runtime, &producer);
+    verify_canonical_target_accounting(&runtime);
 
     pull_client.send_command(pull_request()).await.expect("send Pull wait");
     pop_client.send_command(pop_request()).await.expect("send POP wait");
@@ -412,7 +401,6 @@ async fn store_replay_workers_resume_three_canonical_sessions_exactly_once_and_r
         [2, 1, 2],
         "the first replay phase must expose only the POP miss"
     );
-    let attempts = producer.replay_store_attempts_for_test();
     // Arrival callbacks carry the next logical upper bound; each service converts it to the
     // corresponding zero-based Store offset before replay.
     for logic_offset in [1, 2] {
@@ -424,7 +412,6 @@ async fn store_replay_workers_resume_three_canonical_sessions_exactly_once_and_r
             0,
             None,
             None,
-            || panic!("Pull target must be New"),
         );
         producer.route_notification_arrival_at(
             &CheetahString::from_static_str(NOTIFICATION_TOPIC),
@@ -434,22 +421,23 @@ async fn store_replay_workers_resume_three_canonical_sessions_exactly_once_and_r
             0,
             None,
             None,
-            || {},
         );
     }
-    producer.route_pop_arrival_at(
-        &CheetahString::from_static_str(POP_TOPIC),
-        0,
-        1,
-        None,
-        0,
-        None,
-        None,
-        || {},
-    );
+    producer.route_pop_arrival_at(&CheetahString::from_static_str(POP_TOPIC), 0, 1, None, 0, None, None);
     wait_until(
-        || producer.replay_store_attempts_for_test() >= attempts + 3,
-        "unavailable Store worker attempts",
+        || {
+            let snapshot = runtime
+                .composition
+                .data_plane
+                .deferred
+                .as_ref()
+                .expect("deferred lifecycle")
+                .resource_snapshot();
+            snapshot.pull_pending_replays > 0
+                && snapshot.pop_pending_replays > 0
+                && snapshot.notification_pending_replays > 0
+        },
+        "unavailable Store pending replay retention",
     )
     .await;
     let unavailable = runtime

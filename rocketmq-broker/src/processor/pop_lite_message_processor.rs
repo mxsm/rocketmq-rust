@@ -18,7 +18,6 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
-use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
@@ -34,9 +33,6 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -44,10 +40,6 @@ use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
 use crate::lite::memory_consumer_order_info_manager::LiteOrderVisibilityUpdate;
 use crate::lite::memory_consumer_order_info_manager::MemoryConsumerOrderInfoManager;
-use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingRequestProcessor;
-use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
-use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
-use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::pop_message_processor::QueueLockManager;
@@ -230,7 +222,6 @@ pub(crate) struct PopLiteMessageProcessorContext<MS: BrokerReadWriteStore> {
     message_store: PopLiteMessageStoreCapability<MS>,
     lite_event_dispatcher: LiteEventDispatcher,
     queue_lock_manager: QueueLockManager,
-    long_polling: PopLiteLongPollingServiceContext,
 }
 
 impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
@@ -246,7 +237,6 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
         message_store: PopLiteMessageStoreCapability<MS>,
         lite_event_dispatcher: LiteEventDispatcher,
         queue_lock_manager: QueueLockManager,
-        long_polling: PopLiteLongPollingServiceContext,
     ) -> Self {
         Self {
             command_factory: application_remoting_command_factory(),
@@ -257,7 +247,6 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
             message_store,
             lite_event_dispatcher,
             queue_lock_manager,
-            long_polling,
         }
     }
 
@@ -269,7 +258,6 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
 
 pub(crate) struct PopLiteMessageProcessor<MS: BrokerReadWriteStore> {
     context: PopLiteMessageProcessorContext<MS>,
-    pop_lite_long_polling_service: Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>>,
     pop_lite_deferred_service: OnceLock<Arc<PopLiteDeferredService>>,
     consumer_order_info_manager: MemoryConsumerOrderInfoManager,
     lifecycle: AsyncMutex<()>,
@@ -296,12 +284,7 @@ pub(crate) enum PopLiteVisibilityUpdate {
 
 impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
     pub(crate) fn new(context: PopLiteMessageProcessorContext<MS>) -> Arc<Self> {
-        let long_polling_context = context.long_polling.clone();
-        Arc::new_cyclic(move |processor| Self {
-            pop_lite_long_polling_service: Arc::new(PopLiteLongPollingService::new(
-                long_polling_context,
-                processor.clone(),
-            )),
+        Arc::new(Self {
             pop_lite_deferred_service: OnceLock::new(),
             consumer_order_info_manager: MemoryConsumerOrderInfoManager::default(),
             context,
@@ -327,61 +310,12 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
 
     pub(crate) async fn start(&self) {
         let _lifecycle = self.lifecycle.lock().await;
-        PopLiteLongPollingService::start(&self.pop_lite_long_polling_service).await;
         self.context.queue_lock_manager.start();
-    }
-
-    pub(crate) async fn stop_legacy_producer_until(
-        &self,
-        deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.pop_lite_long_polling_service.stop_producer_until(deadline).await
-    }
-
-    pub(crate) async fn drain_legacy_executions_until(
-        &self,
-        deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.pop_lite_long_polling_service
-            .drain_executions_until(deadline)
-            .await
-    }
-
-    pub(crate) async fn finalize_legacy_shutdown(
-        &self,
-    ) -> crate::long_polling::long_polling_service::LegacyServiceFinalization {
-        self.pop_lite_long_polling_service.finalize_shutdown().await
     }
 
     pub(crate) async fn shutdown_auxiliary(&self) {
         let _lifecycle = self.lifecycle.lock().await;
         self.context.queue_lock_manager.shutdown().await;
-    }
-
-    pub(crate) async fn shutdown(&self) -> crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
-        let deadline = rocketmq_runtime::ShutdownDeadline::after(std::time::Duration::from_secs(5));
-        let producer = self.stop_legacy_producer_until(deadline).await;
-        let executions = self.drain_legacy_executions_until(deadline).await;
-        let finalization = self.finalize_legacy_shutdown().await;
-        self.shutdown_auxiliary().await;
-        crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
-            name: "pop_lite_long_polling",
-            producer,
-            executions,
-            observed_after_session_drain: finalization.observed_after_session_drain,
-            resources: finalization.terminal,
-        }
-    }
-
-    pub(crate) fn pop_lite_long_polling_service(&self) -> &Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>> {
-        &self.pop_lite_long_polling_service
-    }
-
-    pub(crate) fn install_deferred_generation_handoff(
-        &self,
-        handoff: Arc<DeferredGenerationHandoff>,
-    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
-        self.pop_lite_long_polling_service.install_handoff(handoff)
     }
 
     pub(crate) fn order_info_count(&self) -> i32 {
@@ -796,73 +730,6 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
             return vec![split[2]; msg_count].join(";");
         }
         vec!["0"; msg_count].join(";")
-    }
-}
-
-impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
-    pub(crate) async fn process_request_shared(
-        &self,
-        _channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request.decode_command_custom_header::<PopLiteMessageRequestHeader>()?;
-        if let Some((code, remark)) = self.pre_check(&request_header) {
-            return Ok(Some(self.response_with_code(request, code, remark)));
-        }
-
-        let dispatcher = &self.context.lite_event_dispatcher;
-        dispatcher.touch_client(&request_header.client_id);
-        let result = match dispatcher.reserve_pending_events(&request_header.client_id) {
-            Some(reservation) => self.execute_pop_lite_batch(&request_header, reservation.commit()).await,
-            None => self.execute_pop_lite_without_events(&request_header).await,
-        };
-        let response_kind = if result.body.is_some() {
-            response::PopLiteResponseKind::Found
-        } else {
-            match self.pop_lite_long_polling_service.polling(
-                ctx,
-                request,
-                &request_header.client_id,
-                request_header.born_time,
-                request_header.poll_time,
-            ) {
-                PollingResult::PollingSuc => {
-                    if !dispatcher.pending_events(&request_header.client_id).is_empty() {
-                        self.pop_lite_long_polling_service
-                            .wake_up_client(&request_header.client_id);
-                    }
-                    return Ok(None);
-                }
-                PollingResult::PollingFull => response::PopLiteResponseKind::PollingFull,
-                _ => response::PopLiteResponseKind::PollingTimeout,
-            }
-        };
-        let response = self.compose_pop_lite_command(request.opaque(), &request_header, result, response_kind);
-
-        Ok(Some(response))
-    }
-}
-
-impl<MS: BrokerReadWriteStore> RequestProcessor for PopLiteMessageProcessor<MS> {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
-    }
-}
-
-impl<MS: BrokerReadWriteStore> PopLiteLongPollingRequestProcessor for PopLiteMessageProcessor<MS> {
-    async fn process_request_when_wakeup(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, &mut request).await
     }
 }
 

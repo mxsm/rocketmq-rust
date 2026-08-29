@@ -82,12 +82,6 @@ use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RejectRequestResponse;
-use rocketmq_transport::api::v1::RequestProcessor;
-use rocketmq_transport::api::v1::ResponseError;
-use rocketmq_transport::api::v1::ResponseReceipt;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestId;
@@ -95,12 +89,10 @@ use rocketmq_transport::api::v2::RequestOrigin;
 use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::ResponseWriteObservationV2;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 use tracing::Instrument;
 
-use crate::client::net::broker_to_client::Broker2Client;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::mqtrace::send_message_context::SendMessageContext;
@@ -180,71 +172,50 @@ impl<MS: BrokerWriteStore, TS> Clone for SendMessageProcessor<MS, TS> {
     }
 }
 
-impl<MS, TS> RequestProcessor for SendMessageProcessor<MS, TS>
+impl<MS, TS> SendMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let (receive_span, parsed_request) = self.receive_span_and_request(request);
-        self.process_request_mut(channel, ctx, request, parsed_request)
-            .instrument(receive_span)
-            .await
-    }
-
-    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
+    pub(crate) fn rejection_response(&self) -> Option<RemotingCommand> {
         let policy = self.inner.context.policy.snapshot();
         let enable_slave_acting_master = policy.enable_slave_acting_master;
         let broker_role = policy.broker_role;
         if !enable_slave_acting_master && broker_role == BrokerRole::Slave {
-            return (
-                true,
-                Some(
-                    self.inner
-                        .context
-                        .command_factory
-                        .create_response_command_with_code_remark(
-                            ResponseCode::SlaveNotAvailable,
-                            "The broker is slave mode, not allowed to accept message",
-                        ),
-                ),
+            return Some(
+                self.inner
+                    .context
+                    .command_factory
+                    .create_response_command_with_code_remark(
+                        ResponseCode::SlaveNotAvailable,
+                        "The broker is slave mode, not allowed to accept message",
+                    ),
             );
         }
         let snapshot = match self.inner.context.store.health_snapshot() {
             Ok(snapshot) => snapshot,
             Err(_) => {
-                return (
-                    true,
-                    Some(
-                        self.inner
-                            .context
-                            .command_factory
-                            .create_response_command_with_code_remark(
-                                ResponseCode::SystemBusy,
-                                "store_backpressure reason=store_shutdown",
-                            ),
-                    ),
+                return Some(
+                    self.inner
+                        .context
+                        .command_factory
+                        .create_response_command_with_code_remark(
+                            ResponseCode::SystemBusy,
+                            "store_backpressure reason=store_shutdown",
+                        ),
                 );
             }
         };
         if let Some(remark) = store_health_reject_remark(policy.as_ref(), snapshot) {
-            return (
-                true,
-                Some(
-                    self.inner
-                        .context
-                        .command_factory
-                        .create_response_command_with_code_remark(ResponseCode::SystemBusy, remark),
-                ),
+            return Some(
+                self.inner
+                    .context
+                    .command_factory
+                    .create_response_command_with_code_remark(ResponseCode::SystemBusy, remark),
             );
         }
 
-        (false, None)
+        None
     }
 }
 
@@ -282,20 +253,6 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
-    pub async fn process_request_shared(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
-        let (receive_span, parsed_request) = self.receive_span_and_request(request);
-        processor
-            .process_request_mut(channel, ctx, request, parsed_request)
-            .instrument(receive_span)
-            .await
-    }
-
     pub(crate) async fn process_v2_shared(
         &self,
         request: &mut RemotingRequest,
@@ -488,39 +445,9 @@ where
         }
         (span, parsed_request)
     }
-
-    async fn process_request_mut(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-        parsed_request: Option<ParsedSendRequest>,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        debug!("SendMessageProcessor received request code: {:?}", request_code);
-        match request_code {
-            RequestCode::SendMessage
-            | RequestCode::SendMessageV2
-            | RequestCode::SendBatchMessage
-            | RequestCode::ConsumerSendMsgBack => {
-                self.process_request_inner_with_parsed_request(channel, ctx, request_code, request, parsed_request)
-                    .await
-            }
-            _ => {
-                warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
-                let response = request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.inner.context.command_factory,
-                    request.code(),
-                    format!("request code {} not supported", request.code()),
-                    request.opaque(),
-                );
-                Ok(Some(response))
-            }
-        }
-    }
 }
 
-// RequestProcessor implementation
+// Shared send-message operations.
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
@@ -528,100 +455,6 @@ where
 {
     pub fn has_send_message_hook(&self) -> bool {
         has_registered_send_message_hooks(&self.inner.send_message_hook_vec)
-    }
-
-    pub async fn process_request_inner(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_inner_with_parsed_request(channel, ctx, request_code, request, None)
-            .await
-    }
-
-    async fn process_request_inner_with_parsed_request(
-        &mut self,
-        channel: Channel,
-        mut ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
-        request: &mut RemotingCommand,
-        parsed_request: Option<ParsedSendRequest>,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        match request_code {
-            RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(request).await,
-            _ => {
-                let ParsedSendRequest {
-                    header: mut request_header,
-                    properties: parsed_properties,
-                } = match parsed_request {
-                    Some(parsed_request) => parsed_request,
-                    None => {
-                        let header = parse_request_header(request, request_code)?;
-                        let properties = string_to_message_properties(header.properties.as_ref());
-                        ParsedSendRequest { header, properties }
-                    }
-                };
-                let mapping_context = self
-                    .inner
-                    .context
-                    .topics
-                    .build_topic_queue_mapping_context(&request_header, true);
-                let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(
-                    &self.inner.context.command_factory,
-                    &mut request_header,
-                    &mapping_context,
-                );
-                if rewrite_result.is_some() {
-                    return Ok(rewrite_result);
-                }
-
-                let (send_message_context, mut request_properties) = self.inner.build_msg_context_at(
-                    channel.remote_address(),
-                    &mut request_header,
-                    request,
-                    parsed_properties,
-                );
-                self.inner.execute_send_message_hook_before(&send_message_context);
-                clear_reserved_properties(&mut request_header, &mut request_properties);
-
-                let execute_send_message_hook_after = {
-                    let inner = Arc::clone(&self.inner);
-                    move |ctx: &mut SendMessageContext, cmd: &mut RemotingCommand| {
-                        inner.execute_send_message_hook_after(Some(cmd), ctx)
-                    }
-                };
-
-                if request_header.is_batch() {
-                    //handle batch message
-                    self.send_batch_message(
-                        &channel,
-                        &mut ctx,
-                        request,
-                        send_message_context,
-                        request_header,
-                        request_properties,
-                        mapping_context,
-                        execute_send_message_hook_after,
-                    )
-                    .await
-                } else {
-                    //handle single message
-                    self.send_message(
-                        &channel,
-                        &mut ctx,
-                        request,
-                        send_message_context,
-                        request_header,
-                        request_properties,
-                        mapping_context,
-                        execute_send_message_hook_after,
-                    )
-                    .await
-                }
-            }
-        }
     }
 }
 
@@ -636,7 +469,6 @@ where
                 send_message_hook_vec: Arc::new(Vec::new()),
                 consume_message_hook_vec: Arc::new(Vec::new()),
                 transactional_message_service,
-                broker_to_client: Broker2Client::new(context.command_factory),
                 context,
             }),
             v2_after_hooks: Arc::new(Mutex::new(HashMap::new())),
@@ -1034,319 +866,6 @@ where
         Ok(outcome)
     }
 
-    async fn send_batch_message<F>(
-        &mut self,
-        channel: &Channel,
-        ctx: &mut ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-        mut send_message_context: SendMessageContext,
-        request_header: SendMessageRequestHeader,
-        request_properties: HashMap<CheetahString, CheetahString>,
-        mut mapping_context: TopicQueueMappingContext,
-        send_message_callback: F,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
-    where
-        F: Fn(&mut SendMessageContext, &mut RemotingCommand),
-    {
-        let mut response = self.pre_send(channel, ctx, request, &request_header).await;
-        if response.code() != -1 {
-            return Ok(Some(response));
-        }
-        let inbound_peer = channel.remote_address();
-        let topic_config = self
-            .inner
-            .context
-            .topics
-            .select_topic_config(request_header.topic())
-            .ok_or_else(|| RocketMQError::TopicNotExist {
-                topic: request_header.topic().to_string(),
-            })?;
-        let mut queue_id = request_header.queue_id;
-        if queue_id < 0 {
-            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
-        }
-
-        if request_header.topic.len() > message_limits::MAX_TOPIC_LENGTH {
-            return Ok(Some(response.set_code(ResponseCode::MessageIllegal).set_remark(
-                format!("message topic length too long {}", request_header.topic().len()),
-            )));
-        }
-
-        if !request_header.topic.is_empty() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            return Ok(Some(response.set_code(ResponseCode::MessageIllegal).set_remark(
-                format!("batch request does not support retry group  {}", request_header.topic()),
-            )));
-        }
-        let mut message_ext = MessageExtBrokerInner::default();
-        message_ext
-            .message_ext_inner
-            .message
-            .set_topic(request_header.topic().clone());
-        message_ext.message_ext_inner.queue_id = queue_id;
-        let mut sys_flag = request_header.sys_flag;
-        if TopicFilterType::MultiTag == topic_config.topic_filter_type {
-            sys_flag |= MessageSysFlag::MULTI_TAGS_FLAG;
-        }
-        message_ext.message_ext_inner.sys_flag = sys_flag;
-        message_ext.message_ext_inner.message.set_flag(request_header.flag);
-        message_ext.message_ext_inner.message.set_properties(request_properties);
-        message_ext.message_ext_inner.message.set_body(request.body().cloned());
-        message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        message_ext.message_ext_inner.born_host = inbound_peer;
-        message_ext.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
-        message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
-        let cluster_name = self.inner.context.policy.snapshot().broker_cluster_name.clone();
-        message_ext.message_ext_inner.message.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
-            cluster_name,
-        );
-
-        let mut batch_message = MessageExtBatch {
-            message_ext_broker_inner: message_ext,
-            is_inner_batch: false,
-            encoded_buff: None,
-        };
-
-        let mut is_inner_batch = false;
-        let mut response_header = SendMessageResponseHeader::default();
-        let batch_uniq_id =
-            MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
-        if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq_arc_mut(Some(&topic_config)) {
-            let sys_flag = batch_message.message_ext_broker_inner.message_ext_inner.sys_flag;
-            batch_message.message_ext_broker_inner.message_ext_inner.sys_flag =
-                sys_flag | MessageSysFlag::NEED_UNWRAP_FLAG | MessageSysFlag::INNER_BATCH_FLAG;
-            batch_message.is_inner_batch = true;
-            let inner_num = MessageDecoder::count_inner_msg_num(
-                batch_message
-                    .message_ext_broker_inner
-                    .message_ext_inner
-                    .message
-                    .get_body()
-                    .cloned(),
-            );
-            batch_message
-                .message_ext_broker_inner
-                .message_ext_inner
-                .message
-                .put_property(
-                    CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM),
-                    CheetahString::from_string(inner_num.to_string()),
-                );
-            batch_message.message_ext_broker_inner.properties_string = message_properties_to_string(
-                batch_message
-                    .message_ext_broker_inner
-                    .message_ext_inner
-                    .message
-                    .properties()
-                    .as_map(),
-            );
-            response_header.set_batch_uniq_id(batch_uniq_id);
-            is_inner_batch = true;
-        }
-        let start = Instant::now();
-        let transaction_id =
-            MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
-        let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
-        let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
-        let completion_facts = SendCompletionFacts::capture(request);
-        let append_receipt = if is_inner_batch {
-            let mut store = self.inner.context.store.clone();
-            append_message_with_store(&mut store, batch_message.message_ext_broker_inner)
-                .await
-                .map_err(map_legacy_store_wait_stopped)?
-                .map_err(map_store_api_error)?
-        } else {
-            let mut store = self.inner.context.store.clone();
-            append_message_with_store(&mut store, batch_message)
-                .await
-                .map_err(map_legacy_store_wait_stopped)?
-                .map_err(map_store_api_error)?
-        };
-        let result = self.handle_put_message_result(
-            append_receipt,
-            &mut response,
-            completion_facts,
-            topic.as_str(),
-            transaction_id,
-            None,
-            &mut send_message_context,
-            queue_id,
-            start,
-            &mut mapping_context,
-            topic_message_type,
-            MessageType::NormalMsg,
-        );
-        finish_legacy_send_message_response(result, response, ctx, |response| {
-            send_message_callback(&mut send_message_context, response);
-        })
-        .await
-    }
-
-    async fn send_message<F>(
-        &mut self,
-        channel: &Channel,
-        ctx: &mut ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-        mut send_message_context: SendMessageContext,
-        request_header: SendMessageRequestHeader,
-        request_properties: HashMap<CheetahString, CheetahString>,
-        mut mapping_context: TopicQueueMappingContext,
-        send_message_callback: F,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
-    where
-        F: Fn(&mut SendMessageContext, &mut RemotingCommand),
-    {
-        let mut response = self.pre_send(channel, ctx, request, &request_header).await;
-        if response.code() != -1 {
-            return Ok(Some(response));
-        }
-        let inbound_peer = channel.remote_address();
-
-        let mut topic_config = self
-            .inner
-            .context
-            .topics
-            .select_topic_config(request_header.topic())
-            .ok_or_else(|| RocketMQError::TopicNotExist {
-                topic: request_header.topic().to_string(),
-            })?;
-        let mut queue_id = request_header.queue_id;
-        if queue_id < 0 {
-            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
-        }
-
-        let mut message_ext = MessageExtBrokerInner::default();
-        message_ext
-            .message_ext_inner
-            .message
-            .set_topic(request_header.topic().clone());
-        message_ext.message_ext_inner.queue_id = queue_id;
-        let mut ori_props = request_properties;
-        if !self
-            .handle_retry_and_dlq(
-                &request_header,
-                &mut response,
-                request,
-                &mut message_ext.message_ext_inner,
-                &mut topic_config,
-                &mut ori_props,
-            )
-            .await
-        {
-            return Ok(Some(response));
-        }
-        apply_topic_delivery_properties(&topic_config, request_header.topic(), &mut ori_props, &mut queue_id);
-        message_ext.message_ext_inner.queue_id = queue_id;
-        message_ext.message_ext_inner.message.set_body(request.body().cloned());
-        message_ext.message_ext_inner.message.set_flag(request_header.flag);
-
-        if should_create_uniq_key(&ori_props) {
-            ori_props.insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-                CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
-            );
-        }
-
-        let tra_flag = ori_props
-            .get(MessageConst::PROPERTY_TRANSACTION_PREPARED)
-            .is_some_and(|tra_flag_inner| tra_flag_inner.parse().unwrap_or(false));
-        message_ext.message_ext_inner.message.set_properties(ori_props);
-        let cleanup_policy = cleanup_policy_utils::get_delete_policy(Some(&topic_config));
-
-        if cleanup_policy == CleanupPolicy::COMPACTION
-            && !has_valid_compaction_key(message_ext.message_ext_inner.message.properties().as_map())
-        {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::MessageIllegal)
-                    .set_remark("Required message key is missing"),
-            ));
-        }
-        message_ext.tags_code = MessageExtBrokerInner::tags_string2tags_code(
-            &topic_config.topic_filter_type,
-            message_ext.tags().unwrap_or_default().as_str(),
-        );
-
-        message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        message_ext.message_ext_inner.born_host = inbound_peer;
-        message_ext.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
-        message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
-
-        message_ext
-            .message_ext_inner
-            .message
-            .properties_mut()
-            .as_map_mut()
-            .insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
-                self.inner.context.policy.snapshot().broker_cluster_name.clone(),
-            );
-
-        message_ext.properties_string =
-            MessageDecoder::message_properties_to_string(message_ext.message_ext_inner.message.properties().as_map());
-        let send_transaction_prepare_message = if tra_flag
-            && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.delay_time_level() > 0)
-        {
-            let policy = self.inner.context.policy.snapshot();
-            if policy.reject_transaction_message {
-                return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(format!(
-                    "the broker[{}] sending transaction message is forbidden",
-                    policy.broker_ip
-                ))));
-            }
-            true
-        } else {
-            false
-        };
-
-        let start = Instant::now();
-        let topic = message_ext.topic().clone();
-        let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
-        let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
-        let recall_handle = self.build_recall_handle(&message_ext);
-        let completion_facts = SendCompletionFacts::capture(request);
-        let append_receipt = if send_transaction_prepare_message {
-            let result = {
-                let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
-                append_message_with_store(&mut store, message_ext)
-                    .await
-                    .map_err(map_legacy_store_wait_stopped)?
-                    .map_err(map_store_api_error)?
-            };
-            let (max_phy_offset, flushed_where) = self
-                .inner
-                .context
-                .store
-                .append_progress()
-                .map_err(|_| message_store_not_initialized())?;
-            store_append_receipt(result, max_phy_offset, flushed_where)
-        } else {
-            let mut store = self.inner.context.store.clone();
-            append_message_with_store(&mut store, message_ext)
-                .await
-                .map_err(map_legacy_store_wait_stopped)?
-                .map_err(map_store_api_error)?
-        };
-        let result = self.handle_put_message_result(
-            append_receipt,
-            &mut response,
-            completion_facts,
-            topic.as_str(),
-            transaction_id,
-            recall_handle,
-            &mut send_message_context,
-            queue_id,
-            start,
-            &mut mapping_context,
-            topic_message_type,
-            MessageType::NormalMsg,
-        );
-        finish_legacy_send_message_response(result, response, ctx, |response| {
-            send_message_callback(&mut send_message_context, response);
-        })
-        .await
-    }
-
     fn finish_v2_send_message_response(
         &self,
         request_id: RequestId,
@@ -1395,45 +914,6 @@ where
     }
 }
 
-async fn complete_legacy_send_message_response(
-    response_write: impl Future<Output = Result<ResponseReceipt, ResponseError>>,
-) {
-    if let Err(error) = response_write.await {
-        error!(
-            kind = error.kind().as_str(),
-            progress = error.write_progress().map_or("none", |progress| progress.as_str()),
-            retryable = error.retryable(),
-            "send message response write failed; not retrying"
-        );
-    }
-}
-
-/// Final V1 compatibility adapter. The store await and response construction
-/// complete before this boundary; only the legacy write capability crosses
-/// the final await so the established write-attempt-before-after-hook ordering
-/// remains unchanged until MIG-04 wires the V2 write observation.
-async fn finish_legacy_send_message_response(
-    result: (Option<RemotingCommand>, bool),
-    mut response: RemotingCommand,
-    ctx: &ConnectionHandlerContext,
-    after_hook: impl FnOnce(&mut RemotingCommand),
-) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-    if result.1 {
-        complete_legacy_send_message_response(ctx.try_write_response_ref(&mut response)).await;
-        after_hook(&mut response);
-        return Ok(None);
-    }
-
-    after_hook(&mut response);
-    if result.0.is_some() {
-        Ok(result.0)
-    } else {
-        Ok(Some(response))
-    }
-}
-
-/// Map the unchanged legacy append status to the legacy response code.
-#[inline]
 fn map_put_status_to_response(status: PutMessageStatus, response: &mut RemotingCommand) -> bool {
     match status {
         PutMessageStatus::PutOk => {
@@ -1744,17 +1224,6 @@ where
             timestamp.to_string(),
             uniq_id,
         )))
-    }
-
-    pub async fn pre_send(
-        &mut self,
-        channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        request: &RemotingCommand,
-        request_header: &SendMessageRequestHeader,
-    ) -> RemotingCommand {
-        self.pre_send_at(channel.remote_address(), request, request_header)
-            .await
     }
 
     async fn pre_send_at(
@@ -2125,7 +1594,6 @@ where
 {
     pub(crate) send_message_hook_vec: Arc<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) consume_message_hook_vec: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
-    pub(crate) broker_to_client: Broker2Client,
     pub(crate) transactional_message_service: Arc<TS>,
     pub(crate) context: Arc<SendMessageProcessorContext<MS>>,
 }
@@ -2457,17 +1925,6 @@ where
         Ok(Some(response))
     }
 
-    pub(crate) fn build_msg_context(
-        &self,
-        channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        request_header: &mut SendMessageRequestHeader,
-        request: &RemotingCommand,
-    ) -> (SendMessageContext, HashMap<CheetahString, CheetahString>) {
-        let properties = string_to_message_properties(request_header.properties.as_ref());
-        self.build_msg_context_at(channel.remote_address(), request_header, request, properties)
-    }
-
     pub(crate) fn build_msg_context_at(
         &self,
         inbound_peer: SocketAddr,
@@ -2518,20 +1975,6 @@ where
             send_message_context.msg_type = MessageType::NormalMsg;
         }
         (send_message_context, properties)
-    }
-
-    pub(crate) async fn msg_check(
-        &self,
-        channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        request: &RemotingCommand,
-        request_header: &SendMessageRequestHeader,
-        response: &mut RemotingCommand,
-    ) where
-        MS: BrokerMasterAddressStore,
-    {
-        self.msg_check_at(channel.remote_address(), request, request_header, response)
-            .await;
     }
 
     pub(crate) async fn msg_check_at(
@@ -2697,10 +2140,7 @@ fn no_retry_queue_response(command_factory: &RemotingCommandFactory) -> Remoting
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
-    use std::sync::Mutex;
 
     use std::collections::HashMap;
     use std::future::Future;
@@ -2725,9 +2165,6 @@ mod tests {
     use rocketmq_store::StoreHealthSnapshot;
     use rocketmq_store::StorePorts;
     use rocketmq_store::SyncFlushRuntimeInfo;
-    use rocketmq_transport::api::v1::ResponseError;
-    use rocketmq_transport::api::v1::ResponseReceipt;
-    use rocketmq_transport::test_support::LocalRequestHarness;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
     use crate::mqtrace::send_message_hook::SendMessageHook;
@@ -2736,8 +2173,6 @@ mod tests {
     use super::add_send_response_metadata;
     use super::append_message_with_store;
     use super::broker_send_permission_denied;
-    use super::complete_legacy_send_message_response;
-    use super::finish_legacy_send_message_response;
     use super::has_registered_send_message_hooks;
     use super::has_valid_compaction_key;
     use super::map_put_status_to_response;
@@ -2836,7 +2271,12 @@ mod tests {
         let record_with_handle = concat!("record_message_properties", "_with_handle");
         let late_record_with_handle = concat!("record_current_message_properties", "_with_handle");
 
-        assert_eq!(production.matches("receive_span_and_request(request)").count(), 2);
+        assert_eq!(
+            production
+                .matches("receive_span_and_request(request.command())")
+                .count(),
+            1
+        );
         assert_eq!(
             production
                 .matches("parse_request_header(request, request_code)")
@@ -2906,55 +2346,6 @@ mod tests {
 
         let hooks: Vec<Box<dyn SendMessageHook>> = vec![Box::new(NoopSendMessageHook)];
         assert!(has_registered_send_message_hooks(&hooks));
-    }
-
-    #[tokio::test]
-    async fn legacy_direct_write_failure_runs_after_hook_only_after_write_attempt() {
-        let harness = LocalRequestHarness::new(crate::test_task_group("send-message-direct-write-failure"))
-            .await
-            .expect("local transport harness should start");
-        let context = harness.context();
-        context.connection_ref().close();
-        let attempts = AtomicUsize::new(0);
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut response = RemotingCommand::create_success_response_command().set_body(b"direct".to_vec());
-
-        {
-            let write_events = Arc::clone(&events);
-            let response_write = async {
-                attempts.fetch_add(1, Ordering::Relaxed);
-                write_events.lock().expect("write event lock").push("write");
-                let error = context
-                    .try_write_response_ref(&mut response)
-                    .await
-                    .expect_err("closed session should reject the direct response write");
-                assert!(matches!(error, ResponseError::SessionClosed));
-                Err::<ResponseReceipt, ResponseError>(error)
-            };
-            complete_legacy_send_message_response(response_write).await;
-        }
-
-        assert_eq!(attempts.load(Ordering::Relaxed), 1);
-        assert!(response.body().is_none(), "the single direct write consumed the body");
-        events.lock().expect("callback event lock").push("callback");
-        assert_eq!(events.lock().expect("event lock").as_slice(), ["write", "callback"]);
-
-        let callback_ran = AtomicUsize::new(0);
-        let outer = finish_legacy_send_message_response(
-            (None, true),
-            RemotingCommand::create_success_response_command().set_body(b"compatibility".to_vec()),
-            &context,
-            |_| {
-                callback_ran.fetch_add(1, Ordering::Relaxed);
-            },
-        )
-        .await
-        .expect("a failed legacy direct write remains a successful processor outcome");
-        assert!(
-            outer.is_none(),
-            "the compatibility adapter must never schedule a central retry"
-        );
-        assert_eq!(callback_ran.load(Ordering::Relaxed), 1);
     }
 
     #[test]

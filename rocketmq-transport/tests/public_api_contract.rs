@@ -666,6 +666,26 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
     let expected_uses = [
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::admission::AdmissionController".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::admission::AdmissionLimits".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::clients::rocketmq_tokio_client::RemotingClientV2Builder".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::clients::rocketmq_tokio_client::TransportClientV2Builder".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::config::ServerConfig".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::deadline::RequestDeadline".to_owned(),
         },
         PublicUse {
@@ -934,6 +954,10 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::proxy_protocol::ProxyProtocolConfig".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::remoting_server::rocketmq_tokio_server::TransportServerV2".to_owned(),
         },
         PublicUse {
@@ -943,6 +967,10 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         PublicUse {
             module_path: String::new(),
             use_tree: "crate::request_ordering::RequestOrderingKey".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::request_processor::default_request_processor::DefaultRequestProcessor".to_owned(),
         },
         PublicUse {
             module_path: String::new(),
@@ -970,6 +998,10 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::security::TransportSecurity".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::session_view::ProxyInfoSnapshot".to_owned(),
         },
         PublicUse {
@@ -984,14 +1016,105 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
             module_path: String::new(),
             use_tree: "crate::session_view::SessionView".to_owned(),
         },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::telemetry::TransportTelemetry".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerPushCommand".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerPushError".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerPushKind".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerPushReceipt".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerPushSender".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerRequestCommand".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerRequestError".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerRequestErrorStage".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerRequestKind".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerRequestResponse".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::ServerRequestSender".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::SessionCloseError".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::SessionCloseHandle".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::SessionCloseReason".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::V2SessionEvent".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::V2SessionLifecycleListener".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::v2_session_registry::V2SessionRegistry".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::clients::rocketmq_tokio_client::V2TransportClientasTransportClient".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::clients::rocketmq_tokio_client::V2RemotingClientasRemotingClient".to_owned(),
+        },
     ];
     if boundary.uses != expected_uses {
-        return Err(format!("unexpected public v2 uses: {:?}", boundary.uses));
+        let first_mismatch = boundary
+            .uses
+            .iter()
+            .zip(expected_uses.iter())
+            .position(|(actual, expected)| actual != expected);
+        return Err(format!(
+            "unexpected public v2 uses (actual {}, expected {}, first mismatch {:?}): {:?}",
+            boundary.uses.len(),
+            expected_uses.len(),
+            first_mismatch,
+            boundary.uses
+        ));
     }
     Ok(())
 }
 
-const CURATED_V2_REEXPORTS: &str = "pub use crate::deadline::RequestDeadline; pub use crate::dispatch::AuthenticationState; pub use crate::dispatch::AuthorizedCommandDispatcherV2; pub use crate::dispatch::ClaimedDeferred; pub use crate::dispatch::DeferredAdmission; pub use crate::dispatch::DeferredAdmissionAcquireError; pub use crate::dispatch::DeferredAdmissionAcquireErrorKind; pub use crate::dispatch::DeferredAdmissionConfigError; pub use crate::dispatch::DeferredAdmissionConfigErrorKind; pub use crate::dispatch::DeferredAdmissionSnapshot; pub use crate::dispatch::DeferredCancellationReason; pub use crate::dispatch::DeferredClaimError; pub use crate::dispatch::DeferredClaimErrorKind; pub use crate::dispatch::DeferredExpiry; pub use crate::dispatch::DeferredExpiryBatch; pub use crate::dispatch::DeferredExpiryBatchStats; pub use crate::dispatch::DeferredExpiryError; pub use crate::dispatch::DeferredExpiryErrorKind; pub use crate::dispatch::DeferredExpiryKind; pub use crate::dispatch::DeferredExpiryMargins; pub use crate::dispatch::DeferredId; pub use crate::dispatch::DeferredParts; pub use crate::dispatch::DeferredRegistration; pub use crate::dispatch::DeferredRegistry; pub use crate::dispatch::DeferredRegistryError; pub use crate::dispatch::DeferredRegistryErrorKind; pub use crate::dispatch::DeferredRegistryShutdownOutcome; pub use crate::dispatch::DeferredRegistryShutdownStats; pub use crate::dispatch::DeferredRequest; pub use crate::dispatch::DeferredResponder; pub use crate::dispatch::DeferredResponseError; pub use crate::dispatch::DeferredResponseErrorKind; pub use crate::dispatch::DeferredResumeError; pub use crate::dispatch::DeferredResumeErrorKind; pub use crate::dispatch::DeferredResumeRetainedSize; pub use crate::dispatch::DeferredRetainedSize; pub use crate::dispatch::DeferredRetainedSizeParts; pub use crate::dispatch::DeferredTerminalReason; pub use crate::dispatch::DeferredWaitLimits; pub use crate::dispatch::DeferredWaitPermit; pub use crate::dispatch::DeferredWakeReason; pub use crate::dispatch::EmbeddedCaller; pub use crate::dispatch::EmbeddedDispatchError; pub use crate::dispatch::EmbeddedDispatchErrorKind; pub use crate::dispatch::EmbeddedDispatchOutcome; pub use crate::dispatch::HandlerOutcome; pub use crate::dispatch::IngressRequestView; pub use crate::dispatch::OriginalRequestIdentity; pub use crate::dispatch::ProtocolNoResponse; pub use crate::dispatch::ProtocolNoResponseError; pub use crate::dispatch::ProtocolNoResponseReason; pub use crate::dispatch::RemotingRequest; pub use crate::dispatch::RequestControlView; pub use crate::dispatch::RequestId; pub use crate::dispatch::RequestMeta; pub use crate::dispatch::RequestOrigin; pub use crate::dispatch::ResponseBodyKind; pub use crate::dispatch::ResponseDisposition; pub use crate::dispatch::ResponseErrorKind; pub use crate::dispatch::ResponsePlan; pub use crate::dispatch::ResponsePlanError; pub use crate::dispatch::ResponseReceipt; pub use crate::dispatch::ResponseTerminalState; pub use crate::dispatch::TakeDeferredResponderError; pub use crate::dispatch::WriteProgress; pub use crate::file_region::FileRegion; pub use crate::file_region::FileRegionSequence; pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2; pub use crate::request_ordering::RequestOrdering; pub use crate::request_ordering::RequestOrderingKey; pub use crate::runtime::processor_v2::LocalRequestProcessorV2; pub use crate::runtime::processor_v2::RejectRequestDecision; pub use crate::runtime::processor_v2::RequestProcessorV2; pub use crate::runtime::processor_v2::ResponseWriteObservationV2; pub use crate::runtime::processor_v2::ResponseWriteOutcomeV2; pub use crate::runtime::processor_v2::ResponseWritePath; pub use crate::session_view::ProxyInfoSnapshot; pub use crate::session_view::SessionId; pub use crate::session_view::SessionStateView; pub use crate::session_view::SessionView;";
+const CURATED_V2_REEXPORTS: &str = include_str!("../src/public_api_v2.rs");
 
 #[test]
 fn lib_rs_exposes_only_the_curated_versioned_boundary() {

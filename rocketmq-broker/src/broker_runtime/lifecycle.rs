@@ -16,8 +16,6 @@ use super::deferred::BrokerDeferredLifecycle;
 use super::deferred::BrokerDeferredRegistryShutdownReport;
 use super::shutdown_report::record_message_store_shutdown_outcome;
 use super::*;
-use crate::long_polling::long_polling_service::LegacyServiceResourceSnapshot;
-use crate::long_polling::long_polling_service::LegacyServiceShutdownReport;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerLifecycle {
@@ -142,70 +140,6 @@ impl BrokerRuntime {
             deferred.unbind_producer_store();
         }
 
-        // Legacy V1 producers and accepted executions have different owners.
-        // Stop scan/event admission first without claiming or clearing registered
-        // waiters, then drain only work that was already accepted while the
-        // remoting writer and Store are still available.
-        let legacy_started = Instant::now();
-        let mut pull_legacy_report = if let Some(service) = self.composition.state.pull_request_hold_service.as_ref() {
-            Some(LegacyServiceShutdownReport {
-                name: "pull_request_hold",
-                producer: service.stop_producer_until(deadline).await,
-                executions: None,
-                observed_after_session_drain: LegacyServiceResourceSnapshot::default(),
-                resources: LegacyServiceResourceSnapshot::default(),
-            })
-        } else {
-            None
-        };
-        let mut pop_legacy_reports = Vec::new();
-        if let Some(processor) = self.composition.state.pop_message_processor.as_ref() {
-            pop_legacy_reports.push(LegacyServiceShutdownReport {
-                name: "pop_long_polling",
-                producer: processor.stop_legacy_producer_until(deadline).await,
-                executions: None,
-                observed_after_session_drain: LegacyServiceResourceSnapshot::default(),
-                resources: LegacyServiceResourceSnapshot::default(),
-            });
-        }
-        if let Some(processor) = self.composition.state.notification_processor.as_ref() {
-            pop_legacy_reports.push(LegacyServiceShutdownReport {
-                name: "notification_long_polling",
-                producer: processor.stop_legacy_producer_until(deadline).await,
-                executions: None,
-                observed_after_session_drain: LegacyServiceResourceSnapshot::default(),
-                resources: LegacyServiceResourceSnapshot::default(),
-            });
-        }
-        if let Some(processor) = self.composition.state.pop_lite_message_processor.as_ref() {
-            pop_legacy_reports.push(LegacyServiceShutdownReport {
-                name: "pop_lite_long_polling",
-                producer: processor.stop_legacy_producer_until(deadline).await,
-                executions: None,
-                observed_after_session_drain: LegacyServiceResourceSnapshot::default(),
-                resources: LegacyServiceResourceSnapshot::default(),
-            });
-        }
-
-        if let (Some(service), Some(report)) = (
-            self.composition.state.pull_request_hold_service.as_ref(),
-            pull_legacy_report.as_mut(),
-        ) {
-            report.executions = service.drain_executions_until(deadline).await;
-        }
-        let mut pop_report_index = 0;
-        if let Some(processor) = self.composition.state.pop_message_processor.as_ref() {
-            pop_legacy_reports[pop_report_index].executions = processor.drain_legacy_executions_until(deadline).await;
-            pop_report_index += 1;
-        }
-        if let Some(processor) = self.composition.state.notification_processor.as_ref() {
-            pop_legacy_reports[pop_report_index].executions = processor.drain_legacy_executions_until(deadline).await;
-            pop_report_index += 1;
-        }
-        if let Some(processor) = self.composition.state.pop_lite_message_processor.as_ref() {
-            pop_legacy_reports[pop_report_index].executions = processor.drain_legacy_executions_until(deadline).await;
-        }
-
         let deferred_registry_initial = self
             .composition
             .data_plane
@@ -228,54 +162,12 @@ impl BrokerRuntime {
             .zip(deferred_registry_terminal)
             .map(|(initial, terminal)| BrokerDeferredRegistryShutdownReport::new(initial, terminal));
 
-        // Session close during remoting shutdown removes still-registered V1
-        // waiters by exact identity. Only now can the terminal legacy snapshot
-        // prove that tables, permits, gates and accepted executions reached zero.
-        if let (Some(service), Some(report)) = (
-            self.composition.state.pull_request_hold_service.as_ref(),
-            pull_legacy_report.as_mut(),
-        ) {
-            let finalization = service.finalize_shutdown().await;
-            report.observed_after_session_drain = finalization.observed_after_session_drain;
-            report.resources = finalization.terminal;
-        }
-        pop_report_index = 0;
         if let Some(processor) = self.composition.state.pop_message_processor.as_ref() {
-            let finalization = processor.finalize_legacy_shutdown().await;
-            pop_legacy_reports[pop_report_index].observed_after_session_drain =
-                finalization.observed_after_session_drain;
-            pop_legacy_reports[pop_report_index].resources = finalization.terminal;
             processor.shutdown_auxiliary().await;
-            pop_report_index += 1;
-        }
-        if let Some(processor) = self.composition.state.notification_processor.as_ref() {
-            let finalization = processor.finalize_legacy_shutdown().await;
-            pop_legacy_reports[pop_report_index].observed_after_session_drain =
-                finalization.observed_after_session_drain;
-            pop_legacy_reports[pop_report_index].resources = finalization.terminal;
-            pop_report_index += 1;
         }
         if let Some(processor) = self.composition.state.pop_lite_message_processor.as_ref() {
-            let finalization = processor.finalize_legacy_shutdown().await;
-            pop_legacy_reports[pop_report_index].observed_after_session_drain =
-                finalization.observed_after_session_drain;
-            pop_legacy_reports[pop_report_index].resources = finalization.terminal;
             processor.shutdown_auxiliary().await;
         }
-        let pull_reports = pull_legacy_report.iter().cloned().collect::<Vec<_>>();
-        shutdown_report.pull_request_hold = BrokerShutdownComponentReport::from_legacy_reports(
-            "pull_request_hold",
-            &pull_reports,
-            legacy_started.elapsed(),
-        );
-        progress.complete("pull_request_hold");
-        shutdown_report.pop_services = BrokerShutdownComponentReport::from_legacy_reports(
-            "pop_services",
-            &pop_legacy_reports,
-            legacy_started.elapsed(),
-        );
-        progress.complete("pop_services");
-        shutdown_report.legacy_service_shutdown = pull_reports.into_iter().chain(pop_legacy_reports).collect();
 
         // The remoting group owns connection/session/writer work. Capture the final
         // deferred snapshot only after it and the request processor group have drained.
@@ -294,7 +186,6 @@ impl BrokerRuntime {
             .request_processor
             .as_ref()
             .is_none_or(ShutdownReport::is_healthy);
-        let legacy_healthy = shutdown_report.pull_request_hold.healthy && shutdown_report.pop_services.healthy;
         shutdown_report.deferred_services = match (
             deferred_snapshot,
             shutdown_report.deferred_producer_tasks.as_ref(),
@@ -305,18 +196,15 @@ impl BrokerRuntime {
                     && producer_report.is_healthy()
                     && registry_report.is_healthy()
                     && remoting_healthy
-                    && request_processor_healthy
-                    && legacy_healthy =>
+                    && request_processor_healthy =>
             {
                 BrokerShutdownComponentReport::completed_with_detail(
                     "deferred_services",
                     deferred_started.elapsed(),
                     format!(
                         "resources={snapshot:?}, producer_tasks={}, registry_shutdown={registry_report:?}, \
-                         remoting_healthy={remoting_healthy}, request_processor_healthy={request_processor_healthy}; \
-                         legacy_healthy={legacy_healthy}, legacy={:?}",
-                        producer_report.to_json(),
-                        shutdown_report.legacy_service_shutdown
+                         remoting_healthy={remoting_healthy}, request_processor_healthy={request_processor_healthy}",
+                        producer_report.to_json()
                     ),
                 )
             }
@@ -325,10 +213,8 @@ impl BrokerRuntime {
                 deferred_started.elapsed(),
                 format!(
                     "resources={snapshot:?}, producer_tasks={}, registry_shutdown={registry_report:?}, \
-                     remoting_healthy={remoting_healthy}, request_processor_healthy={request_processor_healthy}, \
-                     legacy_healthy={legacy_healthy}, legacy={:?}",
-                    producer_report.to_json(),
-                    shutdown_report.legacy_service_shutdown
+                     remoting_healthy={remoting_healthy}, request_processor_healthy={request_processor_healthy}",
+                    producer_report.to_json()
                 ),
             ),
             (Some(snapshot), None, Some(registry_report))
@@ -336,8 +222,7 @@ impl BrokerRuntime {
                     && snapshot.is_zero()
                     && registry_report.is_healthy()
                     && remoting_healthy
-                    && request_processor_healthy
-                    && legacy_healthy =>
+                    && request_processor_healthy =>
             {
                 BrokerShutdownComponentReport::completed_with_detail(
                     "deferred_services",
@@ -353,20 +238,10 @@ impl BrokerRuntime {
                 deferred_started.elapsed(),
                 format!(
                     "resources={snapshot:?}, producer_tasks=missing, registry_shutdown={registry_report:?}, \
-                     remoting_healthy={remoting_healthy}, request_processor_healthy={request_processor_healthy}, \
-                     legacy_healthy={legacy_healthy}, legacy={:?}",
-                    shutdown_report.legacy_service_shutdown
+                     remoting_healthy={remoting_healthy}, request_processor_healthy={request_processor_healthy}"
                 ),
             ),
-            (None, _, _) if legacy_healthy => BrokerShutdownComponentReport::skipped("deferred_services"),
-            (None, _, _) => BrokerShutdownComponentReport::unhealthy(
-                "deferred_services",
-                deferred_started.elapsed(),
-                format!(
-                    "legacy shutdown unhealthy: {:?}",
-                    shutdown_report.legacy_service_shutdown
-                ),
-            ),
+            (None, _, _) => BrokerShutdownComponentReport::skipped("deferred_services"),
         };
         progress.complete("deferred_services");
 
@@ -1288,7 +1163,7 @@ impl BrokerRuntime {
             && self.composition.state.ack_message_processor.is_some()
             && self.composition.state.notification_processor.is_some()
             && self.composition.state.query_assignment_processor.is_some()
-            && self.composition.request_pipeline.proxy_request_processor.is_some()
+            && self.composition.request_pipeline.canonical_v2_dispatcher().is_some()
             && self.composition.request_pipeline.processor_wiring_complete;
         let security_ready = (!live_broker_config.authentication_enabled && !live_broker_config.authorization_enabled)
             || self.composition.request_pipeline.auth_runtime.is_some();

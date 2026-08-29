@@ -26,7 +26,7 @@ use tokio::time::Instant;
 use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupOutcome;
+use crate::long_polling::pop_deferred::service::PopWakeupOutcome;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustment;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustments;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagObservation;
@@ -142,7 +142,7 @@ fn is_pop_consumer(consumers: &ConsumerManager, target: &ConsumerLagTarget) -> b
 async fn await_pop_refreshes(
     completions: Vec<(
         CheetahString,
-        crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion,
+        crate::long_polling::pop_deferred::service::PopWakeupCompletion,
     )>,
     timeout: Duration,
 ) -> HashSet<CheetahString> {
@@ -182,7 +182,7 @@ mod tests {
     use crate::client::consumer_group_event::ConsumerGroupEvent;
     use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
     use crate::client::manager::consumer_manager::ConsumerManager;
-    use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupOutcome;
+    use crate::long_polling::pop_deferred::service::PopWakeupOutcome;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;

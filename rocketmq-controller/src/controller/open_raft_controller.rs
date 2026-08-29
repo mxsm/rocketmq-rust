@@ -84,6 +84,7 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
@@ -524,15 +525,26 @@ impl OpenRaftController {
             )));
         }
 
+        let heartbeat_timeout_millis = match request.heartbeat_timeout_mills {
+            Some(timeout) => match u64::try_from(timeout) {
+                Ok(timeout) if timeout <= MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS => timeout,
+                _ => {
+                    return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::InvalidParameter,
+                        format!(
+                            "Heart beat timeout must be between 0 and {MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS} milliseconds"
+                        ),
+                    )));
+                }
+            },
+            None => DEFAULT_BROKER_CHANNEL_EXPIRED_TIME,
+        };
+
         let now_millis = current_millis();
         let _ = self
             .first_received_heartbeat_time
             .compare_exchange(0, now_millis, Ordering::AcqRel, Ordering::Acquire);
 
-        let heartbeat_timeout_millis = request
-            .heartbeat_timeout_mills
-            .and_then(|timeout| u64::try_from(timeout).ok())
-            .unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
         let broker_id = broker_id as u64;
         let broker_identity = BrokerIdentityInfoSnapshot::new(
             request.cluster_name.to_string(),

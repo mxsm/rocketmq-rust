@@ -21,7 +21,6 @@ const REQUEST_PIPELINE: &str = include_str!("../src/broker_runtime/request_pipel
 const REQUEST_PIPELINE_STARTUP: &str = include_str!("../src/broker_runtime/request_pipeline/startup.rs");
 const LIFECYCLE: &str = include_str!("../src/broker_runtime/lifecycle.rs");
 const METADATA: &str = include_str!("../src/broker_runtime/metadata.rs");
-const PROXY_FACADE: &str = include_str!("../src/proxy_facade.rs");
 
 fn is_use_declaration(line: &str) -> bool {
     line.starts_with("use ") || (line.starts_with("pub") && line.contains(" use "))
@@ -221,22 +220,4 @@ fn run() {}
 "#;
 
     assert_eq!(production_code_line_count(source), 4);
-}
-
-#[test]
-fn transient_requests_do_not_create_component_groups() {
-    let process_request = PROXY_FACADE
-        .split("pub async fn process_request_with_timeout")
-        .nth(1)
-        .and_then(|source| source.split("\n    }\n}").next())
-        .expect("ProxyBrokerFacade::process_request_with_timeout should exist");
-
-    assert!(
-        process_request.contains("&self.local_request_tasks"),
-        "local requests must reuse the component owner created during facade composition"
-    );
-    assert!(
-        !process_request.contains(".child("),
-        "a transient local request must not create a task-group child"
-    );
 }

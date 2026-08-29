@@ -12,51 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::DeferredGeneration;
 use super::DeferredGenerationTarget;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DeferredGenerationTargetSnapshot {
     pub(crate) target: DeferredGenerationTarget,
-    pub(crate) generation: DeferredGeneration,
-    pub(crate) legacy_waiters: usize,
     pub(crate) candidates: usize,
-    pub(crate) active_wakes: usize,
-    pub(crate) wake_gates: usize,
-    pub(crate) continuations: usize,
-    pub(crate) replay_tokens: usize,
-    pub(crate) abandoned_replays: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DeferredGenerationHandoffSnapshot {
-    pub(crate) default_generation: DeferredGeneration,
     pub(crate) sealed: bool,
-    pub(crate) legacy_acceptance_sealed: bool,
-    pub(crate) v2_aggregate_published: bool,
     pub(crate) tracked_targets: usize,
-    /// Exact legacy V1 waiter occupancy, kept under the lifecycle-report name.
-    pub(crate) occupancy: usize,
     pub(crate) candidates: usize,
-    pub(crate) active_wakes: usize,
-    pub(crate) wake_gates: usize,
-    pub(crate) continuations: usize,
-    pub(crate) replay_tokens: usize,
-    pub(crate) abandoned_replays: usize,
     pub(crate) targets: Vec<DeferredGenerationTargetSnapshot>,
 }
 
 impl DeferredGenerationHandoffSnapshot {
     #[must_use]
     pub(crate) const fn is_zero(&self) -> bool {
-        self.tracked_targets == 0
-            && self.occupancy == 0
-            && self.candidates == 0
-            && self.active_wakes == 0
-            && self.wake_gates == 0
-            && self.continuations == 0
-            && self.replay_tokens == 0
-            && self.abandoned_replays == 0
+        self.tracked_targets == 0 && self.candidates == 0
     }
 }
 

@@ -159,15 +159,6 @@ impl NotifyMinBrokerChangeIdHandler {
         if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
             Self::on_master_on_line(broker_runtime_inner, min_broker_addr, master_ha_addr).await;
         }
-
-        if min_broker_id == MASTER_ID {
-            let pull_request_hold_service = broker_runtime_inner.pull_request_hold_service();
-            if let Some(pull_request_hold_service) = pull_request_hold_service {
-                pull_request_hold_service.notify_master_online();
-            } else {
-                error!("pull_request_hold_service is empty");
-            }
-        }
     }
 
     async fn change_special_service_status<MS: BrokerAdminStore>(

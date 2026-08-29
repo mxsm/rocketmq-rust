@@ -160,8 +160,8 @@ impl AuthorizedDispatchBoundary {
 /// Public network dispatcher for the V2 request-processor contract.
 ///
 /// The facade owns one security/admission boundary and one statically
-/// monomorphized V2 processor core. It does not construct legacy channel or
-/// pending-response capabilities.
+/// monomorphized V2 processor core. It does not construct a legacy channel;
+/// response correlation remains private to each canonical V2 network session.
 pub struct AuthorizedCommandDispatcherV2<P> {
     boundary: Arc<AuthorizedDispatchBoundary>,
     core: Arc<AuthorizedDispatcherCore<crate::dispatch::ExplicitV2Processor<P>>>,
@@ -173,6 +173,12 @@ where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
     /// Creates a network-only V2 dispatcher.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the compatibility pending-request budget cannot be
+    /// initialized. Production composition should use
+    /// [`Self::try_new_with_telemetry_and_budget`].
     #[must_use]
     pub fn new(
         request_processor: P,
@@ -190,6 +196,12 @@ where
     }
 
     /// Creates a V2 dispatcher with the composition-owned transport telemetry.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the compatibility pending-request budget cannot be
+    /// initialized. Production composition should use
+    /// [`Self::try_new_with_telemetry_and_budget`].
     #[must_use]
     pub fn new_with_telemetry(
         request_processor: P,
@@ -203,6 +215,39 @@ where
             core: Arc::new(AuthorizedDispatcherCore::new(request_processor, rpc_hooks)),
             telemetry,
         }
+    }
+
+    /// Creates a V2 dispatcher whose server-request correlations are charged
+    /// to the composition-owned process budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed configuration error when the bounded pending-request
+    /// table cannot be derived from `process_budget`.
+    pub fn try_new_with_telemetry_and_budget(
+        request_processor: P,
+        rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        security: Arc<TransportSecurity>,
+        admission: Arc<AdmissionController>,
+        telemetry: TransportTelemetry,
+        process_budget: &ResourceBudget,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let response_table = PendingRequestTable::try_with_limits_and_budget(
+            PendingRequestLimits {
+                max_count: 512,
+                ..PendingRequestLimits::default()
+            },
+            process_budget,
+        )?;
+        Ok(Self {
+            boundary: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
+            core: Arc::new(AuthorizedDispatcherCore::new_with_pending_requests(
+                request_processor,
+                rpc_hooks,
+                response_table,
+            )),
+            telemetry,
+        })
     }
 
     /// Returns the exact security and admission boundary used by this dispatcher.
@@ -235,6 +280,7 @@ where
     pub(crate) async fn dispatch_network(
         &self,
         authorized_session: &AuthorizedDispatchSession,
+        network_session: crate::dispatch::V2NetworkSession,
         session: crate::server::SessionHandle,
         context: RequestContext,
         command: RemotingCommand,
@@ -246,7 +292,7 @@ where
         self.core
             .dispatch_network(
                 authorized_session,
-                (),
+                network_session,
                 session,
                 context,
                 command,
@@ -258,12 +304,20 @@ where
             .await
     }
 
-    pub(crate) fn complete_network_response(&self, response: RemotingCommand) {
-        self.core.complete_network_response(&(), response);
+    pub(crate) fn open_network_session(&self) -> crate::dispatch::V2NetworkSession {
+        self.core.open_network_session()
     }
 
-    pub(crate) fn close_network_session(&self) {
-        self.core.close_network_session(&());
+    pub(crate) fn complete_network_response(
+        &self,
+        session: &crate::dispatch::V2NetworkSession,
+        response: RemotingCommand,
+    ) {
+        self.core.complete_network_response(session, response);
+    }
+
+    pub(crate) fn close_network_session(&self, session: &crate::dispatch::V2NetworkSession) {
+        self.core.close_network_session(session);
     }
 }
 

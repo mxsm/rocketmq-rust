@@ -14,13 +14,6 @@
 
 use cheetah_string::CheetahString;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum DeferredGeneration {
-    #[default]
-    Legacy,
-    New,
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum DeferredGenerationTarget {
     Pop {
@@ -40,18 +33,6 @@ pub(crate) enum DeferredGenerationTarget {
     PopLite {
         client_id: CheetahString,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeferredGenerationTransitionKind {
-    LegacyTarget,
-    AbandonedReplay,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DeferredGenerationTransitionCandidate {
-    pub(crate) target: DeferredGenerationTarget,
-    pub(crate) kind: DeferredGenerationTransitionKind,
 }
 
 impl DeferredGenerationTarget {
@@ -81,10 +62,6 @@ impl DeferredGenerationTarget {
     #[must_use]
     pub(crate) const fn pop_lite(client_id: CheetahString) -> Self {
         Self::PopLite { client_id }
-    }
-
-    pub(super) const fn is_pop_lite(&self) -> bool {
-        matches!(self, Self::PopLite { .. })
     }
 
     pub(super) fn stable_name(&self) -> String {

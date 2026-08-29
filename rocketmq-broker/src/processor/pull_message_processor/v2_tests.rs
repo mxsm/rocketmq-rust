@@ -49,6 +49,7 @@ use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use rocketmq_transport::test_support::Connection;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -56,7 +57,7 @@ use tokio::sync::oneshot;
 use super::PullMessageProcessor;
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
-use crate::client::client_channel_info::ClientSessionInfo;
+use crate::client::client_session_info::ClientSessionInfo;
 use crate::client::manager::consumer_manager::ConsumerClientRegistration;
 use crate::config::broker_config::BrokerConfig;
 use crate::long_polling::pull_deferred::PullCriteriaLimits;
@@ -155,6 +156,17 @@ async fn start_server<P>(processor: P, controller: Arc<AdmissionController>) -> 
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
+    start_server_with_registry(processor, controller, None).await
+}
+
+async fn start_server_with_registry<P>(
+    processor: P,
+    controller: Arc<AdmissionController>,
+    session_registry: Option<Arc<V2SessionRegistry>>,
+) -> (Connection, RunningServer)
+where
+    P: RequestProcessorV2 + Clone + Sync + 'static,
+{
     let owner =
         RuntimeOwner::new(RuntimeConfig::server_default("pull-message-v2-leaf")).expect("Pull V2 runtime owner");
     let server_context = owner.root_context().component("pull-message-v2.server");
@@ -169,6 +181,10 @@ where
         processor,
     )
     .with_admission_controller(controller);
+    let server = match session_registry {
+        Some(session_registry) => server.with_session_registry(session_registry),
+        None => server,
+    };
     let (stop_tx, stop_rx) = oneshot::channel();
     let (startup_tx, startup_rx) = oneshot::channel();
     let (result_tx, result_rx) = oneshot::channel();
@@ -391,6 +407,7 @@ fn stored_message() -> MessageExtBrokerInner {
 async fn v2_broadcast_offset_uses_the_canonical_network_session_identity() {
     const OPAQUE: i32 = 98_474;
     let (mut runtime, root) = runtime("broadcast", true).await;
+    let transport_sessions = runtime.v2_session_registry_for_test();
     let context = runtime.pull_message_context_for_test();
     for _ in 0..2 {
         let result = context
@@ -409,8 +426,12 @@ async fn v2_broadcast_offset_uses_the_canonical_network_session_identity() {
     assert!(pull_processor.install_session_client_lookup(lookup_port).is_ok());
     let shared = ArcHeldPullProcessor::new(pull_processor).with_broadcast_registration(session_registration);
     let sessions = Arc::clone(&shared.sessions);
-    let (mut client, server) =
-        start_server(shared, Arc::new(AdmissionController::new(AdmissionLimits::default()))).await;
+    let (mut client, server) = start_server_with_registry(
+        shared,
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        Some(transport_sessions),
+    )
+    .await;
 
     let response = send_and_receive(&mut client, pull_request("group-a", 1, false, OPAQUE)).await;
     assert_eq!(response.code(), ResponseCode::Success as i32);

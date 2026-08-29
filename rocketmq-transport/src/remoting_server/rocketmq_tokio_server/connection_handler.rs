@@ -19,6 +19,7 @@ use crate::dispatch::AuthorizedCommandDispatcherV2;
 use crate::dispatch::AuthorizedDispatchSession;
 use crate::dispatch::LegacyNetworkSession;
 use crate::dispatch::RequestContext;
+use crate::dispatch::V2NetworkSession;
 use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::server::AuthorizedFrameRoute;
 
@@ -84,6 +85,7 @@ pub(super) struct V2ConnectionHandler<P> {
 
 pub(crate) struct V2NetworkRouteState {
     _shutdown_complete: mpsc::Sender<()>,
+    endpoint: V2NetworkSession,
     deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner,
 }
 
@@ -265,22 +267,24 @@ where
     type SessionState = V2NetworkRouteState;
 
     async fn connected(&self, session: crate::server::SessionHandle) -> Option<Self::SessionState> {
+        let endpoint = self.dispatcher.open_network_session();
         if let Some(registry) = &self.session_registry {
-            registry.register(&session);
+            registry.register(&session, endpoint.response_table().clone(), endpoint.owner().clone());
         }
         Some(V2NetworkRouteState {
             _shutdown_complete: self.shutdown_complete_tx.clone(),
+            endpoint,
             deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id()),
         })
     }
 
     async fn response(
         &self,
-        _state: &Self::SessionState,
+        state: &Self::SessionState,
         _session: crate::server::SessionHandle,
         command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) {
-        self.dispatcher.complete_network_response(command);
+        self.dispatcher.complete_network_response(&state.endpoint, command);
     }
 
     async fn request(
@@ -297,6 +301,7 @@ where
         self.dispatcher
             .dispatch_network(
                 authorized_session,
+                state.endpoint.clone(),
                 session,
                 context,
                 command,
@@ -310,7 +315,7 @@ where
     }
 
     fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
-        self.dispatcher.close_network_session();
+        self.dispatcher.close_network_session(&state.endpoint);
         let _ = state.deferred_cleanup.close();
     }
 

@@ -98,11 +98,11 @@ fn response_parts_reject_every_invalid_head_before_storing_an_owner() {
 }
 
 #[test]
-fn legacy_command_conversion_extracts_the_body_before_plan_validation() {
+fn command_conversion_extracts_the_body_before_plan_validation() {
     let parts = BrokerResponseParts::from_command(response_head().set_body(Bytes::from_static(b"body")))
-        .expect("legacy response body should become the affine bytes owner");
+        .expect("response body should become the affine bytes owner");
     let BrokerResponseBodyOwner::Bytes(body) = parts.body() else {
-        panic!("legacy response bytes must be extracted from the head");
+        panic!("response bytes must be extracted from the head");
     };
     assert_eq!(body.as_ref(), b"body");
 
@@ -140,7 +140,7 @@ fn immediate_leaf_mapper_turns_only_typed_header_failures_into_replies() {
 }
 
 #[test]
-fn immediate_leaf_mapper_rejects_legacy_none_semantics() {
+fn immediate_leaf_mapper_rejects_missing_response_semantics() {
     let result = immediate_outcome_from_command_result(
         &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
         Ok(None),
@@ -381,33 +381,4 @@ fn region_failure_after_one_region_falls_back_without_losing_owners() {
 #[test]
 fn sequence_failure_releases_all_attempted_regions_before_segment_fallback() {
     assert_injected_file_region_failure_falls_back(2, StoreFileRegionStage::Sequence, 2);
-}
-
-#[tokio::test]
-async fn legacy_heap_delivery_returns_an_explicit_command() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
-    let address = listener.local_addr().expect("listener address");
-    let stream = std::net::TcpStream::connect(address).expect("connect test stream");
-    stream.set_nonblocking(true).expect("nonblocking test stream");
-    let _accepted = listener.accept().expect("accept test stream");
-    let connection = rocketmq_transport::test_support::Connection::new(
-        tokio::net::TcpStream::from_std(stream).expect("Tokio test stream"),
-    );
-    let channel = rocketmq_transport::test_support::TestChannelBuilder::new(
-        connection,
-        crate::test_task_group("broker-response-plan-command"),
-    )
-    .addresses(address, address)
-    .build()
-    .expect("test channel");
-
-    let delivery = BrokerResponseParts::bytes(response_head(), Bytes::from_static(b"legacy"))
-        .expect("valid legacy parts")
-        .deliver_legacy(&channel)
-        .await
-        .expect("legacy command delivery");
-    let LegacyResponseDelivery::Command(command) = delivery else {
-        panic!("heap compatibility delivery must return a command");
-    };
-    assert_eq!(command.body(), Some(&Bytes::from_static(b"legacy")));
 }

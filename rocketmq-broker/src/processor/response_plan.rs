@@ -23,13 +23,11 @@ use bytes::Bytes;
 use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::FileRangeTransferHandle;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::FileRegionLease;
 use rocketmq_transport::api::v2::FileRegion;
 use rocketmq_transport::api::v2::FileRegionSequence;
@@ -52,14 +50,6 @@ pub(crate) enum BrokerResponseBodyOwner {
 pub(crate) struct BrokerResponseParts {
     head: RemotingCommand,
     body: BrokerResponseBodyOwner,
-}
-
-/// An explicit result from the sole V1 compatibility-delivery boundary.
-pub(crate) enum LegacyResponseDelivery {
-    /// The legacy processor must return this command to its dispatcher.
-    Command(RemotingCommand),
-    /// The compatibility boundary wrote the response directly.
-    Written,
 }
 
 /// Typed failures while assembling a Broker-owned response body.
@@ -93,12 +83,9 @@ impl FileRegionLease for StoreFileRegionLease {
 }
 
 impl BrokerResponseParts {
-    /// Splits a legacy response command into the body-free head and affine byte owner required by
-    /// the V2 response contract.
-    ///
-    /// Ordinary processor migrations use this boundary while their V1 compatibility shell still
-    /// returns a command. It prevents each leaf from open-coding body extraction or accidentally
-    /// placing a body-bearing head in a [`ResponsePlan`].
+    /// Splits a response command into the body-free head and affine byte owner required by the V2
+    /// response contract. This prevents each leaf from open-coding body extraction or
+    /// accidentally placing a body-bearing head in a [`ResponsePlan`].
     pub(crate) fn from_command(mut command: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
         match command.take_body() {
             Some(body) => Self::bytes(command, body),
@@ -149,31 +136,6 @@ impl BrokerResponseParts {
 
     pub(crate) fn into_handler_outcome(self) -> RocketMQResult<HandlerOutcome> {
         self.into_response_plan().map(HandlerOutcome::Reply)
-    }
-
-    pub(crate) async fn deliver_legacy(mut self, channel: &Channel) -> RocketMQResult<LegacyResponseDelivery> {
-        match self.body {
-            BrokerResponseBodyOwner::Empty => Ok(LegacyResponseDelivery::Command(self.head)),
-            BrokerResponseBodyOwner::Bytes(body) => Ok(LegacyResponseDelivery::Command(self.head.set_body(body))),
-            BrokerResponseBodyOwner::Segments(mut segments) => {
-                let body_len = checked_body_len(segments.iter().map(|segment| segment.len() as u64))?;
-                let header = self.head.encode_header_with_body_length(body_len).ok_or_else(|| {
-                    RocketMQError::Serialization(SerializationError::encode_failed(
-                        "remoting-command",
-                        "failed to encode Broker compatibility response header",
-                    ))
-                })?;
-                let mut frame_segments = Vec::with_capacity(segments.len() + 1);
-                frame_segments.push(header);
-                frame_segments.append(&mut segments);
-                channel.send_frame_segments(frame_segments).await?;
-                Ok(LegacyResponseDelivery::Written)
-            }
-            BrokerResponseBodyOwner::FileRegions(regions) => {
-                channel.send_file_regions_response(self.head, regions).await?;
-                Ok(LegacyResponseDelivery::Written)
-            }
-        }
     }
 
     #[cfg(test)]
@@ -325,7 +287,3 @@ where
 #[cfg(test)]
 #[path = "response_plan/tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "response_plan/tests/wire_equivalence.rs"]
-mod wire_equivalence;

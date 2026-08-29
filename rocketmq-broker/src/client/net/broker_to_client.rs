@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mq_version::RocketMqVersion;
-use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
@@ -33,7 +33,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v2::ServerPushCommand;
+use rocketmq_transport::api::v2::ServerPushSender;
+use rocketmq_transport::api::v2::ServerRequestCommand;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -64,44 +66,24 @@ impl Broker2Client {
         &self.command_factory
     }
 
-    /// Synchronously call client and wait for response.
-    ///
-    /// # Arguments
-    /// * `channel` - The client channel
-    /// * `request` - The request command
-    /// * `timeout_millis` - Timeout in milliseconds (Java default: 10000ms)
-    pub async fn call_client(
-        &mut self,
-        channel: &mut Channel,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        channel.send_wait_response(request, timeout_millis).await
-    }
-
     /// Check producer transaction state.
     /// This is a oneway request - exceptions are logged but not propagated.
     ///
     /// # Arguments
     /// * `group` - Producer group name
-    /// * `channel` - The producer channel
+    /// * `sender` - The producer session's typed push capability
     /// * `request_header` - Transaction state check request header
     /// * `message_ext` - The message to check
     pub async fn check_producer_transaction_state(
         &self,
         group: &CheetahString,
-        channel: &mut Channel,
+        sender: &ServerPushSender,
         request_header: CheckTransactionStateRequestHeader,
         message_ext: MessageExt,
     ) {
-        let mut request = self
-            .command_factory
-            .create_request_command(RequestCode::CheckTransactionState, request_header);
         let msg_id = message_ext.msg_id().clone();
-        match MessageDecoder::encode(&message_ext, false) {
-            Ok(body) => {
-                request.set_body_mut_ref(body);
-            }
+        let body = match MessageDecoder::encode(&message_ext, false) {
+            Ok(body) => body,
             Err(e) => {
                 error!(
                     "Check transaction failed because encode message error. group={}, msgId={}, error={:?}",
@@ -109,9 +91,18 @@ impl Broker2Client {
                 );
                 return;
             }
-        }
+        };
         // Java uses timeout=10ms for oneway
-        if let Err(e) = channel.send_oneway(request, 10).await {
+        if let Err(e) = sender
+            .send(
+                ServerPushCommand::CheckTransactionState {
+                    header: request_header,
+                    body,
+                },
+                Duration::from_millis(10),
+            )
+            .await
+        {
             error!(
                 "Check transaction failed because invoke producer exception. group={}, msgId={}, error={:?}",
                 group, msg_id, e
@@ -123,9 +114,9 @@ impl Broker2Client {
     /// This triggers consumer rebalance.
     ///
     /// # Arguments
-    /// * `channel` - The consumer channel
+    /// * `sender` - The consumer session's typed push capability
     /// * `consumer_group` - The consumer group name
-    pub async fn notify_consumer_ids_changed(&self, channel: &mut Channel, consumer_group: &CheetahString) {
+    pub async fn notify_consumer_ids_changed(&self, sender: &ServerPushSender, consumer_group: &CheetahString) {
         if consumer_group.is_empty() {
             error!("notifyConsumerIdsChanged consumerGroup is null");
             return;
@@ -135,12 +126,17 @@ impl Broker2Client {
             consumer_group: consumer_group.clone(),
             rpc_request_header: None,
         };
-        let request = self
-            .command_factory
-            .create_request_command(RequestCode::NotifyConsumerIdsChanged, request_header);
-
         // Java uses timeout=10ms for oneway
-        if let Err(e) = channel.send_oneway(request, 10).await {
+        if let Err(e) = sender
+            .send(
+                ServerPushCommand::NotifyConsumerIdsChanged {
+                    header: request_header,
+                    opaque: None,
+                },
+                Duration::from_millis(10),
+            )
+            .await
+        {
             warn!(
                 "notifyConsumerIdsChanged exception. group={}, error={:?}",
                 consumer_group, e
@@ -153,17 +149,22 @@ impl Broker2Client {
     /// Java sends this as a one-way broker-to-client callback with a short timeout.
     pub async fn notify_unsubscribe_lite(
         &self,
-        channel: &mut Channel,
+        sender: &ServerPushSender,
         request_header: NotifyUnsubscribeLiteRequestHeader,
     ) {
         let lite_topic = request_header.lite_topic.clone();
         let consumer_group = request_header.consumer_group.clone();
         let client_id = request_header.client_id.clone();
-        let request = self
-            .command_factory
-            .create_request_command(RequestCode::NotifyUnsubscribeLite, request_header);
-
-        if let Err(e) = channel.send_oneway(request, 100).await {
+        if let Err(e) = sender
+            .send(
+                ServerPushCommand::NotifyUnsubscribeLite {
+                    header: request_header,
+                    opaque: None,
+                },
+                Duration::from_millis(100),
+            )
+            .await
+        {
             error!(
                 "notifyUnsubscribeLite failed. liteTopic={}, group={}, clientId={}, error={:?}",
                 lite_topic, consumer_group, client_id, e
@@ -313,67 +314,64 @@ impl Broker2Client {
             is_force,
             topic_request_header: None,
         };
-        let mut request = self
-            .command_factory
-            .create_request_command(RequestCode::ResetConsumerClientOffset, request_header);
-
         // Use different body format for C++ clients
-        if is_c {
+        let request_body = if is_c {
             let body = ResetOffsetBodyForC::from_offset_table(&offset_table);
-            request.set_body_mut_ref(body.encode());
+            body.encode()
         } else {
             let body = ResetOffsetBody {
                 offset_table: offset_table.clone(),
             };
-            request.set_body_mut_ref(body.encode());
-        }
+            body.encode()
+        };
 
         // Notify all consumers in the group
-        let consumer_group_info = broker_inner.consumer_manager().get_consumer_group_info(group);
-        if let Some(consumer_group_info) = consumer_group_info {
-            let channel_info_snapshot = consumer_group_info.channel_info_snapshot();
-            if !channel_info_snapshot.is_empty() {
-                for (channel, channel_info) in channel_info_snapshot {
-                    let version = channel_info.version();
-                    if version >= MIN_CLIENT_VERSION {
-                        // Java uses timeout=5000ms for oneway
-                        if let Err(e) = channel.send_oneway(request.clone(), 5000).await {
-                            error!(
-                                "[reset-offset] reset offset exception. topic={}, group={}, error={:?}",
-                                topic, group, e
-                            );
-                        } else {
-                            info!(
-                                "[reset-offset] reset offset success. topic={}, group={}, clientId={}",
-                                topic,
-                                group,
-                                channel_info.client_id()
-                            );
-                        }
-                    } else {
-                        let version_desc = RocketMqVersion::from_ordinal(version as u32).name();
-                        response.set_code_ref(ResponseCode::SystemError);
-                        response.set_remark_mut(format!(
-                            "the client does not support this feature. version={}",
-                            version_desc
-                        ));
-                        warn!(
-                            "[reset-offset] the client does not support this feature. channel={}, version={}",
-                            channel.remote_address(),
-                            version_desc
+        let session_snapshot = broker_inner
+            .consumer_manager()
+            .session_registry()
+            .transport_snapshot(group);
+        if !session_snapshot.is_empty() {
+            for (client, transport) in session_snapshot {
+                let version = client.version();
+                if version >= MIN_CLIENT_VERSION {
+                    // Java uses timeout=5000ms for oneway
+                    if let Err(e) = transport
+                        .push_sender()
+                        .send(
+                            ServerPushCommand::ResetConsumerClientOffset {
+                                header: request_header.clone(),
+                                body: request_body.clone().into(),
+                            },
+                            Duration::from_millis(5_000),
+                        )
+                        .await
+                    {
+                        error!(
+                            "[reset-offset] reset offset exception. topic={}, group={}, error={:?}",
+                            topic, group, e
                         );
-                        return response;
+                    } else {
+                        info!(
+                            "[reset-offset] reset offset success. topic={}, group={}, clientId={}",
+                            topic,
+                            group,
+                            client.client_id()
+                        );
                     }
+                } else {
+                    let version_desc = RocketMqVersion::from_ordinal(version as u32).name();
+                    response.set_code_ref(ResponseCode::SystemError);
+                    response.set_remark_mut(format!(
+                        "the client does not support this feature. version={}",
+                        version_desc
+                    ));
+                    warn!(
+                        "[reset-offset] the client does not support this feature. session={:?}, version={}",
+                        client.session_id(),
+                        version_desc
+                    );
+                    return response;
                 }
-            } else {
-                let error_info = format!(
-                    "Consumer not online, so can not reset offset, Group: {} Topic: {} Timestamp: {}",
-                    group, topic, timestamp
-                );
-                error!("{}", error_info);
-                response.set_code_ref(ResponseCode::ConsumerNotOnline);
-                response.set_remark_mut(error_info);
-                return response;
             }
         } else {
             let error_info = format!(
@@ -412,21 +410,13 @@ impl Broker2Client {
         let mut result = self.command_factory.create_java_default_error_response_command();
 
         let request_header = GetConsumerStatusRequestHeader::new(topic.clone(), group.clone());
-        let request = self
-            .command_factory
-            .create_request_command(RequestCode::GetConsumerStatusFromClient, request_header);
 
         let mut consumer_status_table: HashMap<CheetahString, HashMap<MessageQueue, i64>> = HashMap::new();
 
-        let consumer_group_info = broker_inner.consumer_manager().get_consumer_group_info(group);
-        let channel_info_snapshot = match consumer_group_info {
-            Some(info) => info.channel_info_snapshot(),
-            None => {
-                result.set_code_ref(ResponseCode::SystemError);
-                result.set_remark_mut(format!("No Any Consumer online in the consumer group: [{}]", group));
-                return result;
-            }
-        };
+        let channel_info_snapshot = broker_inner
+            .consumer_manager()
+            .session_registry()
+            .transport_snapshot(group);
 
         if channel_info_snapshot.is_empty() {
             result.set_code_ref(ResponseCode::SystemError);
@@ -434,7 +424,7 @@ impl Broker2Client {
             return result;
         }
 
-        for (channel, channel_info) in channel_info_snapshot {
+        for (channel_info, transport) in channel_info_snapshot {
             let version = channel_info.version();
             let client_id = channel_info.client_id().clone();
 
@@ -446,8 +436,8 @@ impl Broker2Client {
                     version_desc
                 ));
                 warn!(
-                    "[get-consumer-status] the client does not support this feature. channel={}, version={}",
-                    channel.remote_address(),
+                    "[get-consumer-status] the client does not support this feature. session={:?}, version={}",
+                    channel_info.session_id(),
                     version_desc
                 );
                 return result;
@@ -460,7 +450,16 @@ impl Broker2Client {
 
             if should_query {
                 // Java uses timeout=5000ms
-                match channel.send_wait_response(request.clone(), 5000).await {
+                match transport
+                    .request_sender()
+                    .request(
+                        ServerRequestCommand::GetConsumerStatusFromClient {
+                            header: request_header.clone(),
+                        },
+                        Duration::from_millis(5_000),
+                    )
+                    .await
+                {
                     Ok(response) => {
                         if response.code() == ResponseCode::Success as i32 {
                             if let Some(body_bytes) = response.body() {

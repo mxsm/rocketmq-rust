@@ -398,3 +398,84 @@ fn close_and_registration_are_one_atomic_owner_epoch() {
         drop(guard);
     }
 }
+
+#[test]
+fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
+    const ITERATIONS: i32 = 128;
+
+    for opaque in 0..ITERATIONS {
+        let table = PendingRequestTable::new();
+        let owner = table.new_owner();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let guard = table
+            .register_for_owner(&owner, opaque, RequestDeadline::from_timeout_millis(30_000), sender)
+            .expect("request should be admitted");
+        let barrier = Arc::new(Barrier::new(4));
+
+        let expire_barrier = Arc::clone(&barrier);
+        let expiration = std::thread::spawn(move || {
+            expire_barrier.wait();
+            guard.expire("race")
+        });
+
+        let response_table = table.clone();
+        let response_owner = owner.clone();
+        let response_barrier = Arc::clone(&barrier);
+        let response = std::thread::spawn(move || {
+            response_barrier.wait();
+            response_table.complete_response_for_owner(
+                &response_owner,
+                opaque,
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+            )
+        });
+
+        let disconnect_table = table.clone();
+        let disconnect_owner = owner.clone();
+        let disconnect_barrier = Arc::clone(&barrier);
+        let disconnect = std::thread::spawn(move || {
+            disconnect_barrier.wait();
+            disconnect_table.close_owner(&disconnect_owner, || {
+                RocketMQError::network_connection_failed("race", "owner disconnected")
+            })
+        });
+
+        barrier.wait();
+        expiration.join().expect("expiration contender");
+        let response_won = response.join().expect("response contender");
+        let disconnected = disconnect.join().expect("disconnect contender");
+        let result = receiver
+            .blocking_recv()
+            .expect("one contender must complete the waiter");
+
+        match result {
+            Ok(command) => {
+                assert!(response_won);
+                assert_eq!(command.code(), ResponseCode::Success.to_i32());
+                assert_eq!(disconnected, 0);
+            }
+            Err(RocketMQError::Network(rocketmq_error::NetworkError::ResponseTimeout { .. })) => {
+                assert!(!response_won);
+                assert_eq!(disconnected, 0);
+            }
+            Err(_) => {
+                assert!(!response_won);
+                assert_eq!(disconnected, 1);
+            }
+        }
+        assert!(table.is_empty());
+        assert!(!owner.is_accepting());
+        assert_eq!(table.usage().count, 0);
+        assert_eq!(table.usage().bytes, 0);
+
+        let (next_sender, _next_receiver) = tokio::sync::oneshot::channel();
+        assert!(table
+            .register_for_owner(
+                &owner,
+                opaque,
+                RequestDeadline::from_timeout_millis(30_000),
+                next_sender,
+            )
+            .is_err());
+    }
+}

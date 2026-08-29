@@ -79,7 +79,6 @@ where
                 hook_metadata,
                 broadcast_client_resolver,
                 false,
-                None,
             )
             .await?
         {

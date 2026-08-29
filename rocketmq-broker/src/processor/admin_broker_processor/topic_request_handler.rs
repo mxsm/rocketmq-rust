@@ -1039,8 +1039,6 @@ mod tests {
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
 
     use super::decode_topic_queue_mapping_detail;
     use super::AdminRequestMetadata;
@@ -1070,20 +1068,6 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
     }
 
     #[test]
@@ -1123,7 +1107,7 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = TopicRequestHandler::new();
         let broker_config_request_handler = BrokerConfigRequestHandler::new(admin.clone());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:
@@ -1161,7 +1145,7 @@ mod tests {
         let response = handler
             .update_and_create_static_topic(
                 &broker_config_request_handler,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndCreateStaticTopic,
                 &mut request,
             )
@@ -1213,11 +1197,11 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let request_opaque = request.opaque();
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .update_topic_config_cas(
                 &broker_config_request_handler,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateTopicConfigCas,
                 &mut request,
             )
@@ -1256,11 +1240,11 @@ mod tests {
             },
         );
         stale_request.make_custom_header_to_net();
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let stale_response = handler
             .update_topic_config_cas(
                 &broker_config_request_handler,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateTopicConfigCas,
                 &mut stale_request,
             )
@@ -1329,11 +1313,11 @@ mod tests {
             rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody::default();
         let mut empty = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(empty_body.encode().unwrap());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_topic_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteTopicInBrokerList,
                 &mut empty,
             )
@@ -1350,11 +1334,11 @@ mod tests {
             };
         let mut invalid = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(invalid_body.encode().unwrap());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_topic_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteTopicInBrokerList,
                 &mut invalid,
             )
@@ -1370,11 +1354,11 @@ mod tests {
         };
         let mut request = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(body.encode().unwrap());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_topic_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteTopicInBrokerList,
                 &mut request,
             )

@@ -51,9 +51,6 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::v1::apply_error_to_response;
 use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RemotingRequest;
@@ -129,31 +126,7 @@ pub struct AdminBrokerProcessor<MS: BrokerAdminStore> {
     broker_stats_handler: BrokerStatsHandler,
 }
 
-impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
-where
-    MS: BrokerAdminStore,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, request).await
-    }
-}
-
 impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
-    pub(crate) async fn process_request_shared(
-        &self,
-        channel: Channel,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        let metadata = AdminRequestMetadata::legacy_network(channel.remote_address());
-        self.process_request_inner(&metadata, request_code, request).await
-    }
-
     pub(crate) async fn process_v2_shared(
         &self,
         request: &mut RemotingRequest,
@@ -197,7 +170,8 @@ pub(super) struct AdminRequestMetadata {
 }
 
 impl AdminRequestMetadata {
-    fn legacy_network(remote_addr: SocketAddr) -> Self {
+    #[cfg(test)]
+    fn network_for_test(remote_addr: SocketAddr) -> Self {
         Self {
             caller: AdminRequestCaller::Network(remote_addr),
         }
@@ -310,7 +284,7 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
 
         let message_related_handler = MessageRelatedHandler::new();
         let producer_request_handler =
-            ProducerRequestHandler::new(broker_runtime_inner.producer_manager().channel_registry());
+            ProducerRequestHandler::new(broker_runtime_inner.producer_manager().session_registry());
         let create_acl_request_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
         let create_user_request_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
         let get_acl_request_handler = GetAclRequestHandler::new(auth_admin_service.clone());

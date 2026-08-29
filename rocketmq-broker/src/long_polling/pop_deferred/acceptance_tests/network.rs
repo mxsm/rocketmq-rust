@@ -419,7 +419,7 @@ async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
         .expect("accepted POP resume drains through canonical writing");
     assert_eq!(
         completion.await.expect("POP wake completion"),
-        crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupOutcome::ProcessingCompleted
+        crate::long_polling::pop_deferred::service::PopWakeupOutcome::ProcessingCompleted
     );
 
     let response = client
@@ -825,7 +825,7 @@ async fn duplicate_claim_and_session_close_never_execute_or_write() {
     observer.complete_claim_error(&duplicate);
     assert_eq!(
         completion.await.expect("duplicate wake completion"),
-        crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupOutcome::AlreadyCompleted
+        crate::long_polling::pop_deferred::service::PopWakeupOutcome::AlreadyCompleted
     );
     drop(first);
     assert_released(&service);

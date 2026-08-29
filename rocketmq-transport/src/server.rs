@@ -167,6 +167,29 @@ pub struct SessionHandle {
     response_plan_context: Option<NetworkResponsePlanContext>,
 }
 
+struct SessionRetirementGuard<'a> {
+    session: &'a SessionHandle,
+    armed: bool,
+}
+
+impl<'a> SessionRetirementGuard<'a> {
+    fn new(session: &'a SessionHandle) -> Self {
+        Self { session, armed: true }
+    }
+
+    fn complete(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SessionRetirementGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.session.abort();
+        }
+    }
+}
+
 impl SessionHandle {
     pub fn session_id(&self) -> u64 {
         self.send.session_id
@@ -274,6 +297,24 @@ impl SessionHandle {
         self.send.task_group.abort_task(self.send.writer_task_id);
     }
 
+    /// Cancels both socket halves and waits for the owned writer task to exit.
+    /// A stuck writer is force-aborted after the normal retirement deadline.
+    pub(crate) async fn terminate(&self) {
+        let _ = self.send.session_closed_tx.send(true);
+        let _ = self.send.state_tx.send(ConnectionState::Closed);
+        self.send.reader_cancellation.cancel();
+        self.request_operation.cancel();
+        self.send.writer_operation.cancel();
+        if !self
+            .send
+            .task_group
+            .wait_task(self.send.writer_task_id, SESSION_RETIREMENT_TIMEOUT)
+            .await
+        {
+            self.send.task_group.abort_task(self.send.writer_task_id);
+        }
+    }
+
     pub(crate) fn with_response_class(mut self, class: AdmissionClass) -> Self {
         self.response_class = Some(class);
         self
@@ -322,21 +363,19 @@ impl SessionHandle {
         timeout: Duration,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        match tokio::time::timeout(timeout, self.retire_inner(started)).await {
+        let mut retirement_guard = SessionRetirementGuard::new(self);
+        let result = match tokio::time::timeout(timeout, self.retire_inner(started)).await {
             Ok(result) => result,
             Err(_) => {
-                let _ = self.send.session_closed_tx.send(true);
-                let _ = self.send.state_tx.send(ConnectionState::Closed);
-                self.send.reader_cancellation.cancel();
-                self.request_operation.cancel();
-                self.send.writer_operation.cancel();
-                self.send.task_group.abort_task(self.send.writer_task_id);
+                self.abort();
                 Err(rocketmq_error::RocketMQError::network_connection_failed(
                     "transport-session-writer",
                     "writer retirement exceeded its absolute deadline",
                 ))
             }
-        }
+        };
+        retirement_guard.complete();
+        result
     }
 
     async fn retire_inner(
@@ -1755,6 +1794,7 @@ mod retirement_tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::task::Poll;
     use std::time::Duration;
 
     use rocketmq_error::NetworkError;
@@ -2578,6 +2618,74 @@ mod retirement_tests {
         assert_eq!(first.code(), 1);
         assert!(peer.receive_command().await.is_none());
         runner.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn aborting_retirement_while_an_active_send_is_draining_aborts_the_exact_session() {
+        let runtime = RuntimeContext::from_current("transport-retirement-cancellation-test");
+        let service = runtime.service_context("transport-retirement-cancellation");
+        let (transport, _peer_stream) = tokio::io::duplex(4096);
+        let (session_tx, session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let local_addr: SocketAddr = "127.0.0.1:19007".parse().unwrap();
+        let remote_addr: SocketAddr = "127.0.0.1:19008".parse().unwrap();
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_plaintext_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            handler,
+        ));
+        let session = session_rx.await.expect("session capture");
+        let checked = Arc::new(Notify::new());
+        let resume_enqueue = Arc::new(Notify::new());
+        let mut checked_connection = session.connection_with_enqueue_gate(checked.clone(), resume_enqueue.clone());
+        let checked_send = tokio::spawn(async move {
+            checked_connection
+                .send_command(RemotingCommand::create_remoting_command(5))
+                .await
+        });
+        checked.notified().await;
+
+        let (retirement_started_tx, retirement_started_rx) = oneshot::channel();
+        let retiring_session = session.clone();
+        let retirement = tokio::spawn(async move { retiring_session.retire_with_signal(retirement_started_tx).await });
+        retirement_started_rx.await.expect("retirement started");
+        std::future::poll_fn(|context| match session.send.lifecycle.begin_send() {
+            None => Poll::Ready(()),
+            Some(lease) => {
+                drop(lease);
+                context.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .await;
+
+        retirement.abort();
+        assert!(retirement
+            .await
+            .expect_err("retirement caller must be aborted")
+            .is_cancelled());
+        assert_eq!(session.connection().state(), crate::connection::ConnectionState::Closed);
+        assert!(session.send.reader_cancellation.is_cancelled());
+        assert!(session.send.writer_operation.is_cancelled());
+
+        resume_enqueue.notify_one();
+        let send_error = checked_send
+            .await
+            .expect("checked send task")
+            .expect_err("session abort must reject the draining send");
+        assert!(matches!(
+            send_error,
+            RocketMQError::Network(NetworkError::ConnectionFailed { .. })
+        ));
+        runner.await.expect("session runner");
     }
 
     #[tokio::test]

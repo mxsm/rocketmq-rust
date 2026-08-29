@@ -429,12 +429,17 @@ where
                         "automatic V2 startup has no processor source",
                     ));
                 };
-                Arc::new(AuthorizedCommandDispatcherV2::new(
-                    processor,
-                    Vec::new(),
-                    security,
-                    admission,
-                ))
+                Arc::new(
+                    AuthorizedCommandDispatcherV2::try_new_with_telemetry_and_budget(
+                        processor,
+                        Vec::new(),
+                        security,
+                        admission,
+                        self.telemetry.clone(),
+                        &self.service_context.process_budget(),
+                    )
+                    .map_err(|error| configuration_error("server_request_pending", error))?,
+                )
             }
         };
 

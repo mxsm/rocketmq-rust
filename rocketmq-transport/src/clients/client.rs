@@ -289,6 +289,7 @@ struct V2ClientRoute<P> {
 
 struct V2ClientRouteState {
     pending_owner: PendingRequestOwner,
+    network_endpoint: crate::dispatch::V2NetworkSession,
     deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner,
 }
 
@@ -312,6 +313,7 @@ where
         }
         Some(V2ClientRouteState {
             pending_owner,
+            network_endpoint: self.dispatcher.open_network_session(),
             deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id()),
         })
     }
@@ -346,6 +348,7 @@ where
         self.dispatcher
             .dispatch_network(
                 authorized_session,
+                state.network_endpoint.clone(),
                 session,
                 context,
                 command,
@@ -359,6 +362,7 @@ where
     }
 
     fn close_pending(&self, state: &Self::SessionState, _session: SessionHandle) {
+        self.dispatcher.close_network_session(&state.network_endpoint);
         let _ = state.deferred_cleanup.close();
     }
 

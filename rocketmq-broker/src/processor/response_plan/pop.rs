@@ -16,11 +16,9 @@ use bytes::Bytes;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::GetMessageResult;
-use rocketmq_transport::api::v1::Channel;
 
 use super::store_body_segments;
 use super::BrokerResponseParts;
-use super::LegacyResponseDelivery;
 
 pub(crate) fn attach_pop_response_header(
     mut head: RemotingCommand,
@@ -50,16 +48,6 @@ pub(crate) fn pop_segmented_response_parts(
 
 pub(crate) fn take_pop_body_segments(get_message_result: GetMessageResult) -> Vec<Bytes> {
     store_body_segments(get_message_result.message_mapped_vec())
-}
-
-pub(crate) async fn deliver_pop_legacy(
-    parts: BrokerResponseParts,
-    channel: &Channel,
-) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-    match parts.deliver_legacy(channel).await? {
-        LegacyResponseDelivery::Command(command) => Ok(Some(command)),
-        LegacyResponseDelivery::Written => Ok(None),
-    }
 }
 
 #[cfg(test)]

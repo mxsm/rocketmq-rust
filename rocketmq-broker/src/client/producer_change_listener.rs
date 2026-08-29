@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::client_session_info::ClientSessionInfo;
 use crate::client::producer_group_event::ProducerGroupEvent;
 
 pub type ArcProducerChangeListener = std::sync::Arc<dyn ProducerChangeListener>;
@@ -31,7 +31,6 @@ pub trait ProducerChangeListener: Send + Sync {
     /// # Parameters
     /// - `event`: The event that occurred, represented by a `ProducerGroupEvent`.
     /// - `group`: The name of the producer group as a string slice.
-    /// - `client_channel_info`: Optional reference to `ClientChannelInfo` containing details about
-    ///   the client channel associated with the event.
-    fn handle(&self, event: ProducerGroupEvent, group: &str, client_channel_info: Option<&ClientChannelInfo>);
+    /// - `client_session_info`: Optional identity for the session associated with the event.
+    fn handle(&self, event: ProducerGroupEvent, group: &str, client_session_info: Option<&ClientSessionInfo>);
 }

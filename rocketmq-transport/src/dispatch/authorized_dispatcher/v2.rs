@@ -32,6 +32,7 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionError;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
+use crate::base::pending_request_table::PendingRequestTable;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
 use crate::dispatch::remoting_request::RemotingRequestBuilder;
 use crate::dispatch::remoting_request::RequestLifecycleProvenance;
@@ -152,6 +153,17 @@ where
     )]
     pub(crate) fn new(processor: P, rpc_hooks: Vec<Arc<dyn RPCHook>>) -> Self {
         Self::from_dispatch_processor(ExplicitV2Processor::new(processor), rpc_hooks)
+    }
+
+    pub(crate) fn new_with_pending_requests(
+        processor: P,
+        rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        response_table: PendingRequestTable,
+    ) -> Self {
+        Self::from_dispatch_processor(
+            ExplicitV2Processor::with_response_table(processor, response_table),
+            rpc_hooks,
+        )
     }
 
     pub(super) fn clone_explicit_processor(&self) -> ExplicitV2Processor<P> {

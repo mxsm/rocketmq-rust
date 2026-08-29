@@ -35,7 +35,6 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Principal;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::v1::RequestContext;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v2::EmbeddedDispatchErrorKind;
 use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
@@ -223,31 +222,10 @@ impl ProxyBrokerFacade {
 
     pub async fn process_request_with_timeout(
         &self,
-        mut request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         timeout: Duration,
     ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::remoting_command::RemotingCommand> {
-        request.make_custom_header_to_net();
-        let dispatcher = self
-            .runtime
-            .authorized_dispatcher()
-            .ok_or_else(embedded_broker_request_processor_not_ready)?;
-
-        let opaque = request.opaque();
-        let deadline = RequestDeadline::after(timeout);
-        let context =
-            RequestContext::try_embedded(Some(Principal::new("embedded-proxy")), Some(deadline)).map_err(|error| {
-                rocketmq_error::RocketMQError::response_process_failed(
-                    "embedded_broker_request_context",
-                    error.to_string(),
-                )
-            })?;
-        let response = dispatcher
-            .dispatch_embedded(&self.local_request_tasks, context, request)
-            .await
-            .map_err(|error| embedded_dispatch_error(error, timeout))?
-            .set_opaque(opaque)
-            .mark_response_type();
-        Ok(response)
+        self.process_request_v2_compatibility(request, timeout).await
     }
 
     /// Dispatches one local Proxy command through the prepared Broker V2 graph.
@@ -342,6 +320,7 @@ impl ProxyBrokerFacade {
     }
 }
 
+#[cfg(test)]
 fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
 }
@@ -382,6 +361,7 @@ fn embedded_v2_compatibility_materialization_error(
     )
 }
 
+#[cfg(test)]
 fn embedded_dispatch_error(
     error: rocketmq_transport::api::v1::DispatchError,
     timeout: Duration,

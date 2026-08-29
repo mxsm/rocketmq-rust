@@ -42,8 +42,6 @@ use super::super::NotificationStoreCapability;
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::failover::escape_bridge::EscapeBridge;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
 use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadline;
 use crate::long_polling::notification_deferred::index::NotificationMatchCriteria;
 use crate::long_polling::notification_deferred::service::NotificationRequestData;
@@ -112,16 +110,9 @@ fn processor_with_policy(
     Arc<NotificationProcessor<BrokerMessageStore>>,
     Arc<EscapeBridge<BrokerMessageStore>>,
 ) {
-    let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());
     let topic_config_manager = inner.topic_config_manager_handle();
     let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
     let consumer_filter_manager = Arc::new(inner.consumer_filter_manager().clone());
-    let long_polling = PopLongPollingServiceContext::new(
-        long_polling_policy,
-        Arc::clone(&topic_config_manager),
-        subscription_group_lookup.clone(),
-        inner.broker_service_context(),
-    );
     let escape_bridge = inner.escape_bridge();
     let processor = NotificationProcessor::new(NotificationProcessorContext::new(
         policy,
@@ -135,7 +126,6 @@ fn processor_with_policy(
         NotificationPopOffsetCapability {
             merge_service: Weak::new(),
         },
-        long_polling,
     ));
     (processor, escape_bridge)
 }

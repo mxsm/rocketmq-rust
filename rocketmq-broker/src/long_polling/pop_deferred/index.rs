@@ -522,6 +522,15 @@ where
             .values()
             .any(|bucket| bucket.entries.iter().any(|record| record.id == id))
     }
+
+    pub(crate) fn polling_count(&self, key: &PopCriteriaKey) -> i32 {
+        self.inner
+            .state
+            .lock()
+            .buckets
+            .get(key)
+            .map_or(0, |bucket| i32::try_from(bucket.entries.len()).unwrap_or(i32::MAX))
+    }
 }
 
 fn arc_allocation_size<T>() -> Option<usize> {

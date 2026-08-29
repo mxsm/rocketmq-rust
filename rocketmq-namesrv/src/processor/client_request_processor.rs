@@ -185,9 +185,10 @@ impl ClientRequestProcessor {
             topic_route_view.route_data().as_ref()
         };
         let zone_request = ZoneRequest::from_command(request);
-        let typed_zone_filtered = route_config.namesrv_typed_zone_route_enable && zone_request.is_enabled();
+        let zone_filtered = zone_request.is_enabled();
+        let force_java_zone_legacy_json = route_config.namesrv_typed_zone_route_enable && zone_filtered;
         let filtered_route;
-        let topic_route_data = if route_config.namesrv_typed_zone_route_enable {
+        let topic_route_data = if zone_filtered {
             request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_ENABLED);
             let filter_started = Instant::now();
             filtered_route = filter_route_by_zone(topic_route_data, &zone_request);
@@ -212,7 +213,7 @@ impl ClientRequestProcessor {
                 topic_route_data,
                 request.version(),
                 request_header.accept_standard_json_only,
-                typed_zone_filtered,
+                force_java_zone_legacy_json,
             );
             metrics.record_route_stage(NameServerRouteStage::Encode, encode_started.elapsed());
             result

@@ -41,6 +41,12 @@ impl NotifyBrokerRoleChangeHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_success_response_command();
+        let Some(controller_leader_address) = metadata.network_remote_addr() else {
+            warn!("Reject embedded notifyBrokerRoleChanged because the controller network peer is unavailable");
+            return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(
+                "notify broker role change requires a trusted network controller peer",
+            )));
+        };
 
         let request_header = match request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>() {
             Ok(header) => header,
@@ -72,13 +78,6 @@ impl NotifyBrokerRoleChangeHandler {
             "Receive notifyBrokerRoleChanged request, try to change brokerRole, request:{}",
             request_header
         );
-
-        let Some(controller_leader_address) = metadata.network_remote_addr() else {
-            warn!("Reject embedded notifyBrokerRoleChanged because the controller network peer is unavailable");
-            return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(
-                "notify broker role change requires a trusted network controller peer",
-            )));
-        };
 
         if broker_config_request_handler
             .broker_runtime_inner()
@@ -127,8 +126,6 @@ mod tests {
     use rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::admin_broker_processor::trusted_admin_metadata;
@@ -138,20 +135,6 @@ mod tests {
     use super::AdminRequestMetadata;
     use super::BrokerConfigRequestHandler;
     use super::NotifyBrokerRoleChangeHandler;
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
-    }
 
     #[tokio::test]
     async fn uninitialized_controller_fails_closed_without_retaining_runtime_owner() {
@@ -163,7 +146,7 @@ mod tests {
         let broker_config_request_handler = BrokerConfigRequestHandler::new(admin);
         let handler = NotifyBrokerRoleChangeHandler::new();
 
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let header = NotifyBrokerRoleChangedRequestHeader {
             master_address: Some(CheetahString::from_static_str("127.0.0.1:10911")),
             master_epoch: Some(1),
@@ -179,7 +162,7 @@ mod tests {
         let response = handler
             .notify_broker_role_changed(
                 &broker_config_request_handler,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::NotifyBrokerRoleChanged,
                 &mut request,
             )

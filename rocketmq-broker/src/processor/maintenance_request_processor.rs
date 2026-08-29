@@ -49,7 +49,6 @@ use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_remark;
-use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestProcessorV2;
@@ -96,12 +95,6 @@ impl MaintenanceRequestProcessor {
             auth_runtime,
             authorizer,
             checkpoint_service,
-        }
-    }
-
-    pub(crate) fn legacy_adapter(&self) -> LegacyMaintenanceRequestProcessor {
-        LegacyMaintenanceRequestProcessor {
-            processor: self.clone(),
         }
     }
 
@@ -266,35 +259,6 @@ impl MaintenanceRequestProcessor {
             &checkpoint_verification_to_wire(verification),
             "encode Store restore-verification proof",
         )
-    }
-}
-
-pub(crate) struct LegacyMaintenanceRequestProcessor {
-    processor: MaintenanceRequestProcessor,
-}
-
-impl LegacyMaintenanceRequestProcessor {
-    pub(crate) async fn process_legacy(
-        &self,
-        channel: &Channel,
-        request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        if !self.processor.broker_config.maintenance_enabled {
-            return Err(RocketMQError::authentication_failed(
-                "Broker maintenance API is disabled",
-            ));
-        }
-        let principal = self
-            .processor
-            .auth_runtime
-            .authenticate_maintenance_principal(request, Some(channel.channel_id()))
-            .await?;
-        let grant = self.processor.authorize_principal(principal.as_str(), request)?;
-        self.processor
-            .process_authorized(&grant, request_code, request)
-            .await
-            .map(Some)
     }
 }
 

@@ -70,6 +70,14 @@ pub use api::{
 };
 pub use compatibility::CachedConnectionState;
 
+/// Transport client alias whose omitted processor is the V2-native default.
+pub type V2TransportClient<PR = crate::request_processor::default_request_processor::DefaultRequestProcessor> =
+    TransportClient<PR>;
+
+/// Nameserver-aware client alias whose omitted processor is the V2-native default.
+pub type V2RemotingClient<PR = crate::request_processor::default_request_processor::DefaultRequestProcessor> =
+    RemotingClient<PR>;
+
 use connection_registry::ConnectionRegistry;
 use endpoint_state::EndpointStateStore;
 use lifecycle::ClientLifecycle;

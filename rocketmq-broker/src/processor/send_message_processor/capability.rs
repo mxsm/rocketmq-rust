@@ -54,7 +54,7 @@ use tracing::debug;
 use tracing::info;
 
 use crate::broker_runtime::complete_topic_config_creation;
-use crate::client::manager::producer_manager::ProducerReplyChannelRegistry;
+use crate::client::manager::producer_manager::ProducerReplySessionRegistry;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
@@ -687,7 +687,7 @@ pub(crate) struct SendMessageProcessorContext<MS: BrokerWriteStore> {
     pub(crate) rebalance_locks: RebalanceLockManager,
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
     pub(crate) broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
-    pub(crate) producer_reply_channels: ProducerReplyChannelRegistry,
+    pub(crate) producer_reply_sessions: ProducerReplySessionRegistry,
 }
 
 impl<MS: BrokerWriteStore> Clone for SendMessageProcessorContext<MS> {
@@ -702,7 +702,7 @@ impl<MS: BrokerWriteStore> Clone for SendMessageProcessorContext<MS> {
             rebalance_locks: self.rebalance_locks.clone(),
             broker_stats_manager: Arc::clone(&self.broker_stats_manager),
             broker_metrics_manager: self.broker_metrics_manager.clone(),
-            producer_reply_channels: self.producer_reply_channels.clone(),
+            producer_reply_sessions: self.producer_reply_sessions.clone(),
         }
     }
 }
@@ -721,7 +721,7 @@ impl<MS: BrokerWriteStore> SendMessageProcessorContext<MS> {
         rebalance_locks: RebalanceLockManager,
         broker_stats_manager: Arc<BrokerStatsManager>,
         broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
-        producer_reply_channels: ProducerReplyChannelRegistry,
+        producer_reply_sessions: ProducerReplySessionRegistry,
     ) -> Self {
         Self {
             command_factory: application_remoting_command_factory(),
@@ -733,7 +733,7 @@ impl<MS: BrokerWriteStore> SendMessageProcessorContext<MS> {
             rebalance_locks,
             broker_stats_manager,
             broker_metrics_manager,
-            producer_reply_channels,
+            producer_reply_sessions,
         }
     }
 
@@ -797,7 +797,10 @@ mod tests {
         let snapshot = state.snapshot();
         assert_eq!(snapshot.timer_store_mode, TimerStoreMode::ExtendedTimeline);
         assert_eq!(snapshot.timer_maximum_horizon_days, 366);
-        assert_eq!(snapshot.timer_extended_capability_version, 1);
+        assert_eq!(
+            snapshot.timer_extended_capability_version,
+            u16::from(cfg!(feature = "extended_timeline"))
+        );
         assert!(snapshot.timer_extended_admission_enable);
     }
 

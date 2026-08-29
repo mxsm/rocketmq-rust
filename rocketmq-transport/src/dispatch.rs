@@ -150,6 +150,7 @@ pub(crate) use legacy_processor_adapter::LegacyReplyCandidate;
     reason = "DSP-05 exposes the sealed legacy bridge to later coexistence routing"
 )]
 pub(crate) use legacy_processor_adapter::LegacyRequestBridge;
+pub(crate) use legacy_processor_adapter::V2NetworkSession;
 pub(crate) use legacy_session_execution::LegacySessionExecutionCapability;
 pub use legacy_session_execution::LegacySessionExecutionEnrollment;
 pub(crate) use legacy_session_execution::LegacySessionExecutionSeed;

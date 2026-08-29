@@ -68,8 +68,6 @@ use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::types::BrokerSession;
 use crate::NamesrvConfig;
 
-mod compatibility;
-
 pub struct DefaultRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
     command_factory: RemotingCommandFactory,
@@ -87,7 +85,10 @@ impl DefaultRequestProcessor {
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let broker_session = if request.command().code() == RequestCode::RegisterBroker as i32 {
+        let broker_session = if matches!(
+            RequestCode::from(request.command().code()),
+            RequestCode::RegisterBroker | RequestCode::BrokerHeartbeat
+        ) {
             Some(broker_session_from_request(request)?)
         } else {
             None
@@ -135,7 +136,14 @@ impl DefaultRequestProcessor {
                 request,
             ),
             RequestCode::UnregisterBroker => self.process_unregister_broker(request),
-            RequestCode::BrokerHeartbeat => self.process_broker_heartbeat(request),
+            RequestCode::BrokerHeartbeat => self.process_broker_heartbeat(
+                broker_session.ok_or_else(|| {
+                    rocketmq_error::RocketMQError::invariant_violated(
+                        "BrokerHeartbeat session was not prepared before command dispatch",
+                    )
+                })?,
+                request,
+            ),
             RequestCode::GetBrokerMemberGroup => self.get_broker_member_group(request),
             //handle get broker cluster info
             RequestCode::GetBrokerClusterInfo => self.get_broker_cluster_info(request),
@@ -389,7 +397,7 @@ pub(crate) fn broker_session_from_request(request: &RemotingRequest) -> rocketmq
     } = request.session()
     else {
         return Err(rocketmq_error::RocketMQError::invariant_violated(
-            "RegisterBroker requires a trusted network session",
+            "broker control requests require a trusted network session",
         ));
     };
     Ok(BrokerSession::new(
@@ -406,12 +414,17 @@ pub(crate) fn broker_session_from_request(request: &RemotingRequest) -> rocketmq
 impl DefaultRequestProcessor {
     fn process_broker_heartbeat(
         &self,
+        broker_session: BrokerSession,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<BrokerHeartbeatRequestHeader>()?;
         self.name_server_runtime_inner
             .route_info_manager()
-            .update_broker_info_update_timestamp(request_header.cluster_name, request_header.broker_addr);
+            .update_broker_info_update_timestamp_for_session(
+                request_header.cluster_name,
+                request_header.broker_addr,
+                broker_session.id,
+            );
         Ok(self.command_factory.create_success_response_command())
     }
 

@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::controller::broker_heartbeat_manager::BrokerHeartbeatAdmission;
+use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_heartbeat_manager::BrokerSession;
-use crate::controller::broker_heartbeat_manager::BrokerSessionHeartbeatManager;
 use crate::Controller;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -23,6 +24,7 @@ use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_h
 use rocketmq_protocol::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tracing::info;
 use tracing::warn;
@@ -38,6 +40,12 @@ impl ControllerRequestProcessor {
         let request_header = request.decode_command_custom_header_fast::<BrokerHeartbeatRequestHeader>()?;
 
         if let Some(broker_id) = &request_header.broker_id {
+            if *broker_id < 0 {
+                return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::ControllerInvalidRequest,
+                    "Heart beat with invalid brokerId",
+                )));
+            }
             let heartbeat_timeout_mills = request_header.heartbeat_timeout_mills.ok_or_else(|| {
                 RocketMQError::request_header_error("BrokerHeartbeatRequestHeader.heartbeat_timeout_mills is missing")
             })?;
@@ -46,7 +54,12 @@ impl ControllerRequestProcessor {
                     "BrokerHeartbeatRequestHeader.heartbeat_timeout_mills must be non-negative",
                 )
             })?;
-            self.heartbeat_manager.on_broker_session_heartbeat(
+            if heartbeat_timeout_mills > MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS {
+                return Err(RocketMQError::request_header_error(format!(
+                    "BrokerHeartbeatRequestHeader.heartbeat_timeout_mills must not exceed {MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS}",
+                )));
+            }
+            let admission = self.heartbeat_manager.on_broker_session_heartbeat(
                 &request_header.cluster_name,
                 &request_header.broker_name,
                 &request_header.broker_addr,
@@ -58,10 +71,32 @@ impl ControllerRequestProcessor {
                 request_header.confirm_offset,
                 request_header.election_priority,
             );
-            self.controller_manager()?
-                .controller()
-                .record_broker_heartbeat(&request_header)
-                .await
+            match admission {
+                BrokerHeartbeatAdmission::Accepted => {
+                    self.controller_manager()?
+                        .controller()
+                        .record_broker_heartbeat(&request_header)
+                        .await
+                }
+                BrokerHeartbeatAdmission::Superseded => {
+                    Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::Success,
+                        "Heart beat ignored from superseded session",
+                    )))
+                }
+                BrokerHeartbeatAdmission::CapacityExceeded => {
+                    Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::SystemBusy,
+                        "Broker heartbeat session capacity exceeded",
+                    )))
+                }
+                BrokerHeartbeatAdmission::Invalid => {
+                    Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::ControllerInvalidRequest,
+                        "Invalid broker heartbeat",
+                    )))
+                }
+            }
         } else {
             Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,

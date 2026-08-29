@@ -15,6 +15,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::Weak;
 
@@ -45,12 +46,9 @@ use rocketmq_transport::api::v1::RpcClientImpl;
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
-use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
-use crate::long_polling::pull_request::PullRequest;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetCapability;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
@@ -377,7 +375,6 @@ pub(crate) struct PullMessageProcessorContext<MS: BrokerReadStore> {
     online_role_state: Arc<BrokerOnlineRoleState>,
     store: PullMessageStoreCapability,
     cold_data_flow: Option<Arc<ColdDataCgCtrService>>,
-    pull_request_hold: Arc<OnceLock<Arc<PullRequestHoldService<MS>>>>,
 }
 
 impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
@@ -415,7 +412,6 @@ impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
             online_role_state,
             store,
             cold_data_flow,
-            pull_request_hold: Arc::new(OnceLock::new()),
         }
     }
 
@@ -470,29 +466,6 @@ impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
 
     pub(crate) fn cold_data_flow(&self) -> Option<&ColdDataCgCtrService> {
         self.cold_data_flow.as_deref()
-    }
-
-    pub(crate) fn install_pull_request_hold_service(&self, service: Arc<PullRequestHoldService<MS>>) -> bool {
-        self.pull_request_hold.set(service).is_ok()
-    }
-
-    pub(crate) fn install_deferred_generation_handoff(
-        &self,
-        handoff: Arc<DeferredGenerationHandoff>,
-    ) -> Result<(), Arc<DeferredGenerationHandoff>>
-    where
-        MS: Send + Sync + 'static,
-    {
-        let Some(service) = self.pull_request_hold.get() else {
-            return Err(handoff);
-        };
-        service.install_handoff(handoff)
-    }
-
-    pub(crate) fn suspend_pull_request(&self, topic: &str, queue_id: i32, request: PullRequest) -> bool {
-        self.pull_request_hold
-            .get()
-            .is_some_and(|service| service.suspend_pull_request(topic, queue_id, request))
     }
 
     pub(crate) fn query_reset_offset(

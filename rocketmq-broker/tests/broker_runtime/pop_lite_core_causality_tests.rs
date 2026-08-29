@@ -28,7 +28,9 @@ async fn pop_lite_v2_resume_core_real_store_causality_advances_offset_once() {
         &HashSet::from([lmq_name.clone()]),
     );
 
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let processor = runtime
         .composition
         .state
@@ -98,7 +100,9 @@ async fn pop_lite_v2_real_store_preserves_attempt_order_and_requeues_until_drain
     let dispatcher = runtime.composition.state.lite_event_dispatcher().clone();
     dispatcher.do_full_dispatch(&client_id, &group, &HashSet::from([lmq_name.clone()]));
 
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let processor = runtime
         .composition
         .state
@@ -202,7 +206,9 @@ async fn pop_lite_v2_real_store_applies_reset_and_consumes_empty_event() {
     let group = CheetahString::from_static_str("group-a");
     let dispatcher = runtime.composition.state.lite_event_dispatcher().clone();
 
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let processor = runtime
         .composition
         .state
@@ -315,7 +321,9 @@ async fn pop_lite_v2_real_store_corrects_bad_offset_before_reread() {
     assert_eq!(direct_bad_offset.status(), Some(GetMessageStatus::OffsetOverflowBadly));
     assert_eq!(direct_bad_offset.next_begin_offset(), 2);
 
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let processor = runtime
         .composition
         .state
@@ -388,7 +396,9 @@ async fn pop_lite_v2_real_store_initializes_missing_offset_from_retained_minimum
         -1
     );
 
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let processor = runtime
         .composition
         .state
@@ -443,7 +453,9 @@ async fn pop_lite_v2_unavailable_store_consumes_event_without_offset_commit() {
     let client_id = CheetahString::from_static_str("client-1");
     let group = CheetahString::from_static_str("group-a");
     let dispatcher = runtime.composition.state.lite_event_dispatcher().clone();
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let processor = runtime
         .composition
         .state

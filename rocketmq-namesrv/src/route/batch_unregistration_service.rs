@@ -20,7 +20,6 @@ use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::api::v1::ChannelId;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -30,13 +29,14 @@ use tracing::warn;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::route::types::BrokerGeneration;
 use crate::route::types::BrokerInstanceKey;
+use crate::route::types::RemotingConnectionId;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub(crate) struct BrokerUnregistrationRequest {
     pub(crate) header: UnRegisterBrokerRequestHeader,
-    pub(crate) expected_channel_id: Option<ChannelId>,
+    pub(crate) expected_channel_id: Option<RemotingConnectionId>,
     pub(crate) expected_generation: Option<BrokerGeneration>,
     enqueued_at: Instant,
 }
@@ -53,7 +53,7 @@ impl BrokerUnregistrationRequest {
 
     pub(crate) fn channel_guarded(
         header: UnRegisterBrokerRequestHeader,
-        channel_id: ChannelId,
+        channel_id: RemotingConnectionId,
         generation: BrokerGeneration,
     ) -> Self {
         Self {
@@ -122,7 +122,7 @@ impl BatchUnregistrationService {
     pub(crate) fn submit_channel_guarded(
         &self,
         request: UnRegisterBrokerRequestHeader,
-        channel_id: ChannelId,
+        channel_id: RemotingConnectionId,
         generation: BrokerGeneration,
     ) -> bool {
         self.submit_request(BrokerUnregistrationRequest::channel_guarded(

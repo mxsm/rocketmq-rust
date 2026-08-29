@@ -147,6 +147,7 @@ use crate::message::message_properties_from_core;
 use crate::service::LocalServiceManager;
 
 const LOCAL_LONG_POLL_TIMEOUT_MARGIN: Duration = Duration::from_millis(500);
+const LOCAL_REMOTING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct LocalBrokerFacadeClient {
@@ -204,11 +205,6 @@ pub(crate) enum LocalBrokerCommand {
         request_id: String,
         reply: oneshot::Sender<ProxyResult<EndTransactionPlan>>,
     },
-    ProcessRemoting {
-        request: RemotingCommand,
-        timeout: Duration,
-        reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
-    },
     ProcessRemotingV2Compatibility {
         request: RemotingCommand,
         timeout: Duration,
@@ -235,8 +231,7 @@ impl QueuedLocalBrokerCommand {
             return;
         };
         match &mut self.command {
-            LocalBrokerCommand::ProcessRemoting { timeout, .. }
-            | LocalBrokerCommand::ProcessRemotingV2Compatibility { timeout, .. }
+            LocalBrokerCommand::ProcessRemotingV2Compatibility { timeout, .. }
             | LocalBrokerCommand::ProcessRemotingV2 { timeout, .. } => {
                 *timeout = deadline_at.saturating_duration_since(now);
             }
@@ -248,9 +243,9 @@ impl QueuedLocalBrokerCommand {
 impl LocalBrokerCommand {
     fn timeout(&self) -> Option<Duration> {
         match self {
-            Self::ProcessRemoting { timeout, .. }
-            | Self::ProcessRemotingV2Compatibility { timeout, .. }
-            | Self::ProcessRemotingV2 { timeout, .. } => Some(*timeout),
+            Self::ProcessRemotingV2Compatibility { timeout, .. } | Self::ProcessRemotingV2 { timeout, .. } => {
+                Some(*timeout)
+            }
             _ => None,
         }
     }
@@ -328,9 +323,7 @@ impl LocalBrokerCommand {
                 .saturating_add(request.commit_log_message_id.as_ref().map_or(0, String::len))
                 .saturating_add(client_id.as_ref().map_or(0, String::len))
                 .saturating_add(request_id.len()),
-            Self::ProcessRemoting { request, .. }
-            | Self::ProcessRemotingV2Compatibility { request, .. }
-            | Self::ProcessRemotingV2 { request, .. } => {
+            Self::ProcessRemotingV2Compatibility { request, .. } | Self::ProcessRemotingV2 { request, .. } => {
                 base.saturating_add(request.body().map_or(0, bytes::Bytes::len))
             }
         }
@@ -380,9 +373,6 @@ impl LocalBrokerCommand {
                 let _ = reply.send(Err(error));
             }
             Self::EndTransaction { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::ProcessRemoting { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::ProcessRemotingV2Compatibility { reply, .. } => {
@@ -549,40 +539,21 @@ impl LocalBrokerFacadeClient {
         .await
     }
 
-    pub async fn process_remoting(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
-        self.process_remoting_with_timeout(request, Duration::from_secs(3))
-            .await
-    }
-
-    pub async fn process_remoting_with_timeout(
-        &self,
-        mut request: RemotingCommand,
-        timeout: Duration,
-    ) -> ProxyResult<RemotingCommand> {
-        request.make_custom_header_to_net();
-        self.execute(|reply| LocalBrokerCommand::ProcessRemoting {
-            request,
-            timeout,
-            reply,
-        })
-        .await
-    }
-
-    /// Processes one command through Broker V2 and materializes the terminal
-    /// response for the outer V1 Proxy remoting listener.
+    /// Processes one raw remoting command through Broker V2 and materializes
+    /// the terminal response for the Proxy compatibility adapter.
     ///
     /// # Errors
     ///
     /// Returns an error when the local Broker worker is unavailable, V2
     /// dispatch fails, or bounded compatibility materialization fails.
     pub async fn process_remoting_v2_compatibility(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
-        self.process_remoting_v2_compatibility_with_timeout(request, Duration::from_secs(3))
+        self.process_remoting_v2_compatibility_with_timeout(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
             .await
     }
 
-    /// Processes one command through Broker V2 and materializes the terminal
-    /// response for the outer V1 Proxy remoting listener with an explicit
-    /// timeout.
+    /// Processes one raw remoting command through Broker V2 and materializes
+    /// the terminal response for the Proxy compatibility adapter with an
+    /// explicit timeout.
     ///
     /// # Errors
     ///
@@ -1287,23 +1258,6 @@ async fn handle_local_broker_command(
             };
             let _ = reply.send(result);
         }
-        LocalBrokerCommand::ProcessRemoting {
-            request,
-            timeout,
-            reply,
-        } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
-            } else {
-                facade
-                    .process_request_with_timeout(request, timeout)
-                    .await
-                    .map_err(Into::into)
-            };
-            let _ = reply.send(result);
-        }
         LocalBrokerCommand::ProcessRemotingV2Compatibility {
             request,
             timeout,
@@ -1367,7 +1321,9 @@ async fn query_assignment(
             message: format!("failed to encode local assignment request: {error}"),
         })?,
     );
-    let response = facade.process_request(request).await?;
+    let response = facade
+        .process_request_v2_compatibility(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
+        .await?;
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         return Err(broker_operation_error("queryAssignment", &response).into());
     }
@@ -1409,7 +1365,7 @@ async fn sync_lite_subscription_via_broker(
     body.set_subscription_set(vec![request.broker_dto(client_id)?]);
     let command = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
         .set_body(body.encode()?);
-    let response = client.process_remoting(command).await?;
+    let response = client.process_remoting_v2_compatibility(command).await?;
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         return Err(broker_operation_error("syncLiteSubscription", &response).into());
     }
@@ -1445,7 +1401,9 @@ async fn send_compatible_batch(
 ) -> Vec<SendMessageResultEntry> {
     let result = async {
         let request = build_send_batch_message_request(broker_name, producer_group, &entries)?;
-        let response = facade.process_request(request).await?;
+        let response = facade
+            .process_request_v2_compatibility(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
+            .await?;
         build_send_result(entries[0].topic.clone(), broker_name, response)
     }
     .await;
@@ -1514,7 +1472,9 @@ async fn send_message_entry_inner(
 ) -> ProxyResult<SendResult> {
     attach_transaction_producer_group(&mut entry.message, producer_group);
     let request = build_send_message_request(broker_name, producer_group, &entry)?;
-    let response = facade.process_request(request).await?;
+    let response = facade
+        .process_request_v2_compatibility(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
+        .await?;
     build_send_result(entry.topic, broker_name, response)
 }
 
@@ -1532,7 +1492,9 @@ async fn recall_message(
     );
     let mut command = RemotingCommand::create_request_command(RequestCode::RecallMessage, header);
     command.make_custom_header_to_net();
-    let response = facade.process_request(command).await?;
+    let response = facade
+        .process_request_v2_compatibility(command, LOCAL_REMOTING_RESPONSE_TIMEOUT)
+        .await?;
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         return Err(broker_operation_error("recallMessage", &response).into());
     }
@@ -1586,7 +1548,9 @@ async fn end_transaction(
     let mut command = RemotingCommand::create_request_command(RequestCode::EndTransaction, header)
         .set_remark(CheetahString::from(request.trace_context.as_deref().unwrap_or("")));
     command.make_custom_header_to_net();
-    let response = facade.process_request(command).await?;
+    let response = facade
+        .process_request_v2_compatibility(command, LOCAL_REMOTING_RESPONSE_TIMEOUT)
+        .await?;
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         return Err(broker_operation_error("endTransaction", &response).into());
     }
@@ -1603,7 +1567,7 @@ async fn receive_message_via_broker(
 ) -> ProxyResult<ReceiveMessagePlan> {
     let header = build_pop_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting_with_timeout(
+        .process_remoting_v2_compatibility_with_timeout(
             RemotingCommand::create_request_command(RequestCode::PopMessage, header),
             local_long_poll_timeout(request.long_polling_timeout, caller_deadline),
         )
@@ -1623,7 +1587,7 @@ async fn pull_message_via_broker(
 ) -> ProxyResult<PullMessagePlan> {
     let header = build_pull_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting_with_timeout(
+        .process_remoting_v2_compatibility_with_timeout(
             RemotingCommand::create_request_command(RequestCode::PullMessage, header),
             local_long_poll_timeout(request.long_polling_timeout, caller_deadline),
         )
@@ -1674,7 +1638,7 @@ async fn ack_message_via_broker(
 
     for batch_request in built.requests {
         let command = RemotingCommand::new_request(RequestCode::BatchAckMessage, batch_request.body.encode()?);
-        match client.process_remoting(command).await {
+        match client.process_remoting_v2_compatibility(command).await {
             Ok(response) => {
                 let status = if ResponseCode::from(response.code()) == ResponseCode::Success {
                     ProxyStatusMapper::ok_payload()
@@ -1758,7 +1722,7 @@ async fn ack_message_entry_via_broker(
         }),
     };
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(RequestCode::AckMessage, header))
+        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(RequestCode::AckMessage, header))
         .await?;
 
     Ok(if ResponseCode::from(response.code()) == ResponseCode::Success {
@@ -1793,7 +1757,7 @@ async fn forward_message_to_dead_letter_queue_via_broker(
         }),
     };
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(
+        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
             RequestCode::ConsumerSendMsgBack,
             header,
         ))
@@ -1838,7 +1802,7 @@ async fn change_invisible_duration_via_broker(
         }),
     };
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(
+        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
             RequestCode::ChangeMessageInvisibleTime,
             header,
         ))
@@ -1883,7 +1847,7 @@ async fn update_offset_via_broker(
 ) -> ProxyResult<UpdateOffsetPlan> {
     let header = build_update_offset_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(
+        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
             RequestCode::UpdateConsumerOffset,
             header,
         ))
@@ -1903,7 +1867,7 @@ async fn get_offset_via_broker(
 ) -> ProxyResult<GetOffsetPlan> {
     let header = build_query_consumer_offset_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(
+        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
             RequestCode::QueryConsumerOffset,
             header,
         ))
@@ -1987,7 +1951,7 @@ async fn query_offset_via_broker(
             )
         }
     };
-    let response = client.process_remoting(command).await?;
+    let response = client.process_remoting_v2_compatibility(command).await?;
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         return Err(broker_operation_error("queryOffset", &response).into());
     }
@@ -3019,7 +2983,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn outer_v1_local_backend_enqueues_only_v2_compatibility_dispatch() {
+    async fn raw_command_backend_enqueues_only_v2_compatibility_dispatch() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
@@ -3032,7 +2996,10 @@ mod tests {
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
 
         let call = tokio::spawn(async move { backend.process(request).await });
-        let queued = receiver.recv().await.expect("V1 backend must enqueue local work");
+        let queued = receiver
+            .recv()
+            .await
+            .expect("raw-command backend must enqueue local work");
         match queued.command {
             super::LocalBrokerCommand::ProcessRemotingV2Compatibility {
                 request,
@@ -3050,14 +3017,57 @@ mod tests {
                     "backend call must own the reply receiver"
                 );
             }
-            super::LocalBrokerCommand::ProcessRemoting { .. } => {
-                panic!("outer V1 backend must not enqueue the legacy embedded dispatcher")
-            }
-            _ => panic!("outer V1 backend enqueued an unrelated command"),
+            _ => panic!("raw-command backend enqueued an unrelated command"),
         }
 
         let response = call.await.expect("backend task joins").expect("backend succeeds");
         assert_eq!(response.opaque(), 9_852);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+    }
+
+    #[tokio::test]
+    async fn v2_compatibility_client_api_preserves_timeout_and_identity() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let client = LocalBrokerFacadeClient {
+            sender,
+            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
+            byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
+            rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            broker_name: "broker-a".to_owned(),
+        };
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_857);
+
+        let call = tokio::spawn(async move {
+            client
+                .process_remoting_v2_compatibility_with_timeout(request, Duration::from_millis(275))
+                .await
+        });
+        let queued = receiver
+            .recv()
+            .await
+            .expect("compatibility API must enqueue local work");
+        match queued.command {
+            super::LocalBrokerCommand::ProcessRemotingV2Compatibility {
+                request,
+                timeout,
+                reply,
+            } => {
+                assert_eq!(RequestCode::from(request.code()), RequestCode::GetBrokerConfig);
+                assert_eq!(request.opaque(), 9_857);
+                assert_eq!(timeout, Duration::from_millis(275));
+                let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                    .set_opaque(request.opaque())
+                    .mark_response_type();
+                assert!(
+                    reply.send(Ok(response)).is_ok(),
+                    "client call must own the reply receiver"
+                );
+            }
+            _ => panic!("compatibility API enqueued an unrelated command"),
+        }
+
+        let response = call.await.expect("client task joins").expect("client call succeeds");
+        assert_eq!(response.opaque(), 9_857);
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
     }
 

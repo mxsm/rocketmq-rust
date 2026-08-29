@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 
@@ -308,6 +309,24 @@ pub(crate) struct LegacyNetworkSession {
     owner: PendingRequestOwner,
 }
 
+/// Stable response-correlation owner allocated once for one canonical V2
+/// network session.
+#[derive(Clone)]
+pub(crate) struct V2NetworkSession {
+    response_table: PendingRequestTable,
+    owner: PendingRequestOwner,
+}
+
+impl V2NetworkSession {
+    pub(crate) fn response_table(&self) -> &PendingRequestTable {
+        &self.response_table
+    }
+
+    pub(crate) fn owner(&self) -> &PendingRequestOwner {
+        &self.owner
+    }
+}
+
 impl LegacyNetworkSession {
     #[cfg(test)]
     pub(crate) fn for_test(response_table: PendingRequestTable) -> Self {
@@ -382,11 +401,19 @@ where
 /// legacy compatibility implementation.
 pub(crate) struct ExplicitV2Processor<P> {
     processor: P,
+    response_table: PendingRequestTable,
 }
 
 impl<P> ExplicitV2Processor<P> {
-    pub(crate) const fn new(processor: P) -> Self {
-        Self { processor }
+    pub(crate) fn new(processor: P) -> Self {
+        Self::with_response_table(processor, PendingRequestTable::new())
+    }
+
+    pub(crate) const fn with_response_table(processor: P, response_table: PendingRequestTable) -> Self {
+        Self {
+            processor,
+            response_table,
+        }
     }
 }
 
@@ -401,6 +428,7 @@ where
     fn clone(&self) -> Self {
         Self {
             processor: self.processor.clone(),
+            response_table: self.response_table.clone(),
         }
     }
 }
@@ -634,19 +662,36 @@ impl<P> DispatchProcessor for ExplicitV2Processor<P>
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
-    type NetworkSession = ();
+    type NetworkSession = V2NetworkSession;
 
-    fn open_network_session(&self) -> Self::NetworkSession {}
-
-    fn complete_network_response(&self, _session: &Self::NetworkSession, _response: RemotingCommand) {
-        tracing::warn!(
-            frame = "unexpected_response",
-            generation = "v2",
-            "unexpected response frame dropped on V2-only transport session"
-        );
+    fn open_network_session(&self) -> Self::NetworkSession {
+        V2NetworkSession {
+            response_table: self.response_table.clone(),
+            owner: self.response_table.new_owner(),
+        }
     }
 
-    fn close_network_session(&self, _session: &Self::NetworkSession) {}
+    fn complete_network_response(&self, session: &Self::NetworkSession, response: RemotingCommand) {
+        if !session
+            .response_table
+            .complete_response_for_owner(&session.owner, response.opaque(), response)
+        {
+            tracing::warn!(
+                frame = "unexpected_response",
+                generation = "v2",
+                "unmatched response frame dropped on V2 transport session"
+            );
+        }
+    }
+
+    fn close_network_session(&self, session: &Self::NetworkSession) {
+        session.response_table.close_owner(&session.owner, || {
+            RocketMQError::network_connection_failed(
+                "v2-server-request",
+                "canonical V2 session closed while awaiting response",
+            )
+        });
+    }
 
     fn request_ordering(&self, builder: &RemotingRequestBuilder) -> RequestOrdering {
         self.processor.request_ordering(builder.ingress_view())

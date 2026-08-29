@@ -36,9 +36,6 @@ use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestProcessorV2;
@@ -145,18 +142,6 @@ impl QueryResponseParts {
         Self { head, body: Some(body) }
     }
 
-    fn into_legacy_command(mut self) -> RemotingCommand {
-        if let Some(body) = self.body {
-            self.head.set_body_mut_ref(body);
-        }
-        self.head
-    }
-
-    fn into_legacy_command_with_opaque(mut self, opaque: i32) -> RemotingCommand {
-        self.head.set_opaque_mut(opaque);
-        self.into_legacy_command()
-    }
-
     fn into_broker_response_parts(self) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
         let parts = match self.body {
             Some(body) => BrokerResponseParts::bytes(self.head, body)?,
@@ -167,39 +152,6 @@ impl QueryResponseParts {
 
     fn into_handler_outcome(self) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         self.into_broker_response_parts()?.into_handler_outcome()
-    }
-}
-
-impl<S> RequestProcessor for QueryMessageProcessor<S>
-where
-    S: QueryMessageStore + Clone,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        info!("QueryMessageProcessor received request code: {:?}", request_code);
-        match request_code {
-            RequestCode::QueryMessage | RequestCode::ViewMessageById => {
-                self.process_request_inner(channel, ctx, request_code, request).await
-            }
-            _ => {
-                warn!(
-                    "QueryMessageProcessor received unknown request code: {:?}",
-                    request_code
-                );
-                let response = request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.command_factory,
-                    request.code(),
-                    format!("QueryMessageProcessor request code {} not supported", request.code()),
-                    request.opaque(),
-                );
-                Ok(Some(response))
-            }
-        }
     }
 }
 
@@ -279,30 +231,6 @@ impl<S> QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone,
 {
-    pub async fn process_request_shared(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
-        processor.process_request(channel, ctx, request).await
-    }
-
-    async fn process_request_inner(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        match request_code {
-            RequestCode::QueryMessage => self.query_message(channel, ctx, request).await,
-            RequestCode::ViewMessageById => self.view_message_by_id(channel, ctx, request).await,
-            _ => Ok(None),
-        }
-    }
-
     async fn process_v2_command(
         &self,
         request: &mut RemotingCommand,
@@ -328,20 +256,6 @@ where
             }
         };
         parts.into_handler_outcome()
-    }
-
-    async fn query_message(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let opaque = request.opaque();
-        Ok(Some(
-            self.query_message_parts(request)
-                .await?
-                .into_legacy_command_with_opaque(opaque),
-        ))
     }
 
     async fn query_message_parts(
@@ -433,17 +347,6 @@ where
             response
                 .set_code(ResponseCode::QueryNotFound)
                 .set_remark("can not find message, maybe time range not correct"),
-        ))
-    }
-
-    async fn view_message_by_id(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        Ok(Some(
-            self.view_message_by_id_parts(request).await?.into_legacy_command(),
         ))
     }
 
@@ -563,19 +466,6 @@ async fn query_wire_fixture_response(
         QueryWireFixtureKind::View => processor.view_message_by_id_parts(&mut request).await?,
     };
     Ok(response)
-}
-
-#[cfg(test)]
-pub(crate) async fn query_wire_fixture_legacy_command(
-    kind: QueryWireFixtureKind,
-    body: Option<&[u8]>,
-    opaque: i32,
-) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-    let response = query_wire_fixture_response(kind, body).await?;
-    Ok(match kind {
-        QueryWireFixtureKind::Query => response.into_legacy_command_with_opaque(opaque),
-        QueryWireFixtureKind::View => response.into_legacy_command(),
-    })
 }
 
 #[cfg(test)]
@@ -886,30 +776,6 @@ mod tests {
         assert_eq!(ResponseCode::QueryNotFound as i32, plan.response_code());
         assert_eq!(ResponseBodyKind::Empty, plan.body_kind());
         assert_eq!(0, plan.body_len());
-    }
-
-    #[tokio::test]
-    async fn legacy_query_projection_keeps_opaque_and_body_behavior() {
-        let body = Bytes::from_static(b"legacy-query-body");
-        let processor = QueryMessageProcessor::new(
-            64,
-            TestQueryStore {
-                query_body: Some(body.clone()),
-                view_body: None,
-            },
-        );
-        let mut request =
-            RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None)).set_opaque(-73);
-        request.make_custom_header_to_net();
-
-        let response = processor
-            .query_message_parts(&mut request)
-            .await
-            .expect("legacy query response parts")
-            .into_legacy_command_with_opaque(request.opaque());
-
-        assert_eq!(-73, response.opaque());
-        assert_eq!(Some(body.as_ref()), response.body().map(Bytes::as_ref));
     }
 
     #[test]

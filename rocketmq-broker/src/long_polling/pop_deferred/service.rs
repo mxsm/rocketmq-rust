@@ -69,8 +69,6 @@ use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::TakeDeferredResponderError;
 use tokio::sync::oneshot;
 
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupOutcome;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
@@ -103,6 +101,23 @@ pub(crate) use continuation::PopContinuationError;
 use continuation::PopContinuationPermit;
 use continuation::PopPendingArrival;
 use continuation::PopPendingArrivalKey;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PopWakeupOutcome {
+    ProcessingCompleted,
+    ProcessingFailed,
+    InactiveChannel,
+    AlreadyCompleted,
+    ProcessorUnavailable,
+    ServiceNotRunning,
+    ServiceCancelled,
+}
+
+pub(crate) type PopWakeupCompletion = oneshot::Receiver<PopWakeupOutcome>;
+
+pub(crate) trait PollingCountProvider: Send + Sync {
+    fn polling_count(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> i32;
+}
 
 /// Typed POP request data retained without a channel or connection context.
 pub(crate) struct PopRequestData {
@@ -997,6 +1012,13 @@ impl PopDeferredService {
     pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
         self.seal();
         self.registry.shutdown()
+    }
+}
+
+impl PollingCountProvider for PopDeferredService {
+    fn polling_count(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> i32 {
+        self.index
+            .polling_count(&PopCriteriaKey::from_parts(topic, consumer_group, queue_id))
     }
 }
 

@@ -1077,8 +1077,6 @@ mod tests {
     use rocketmq_store::TimerCheckpointSnapshot;
     use rocketmq_store::TimerMessageStore;
     use rocketmq_store::TimerMetricsSerializeWrapper;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
 
@@ -1125,20 +1123,6 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         BrokerRuntime::new(broker_config, message_store_config)
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
     }
 
     #[tokio::test]
@@ -1371,7 +1355,7 @@ mod tests {
         let runtime = new_test_runtime("update-broker-config", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
 
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
             "enableLiteEventMode=false\n",
@@ -1382,7 +1366,7 @@ mod tests {
 
         let response = handler
             .update_broker_config(
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateBrokerConfig,
                 &mut request,
             )
@@ -1404,7 +1388,7 @@ mod tests {
         let runtime = new_test_runtime("update-broker-config-cas", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
 
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateBrokerConfigCas,
@@ -1416,7 +1400,7 @@ mod tests {
 
         let response = handler
             .update_broker_config(
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateBrokerConfigCas,
                 &mut request,
             )
@@ -1447,7 +1431,7 @@ mod tests {
 
         let stale_response = handler
             .update_broker_config(
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateBrokerConfigCas,
                 &mut stale_request,
             )
@@ -1478,7 +1462,7 @@ mod tests {
         let runtime = new_test_runtime("update-log-filter-auth-disabled", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin);
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
             "logFilter=info,rocketmq_broker=debug\n",
             "logFilterReason=incident investigation\n",
@@ -1487,7 +1471,7 @@ mod tests {
 
         let response = handler
             .update_broker_config(
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateBrokerConfig,
                 &mut request,
             )
@@ -1508,13 +1492,13 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
 
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig)
             .set_body("unknownKey=true\nmaxClientEventCount=0");
 
         let response = handler
             .update_broker_config(
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateBrokerConfig,
                 &mut request,
             )
@@ -1528,13 +1512,13 @@ mod tests {
             .is_some_and(|remark| remark.contains("maxClientEventCount")));
         assert_eq!(admin.broker_config().max_client_event_count, 100);
 
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body("unknownKey=true");
 
         let response = handler
             .update_broker_config(
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateBrokerConfig,
                 &mut request,
             )

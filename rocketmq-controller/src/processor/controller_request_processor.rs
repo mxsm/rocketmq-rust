@@ -291,7 +291,7 @@ impl RequestProcessorV2 for ControllerRequestProcessor {
             SessionView::Embedded { .. } => format!("embedded-proxy-{owner_id}"),
             _ => format!("transport-session-{owner_id}"),
         };
-        let session = BrokerSession::new(request.session().id(), request.session().state().clone());
+        let session = BrokerSession::new(request.session().id(), owner_id, request.session().state().clone());
         let request_name = RequestCode::from(request.command().code()).get_controller_request_name();
         let dispatch = self.handle_request(session, &channel_identity, request.command_mut());
         let response = self.complete_request(request_name, dispatch).await?;

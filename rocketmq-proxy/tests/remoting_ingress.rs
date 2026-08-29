@@ -14,17 +14,25 @@
 
 #![recursion_limit = "256"]
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_auth::cal_signature;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
+use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_proxy::ClientSessionRegistry;
 use rocketmq_proxy::ClusterServiceManager;
 use rocketmq_proxy::DefaultAssignmentService;
 use rocketmq_proxy::DefaultConsumerService;
@@ -45,7 +53,7 @@ use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::api::v1::ProxyProtocolConfig;
+use rocketmq_transport::api::v2::ProxyProtocolConfig;
 use rocketmq_transport::test_support::Connection;
 use std::collections::BTreeMap;
 use tokio::io::AsyncWriteExt;
@@ -415,6 +423,149 @@ accounts:
 }
 
 #[tokio::test]
+async fn v2_heartbeat_replacement_retires_old_session_and_preserves_new_binding() {
+    let _guard = REMOTING_INGRESS_TEST_LOCK.lock().await;
+    let sessions = ClientSessionRegistry::default();
+    let service_manager = Arc::new(ClusterServiceManager::with_services(
+        Arc::new(RecordingRouteService::default()),
+        Arc::new(StaticMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ));
+    let ProxyTestAddrs {
+        grpc: grpc_addr,
+        remoting: remoting_addr,
+    } = free_proxy_test_addrs();
+    let runtime_context = RuntimeContext::from_current("proxy-remoting-v2-session-binding-test");
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: grpc_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            remoting: RemotingConfig {
+                enabled: true,
+                listen_addr: remoting_addr.to_string(),
+                ..RemotingConfig::default()
+            },
+            ..ProxyConfig::default()
+        },
+        runtime_context.service_context("proxy-remoting-v2-session-binding"),
+        rocketmq_observability::TelemetryHandle::noop(),
+    )
+    .with_service_manager(service_manager)
+    .with_session_registry(sessions.clone())
+    .build()
+    .expect("Proxy V2 session binding runtime should build");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        runtime
+            .serve_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+
+    let mut old_client = connect_remoting_with_retry(remoting_addr).await;
+    let invalid = RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
+        .set_body(b"not-json".to_vec());
+    old_client.send_command(invalid).await.expect("send invalid heartbeat");
+    assert_ne!(
+        receive_remoting_response(&mut old_client).await.code(),
+        ResponseCode::Success as i32
+    );
+    assert_eq!(sessions.remoting_channel_count(), 0, "failed heartbeat must not bind");
+
+    send_heartbeat(&mut old_client, "client-a", "GroupA").await;
+    assert_eq!(sessions.remoting_channel_count(), 1);
+
+    let mut new_client = connect_remoting_with_retry(remoting_addr).await;
+    send_heartbeat(&mut new_client, "client-a", "GroupA").await;
+    assert_eq!(sessions.remoting_channel_count(), 1);
+
+    expect_remoting_eof(&mut old_client).await;
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if sessions.remoting_channel_count() == 1
+                && sessions.consumer_client_ids("GroupA") == vec!["client-a".to_owned()]
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("old retirement disconnect must preserve the newer client binding");
+
+    let mut admin = connect_remoting_with_retry(remoting_addr).await;
+    let push_request = RemotingCommand::create_request_command(
+        RequestCode::NotifyConsumerIdsChanged,
+        NotifyConsumerIdsChangedRequestHeader {
+            consumer_group: CheetahString::from_static_str("GroupA"),
+            rpc_request_header: None,
+        },
+    )
+    .set_opaque(9_857);
+    admin
+        .send_command(push_request)
+        .await
+        .expect("send server-push trigger");
+    let push = receive_remoting_response(&mut new_client).await;
+    assert_eq!(RequestCode::from(push.code()), RequestCode::NotifyConsumerIdsChanged);
+    assert_eq!(push.opaque(), 9_857);
+    assert!(push.is_oneway_rpc());
+    let push_header = push
+        .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
+        .expect("typed server push header should decode");
+    assert_eq!(push_header.consumer_group, "GroupA");
+    assert_eq!(
+        receive_remoting_response(&mut admin).await.code(),
+        ResponseCode::Success as i32
+    );
+
+    new_client.shutdown().await.expect("close active V2 client session");
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if sessions.remoting_channel_count() == 0 && sessions.consumer_client_ids("GroupA").is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("active disconnect should retire its exact client binding");
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
+async fn send_heartbeat(connection: &mut Connection, client_id: &str, consumer_group: &str) {
+    let heartbeat = HeartbeatData {
+        client_id: CheetahString::from(client_id),
+        producer_data_set: HashSet::new(),
+        consumer_data_set: HashSet::from([ConsumerData {
+            group_name: CheetahString::from(consumer_group),
+            ..ConsumerData::default()
+        }]),
+        heartbeat_fingerprint: 0,
+        is_without_sub: false,
+    };
+    let request = RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
+        .set_body(heartbeat.encode().expect("heartbeat should encode"));
+    connection.send_command(request).await.expect("send valid heartbeat");
+    assert_eq!(
+        receive_remoting_response(connection).await.code(),
+        ResponseCode::Success as i32
+    );
+}
+
+#[tokio::test]
 async fn request_code_not_supported_over_remoting_integration_returns_compatible_response() {
     let _guard = REMOTING_INGRESS_TEST_LOCK.lock().await;
     let service_manager = Arc::new(ClusterServiceManager::with_services(
@@ -518,6 +669,18 @@ async fn receive_remoting_response(connection: &mut Connection) -> RemotingComma
     })
     .await
     .expect("remoting response should arrive before timeout")
+}
+
+async fn expect_remoting_eof(connection: &mut Connection) {
+    timeout(Duration::from_secs(3), async {
+        match connection.receive_command().await {
+            None => {}
+            Some(Ok(_)) => panic!("superseded client received an unexpected command"),
+            Some(Err(error)) => panic!("superseded client received an invalid remoting frame: {error}"),
+        }
+    })
+    .await
+    .expect("superseded V2 client session should receive EOF");
 }
 
 fn sign_remoting_command(command: &mut RemotingCommand, access_key: &str, secret_key: &str) {

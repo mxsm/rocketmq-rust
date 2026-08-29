@@ -26,7 +26,6 @@ use super::raft_controller::RaftController;
 use crate::config::ControllerConfig;
 use crate::config::ControllerConfigHandle;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
-use crate::controller::broker_heartbeat_manager::BrokerSessionHeartbeatManager;
 use crate::controller::broker_heartbeat_manager::BrokerSessionId;
 use crate::controller::broker_role_notifier::BrokerRoleNotifier;
 use crate::controller::broker_role_notifier::NotifyKey;
@@ -1669,6 +1668,84 @@ mod tests {
         assert_eq!(json.code(), ResponseCode::RequestCodeNotSupported as i32);
         assert_eq!(json.version(), 669);
         assert_eq!(json.serialize_type(), SerializeType::JSON);
+    }
+
+    #[tokio::test]
+    async fn broker_heartbeat_admission_controls_raft_dispatch_and_capacity_response() {
+        let manager = Arc::new(
+            ControllerManager::new(
+                ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0),
+                test_service_context(),
+                test_telemetry_handle(),
+            )
+            .await
+            .expect("create manager"),
+        );
+        let processor = ControllerRequestProcessor::new(manager.clone());
+        assert_eq!(
+            manager.heartbeat_manager().on_broker_session_heartbeat(
+                "test-cluster",
+                "broker-a",
+                "127.0.0.1:10911",
+                1,
+                Some(60_000),
+                test_broker_session(2),
+                Some(2),
+                Some(20),
+                Some(19),
+                None,
+            ),
+            crate::controller::broker_heartbeat_manager::BrokerHeartbeatAdmission::Accepted
+        );
+
+        let heartbeat_header = |broker_name: &'static str, broker_id: i64| BrokerHeartbeatRequestHeader {
+            cluster_name: CheetahString::from_static_str("test-cluster"),
+            broker_addr: CheetahString::from_static_str("127.0.0.1:10911"),
+            broker_name: CheetahString::from_static_str(broker_name),
+            broker_id: Some(broker_id),
+            epoch: Some(99),
+            max_offset: Some(999),
+            confirm_offset: Some(998),
+            store_ready: Some(true),
+            heartbeat_timeout_mills: Some(60_000),
+            election_priority: None,
+        };
+        let mut superseded_request =
+            RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, heartbeat_header("broker-a", 1));
+        superseded_request.make_custom_header_to_net();
+        let superseded = processor
+            .handle_request(test_broker_session(1), "superseded-session", &mut superseded_request)
+            .await
+            .expect("dispatch superseded heartbeat")
+            .expect("superseded heartbeat response");
+        assert_eq!(superseded.code(), ResponseCode::Success as i32);
+        assert_eq!(
+            superseded.remark().map(|remark| remark.as_str()),
+            Some("Heart beat ignored from superseded session")
+        );
+
+        manager.heartbeat_manager().saturate_session_high_water_for_test();
+        let mut capacity_request = RemotingCommand::create_request_command(
+            RequestCode::BrokerHeartbeat,
+            heartbeat_header("capacity-broker", 2),
+        );
+        capacity_request.make_custom_header_to_net();
+        let capacity = processor
+            .handle_request(test_broker_session(3), "capacity-session", &mut capacity_request)
+            .await
+            .expect("dispatch capacity-rejected heartbeat")
+            .expect("capacity rejection response");
+        assert_eq!(capacity.code(), ResponseCode::SystemBusy as i32);
+        assert_eq!(
+            capacity.remark().map(|remark| remark.as_str()),
+            Some("Broker heartbeat session capacity exceeded")
+        );
+        assert!(manager
+            .heartbeat_manager()
+            .get_broker_live_info("test-cluster", "capacity-broker", 2)
+            .is_none());
+
+        std::mem::forget(manager);
     }
 
     #[tokio::test]

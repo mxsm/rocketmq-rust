@@ -40,7 +40,6 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::ChannelId;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::V2SessionRegistry;
 use tracing::debug;
@@ -64,6 +63,7 @@ use crate::route::topic_route_snapshot::RouteMutationGuard;
 use crate::route::topic_route_snapshot::TopicRouteView;
 use crate::route::types::BrokerName;
 use crate::route::types::BrokerSession;
+use crate::route::types::RemotingConnectionId;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
@@ -310,33 +310,6 @@ impl RouteInfoManager {
         }
     }
 
-    /// Retained V1 compatibility boundary for channel lifecycle callbacks.
-    ///
-    /// The channel is used only to project its stable identifier; it is never
-    /// retained by the V2 route state.
-    #[deprecated(since = "1.0.0", note = "use the V2 session lifecycle registry")]
-    pub fn on_channel_destroy(&self, channel: &rocketmq_transport::api::v1::Channel) {
-        let channel_id = channel.channel_id_owned();
-        let Some(broker_addr_info) = self.broker_live_table.get_broker_info_by_channel_id(&channel_id) else {
-            return;
-        };
-        let Some(live_info) = self.broker_live_table.get(&broker_addr_info) else {
-            return;
-        };
-        self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn on_channel_id_destroy(&self, channel_id: &ChannelId) {
-        let Some(broker_addr_info) = self.broker_live_table.get_broker_info_by_channel_id(channel_id) else {
-            return;
-        };
-        let Some(live_info) = self.broker_live_table.get(&broker_addr_info) else {
-            return;
-        };
-        self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
-    }
-
     /// Handle broker disconnection when only the remote socket address is available.
     pub fn connection_disconnected(&self, socket_addr: SocketAddr) {
         if let Some((broker_addr_info, live_info)) =
@@ -358,65 +331,6 @@ impl RouteInfoManager {
 // ============================================================================
 
 impl RouteInfoManager {
-    /// Register a broker with the name server
-    ///
-    /// This is the main entry point for broker registration, handling:
-    /// - Cluster membership updates
-    /// - Broker address mapping
-    /// - Topic configuration sync
-    /// - Heartbeat registration
-    /// - Conflict detection and resolution
-    /// - Acting master support
-    ///
-    /// # Arguments
-    /// * `cluster_name` - Name of the cluster
-    /// * `broker_addr` - Broker network address
-    /// * `broker_name` - Logical broker name
-    /// * `broker_id` - Broker ID (0 for master, >0 for slaves)
-    /// * `ha_server_addr` - HA server address
-    /// * `zone_name` - Optional zone/region identifier
-    /// * `timeout_millis` - Heartbeat timeout in milliseconds
-    /// * `enable_acting_master` - Whether to enable acting master mode
-    /// * `topic_config_wrapper` - Topic configurations
-    /// * `filter_server_list` - Message filter servers
-    /// * `channel` - Legacy transport channel projected immediately to owned session facts
-    ///
-    /// # Returns
-    /// Result containing RegisterBrokerResult or RocketMQError
-    #[allow(clippy::too_many_arguments)]
-    #[deprecated(
-        since = "1.0.0",
-        note = "production V2 ingress uses the typed broker-session registration boundary"
-    )]
-    pub fn register_broker(
-        &self,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-        broker_name: CheetahString,
-        broker_id: u64,
-        ha_server_addr: CheetahString,
-        zone_name: Option<CheetahString>,
-        timeout_millis: Option<u64>,
-        enable_acting_master: Option<bool>,
-        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-        filter_server_list: Vec<CheetahString>,
-        channel: rocketmq_transport::api::v1::Channel,
-    ) -> RouteResult<RegisterBrokerResult> {
-        self.register_broker_session(
-            cluster_name,
-            broker_addr,
-            broker_name,
-            broker_id,
-            ha_server_addr,
-            zone_name,
-            timeout_millis,
-            enable_acting_master,
-            topic_config_wrapper,
-            filter_server_list,
-            BrokerSession::from_legacy_channel(&channel),
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_broker_session(
         &self,
@@ -932,7 +846,7 @@ impl RouteInfoManager {
                 && existing.ha_server_addr.as_ref() == Some(&ha_server_addr)
                 && existing.remote_addr == broker_session.remote_addr
                 && existing.channel_id == broker_session.channel_id
-                && existing.session_id == broker_session.id
+                && existing.session_id == Some(broker_session.id)
                 && existing.broker_name.as_ref() == Some(&broker_name)
                 && existing.broker_id == Some(broker_id);
             if is_unchanged {
@@ -1149,7 +1063,7 @@ impl RouteInfoManager {
     }
 
     /// Get broker live info
-    fn get_broker_live_info(&self, cluster_name: &str, broker_addr: &str) -> Option<Arc<BrokerLiveInfo>> {
+    pub(crate) fn get_broker_live_info(&self, cluster_name: &str, broker_addr: &str) -> Option<Arc<BrokerLiveInfo>> {
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.to_string(), broker_addr.to_string());
         self.broker_live_table.get(&broker_addr_info)
     }
@@ -1289,7 +1203,7 @@ impl RouteInfoManager {
     fn submit_unregister_broker_request_guarded(
         &self,
         request: UnRegisterBrokerRequestHeader,
-        expected_channel_id: ChannelId,
+        expected_channel_id: RemotingConnectionId,
         expected_generation: crate::route::types::BrokerGeneration,
     ) -> bool {
         self.un_register_service
@@ -2013,6 +1927,18 @@ impl RouteInfoManager {
             .update_last_update_timestamp_by_addr_info(&broker_addr_info);
     }
 
+    /// Refresh a broker only when the heartbeat came from its current V2 session.
+    pub fn update_broker_info_update_timestamp_for_session(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        session_id: SessionId,
+    ) -> bool {
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
+        self.broker_live_table
+            .update_heartbeat_for_session(&broker_addr_info, session_id, current_millis())
+    }
+
     /// Query broker topic config data version
     ///
     /// This method retrieves the data version for a broker's topic configuration
@@ -2116,6 +2042,7 @@ mod tests {
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::LocalRequestHarness;
 
     use super::*;
@@ -2164,6 +2091,16 @@ mod tests {
 
     fn registration_wrapper(topic: &CheetahString, version: i64, queues: u32) -> TopicConfigAndMappingSerializeWrapper {
         registration_wrapper_with_topics(version, &[(topic, queues)])
+    }
+
+    fn test_broker_session(remote_addr: SocketAddr) -> BrokerSession {
+        static NEXT_SESSION_OWNER: AtomicU64 = AtomicU64::new(20_000);
+        let owner_id = NEXT_SESSION_OWNER.fetch_add(1, Ordering::Relaxed);
+        BrokerSession::for_test(
+            session_id_for_test(owner_id),
+            CheetahString::from_string(format!("transport-session-{owner_id}")),
+            remote_addr,
+        )
     }
 
     fn registration_wrapper_with_topics(
@@ -2221,6 +2158,7 @@ mod tests {
         let topic = CheetahString::from_static_str("delta-topic");
         let second_topic = CheetahString::from_static_str("delta-topic-two");
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
+        let broker_session = test_broker_session(harness.remote_address());
 
         manager
             .register_broker_session(
@@ -2234,7 +2172,7 @@ mod tests {
                 Some(false),
                 registration_wrapper(&topic, 1, 4),
                 Vec::new(),
-                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
+                broker_session.clone(),
             )
             .expect("first registration should succeed");
         let first_version = manager
@@ -2257,7 +2195,7 @@ mod tests {
                 Some(false),
                 registration_wrapper(&topic, 1, 4),
                 Vec::new(),
-                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
+                broker_session.clone(),
             )
             .expect("unchanged registration should succeed");
 
@@ -2284,7 +2222,7 @@ mod tests {
                 Some(false),
                 registration_wrapper(&second_topic, 1, 8),
                 Vec::new(),
-                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
+                broker_session,
             )
             .expect("changed registration should succeed");
         assert_eq!(

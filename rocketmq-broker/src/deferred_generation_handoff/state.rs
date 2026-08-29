@@ -13,379 +13,67 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::collections::VecDeque;
 
-use super::DeferredGeneration;
 use super::DeferredGenerationHandoffSnapshot;
 use super::DeferredGenerationRouteError;
 use super::DeferredGenerationTarget;
 use super::DeferredGenerationTargetSnapshot;
-use super::DeferredGenerationTransitionCandidate;
-use super::DeferredGenerationTransitionKind;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(super) struct DeferredGenerationHandoffState {
-    pub(super) default_generation: DeferredGeneration,
-    pub(super) legacy_acceptance_sealed: bool,
     pub(super) shutdown_sealed: bool,
-    pub(super) v2_aggregate_published: bool,
-    pub(super) cutover_transaction_active: bool,
-    pub(super) targets: HashMap<DeferredGenerationTarget, DeferredGenerationTargetState>,
-    transition_queue: VecDeque<DeferredGenerationTarget>,
-}
-
-impl Default for DeferredGenerationHandoffState {
-    fn default() -> Self {
-        Self {
-            default_generation: DeferredGeneration::Legacy,
-            legacy_acceptance_sealed: false,
-            shutdown_sealed: false,
-            v2_aggregate_published: false,
-            cutover_transaction_active: false,
-            targets: HashMap::new(),
-            transition_queue: VecDeque::new(),
-        }
-    }
+    targets: HashMap<DeferredGenerationTarget, DeferredGenerationTargetState>,
 }
 
 impl DeferredGenerationHandoffState {
-    pub(super) fn generation_for(&self, target: &DeferredGenerationTarget) -> DeferredGeneration {
-        self.targets
-            .get(target)
-            .map_or(self.default_generation, |target_state| target_state.generation)
-    }
-
     pub(super) fn acquire_route(
         &mut self,
         target: &DeferredGenerationTarget,
-    ) -> Result<DeferredGeneration, DeferredGenerationRouteError> {
+    ) -> Result<(), DeferredGenerationRouteError> {
         if self.shutdown_sealed {
             return Err(DeferredGenerationRouteError::ShutdownSealed);
         }
-        let generation = self.generation_for(target);
-        self.targets
-            .entry(target.clone())
-            .or_insert_with(|| DeferredGenerationTargetState::new(generation))
-            .candidates += 1;
-        Ok(generation)
-    }
-
-    pub(super) fn check_legacy_enrollment(
-        &self,
-        target: &DeferredGenerationTarget,
-    ) -> Result<(), LegacyEnrollmentCheckError> {
-        if self.shutdown_sealed {
-            return Err(LegacyEnrollmentCheckError::ShutdownSealed);
-        }
-        if self.legacy_acceptance_sealed {
-            return Err(LegacyEnrollmentCheckError::LegacyAcceptanceSealed);
-        }
-        if self.generation_for(target) != DeferredGeneration::Legacy {
-            return Err(LegacyEnrollmentCheckError::TargetAlreadyNew);
-        }
+        self.targets.entry(target.clone()).or_default().candidates += 1;
         Ok(())
-    }
-
-    pub(super) fn record_legacy_wait(&mut self, target: &DeferredGenerationTarget) {
-        let generation = self.generation_for(target);
-        self.targets
-            .entry(target.clone())
-            .or_insert_with(|| DeferredGenerationTargetState::new(generation))
-            .legacy_waiters += 1;
-    }
-
-    pub(super) fn begin_legacy_wake(
-        &mut self,
-        target: &DeferredGenerationTarget,
-    ) -> Result<(), LegacyWakeBeginFailure> {
-        let Some(target_state) = self.targets.get_mut(target) else {
-            return Err(LegacyWakeBeginFailure::NotReady);
-        };
-        if target_state.generation != DeferredGeneration::Legacy
-            || target_state.legacy_waiters == 0
-            || target_state.candidates == 0
-        {
-            return Err(LegacyWakeBeginFailure::NotReady);
-        }
-        if target.is_pop_lite() && target_state.pop_lite_wake_active {
-            return Err(LegacyWakeBeginFailure::PopLiteSingleFlight);
-        }
-        target_state.legacy_waiters -= 1;
-        target_state.candidates -= 1;
-        target_state.active_wakes += 1;
-        target_state.wake_gates += 1;
-        target_state.pop_lite_wake_active = target.is_pop_lite();
-        Ok(())
-    }
-
-    pub(super) fn wake_into_continuation(&mut self, target: &DeferredGenerationTarget) {
-        let Some(target_state) = self.targets.get_mut(target) else {
-            return;
-        };
-        if target_state.wake_gates == 0 {
-            return;
-        }
-        target_state.wake_gates -= 1;
-        target_state.continuations += 1;
     }
 
     pub(super) fn release_candidate(&mut self, target: &DeferredGenerationTarget) {
         if let Some(target_state) = self.targets.get_mut(target) {
-            if target_state.candidates > 0 {
-                target_state.candidates -= 1;
-            }
+            target_state.candidates = target_state.candidates.saturating_sub(1);
         }
-        self.remove_if_quiescent_and_default(target);
+        self.remove_if_quiescent(target);
     }
 
-    pub(super) fn release_legacy_wait(&mut self, target: &DeferredGenerationTarget) {
-        if let Some(target_state) = self.targets.get_mut(target) {
-            if target_state.legacy_waiters > 0 {
-                target_state.legacy_waiters -= 1;
-            }
-        }
-        self.remove_if_quiescent_and_default(target);
-    }
-
-    pub(super) fn release_wake_gate(&mut self, target: &DeferredGenerationTarget) {
-        if let Some(target_state) = self.targets.get_mut(target) {
-            if target_state.wake_gates > 0 && target_state.active_wakes > 0 {
-                target_state.wake_gates -= 1;
-                target_state.active_wakes -= 1;
-                if target.is_pop_lite() {
-                    target_state.pop_lite_wake_active = false;
-                }
-            }
-        }
-        self.remove_if_quiescent_and_default(target);
-    }
-
-    pub(super) fn release_continuation(&mut self, target: &DeferredGenerationTarget) {
-        if let Some(target_state) = self.targets.get_mut(target) {
-            if target_state.continuations > 0 && target_state.active_wakes > 0 {
-                target_state.continuations -= 1;
-                target_state.active_wakes -= 1;
-                if target.is_pop_lite() {
-                    target_state.pop_lite_wake_active = false;
-                }
-            }
-        }
-        self.remove_if_quiescent_and_default(target);
-    }
-
-    pub(super) fn complete_replay_token(&mut self, target: &DeferredGenerationTarget) {
-        if let Some(target_state) = self.targets.get_mut(target) {
-            if target_state.replay_tokens > 0 {
-                target_state.replay_tokens -= 1;
-            }
-        }
-        self.remove_if_quiescent_and_default(target);
-    }
-
-    pub(super) fn abandon_replay_token(&mut self, target: &DeferredGenerationTarget) {
-        let mut enqueue = false;
-        if let Some(target_state) = self.targets.get_mut(target) {
-            if target_state.replay_tokens > 0 {
-                target_state.replay_tokens -= 1;
-                if !self.shutdown_sealed {
-                    target_state.abandoned_replays += 1;
-                    enqueue = true;
-                }
-            }
-        }
-        if enqueue {
-            self.enqueue_transition_candidate(target);
-        }
-        self.remove_if_quiescent_and_default(target);
-    }
-
-    pub(super) fn publish_default_new(&mut self) {
-        self.default_generation = DeferredGeneration::New;
-        let queued = self
-            .targets
-            .iter_mut()
-            .filter_map(|(target, state)| {
-                if state.generation == DeferredGeneration::Legacy && !state.transition_queued {
-                    state.transition_queued = true;
-                    Some(target.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        self.transition_queue.extend(queued);
-    }
-
-    pub(super) fn take_transition_candidates(&mut self, limit: usize) -> Vec<DeferredGenerationTransitionCandidate> {
-        let mut candidates = Vec::with_capacity(limit.min(self.transition_queue.len()));
-        while candidates.len() < limit {
-            let Some(target) = self.transition_queue.pop_front() else {
-                break;
-            };
-            let Some(state) = self.targets.get_mut(&target) else {
-                continue;
-            };
-            state.transition_queued = false;
-            let kind = if state.generation == DeferredGeneration::Legacy {
-                Some(DeferredGenerationTransitionKind::LegacyTarget)
-            } else if state.abandoned_replays > 0 {
-                Some(DeferredGenerationTransitionKind::AbandonedReplay)
-            } else {
-                None
-            };
-            if let Some(kind) = kind {
-                candidates.push(DeferredGenerationTransitionCandidate { target, kind });
-            }
-        }
-        candidates
-    }
-
-    pub(super) fn enqueue_transition_candidate(&mut self, target: &DeferredGenerationTarget) {
-        if self.shutdown_sealed {
-            return;
-        }
-        let Some(state) = self.targets.get_mut(target) else {
-            return;
-        };
-        let eligible = state.generation == DeferredGeneration::Legacy || state.abandoned_replays > 0;
-        if !eligible || state.transition_queued {
-            return;
-        }
-        state.transition_queued = true;
-        self.transition_queue.push_back(target.clone());
-    }
-
-    pub(super) fn clear_transition_candidates(&mut self) {
-        self.transition_queue.clear();
-        for state in self.targets.values_mut() {
-            state.transition_queued = false;
-        }
-    }
-
-    pub(super) fn discard_abandoned_replays(&mut self) {
-        for state in self.targets.values_mut() {
-            state.abandoned_replays = 0;
-        }
-    }
-
-    pub(super) fn remove_if_quiescent_and_default(&mut self, target: &DeferredGenerationTarget) {
-        let remove = self.targets.get(target).is_some_and(|target_state| {
-            target_state.is_quiescent() && (target_state.generation == self.default_generation || self.shutdown_sealed)
-        });
-        if remove {
+    fn remove_if_quiescent(&mut self, target: &DeferredGenerationTarget) {
+        if self.targets.get(target).is_some_and(|state| state.candidates == 0) {
             self.targets.remove(target);
         }
     }
 
     pub(super) fn prune_quiescent_targets(&mut self) {
-        let default_generation = self.default_generation;
-        let shutdown_sealed = self.shutdown_sealed;
-        self.targets.retain(|_, target_state| {
-            !target_state.is_quiescent() || (target_state.generation != default_generation && !shutdown_sealed)
-        });
-    }
-
-    pub(super) fn target_snapshot(&self, target: &DeferredGenerationTarget) -> DeferredGenerationTargetSnapshot {
-        let target_state = self
-            .targets
-            .get(target)
-            .expect("target state is protected by the handoff write gate");
-        DeferredGenerationTargetSnapshot::from_state(target.clone(), target_state)
+        self.targets.retain(|_, state| state.candidates != 0);
     }
 
     pub(super) fn snapshot(&self) -> DeferredGenerationHandoffSnapshot {
         let mut targets = self
             .targets
             .iter()
-            .map(|(target, state)| DeferredGenerationTargetSnapshot::from_state(target.clone(), state))
+            .map(|(target, state)| DeferredGenerationTargetSnapshot {
+                target: target.clone(),
+                candidates: state.candidates,
+            })
             .collect::<Vec<_>>();
         targets.sort_by_key(|snapshot| snapshot.target.stable_name());
         DeferredGenerationHandoffSnapshot {
-            default_generation: self.default_generation,
             sealed: self.shutdown_sealed,
-            legacy_acceptance_sealed: self.legacy_acceptance_sealed,
-            v2_aggregate_published: self.v2_aggregate_published,
             tracked_targets: targets.len(),
-            occupancy: targets.iter().map(|snapshot| snapshot.legacy_waiters).sum(),
             candidates: targets.iter().map(|snapshot| snapshot.candidates).sum(),
-            active_wakes: targets.iter().map(|snapshot| snapshot.active_wakes).sum(),
-            wake_gates: targets.iter().map(|snapshot| snapshot.wake_gates).sum(),
-            continuations: targets.iter().map(|snapshot| snapshot.continuations).sum(),
-            replay_tokens: targets.iter().map(|snapshot| snapshot.replay_tokens).sum(),
-            abandoned_replays: targets.iter().map(|snapshot| snapshot.abandoned_replays).sum(),
             targets,
         }
     }
 }
 
-#[derive(Debug)]
-pub(super) struct DeferredGenerationTargetState {
-    pub(super) generation: DeferredGeneration,
-    pub(super) legacy_waiters: usize,
-    pub(super) candidates: usize,
-    pub(super) active_wakes: usize,
-    pub(super) wake_gates: usize,
-    pub(super) continuations: usize,
-    pub(super) replay_tokens: usize,
-    pub(super) abandoned_replays: usize,
-    pop_lite_wake_active: bool,
-    transition_queued: bool,
-}
-
-impl DeferredGenerationTargetState {
-    pub(super) const fn new(generation: DeferredGeneration) -> Self {
-        Self {
-            generation,
-            legacy_waiters: 0,
-            candidates: 0,
-            active_wakes: 0,
-            wake_gates: 0,
-            continuations: 0,
-            replay_tokens: 0,
-            abandoned_replays: 0,
-            pop_lite_wake_active: false,
-            transition_queued: false,
-        }
-    }
-
-    pub(super) const fn is_drained(&self) -> bool {
-        self.legacy_waiters == 0
-            && self.candidates == 0
-            && self.active_wakes == 0
-            && self.wake_gates == 0
-            && self.continuations == 0
-    }
-
-    const fn is_quiescent(&self) -> bool {
-        self.is_drained() && self.replay_tokens == 0 && self.abandoned_replays == 0
-    }
-}
-
-impl DeferredGenerationTargetSnapshot {
-    fn from_state(target: DeferredGenerationTarget, state: &DeferredGenerationTargetState) -> Self {
-        Self {
-            target,
-            generation: state.generation,
-            legacy_waiters: state.legacy_waiters,
-            candidates: state.candidates,
-            active_wakes: state.active_wakes,
-            wake_gates: state.wake_gates,
-            continuations: state.continuations,
-            replay_tokens: state.replay_tokens,
-            abandoned_replays: state.abandoned_replays,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum LegacyEnrollmentCheckError {
-    ShutdownSealed,
-    LegacyAcceptanceSealed,
-    TargetAlreadyNew,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum LegacyWakeBeginFailure {
-    NotReady,
-    PopLiteSingleFlight,
+#[derive(Debug, Default)]
+struct DeferredGenerationTargetState {
+    candidates: usize,
 }

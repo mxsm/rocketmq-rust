@@ -11,6 +11,7 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftPeer;
 use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_model::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -506,7 +507,7 @@ async fn controller_request_contract_broker_heartbeat() {
 }
 
 #[tokio::test]
-async fn controller_request_contract_broker_heartbeat_rejects_invalid_timeout_header() {
+async fn controller_request_contract_broker_heartbeat_rejects_invalid_identity_and_timeout() {
     let mut harness = ProcessorHarness::new().await;
     let mut header = BrokerHeartbeatRequestHeader {
         cluster_name: CheetahString::from_static_str(CLUSTER_NAME),
@@ -521,7 +522,8 @@ async fn controller_request_contract_broker_heartbeat_rejects_invalid_timeout_he
         election_priority: Some(1),
     };
 
-    for heartbeat_timeout_mills in [None, Some(-1)] {
+    for heartbeat_timeout_mills in [None, Some(-1), Some((MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS + 1) as i64)] {
+        header.broker_id = Some(FIRST_BROKER_CONTROLLER_ID as i64);
         header.heartbeat_timeout_mills = heartbeat_timeout_mills;
         let response = harness
             .send(RemotingCommand::create_request_command(
@@ -536,6 +538,20 @@ async fn controller_request_contract_broker_heartbeat_rejects_invalid_timeout_he
             Some("Request header is invalid")
         );
     }
+
+    header.broker_id = Some(-1);
+    header.heartbeat_timeout_mills = Some(3_000);
+    let invalid_broker_id = harness
+        .send(RemotingCommand::create_request_command(
+            RequestCode::BrokerHeartbeat,
+            header,
+        ))
+        .await;
+    assert_eq!(invalid_broker_id.code(), ResponseCode::ControllerInvalidRequest as i32);
+    assert_eq!(
+        invalid_broker_id.remark().map(|remark| remark.as_str()),
+        Some("Heart beat with invalid brokerId")
+    );
 
     harness.shutdown().await;
 }
