@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetLimit;
@@ -472,6 +473,20 @@ fn validate_high_availability(
         ));
     }
     if broker.enable_controller_mode {
+        let heartbeat_timeout_millis = u64::try_from(broker.controller_heartbeat_timeout_mills).map_err(|_| {
+            BrokerConfigError::invalid(
+                ConfigSection::HighAvailability,
+                "broker.controllerHeartbeatTimeoutMills",
+                "must be non-negative",
+            )
+        })?;
+        if heartbeat_timeout_millis > MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::HighAvailability,
+                "broker.controllerHeartbeatTimeoutMills",
+                format!("must not exceed {MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS} milliseconds"),
+            ));
+        }
         if broker.controller_addr.trim().is_empty() {
             return Err(BrokerConfigError::invalid(
                 ConfigSection::HighAvailability,
@@ -914,6 +929,23 @@ mod tests {
         let error = validate_storage(&broker, &store).expect_err("zero timer precision must fail startup");
 
         assert!(error.to_string().contains("store.timerPrecisionMs"));
+    }
+
+    #[test]
+    fn controller_mode_rejects_heartbeat_timeouts_outside_the_controller_boundary() {
+        for invalid_timeout in [-1, (MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS + 1) as i64] {
+            let broker = BrokerConfig {
+                enable_controller_mode: true,
+                controller_addr: CheetahString::from_static_str("127.0.0.1:9878"),
+                controller_heartbeat_timeout_mills: invalid_timeout,
+                ..BrokerConfig::default()
+            };
+
+            let error = ValidatedConfigSections::validate(&broker, &MessageStoreConfig::default())
+                .expect_err("invalid Controller heartbeat timeout must fail Broker startup");
+
+            assert!(error.to_string().contains("broker.controllerHeartbeatTimeoutMills"));
+        }
     }
 
     #[test]

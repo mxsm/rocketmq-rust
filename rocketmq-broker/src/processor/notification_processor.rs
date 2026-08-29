@@ -17,13 +17,13 @@ mod response;
 mod resume;
 mod v2;
 
+#[cfg(any(test, feature = "test-support"))]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
-use crate::deferred_generation_handoff::DeferredGenerationHandoff;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -32,27 +32,17 @@ use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
-use tokio::sync::Mutex as AsyncMutex;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
 use crate::long_polling::notification_deferred::service::NotificationDeferredService;
-use crate::long_polling::polling_header::PollingHeader;
-use crate::long_polling::polling_result::PollingResult;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_message_processor::capability::PopPolicyState;
@@ -305,7 +295,6 @@ pub(crate) struct NotificationProcessorContext<MS: BrokerReadWriteStore> {
     consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
     message_store: NotificationStoreCapability<MS>,
     pop_offset: NotificationPopOffsetCapability<MS>,
-    long_polling: PopLongPollingServiceContext,
 }
 
 impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
@@ -323,7 +312,6 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
         consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
         message_store: NotificationStoreCapability<MS>,
         pop_offset: NotificationPopOffsetCapability<MS>,
-        long_polling: PopLongPollingServiceContext,
     ) -> Self {
         Self {
             command_factory: application_remoting_command_factory(),
@@ -336,7 +324,6 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
             consumer_offset_query,
             message_store,
             pop_offset,
-            long_polling,
         }
     }
 
@@ -348,23 +335,15 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
 
 pub struct NotificationProcessor<MS: BrokerReadWriteStore> {
     context: NotificationProcessorContext<MS>,
-    pop_long_polling_service: Arc<PopLongPollingService<NotificationProcessor<MS>>>,
     notification_deferred_service: OnceLock<Arc<NotificationDeferredService>>,
-    lifecycle: AsyncMutex<()>,
 }
 
 impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
     pub const BORN_TIME: &'static str = "bornTime";
     pub(crate) fn new(context: NotificationProcessorContext<MS>) -> Arc<Self> {
-        Arc::new_cyclic(move |processor| Self {
-            pop_long_polling_service: Arc::new(PopLongPollingService::new(
-                context.long_polling.clone(),
-                true,
-                processor.clone(),
-            )),
+        Arc::new(Self {
             notification_deferred_service: OnceLock::new(),
             context,
-            lifecycle: AsyncMutex::new(()),
         })
     }
 
@@ -382,70 +361,6 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
     #[cfg(test)]
     pub(crate) fn notification_deferred_service_is_installed_for_test(&self) -> bool {
         self.notification_deferred_service.get().is_some()
-    }
-
-    pub async fn start(&self) {
-        let _lifecycle = self.lifecycle.lock().await;
-        PopLongPollingService::start(&self.pop_long_polling_service).await
-    }
-
-    pub(crate) async fn stop_legacy_producer_until(
-        &self,
-        deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.pop_long_polling_service.stop_producer_until(deadline).await
-    }
-
-    pub(crate) async fn drain_legacy_executions_until(
-        &self,
-        deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.pop_long_polling_service.drain_executions_until(deadline).await
-    }
-
-    pub(crate) async fn finalize_legacy_shutdown(
-        &self,
-    ) -> crate::long_polling::long_polling_service::LegacyServiceFinalization {
-        self.pop_long_polling_service.finalize_shutdown().await
-    }
-
-    pub async fn shutdown(&self) -> crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
-        let deadline = rocketmq_runtime::ShutdownDeadline::after(std::time::Duration::from_secs(5));
-        let producer = self.stop_legacy_producer_until(deadline).await;
-        let executions = self.drain_legacy_executions_until(deadline).await;
-        let finalization = self.finalize_legacy_shutdown().await;
-        crate::long_polling::long_polling_service::LegacyServiceShutdownReport {
-            name: "notification_long_polling",
-            producer,
-            executions,
-            observed_after_session_drain: finalization.observed_after_session_drain,
-            resources: finalization.terminal,
-        }
-    }
-
-    pub fn notify_message_arriving_simple(&self, topic: &CheetahString, queue_id: i32) {
-        self.pop_long_polling_service
-            .notify_message_arriving_with_retry_topic(topic, queue_id);
-    }
-
-    pub fn notify_message_arriving(
-        &self,
-        topic: CheetahString,
-        queue_id: i32,
-        tags_code: Option<i64>,
-        msg_store_time: i64,
-        filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<CheetahString, CheetahString>>,
-    ) {
-        self.pop_long_polling_service
-            .notify_message_arriving_with_retry_topic_full(
-                topic,
-                queue_id,
-                tags_code,
-                msg_store_time,
-                filter_bit_map,
-                properties,
-            );
     }
 
     async fn has_msg_from_topic_name(
@@ -556,131 +471,22 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
     }
 }
 
-impl<MS> NotificationProcessor<MS>
-where
-    MS: BrokerReadWriteStore,
-{
-    pub(crate) fn pop_long_polling_service(&self) -> &Arc<PopLongPollingService<NotificationProcessor<MS>>> {
-        &self.pop_long_polling_service
-    }
-
-    pub(crate) fn install_deferred_generation_handoff(
-        &self,
-        handoff: Arc<DeferredGenerationHandoff>,
-    ) -> Result<(), Arc<DeferredGenerationHandoff>> {
-        self.pop_long_polling_service.install_handoff(handoff)
-    }
-
-    pub(crate) async fn process_request_shared(
-        &self,
-        _channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let now = current_millis();
-        request.add_ext_field_if_not_exist(NotificationProcessor::<MS>::BORN_TIME, now.to_string());
-        if request
-            .ext_fields()
-            .and_then(|fields| fields.get(NotificationProcessor::<MS>::BORN_TIME))
-            .map(|v| v == "0")
-            .unwrap_or(false)
-        {
-            request.add_ext_field(NotificationProcessor::<MS>::BORN_TIME, now.to_string());
-        }
-        let channel = ctx.channel();
-
-        let request_header = request.decode_command_custom_header::<NotificationRequestHeader>()?;
-        let effective_peer = channel.remote_address();
-        let core = self
-            .execute_notification_core(&request_header, effective_peer, request.opaque(), None)
-            .await;
-        let core = match core {
-            core::NotificationCoreOutcome::Reply(response) => return Ok(Some(response)),
-            core::NotificationCoreOutcome::Ready(core) => core,
-        };
-
-        let mut polling_full = false;
-        if !core.has_msg {
-            match self.pop_long_polling_service.polling(
-                ctx,
-                request,
-                PollingHeader::new_from_notification_request_header(&request_header),
-                core.filter_contract
-                    .as_ref()
-                    .map(|contract| contract.subscription_data.clone()),
-                core.filter_contract.map(|contract| contract.message_filter),
-            ) {
-                PollingResult::PollingSuc => return Ok(None),
-                PollingResult::PollingFull => polling_full = true,
-                _ => {}
-            }
-        }
-
-        Ok(Some(response::compose_notification_response(
-            &self.context.command_factory,
-            core.has_msg,
-            polling_full,
-            request.opaque(),
-        )))
-    }
-}
-
-impl<MS> PopLongPollingRequestProcessor for NotificationProcessor<MS>
-where
-    MS: BrokerReadWriteStore,
-{
-    async fn process_request_when_wakeup(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, &mut request).await
-    }
-}
-
-impl<MS> RequestProcessor for NotificationProcessor<MS>
-where
-    MS: BrokerReadWriteStore,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
-    use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
 
     use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
-    use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
 
     pub(super) fn notification_processor_for_test(
         runtime: &mut BrokerRuntime,
     ) -> Arc<NotificationProcessor<BrokerMessageStore>> {
         let inner = runtime.runtime_state_mut();
         let policy = NotificationPolicy::from_config(&inner.broker_config());
-        let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
         let consumer_filter_manager = Arc::new(inner.consumer_filter_manager().clone());
-        let long_polling = PopLongPollingServiceContext::new(
-            long_polling_policy,
-            Arc::clone(&topic_config_manager),
-            subscription_group_lookup.clone(),
-            inner.broker_service_context(),
-        );
         NotificationProcessor::new(NotificationProcessorContext::new(
             policy,
             inner.pop_policy_state(),
@@ -695,53 +501,7 @@ mod tests {
             NotificationPopOffsetCapability {
                 merge_service: Weak::new(),
             },
-            long_polling,
         ))
-    }
-
-    #[tokio::test]
-    async fn notification_long_polling_service_uses_weak_processor_back_reference() {
-        fn assert_send_sync<T: Send + Sync>(_: &T) {}
-
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let processor = notification_processor_for_test(&mut runtime);
-        let processor_weak = Arc::downgrade(&processor);
-        let service = processor.pop_long_polling_service.clone();
-
-        assert_send_sync(&processor);
-        drop(processor);
-
-        assert!(processor_weak.upgrade().is_none());
-        assert_eq!(Arc::strong_count(&service), 1);
-    }
-
-    #[tokio::test]
-    async fn notification_long_polling_service_uses_broker_parent_task_group() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let runtime_context = RuntimeContext::from_current("notification-long-polling-parent-test");
-        let broker_service = runtime_context.service_context("broker-service");
-        let mut runtime =
-            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
-        let parent_id = runtime
-            .runtime_state_mut()
-            .broker_service_task_group()
-            .expect("broker service task group should exist")
-            .id();
-        let processor = notification_processor_for_test(&mut runtime);
-
-        PopLongPollingService::start(&processor.pop_long_polling_service).await;
-        let task_group = processor
-            .pop_long_polling_service
-            .task_group_for_test()
-            .expect("notification long-polling task group should be installed");
-
-        assert_eq!(task_group.parent_id(), Some(parent_id));
-        processor.shutdown().await;
-        let report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
-        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[test]
@@ -776,21 +536,5 @@ mod tests {
         assert!(store.min_offset(&topic, 0).is_err());
         assert!(store.max_offset(&topic, 0).is_err());
         assert_eq!(pop.latest_offset(&topic, &group, 0).await, -1);
-    }
-
-    #[test]
-    fn notification_and_long_polling_sources_use_only_explicit_capabilities() {
-        let notification_source = include_str!("notification_processor.rs");
-        let long_polling_source = include_str!("../long_polling/long_polling_service/pop_long_polling_service.rs");
-
-        assert!(!notification_source.contains(concat!("rocketmq_rust::", "ArcMut")));
-        assert!(!notification_source.contains(concat!("BrokerRuntime", "Inner")));
-        assert!(notification_source.contains("NotificationProcessorContext<MS>"));
-        assert!(notification_source.contains("Weak<EscapeBridge<MS>>"));
-        assert!(notification_source.contains("Weak<PopBufferMergeService<MS>>"));
-        assert!(!long_polling_source.contains(concat!("rocketmq_rust::", "ArcMut")));
-        assert!(!long_polling_source.contains(concat!("BrokerRuntime", "Inner")));
-        assert!(long_polling_source.contains("service_context: Option<ChildServiceContext>"));
-        assert!(long_polling_source.contains("PopLongPollingServiceContext"));
     }
 }

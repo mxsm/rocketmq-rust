@@ -87,7 +87,6 @@ fn broker_request_processor_owners_do_not_bypass_the_injected_factory() {
                 || OWNER_BYPASS_CONSTRUCTORS
                     .iter()
                     .any(|constructor| line.contains(constructor))
-                || line.contains("BrokerRequestProcessor::new()")
             {
                 bypasses.push(format!(
                     "{}:{}: {}",

@@ -28,7 +28,7 @@ use rocketmq_transport::api::v1::RpcRequestHeader;
 use tracing::error;
 use tracing::warn;
 
-use crate::client::manager::producer_manager::ProducerChannelRegistry;
+use crate::client::manager::producer_manager::ProducerSessionRegistry;
 use crate::client::net::broker_to_client::Broker2Client;
 use crate::transaction::transactional_message_check_listener::TransactionalMessageCheckListener;
 
@@ -45,7 +45,7 @@ impl TransactionCheckTaskOwner {
 #[derive(Clone)]
 pub struct DefaultTransactionalMessageCheckListener {
     broker_name: CheetahString,
-    producer_channels: ProducerChannelRegistry,
+    producer_sessions: ProducerSessionRegistry,
     broker_client: Arc<Broker2Client>,
     task_owner: Option<Arc<TransactionCheckTaskOwner>>,
 }
@@ -53,13 +53,13 @@ pub struct DefaultTransactionalMessageCheckListener {
 impl DefaultTransactionalMessageCheckListener {
     pub(crate) fn new(
         broker_name: CheetahString,
-        producer_channels: ProducerChannelRegistry,
+        producer_sessions: ProducerSessionRegistry,
         broker_client: Arc<Broker2Client>,
         task_group: Option<TaskGroup>,
     ) -> Self {
         Self {
             broker_name,
-            producer_channels,
+            producer_sessions,
             broker_client,
             task_owner: task_group.map(TransactionCheckTaskOwner::new).map(Arc::new),
         }
@@ -98,13 +98,16 @@ impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListe
         }
         msg_ext.store_size = 0;
         let group_id = msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
-        let channel = self.producer_channels.get_available_channel(group_id.as_ref());
-        if let Some(mut channel) = channel {
+        let transport = self.producer_sessions.get_available_session(group_id.as_ref());
+        if let Some(transport) = transport {
             self.broker_client
-                .check_producer_transaction_state(group_id.as_ref().unwrap(), &mut channel, header, msg_ext)
+                .check_producer_transaction_state(group_id.as_ref().unwrap(), &transport.push_sender(), header, msg_ext)
                 .await;
         } else {
-            warn!("Check transaction failed, channel is null. groupId={:?}", group_id);
+            warn!(
+                "Check transaction failed, producer session is unavailable. groupId={:?}",
+                group_id
+            );
         }
         Ok(())
     }

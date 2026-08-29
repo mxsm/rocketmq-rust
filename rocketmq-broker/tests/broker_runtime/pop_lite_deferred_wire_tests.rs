@@ -225,7 +225,9 @@ async fn pop_lite_deferred_v2_real_store_single_chain_writes_exact_terminal_fram
     let mut runtime = new_lite_test_runtime("pop-lite-deferred-v2-real-store-wire").await;
     seed_lite_query_state(&mut runtime);
     seed_lmq_message(&mut runtime, "child-a", b"lite-deferred-v2-real-store").await;
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let pop_lite = runtime
         .composition
         .state
@@ -330,7 +332,9 @@ async fn pop_lite_deferred_v2_real_store_single_chain_writes_exact_terminal_fram
 async fn pop_lite_deferred_v2_real_store_claimed_empty_is_exact_terminal_timeout() {
     let mut runtime = new_lite_test_runtime("pop-lite-deferred-v2-real-store-empty").await;
     seed_lite_query_state(&mut runtime);
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let pop_lite = runtime
         .composition
         .state

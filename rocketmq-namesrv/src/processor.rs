@@ -373,7 +373,10 @@ impl RequestProcessorV2 for NameServerRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let auth_context = RemotingAuthContext::from_request(request)?;
         let original_code = request.original_identity().original_code();
-        let broker_session = if original_code == RequestCode::RegisterBroker as i32 {
+        let broker_session = if matches!(
+            RequestCode::from(original_code),
+            RequestCode::RegisterBroker | RequestCode::BrokerHeartbeat
+        ) {
             Some(crate::processor::default_request_processor::broker_session_from_request(request)?)
         } else {
             None

@@ -16,10 +16,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
@@ -35,23 +31,17 @@ use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
 use rocketmq_transport::api::v2::DeferredWakeReason;
 use tracing::warn;
 
-use crate::deferred_generation_handoff::DeferredGeneration;
 use crate::deferred_generation_handoff::DeferredGenerationHandoff;
-use crate::deferred_generation_handoff::DeferredGenerationTarget;
-use crate::deferred_generation_handoff::DeferredGenerationTargetTransitionError;
-use crate::deferred_generation_handoff::DeferredGenerationTransitionKind;
-use crate::deferred_generation_handoff::ReplayToken;
 use crate::deferred_generation_handoff::RoutePermit;
 use crate::lite::lite_event_dispatcher::DeferredEventObserver;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
-use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion;
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
 use crate::long_polling::notification_deferred::service::NotificationDeferredService;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::index::PopSelectionOrder;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
+use crate::long_polling::pop_deferred::service::PopWakeupCompletion;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 use crate::long_polling::pop_lite_deferred::service::PopLiteReplayObservation;
 use crate::long_polling::pull_deferred::PullDeferredService;
@@ -70,9 +60,7 @@ use workers::submit_pop_lite_event;
 use workers::submit_pull;
 
 const PRODUCER_TICK: Duration = Duration::from_millis(20);
-const TRANSITION_BATCH_LIMIT: usize = 64;
 
-type PullMasterOnlineCallback = dyn Fn() + Send + Sync + 'static;
 type PopLagRefreshCallback =
     dyn Fn(&CheetahString, &CheetahString) -> Option<PopWakeupCompletion> + Send + Sync + 'static;
 
@@ -85,9 +73,7 @@ pub(crate) struct BrokerDeferredProducer<MS: BrokerReadWriteStore> {
     pop_lite: Arc<PopLiteDeferredService>,
     lite_dispatcher: LiteEventDispatcher,
     lite_observer: Arc<DeferredEventObserver>,
-    pull_request_hold_service: Weak<PullRequestHoldService<MS>>,
     message_store: RwLock<Option<Weak<MS>>>,
-    pull_master_online_callback: Arc<PullMasterOnlineCallback>,
     pop_lag_refresh_callback: Arc<PopLagRefreshCallback>,
     pull_processor: Weak<PullMessageProcessor<MS>>,
     pop_processor: Weak<PopMessageProcessor<MS>>,
@@ -95,8 +81,6 @@ pub(crate) struct BrokerDeferredProducer<MS: BrokerReadWriteStore> {
     pop_lite_processor: Weak<PopLiteMessageProcessor<MS>>,
     task_group: TaskGroup,
     short_poll_interval: Duration,
-    #[cfg(test)]
-    replay_store_attempts: AtomicU64,
 }
 
 impl<MS> BrokerDeferredProducer<MS>
@@ -114,7 +98,6 @@ where
         notification: Arc<NotificationDeferredService>,
         pop_lite: Arc<PopLiteDeferredService>,
         lite_dispatcher: LiteEventDispatcher,
-        pull_request_hold_service: &Arc<PullRequestHoldService<MS>>,
         pull_processor: &Arc<PullMessageProcessor<MS>>,
         pop_processor: &Arc<PopMessageProcessor<MS>>,
         notification_processor: &Arc<NotificationProcessor<MS>>,
@@ -129,7 +112,6 @@ where
             notification,
             pop_lite,
             lite_dispatcher,
-            pull_request_hold_service,
             Weak::new(),
             pull_processor,
             pop_processor,
@@ -151,7 +133,6 @@ where
         notification: Arc<NotificationDeferredService>,
         pop_lite: Arc<PopLiteDeferredService>,
         lite_dispatcher: LiteEventDispatcher,
-        pull_request_hold_service: &Arc<PullRequestHoldService<MS>>,
         message_store: Weak<MS>,
         pull_processor: &Arc<PullMessageProcessor<MS>>,
         pop_processor: &Arc<PopMessageProcessor<MS>>,
@@ -160,8 +141,6 @@ where
         task_group: TaskGroup,
         short_poll_interval: Duration,
     ) -> Result<Arc<Self>, BrokerDeferredProducerInstallError> {
-        let weak_hold_service = Arc::downgrade(pull_request_hold_service);
-        let weak_pop_processor = Arc::downgrade(pop_processor);
         let producer = Arc::new_cyclic(|weak_producer: &Weak<Self>| {
             let weak_lite = weak_producer.clone();
             let lite_observer: Arc<DeferredEventObserver> = Arc::new(move |client_id| {
@@ -169,23 +148,10 @@ where
                     .upgrade()
                     .is_some_and(|producer| producer.notify_pop_lite_event(client_id))
             });
-            let weak_pull = weak_producer.clone();
-            let weak_hold = weak_hold_service.clone();
-            let pull_master_online_callback: Arc<PullMasterOnlineCallback> = Arc::new(move || {
-                let (Some(producer), Some(hold_service)) = (weak_pull.upgrade(), weak_hold.upgrade()) else {
-                    return;
-                };
-                producer.notify_master_online(|| hold_service.notify_master_online_legacy());
-            });
             let weak_pop = weak_producer.clone();
-            let weak_legacy_pop = weak_pop_processor.clone();
             let pop_lag_refresh_callback: Arc<PopLagRefreshCallback> = Arc::new(move |topic, consumer_group| {
                 let producer = weak_pop.upgrade()?;
-                producer.notify_pop_lag_refresh(topic, consumer_group, || {
-                    weak_legacy_pop.upgrade().and_then(|processor| {
-                        processor.notify_message_arriving_before_lag_legacy(topic, consumer_group)
-                    })
-                })
+                producer.notify_pop_lag_refresh(topic, consumer_group)
             });
             Self {
                 handoff,
@@ -195,9 +161,7 @@ where
                 pop_lite,
                 lite_dispatcher: lite_dispatcher.clone(),
                 lite_observer,
-                pull_request_hold_service: weak_hold_service.clone(),
                 message_store: RwLock::new(None),
-                pull_master_online_callback,
                 pop_lag_refresh_callback,
                 pull_processor: Arc::downgrade(pull_processor),
                 pop_processor: Arc::downgrade(pop_processor),
@@ -205,8 +169,6 @@ where
                 pop_lite_processor: Arc::downgrade(pop_lite_processor),
                 task_group,
                 short_poll_interval: short_poll_interval.max(Duration::from_millis(1)),
-                #[cfg(test)]
-                replay_store_attempts: AtomicU64::new(0),
             }
         });
         if message_store.strong_count() != 0 && producer.bind_message_store(message_store).is_err() {
@@ -218,18 +180,10 @@ where
         {
             return Err(BrokerDeferredProducerInstallError::LiteEventObserver);
         }
-        if pull_request_hold_service
-            .install_master_online_producer(Arc::clone(&producer.pull_master_online_callback))
-            .is_err()
-        {
-            lite_dispatcher.uninstall_deferred_event_observer(&producer.lite_observer);
-            return Err(BrokerDeferredProducerInstallError::PullMasterOnline);
-        }
         if pop_processor
             .install_lag_refresh_producer(Arc::clone(&producer.pop_lag_refresh_callback))
             .is_err()
         {
-            pull_request_hold_service.uninstall_master_online_producer(&producer.pull_master_online_callback);
             lite_dispatcher.uninstall_deferred_event_observer(&producer.lite_observer);
             return Err(BrokerDeferredProducerInstallError::PopLagRefresh);
         }
@@ -260,14 +214,7 @@ where
     }
 
     fn replay_message_store(&self) -> Option<Arc<MS>> {
-        #[cfg(test)]
-        self.replay_store_attempts.fetch_add(1, Ordering::AcqRel);
         self.message_store.read().as_ref().and_then(Weak::upgrade)
-    }
-
-    #[cfg(test)]
-    fn replay_store_attempts_for_test(&self) -> u64 {
-        self.replay_store_attempts.load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -289,7 +236,6 @@ where
                         {
                             break;
                         }
-                        producer.advance_generation_handoff();
                         producer.produce_pending_arrivals();
                         producer.produce_expired();
                         producer.produce_pending_dispatcher_events();
@@ -319,7 +265,7 @@ where
         clippy::too_many_arguments,
         reason = "the arrival boundary intentionally retains the Store callback shape"
     )]
-    pub(crate) fn route_pull_arrival<F>(
+    pub(crate) fn route_pull_arrival(
         self: &Arc<Self>,
         topic: &CheetahString,
         queue_id: i32,
@@ -328,23 +274,10 @@ where
         _message_store_time: i64,
         _filter_bitmap: Option<&[u8]>,
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
-        legacy: F,
-    ) where
-        F: FnOnce(),
-    {
-        let default_generation = self.handoff.default_generation();
+    ) {
         let Ok(route) = self.handoff.acquire_pull_candidate(topic.clone(), queue_id) else {
             return;
         };
-        if route.generation() == DeferredGeneration::Legacy {
-            legacy();
-            if default_generation == DeferredGeneration::New {
-                if let Err(error) = self.pull.latch_offset(topic, queue_id, logic_offset) {
-                    warn!(?error, "failed to retain deferred Pull handoff replay");
-                }
-            }
-            return;
-        }
         match self.pull.latch_offset(topic, queue_id, logic_offset) {
             Ok(()) => self.produce_pending_pull_offsets(),
             Err(error) => warn!(?error, "failed to retain deferred Pull arrival replay"),
@@ -356,7 +289,7 @@ where
         clippy::too_many_arguments,
         reason = "the arrival boundary intentionally retains the Store callback shape"
     )]
-    pub(crate) fn route_pop_arrival<F>(
+    pub(crate) fn route_pop_arrival(
         self: &Arc<Self>,
         topic: &CheetahString,
         queue_id: i32,
@@ -364,18 +297,7 @@ where
         message_store_time: i64,
         filter_bitmap: Option<&[u8]>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
-        legacy: F,
-    ) where
-        F: FnOnce(),
-    {
-        if self.handoff.default_generation() == DeferredGeneration::Legacy {
-            legacy();
-            return;
-        }
-        // Draining legacy tables remain authoritative for their tracked targets.
-        // A target cannot publish New until its legacy table is empty, so this
-        // legacy-first pass cannot double-deliver a New-owned target.
-        legacy();
+    ) {
         match self.pop.latch_arrival(
             topic,
             queue_id,
@@ -394,7 +316,7 @@ where
         clippy::too_many_arguments,
         reason = "the arrival boundary preserves the Store listener callback shape"
     )]
-    pub(crate) fn route_pop_arrival_at<F>(
+    pub(crate) fn route_pop_arrival_at(
         self: &Arc<Self>,
         topic: &CheetahString,
         queue_id: i32,
@@ -403,15 +325,7 @@ where
         _message_store_time: i64,
         _filter_bitmap: Option<&[u8]>,
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
-        legacy: F,
-    ) where
-        F: FnOnce(),
-    {
-        if self.handoff.default_generation() == DeferredGeneration::Legacy {
-            legacy();
-            return;
-        }
-        legacy();
+    ) {
         match self.pop.latch_offset(topic, queue_id, logic_offset) {
             Ok(()) => self.produce_pending_pop_offsets(),
             Err(error) => warn!(?error, "failed to retain deferred POP offset replay"),
@@ -422,7 +336,7 @@ where
         clippy::too_many_arguments,
         reason = "the arrival boundary intentionally retains the Store callback shape"
     )]
-    pub(crate) fn route_notification_arrival<F>(
+    pub(crate) fn route_notification_arrival(
         self: &Arc<Self>,
         topic: &CheetahString,
         queue_id: i32,
@@ -430,15 +344,7 @@ where
         message_store_time: i64,
         filter_bitmap: Option<&[u8]>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
-        legacy: F,
-    ) where
-        F: FnOnce(),
-    {
-        if self.handoff.default_generation() == DeferredGeneration::Legacy {
-            legacy();
-            return;
-        }
-        legacy();
+    ) {
         let arrival = NotificationArrivalView::new(topic, queue_id).with_filter_metadata(
             tags_code,
             message_store_time,
@@ -458,7 +364,7 @@ where
         clippy::too_many_arguments,
         reason = "the arrival boundary preserves the Store listener callback shape"
     )]
-    pub(crate) fn route_notification_arrival_at<F>(
+    pub(crate) fn route_notification_arrival_at(
         self: &Arc<Self>,
         topic: &CheetahString,
         queue_id: i32,
@@ -467,51 +373,18 @@ where
         _message_store_time: i64,
         _filter_bitmap: Option<&[u8]>,
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
-        legacy: F,
-    ) where
-        F: FnOnce(),
-    {
-        if self.handoff.default_generation() == DeferredGeneration::Legacy {
-            legacy();
-            return;
-        }
-        legacy();
+    ) {
         match self.notification.latch_offset(topic, queue_id, logic_offset) {
             Ok(()) => self.produce_pending_notification_offsets(),
             Err(error) => warn!(?error, "failed to retain deferred Notification offset replay"),
         }
     }
 
-    pub(crate) fn notify_master_online<F>(self: &Arc<Self>, legacy: F)
-    where
-        F: FnOnce(),
-    {
-        if self.handoff.default_generation() == DeferredGeneration::Legacy {
-            legacy();
-            return;
-        }
-        legacy();
-        match self.pull.latch_forced(self.pull.scan_cursor()) {
-            Ok(()) => self.produce_pending_pull_arrivals(),
-            Err(error) => warn!(?error, "failed to retain deferred Pull forced replay"),
-        }
-    }
-
-    pub(crate) fn notify_pop_lag_refresh<F>(
+    pub(crate) fn notify_pop_lag_refresh(
         &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
-        legacy: F,
-    ) -> Option<PopWakeupCompletion>
-    where
-        F: FnOnce() -> Option<PopWakeupCompletion>,
-    {
-        if self.handoff.default_generation() == DeferredGeneration::Legacy {
-            return legacy();
-        }
-        if let Some(completion) = legacy() {
-            return Some(completion);
-        }
+    ) -> Option<PopWakeupCompletion> {
         for key in self.pop.forced_target_batch(topic, consumer_group) {
             let Ok(route) =
                 self.handoff
@@ -519,9 +392,6 @@ where
             else {
                 continue;
             };
-            if route.generation() != DeferredGeneration::New {
-                continue;
-            }
             let arrival = PopArrivalView::new(topic, consumer_group, key.queue_id()).forced();
             let Some(candidate) = self
                 .pop
@@ -540,9 +410,6 @@ where
         let Ok(route) = self.handoff.acquire_pop_lite_candidate(client_id.clone()) else {
             return true;
         };
-        if route.generation() != DeferredGeneration::New {
-            return false;
-        }
         match self.pop_lite.observe_pending_replay(client_id) {
             PopLiteReplayObservation::NoEvent | PopLiteReplayObservation::AlreadyObserved => true,
             PopLiteReplayObservation::NewlyObserved => {
@@ -560,133 +427,7 @@ where
 
     fn produce_pending_dispatcher_events(&self) {
         for client_id in self.lite_dispatcher.pending_client_ids() {
-            let target = DeferredGenerationTarget::pop_lite(client_id.clone());
-            if self.handoff.generation_for(&target) == DeferredGeneration::New {
-                self.lite_dispatcher.replay_pending_event(&client_id);
-            }
-        }
-    }
-
-    fn advance_generation_handoff(self: &Arc<Self>) {
-        for candidate in self.handoff.take_transition_candidates(TRANSITION_BATCH_LIMIT) {
-            let target = candidate.target;
-            match candidate.kind {
-                DeferredGenerationTransitionKind::LegacyTarget => {
-                    match self.handoff.try_transition_target_to_new(target.clone(), |candidate| {
-                        self.legacy_target_occupied(candidate)
-                    }) {
-                        Ok(replay) => self.replay_transition(replay),
-                        Err(
-                            DeferredGenerationTargetTransitionError::Draining(_)
-                            | DeferredGenerationTargetTransitionError::LegacyTableOccupied,
-                        ) => self.handoff.requeue_transition_candidate(&target),
-                        Err(
-                            DeferredGenerationTargetTransitionError::ShutdownSealed
-                            | DeferredGenerationTargetTransitionError::CutoverNotPublished
-                            | DeferredGenerationTargetTransitionError::TargetAbsent
-                            | DeferredGenerationTargetTransitionError::TargetAlreadyNew,
-                        ) => {}
-                    }
-                }
-                DeferredGenerationTransitionKind::AbandonedReplay => {
-                    if let Ok(replay) = self.handoff.retry_abandoned_replay(target) {
-                        self.replay_transition(replay);
-                    }
-                }
-            }
-        }
-    }
-
-    fn legacy_target_occupied(&self, target: &DeferredGenerationTarget) -> bool {
-        match target {
-            DeferredGenerationTarget::Pull { .. } => self
-                .pull_request_hold_service
-                .upgrade()
-                .is_none_or(|service| service.legacy_target_occupied(target)),
-            DeferredGenerationTarget::Pop { .. } => self.pop_processor.upgrade().is_none_or(|processor| {
-                processor
-                    .pop_long_polling_service()
-                    .is_none_or(|service| service.legacy_target_occupied(target))
-            }),
-            DeferredGenerationTarget::Notification { .. } => self
-                .notification_processor
-                .upgrade()
-                .is_none_or(|processor| processor.pop_long_polling_service().legacy_target_occupied(target)),
-            DeferredGenerationTarget::PopLite { .. } => self
-                .pop_lite_processor
-                .upgrade()
-                .is_none_or(|processor| processor.pop_lite_long_polling_service().legacy_target_occupied(target)),
-        }
-    }
-
-    fn replay_transition(self: &Arc<Self>, replay: ReplayToken) {
-        let target = replay.target().clone();
-        let accepted = match &target {
-            DeferredGenerationTarget::Pull { topic, queue_id } => self.replay_pull_target(topic, *queue_id),
-            DeferredGenerationTarget::Pop { topic, queue_id, .. } => self.replay_pop_target(topic, *queue_id),
-            DeferredGenerationTarget::Notification { topic, queue_id, .. } => {
-                self.replay_notification_target(topic, *queue_id)
-            }
-            DeferredGenerationTarget::PopLite { client_id } => {
-                self.lite_dispatcher.replay_pending_event(client_id);
-                true
-            }
-        };
-        if accepted {
-            replay.complete_after_replay_accepted();
-        } else {
-            warn!(?target, "deferred handoff replay was retained for retry");
-        }
-    }
-
-    fn replay_pull_target(self: &Arc<Self>, topic: &CheetahString, queue_id: i32) -> bool {
-        let Some(store) = self.replay_message_store() else {
-            return false;
-        };
-        let max_offset = store.get_max_offset_in_queue(topic, queue_id);
-        match self.pull.latch_offset(topic, queue_id, max_offset) {
-            Ok(()) => {
-                self.produce_pending_pull_offsets();
-                true
-            }
-            Err(error) => {
-                warn!(?error, "failed to retain deferred Pull transition replay");
-                false
-            }
-        }
-    }
-
-    fn replay_pop_target(self: &Arc<Self>, topic: &CheetahString, queue_id: i32) -> bool {
-        let Some(store) = self.replay_message_store() else {
-            return false;
-        };
-        let max_offset = store.get_max_offset_in_queue(topic, queue_id);
-        match self.pop.latch_offset(topic, queue_id, max_offset) {
-            Ok(()) => {
-                self.produce_pending_pop_offsets();
-                true
-            }
-            Err(error) => {
-                warn!(?error, "failed to retain deferred POP transition replay");
-                false
-            }
-        }
-    }
-
-    fn replay_notification_target(self: &Arc<Self>, topic: &CheetahString, queue_id: i32) -> bool {
-        let Some(store) = self.replay_message_store() else {
-            return false;
-        };
-        let max_offset = store.get_max_offset_in_queue(topic, queue_id);
-        match self.notification.latch_offset(topic, queue_id, max_offset) {
-            Ok(()) => {
-                self.produce_pending_notification_offsets();
-                true
-            }
-            Err(error) => {
-                warn!(?error, "failed to retain deferred Notification transition replay");
-                false
-            }
+            self.lite_dispatcher.replay_pending_event(&client_id);
         }
     }
 
@@ -695,12 +436,9 @@ where
             return;
         };
         for key in self.pull.target_batch() {
-            let Ok(route) = self.handoff.acquire_pull_candidate(key.topic().clone(), key.queue_id()) else {
+            let Ok(_route) = self.handoff.acquire_pull_candidate(key.topic().clone(), key.queue_id()) else {
                 continue;
             };
-            if route.generation() != DeferredGeneration::New {
-                continue;
-            }
             let Some(max_offset) = processor.deferred_current_max_offset(key.topic(), key.queue_id()) else {
                 continue;
             };
@@ -784,9 +522,7 @@ where
             let Ok(route) = self.handoff.acquire_pull_candidate(key.topic().clone(), key.queue_id()) else {
                 continue;
             };
-            if route.generation() == DeferredGeneration::New {
-                self.spawn_pull_candidate(candidate, reason, route);
-            }
+            self.spawn_pull_candidate(candidate, reason, route);
         }
     }
 
@@ -988,7 +724,6 @@ where
 pub(crate) enum BrokerDeferredProducerInstallError {
     ReplayStore,
     LiteEventObserver,
-    PullMasterOnline,
     PopLagRefresh,
 }
 
@@ -997,7 +732,6 @@ impl fmt::Display for BrokerDeferredProducerInstallError {
         formatter.write_str(match self {
             Self::ReplayStore => "deferred replay Store capability was already bound or unavailable",
             Self::LiteEventObserver => "PopLite event observer was already installed",
-            Self::PullMasterOnline => "Pull master-online producer was already installed",
             Self::PopLagRefresh => "POP lag-refresh producer was already installed",
         })
     }
@@ -1009,9 +743,6 @@ impl<MS: BrokerReadWriteStore> Drop for BrokerDeferredProducer<MS> {
     fn drop(&mut self) {
         self.lite_dispatcher
             .uninstall_deferred_event_observer(&self.lite_observer);
-        if let Some(hold_service) = self.pull_request_hold_service.upgrade() {
-            hold_service.uninstall_master_online_producer(&self.pull_master_online_callback);
-        }
         if let Some(pop_processor) = self.pop_processor.upgrade() {
             pop_processor.uninstall_lag_refresh_producer(&self.pop_lag_refresh_callback);
         }

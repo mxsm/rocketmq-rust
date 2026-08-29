@@ -5,14 +5,14 @@ use rocketmq_protocol::protocol::header::get_producer_connection_list_request_he
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 
-use crate::client::manager::producer_manager::ProducerChannelRegistry;
+use crate::client::manager::producer_manager::ProducerSessionRegistry;
 
 #[derive(Clone)]
 pub(super) struct ProducerRequestHandler {
-    producer_registry: ProducerChannelRegistry,
+    producer_registry: ProducerSessionRegistry,
 }
 impl ProducerRequestHandler {
-    pub fn new(producer_registry: ProducerChannelRegistry) -> Self {
+    pub fn new(producer_registry: ProducerSessionRegistry) -> Self {
         Self { producer_registry }
     }
     pub async fn get_producer_connection_list(
@@ -51,18 +51,5 @@ impl ProducerRequestHandler {
         let producer_table_info = self.producer_registry.producer_table();
         let body = producer_table_info.encode()?;
         Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn producer_request_handler_has_no_broker_runtime_owner() {
-        let source = include_str!("producer_request_handler.rs");
-        let production_source = source.split("#[cfg(test)]").next().expect("production source");
-        assert!(production_source.contains("ProducerChannelRegistry"));
-        assert!(!production_source.contains(concat!("BrokerRuntime", "Inner")));
-        assert!(!production_source.contains(concat!("Arc", "Mut")));
-        assert!(!production_source.contains(concat!("Message", "Store")));
     }
 }

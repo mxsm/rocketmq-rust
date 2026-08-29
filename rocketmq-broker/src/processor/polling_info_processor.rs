@@ -15,8 +15,8 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
+use cheetah_string::CheetahString;
 use rocketmq_model::common::constant::PermName;
-use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader;
@@ -33,7 +33,7 @@ use tracing::warn;
 
 use crate::config::broker_config::BrokerConfig;
 
-use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
+use crate::long_polling::pop_deferred::service::PollingCountProvider;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
@@ -221,13 +221,11 @@ impl PollingInfoProcessor {
             return Ok(Some(response));
         }
 
-        let key = KeyBuilder::build_polling_key(
+        let polling_num = self.get_polling_num(
             &request_header.topic,
             &request_header.consumer_group,
             request_header.queue_id,
         );
-
-        let polling_num = self.get_polling_num(&key);
 
         let response_header = PollingInfoResponseHeader { polling_num };
         let final_response = self
@@ -245,10 +243,10 @@ impl PollingInfoProcessor {
     ///
     /// # Returns
     /// The number of polling requests, or 0 if no polling requests exist
-    fn get_polling_num(&self, key: &str) -> i32 {
+    fn get_polling_num(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> i32 {
         self.polling_count_provider
             .upgrade()
-            .map(|provider| provider.polling_count(key))
+            .map(|provider| provider.polling_count(topic, consumer_group, queue_id))
             .unwrap_or_default()
     }
 }
@@ -305,7 +303,7 @@ mod tests {
     struct FixedPollingCount(i32);
 
     impl PollingCountProvider for FixedPollingCount {
-        fn polling_count(&self, _key: &str) -> i32 {
+        fn polling_count(&self, _topic: &CheetahString, _consumer_group: &CheetahString, _queue_id: i32) -> i32 {
             self.0
         }
     }
@@ -398,9 +396,11 @@ mod tests {
         let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(7));
         let processor = test_processor(Arc::downgrade(&provider));
 
-        assert_eq!(processor.get_polling_num("topic@group@0"), 7);
+        let topic = CheetahString::from_static_str("topic");
+        let group = CheetahString::from_static_str("group");
+        assert_eq!(processor.get_polling_num(&topic, &group, 0), 7);
         drop(provider);
-        assert_eq!(processor.get_polling_num("topic@group@0"), 0);
+        assert_eq!(processor.get_polling_num(&topic, &group, 0), 0);
     }
 
     #[tokio::test]

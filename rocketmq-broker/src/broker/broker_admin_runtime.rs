@@ -59,7 +59,6 @@ use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeStoreReadLease;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
@@ -109,7 +108,6 @@ pub(crate) struct BrokerAdminRuntime<MS: BrokerAdminStore> {
     consumer_manager: ConsumerManager,
     broker_stats_manager: Arc<BrokerStatsManager>,
     role_state: Arc<BrokerOnlineRoleState>,
-    pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
     rebalance_lock_manager: RebalanceLockManager,
     membership: BrokerMembershipState,
     controller: Arc<BrokerControllerRuntime<MS>>,
@@ -150,7 +148,6 @@ impl<MS: BrokerAdminStore> Clone for BrokerAdminRuntime<MS> {
             consumer_manager: self.consumer_manager.clone_shared_state(),
             broker_stats_manager: Arc::clone(&self.broker_stats_manager),
             role_state: Arc::clone(&self.role_state),
-            pull_request_hold_service: self.pull_request_hold_service.clone(),
             rebalance_lock_manager: self.rebalance_lock_manager.clone(),
             membership: self.membership.clone(),
             controller: Arc::clone(&self.controller),
@@ -196,7 +193,6 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
         consumer_manager: ConsumerManager,
         broker_stats_manager: Arc<BrokerStatsManager>,
         role_state: Arc<BrokerOnlineRoleState>,
-        pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
         rebalance_lock_manager: RebalanceLockManager,
         membership: BrokerMembershipState,
         controller: Arc<BrokerControllerRuntime<MS>>,
@@ -233,7 +229,6 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
             consumer_manager,
             broker_stats_manager,
             role_state,
-            pull_request_hold_service,
             rebalance_lock_manager,
             membership,
             controller,
@@ -366,10 +361,6 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
 
     pub(crate) fn broker_stats_manager_handle(&self) -> Arc<BrokerStatsManager> {
         Arc::clone(&self.broker_stats_manager)
-    }
-
-    pub(crate) fn pull_request_hold_service(&self) -> Option<&PullRequestHoldService<MS>> {
-        self.pull_request_hold_service.as_deref()
     }
 
     pub(crate) fn rebalance_lock_manager(&self) -> &RebalanceLockManager {

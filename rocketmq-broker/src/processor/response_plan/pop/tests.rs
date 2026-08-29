@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -23,14 +19,10 @@ use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessage
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
-use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::ResponseBodyKind;
-use rocketmq_transport::test_support::Connection;
-use rocketmq_transport::test_support::TestChannelBuilder;
 
 use super::attach_pop_response_header;
-use super::deliver_pop_legacy;
 use super::pop_heap_response_parts;
 use super::pop_segmented_response_parts;
 use super::take_pop_body_segments;
@@ -121,56 +113,4 @@ fn non_heap_success_moves_ordered_body_only_segments_into_a_reply() {
     assert_eq!(ResponseBodyKind::Segments, plan.body_kind());
     assert_eq!(body_len, plan.body_len());
     assert_eq!(2, plan.body_part_count());
-}
-
-struct CountingBodyOwner {
-    body: &'static [u8],
-    drops: Arc<AtomicUsize>,
-}
-
-impl AsRef<[u8]> for CountingBodyOwner {
-    fn as_ref(&self) -> &[u8] {
-        self.body
-    }
-}
-
-impl Drop for CountingBodyOwner {
-    fn drop(&mut self) {
-        self.drops.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-async fn closed_test_channel() -> Channel {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind POP compatibility listener");
-    let address = listener.local_addr().expect("POP compatibility address");
-    let stream = std::net::TcpStream::connect(address).expect("connect POP compatibility stream");
-    let accepted = listener.accept().expect("accept POP compatibility stream").0;
-    stream.set_nonblocking(true).expect("set POP stream nonblocking");
-
-    let mut connection = Connection::new(tokio::net::TcpStream::from_std(stream).expect("Tokio POP stream"));
-    connection.shutdown().await.expect("shut down POP test connection");
-    drop(accepted);
-
-    TestChannelBuilder::new(connection, crate::test_task_group("pop-legacy-closed-channel"))
-        .addresses(address, address)
-        .build()
-        .expect("build closed POP test channel")
-}
-
-#[tokio::test]
-async fn segmented_legacy_write_failure_consumes_and_drops_body_once() {
-    let channel = closed_test_channel().await;
-    let drops = Arc::new(AtomicUsize::new(0));
-    let body = Bytes::from_owner(CountingBodyOwner {
-        body: b"segmented-pop-body",
-        drops: Arc::clone(&drops),
-    });
-    let head = attach_pop_response_header(RemotingCommand::create_success_response_command(), response_header());
-    let parts = pop_segmented_response_parts(head, vec![body]).expect("segmented POP response parts");
-    assert_eq!(0, drops.load(Ordering::SeqCst));
-
-    let result = deliver_pop_legacy(parts, &channel).await;
-
-    assert!(result.is_err(), "closed POP connection must reject the write");
-    assert_eq!(1, drops.load(Ordering::SeqCst));
 }

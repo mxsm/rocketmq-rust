@@ -19,8 +19,11 @@
 //! model. It does not expose legacy channels, session handles, operation
 //! contexts, raw cancellation authority, response bodies, or encoded frames.
 
+pub use crate::admission::AdmissionController;
+pub use crate::admission::AdmissionLimits;
 pub use crate::clients::rocketmq_tokio_client::RemotingClientV2Builder;
 pub use crate::clients::rocketmq_tokio_client::TransportClientV2Builder;
+pub use crate::config::ServerConfig;
 pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthenticationState;
 pub use crate::dispatch::AuthorizedCommandDispatcherV2;
@@ -88,6 +91,7 @@ pub use crate::dispatch::TakeDeferredResponderError;
 pub use crate::dispatch::WriteProgress;
 pub use crate::file_region::FileRegion;
 pub use crate::file_region::FileRegionSequence;
+pub use crate::proxy_protocol::ProxyProtocolConfig;
 pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;
@@ -98,10 +102,26 @@ pub use crate::runtime::processor_v2::RequestProcessorV2;
 pub use crate::runtime::processor_v2::ResponseWriteObservationV2;
 pub use crate::runtime::processor_v2::ResponseWriteOutcomeV2;
 pub use crate::runtime::processor_v2::ResponseWritePath;
+pub use crate::security::TransportSecurity;
 pub use crate::session_view::ProxyInfoSnapshot;
 pub use crate::session_view::SessionId;
 pub use crate::session_view::SessionStateView;
 pub use crate::session_view::SessionView;
+pub use crate::telemetry::TransportTelemetry;
+pub use crate::v2_session_registry::ServerPushCommand;
+pub use crate::v2_session_registry::ServerPushError;
+pub use crate::v2_session_registry::ServerPushKind;
+pub use crate::v2_session_registry::ServerPushReceipt;
+pub use crate::v2_session_registry::ServerPushSender;
+pub use crate::v2_session_registry::ServerRequestCommand;
+pub use crate::v2_session_registry::ServerRequestError;
+pub use crate::v2_session_registry::ServerRequestErrorStage;
+pub use crate::v2_session_registry::ServerRequestKind;
+pub use crate::v2_session_registry::ServerRequestResponse;
+pub use crate::v2_session_registry::ServerRequestSender;
+pub use crate::v2_session_registry::SessionCloseError;
+pub use crate::v2_session_registry::SessionCloseHandle;
+pub use crate::v2_session_registry::SessionCloseReason;
 pub use crate::v2_session_registry::V2SessionEvent;
 pub use crate::v2_session_registry::V2SessionLifecycleListener;
 pub use crate::v2_session_registry::V2SessionRegistry;
@@ -119,7 +139,7 @@ pub use crate::v2_session_registry::V2SessionRegistry;
 ///     client.register_processor(processor);
 /// }
 /// ```
-pub type TransportClient<PR = DefaultRequestProcessor> = crate::clients::rocketmq_tokio_client::TransportClient<PR>;
+pub use crate::clients::rocketmq_tokio_client::V2TransportClient as TransportClient;
 
 /// Nameserver-aware client whose omitted processor parameter is V2-native.
-pub type RemotingClient<PR = DefaultRequestProcessor> = crate::clients::rocketmq_tokio_client::RemotingClient<PR>;
+pub use crate::clients::rocketmq_tokio_client::V2RemotingClient as RemotingClient;

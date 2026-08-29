@@ -73,6 +73,12 @@ pub(crate) fn public_name_from_route(route_name: &CheetahString) -> CheetahStrin
 /// Broker address string
 pub type BrokerAddr = CheetahString;
 
+/// Stable identifier for one remoting connection inside NameServer.
+///
+/// This is an identity value only; it grants no read, write, or close
+/// authority over the underlying transport session.
+pub(crate) type RemotingConnectionId = CheetahString;
+
 /// NameServer-local identity for one concrete broker registration instance.
 ///
 /// The address is part of the key so delayed events for an old master address
@@ -124,7 +130,7 @@ pub type SharedBrokerLiveInfo = Arc<BrokerLiveInfo>;
 /// the underlying transport session.
 #[derive(Clone)]
 pub(crate) struct BrokerSession {
-    pub(crate) id: Option<SessionId>,
+    pub(crate) id: SessionId,
     pub(crate) channel_id: CheetahString,
     pub(crate) remote_addr: std::net::SocketAddr,
     pub(crate) state: Option<SessionStateView>,
@@ -138,26 +144,17 @@ impl BrokerSession {
         state: SessionStateView,
     ) -> Self {
         Self {
-            id: Some(id),
+            id,
             channel_id,
             remote_addr,
             state: Some(state),
         }
     }
 
-    pub(crate) fn from_legacy_channel(channel: &rocketmq_transport::api::v1::Channel) -> Self {
-        Self {
-            id: None,
-            channel_id: channel.channel_id_owned(),
-            remote_addr: channel.remote_address(),
-            state: None,
-        }
-    }
-
     #[cfg(test)]
-    pub(crate) fn detached(channel_id: CheetahString, remote_addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn for_test(id: SessionId, channel_id: CheetahString, remote_addr: std::net::SocketAddr) -> Self {
         Self {
-            id: None,
+            id,
             channel_id,
             remote_addr,
             state: None,

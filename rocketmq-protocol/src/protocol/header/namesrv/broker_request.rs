@@ -19,6 +19,13 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Maximum Controller heartbeat lease accepted from a Broker.
+///
+/// Brokers continuously refresh this lease. One day preserves a generous
+/// operational window while preventing an untrusted value from pinning
+/// Controller session-fencing capacity indefinitely.
+pub const MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS: u64 = 24 * 60 * 60 * 1_000;
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
 #[header(

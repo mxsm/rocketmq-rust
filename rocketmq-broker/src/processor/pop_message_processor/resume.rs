@@ -335,15 +335,17 @@ where
 
         get_message_result.set_status(Some(GetMessageStatus::Found));
         if rest_num > 0 {
-            self.pop_long_polling_service.notify_message_arriving(
-                &request_header.topic,
-                request_header.queue_id,
-                &request_header.consumer_group,
-                None,
-                0,
-                None,
-                None,
-            );
+            if let Some(service) = self.pop_deferred_service() {
+                let _ = service.latch_arrival(
+                    &request_header.topic,
+                    request_header.queue_id,
+                    None,
+                    current_millis() as i64,
+                    None,
+                    None,
+                    service.fanout_cursor(),
+                );
+            }
         }
         let response_header = PopMessageResponseHeader {
             pop_time,

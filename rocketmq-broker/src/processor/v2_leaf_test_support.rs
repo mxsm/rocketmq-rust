@@ -22,17 +22,23 @@ use rocketmq_transport::api::v1::AdmissionController;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use rocketmq_transport::test_support::Connection;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
 pub(crate) struct RunningV2LeafServer {
+    address: std::net::SocketAddr,
     owner: RuntimeOwner,
     stop: Option<oneshot::Sender<()>>,
     result: oneshot::Receiver<ShutdownReport>,
 }
 
 impl RunningV2LeafServer {
+    pub(crate) async fn connect(&self) -> Connection {
+        Connection::new(TcpStream::connect(self.address).await.expect("connect V2 leaf client"))
+    }
+
     pub(crate) async fn finish(mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
@@ -92,6 +98,30 @@ pub(crate) async fn start_v2_leaf_server<P>(
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
 {
+    start_v2_leaf_server_with_registry(label, processor, controller, None).await
+}
+
+pub(crate) async fn start_v2_leaf_server_with_session_registry<P>(
+    label: &'static str,
+    processor: P,
+    controller: Arc<AdmissionController>,
+    session_registry: Arc<V2SessionRegistry>,
+) -> (Connection, RunningV2LeafServer)
+where
+    P: RequestProcessorV2 + Clone + Sync + 'static,
+{
+    start_v2_leaf_server_with_registry(label, processor, controller, Some(session_registry)).await
+}
+
+async fn start_v2_leaf_server_with_registry<P>(
+    label: &'static str,
+    processor: P,
+    controller: Arc<AdmissionController>,
+    session_registry: Option<Arc<V2SessionRegistry>>,
+) -> (Connection, RunningV2LeafServer)
+where
+    P: RequestProcessorV2 + Clone + Sync + 'static,
+{
     let mut runtime_config = RuntimeConfig::server_default(label);
     runtime_config.thread_stack_size = Some(16 * 1024 * 1024);
     let owner = RuntimeOwner::new(runtime_config).expect("V2 leaf runtime owner");
@@ -107,6 +137,10 @@ where
         processor,
     )
     .with_admission_controller(controller);
+    let server = match session_registry {
+        Some(session_registry) => server.with_session_registry(session_registry),
+        None => server,
+    };
     let (stop_tx, stop_rx) = oneshot::channel();
     let (startup_tx, startup_rx) = oneshot::channel();
     let (result_tx, result_rx) = oneshot::channel();
@@ -132,6 +166,7 @@ where
     (
         connection,
         RunningV2LeafServer {
+            address,
             owner,
             stop: Some(stop_tx),
             result: result_rx,

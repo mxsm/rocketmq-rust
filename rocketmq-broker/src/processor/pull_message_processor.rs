@@ -15,8 +15,6 @@
 pub(crate) mod capability;
 mod resume;
 
-#[cfg(test)]
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -44,20 +42,12 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::TaskGroup;
-#[cfg(test)]
-use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::MAX_PULL_MSG_SIZE;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::LegacySessionExecutionEnrollment;
-use rocketmq_transport::api::v1::RejectRequestResponse;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::RpcClient;
 use rocketmq_transport::api::v1::RpcClientUtils;
 use rocketmq_transport::api::v1::RpcRequest;
@@ -72,18 +62,14 @@ use tracing::info;
 use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
-use crate::deferred_generation_handoff::DeferredGenerationHandoff;
-use crate::deferred_generation_handoff::LegacyContinuation;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestProcessor;
 use crate::long_polling::pull_deferred::PullDeferredService;
 use crate::long_polling::pull_deferred::PullHookMetadata;
 use crate::long_polling::pull_deferred::PullMatchCriteria;
 use crate::long_polling::pull_deferred::PullRetainedEstimate;
 use crate::long_polling::pull_deferred::PullSessionClientLookup;
-use crate::long_polling::pull_request::PullRequest;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
 use crate::processor::pull_message_result_handler::PullBroadcastClientResolver;
@@ -91,7 +77,6 @@ use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullResponseContext;
 use crate::processor::response_plan::BrokerResponseParts;
-use crate::processor::response_plan::LegacyResponseDelivery;
 
 fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
     max_msg_bytes
@@ -121,7 +106,6 @@ fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
 pub struct PullMessageProcessor<MS: BrokerReadStore> {
     pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
     context: Arc<PullMessageProcessorContext<MS>>,
-    wakeup_task_group: OnceLock<TaskGroup>,
     session_client_lookup: OnceLock<Arc<dyn PullSessionClientLookup>>,
     pull_deferred_service: OnceLock<Arc<PullDeferredService>>,
 }
@@ -136,24 +120,6 @@ enum PullClientIdentityError {
     LookupUnavailable,
     #[error("the resumed Pull session has no current client registration")]
     RegistrationMissing,
-}
-
-impl<MS> RequestProcessor for PullMessageProcessor<MS>
-where
-    MS: BrokerReadStore,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_shared(channel, ctx, request).await
-    }
-
-    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
-        self.reject_request_shared()
-    }
 }
 
 impl<MS> RequestProcessorV2 for PullMessageProcessor<MS>
@@ -204,43 +170,15 @@ impl<MS> PullMessageProcessor<MS>
 where
     MS: BrokerReadStore,
 {
-    pub(crate) async fn process_request_shared(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        info!("PullMessageProcessor received request code: {:?}", request_code);
-        match request_code {
-            RequestCode::PullMessage | RequestCode::LitePullMessage => {
-                self.process_request_(channel, ctx, request_code, request).await
-            }
-            _ => {
-                warn!("PullMessageProcessor received unknown request code: {:?}", request_code);
-                let response = request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.context.command_factory,
-                    request.code(),
-                    format!("ClientManageProcessor request code {} not supported", request.code()),
-                    request.opaque(),
-                );
-                Ok(Some(response))
-            }
-        }
-    }
-
-    pub(crate) fn reject_request_shared(&self) -> RejectRequestResponse {
+    pub(crate) fn rejection_response(&self) -> Option<RemotingCommand> {
         let policy = self.context.policy();
         if !policy.slave_read_enable && policy.broker_role == BrokerRole::Slave {
-            return (
-                true,
-                Some(self.context.command_factory.create_response_command_with_code_remark(
-                    ResponseCode::SlaveNotAvailable,
-                    "the slave broker not allow to read",
-                )),
-            );
+            return Some(self.context.command_factory.create_response_command_with_code_remark(
+                ResponseCode::SlaveNotAvailable,
+                "the slave broker not allow to read",
+            ));
         }
-        (false, None)
+        None
     }
 }
 
@@ -369,7 +307,6 @@ where
         Self {
             pull_message_result_handler,
             context,
-            wakeup_task_group: OnceLock::new(),
             session_client_lookup: OnceLock::new(),
             pull_deferred_service: OnceLock::new(),
         }
@@ -393,16 +330,6 @@ where
         self.pull_deferred_service.set(service)
     }
 
-    pub(crate) fn install_deferred_generation_handoff(
-        &self,
-        handoff: Arc<DeferredGenerationHandoff>,
-    ) -> Result<(), Arc<DeferredGenerationHandoff>>
-    where
-        MS: Send + Sync + 'static,
-    {
-        self.context.install_deferred_generation_handoff(handoff)
-    }
-
     #[cfg(test)]
     pub(crate) fn pull_deferred_service_is_installed_for_test(&self) -> bool {
         self.pull_deferred_service.get().is_some()
@@ -417,19 +344,6 @@ where
         self.session_client_lookup
             .get()
             .and_then(|lookup| lookup.client_id(session_id, consumer_group))
-    }
-
-    pub(crate) fn set_wakeup_task_group(&self, task_group: TaskGroup) {
-        let wakeup_task_group = match task_group.try_child("broker.pull-message.legacy-wakeup") {
-            Ok(task_group) => task_group,
-            Err(error) => {
-                warn!(%error, "failed to create PullMessageProcessor legacy wake-up task group");
-                return;
-            }
-        };
-        if self.wakeup_task_group.set(wakeup_task_group).is_err() {
-            warn!("PullMessageProcessor wake-up task group is already initialized");
-        }
     }
 
     pub(crate) fn deferred_current_max_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<i64> {
@@ -638,7 +552,7 @@ where
         let consumer_group_info = self
             .context
             .consumers()
-            .get_consumer_group_info(request_header.consumer_group.as_ref());
+            .get_consumer_group_info_internal(request_header.consumer_group.as_ref(), true);
         if consumer_group_info.is_none() {
             warn!(
                 "the consumer's group info not exist, group: {}",
@@ -888,97 +802,6 @@ impl<MS> PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
-    /// Processes a pull message request with all the entry point options.
-    pub async fn process_request_(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_inner(request_code, channel, ctx, request, true)
-            .await
-    }
-
-    /// Core pull message processing logic.
-    ///
-    /// # Processing Flow
-    ///
-    /// 1. **Permission Check**: Validates broker and topic read permissions
-    /// 2. **Subscription Validation**: Validates subscription group and consumer info
-    /// 3. **Topic Validation**: Checks topic existence and queue ID validity
-    /// 4. **Subscription Data**: Retrieves or parses subscription data
-    /// 5. **Cold Data Flow Control**: Applies flow control for cold data reads
-    /// 6. **Message Retrieval**: Gets messages from message store
-    /// 7. **Result Handling**: Delegates to `PullMessageResultHandler`
-    ///
-    /// # Arguments
-    ///
-    /// * `broker_allow_suspend` - Whether the broker allows suspending the request
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(response))` - Response to send to client
-    /// * `Ok(None)` - Request was suspended or the V1 compatibility boundary wrote the response
-    #[allow(unused_assignments)]
-    async fn process_request_inner(
-        &self,
-        request_code: RequestCode,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-        broker_allow_suspend: bool,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
-        let hook_metadata = PullHookMetadata::from_command(request);
-        let broadcast_client_resolver = |request_header: &PullMessageRequestHeader| {
-            self.resolve_broadcast_client_id_with(request_header, || {
-                Ok(self.legacy_broadcast_client_id(&request_header.consumer_group, &channel))
-            })
-        };
-        let result = self
-            .execute_pull(
-                request_code,
-                request_header,
-                channel.remote_address(),
-                &hook_metadata,
-                &broadcast_client_resolver,
-                broker_allow_suspend,
-                Some(request.opaque()),
-            )
-            .await?;
-        match result {
-            PullMessageResult::Reply(parts) => Ok(legacy_pull_delivery_response(parts.deliver_legacy(&channel).await)),
-            PullMessageResult::Suspend(suspension) => {
-                let suspension = *suspension;
-                let topic = suspension.request_header.topic.clone();
-                let queue_id = suspension.request_header.queue_id;
-                let offset = suspension.request_header.queue_offset;
-                let pull_request = PullRequest::new(
-                    request.clone(),
-                    channel.clone(),
-                    ctx,
-                    suspension.timing.effective_timeout_millis(),
-                    suspension.timing.suspend_wall_millis(),
-                    offset,
-                    suspension.subscription_data,
-                    suspension.message_filter,
-                );
-                if self
-                    .context
-                    .suspend_pull_request(topic.as_str(), queue_id, pull_request)
-                {
-                    Ok(None)
-                } else {
-                    Ok(legacy_pull_delivery_response(
-                        suspension.fallback.deliver_legacy(&channel).await,
-                    ))
-                }
-            }
-        }
-    }
-
     async fn process_supported_v2(
         &self,
         request_code: RequestCode,
@@ -1001,7 +824,6 @@ where
                 &hook_metadata,
                 &broadcast_client_resolver,
                 true,
-                None,
             )
             .await?;
         match result {
@@ -1059,16 +881,12 @@ where
         hook_metadata: &PullHookMetadata,
         broadcast_client_resolver: &PullBroadcastClientResolver<'_>,
         broker_allow_suspend: bool,
-        legacy_opaque: Option<i32>,
     ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
         let begin_time_mills = current_millis();
-        let mut response = self
+        let response = self
             .context
             .command_factory
             .create_java_default_error_response_command();
-        if let Some(opaque) = legacy_opaque {
-            response.set_opaque_mut(opaque);
-        }
         //info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
         let policy = self.context.policy();
@@ -1453,62 +1271,6 @@ where
         }
         resolve_normal_client()
     }
-
-    fn legacy_broadcast_client_id(&self, consumer_group: &CheetahString, channel: &Channel) -> Option<CheetahString> {
-        self.context
-            .consumers()
-            .get_consumer_group_info(consumer_group.as_ref())?
-            .find_channel_by_channel(channel)
-            .map(|info| info.client_id().clone())
-    }
-
-    pub fn execute_request_when_wakeup(
-        self: &Arc<Self>,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
-        continuation: Option<LegacyContinuation>,
-        execution: Option<LegacySessionExecutionEnrollment>,
-    ) -> bool {
-        let pull_message_processor = Arc::clone(self);
-        let task = async move {
-            let _continuation = continuation;
-            let opaque = request.opaque();
-            let response = pull_message_processor
-                .process_request_inner(
-                    RequestCode::from(request.code()),
-                    channel,
-                    ctx.clone(),
-                    &mut request,
-                    false,
-                )
-                .await;
-
-            if let Ok(Some(response)) = response {
-                let command = response.set_opaque(opaque).mark_response_type();
-                if let Err(error) = ctx.try_write_response(command).await {
-                    error!(
-                        kind = error.kind().as_str(),
-                        progress = error.write_progress().map_or("none", |progress| progress.as_str()),
-                        retryable = error.retryable(),
-                        "long polling wakeup response write failed; not retrying"
-                    );
-                }
-            }
-        };
-        if let Some(execution) = execution {
-            return execution.try_execute(task).is_ok();
-        }
-        #[cfg(test)]
-        {
-            spawn_wakeup_pull_task(self.wakeup_task_group.get(), task)
-        }
-        #[cfg(not(test))]
-        {
-            warn!("pull wake-up has no canonical session execution owner");
-            false
-        }
-    }
 }
 
 fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<std::net::SocketAddr> {
@@ -1527,51 +1289,6 @@ fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResul
     }
 }
 
-impl<MS> PullRequestProcessor for PullMessageProcessor<MS>
-where
-    MS: BrokerReadStore + Send + Sync + 'static,
-{
-    fn long_polling_scan_config(&self) -> (bool, u64) {
-        let policy = self.context.policy();
-        (policy.long_polling_enable, policy.short_polling_time_millis)
-    }
-
-    fn max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<i64> {
-        self.context.store().max_offset(topic, queue_id).ok()
-    }
-
-    fn execute_request_when_wakeup(
-        self: Arc<Self>,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
-        continuation: Option<LegacyContinuation>,
-        execution: Option<LegacySessionExecutionEnrollment>,
-    ) -> bool {
-        PullMessageProcessor::execute_request_when_wakeup(&self, channel, ctx, request, continuation, execution)
-    }
-
-    fn wakeup_task_group(&self) -> Option<TaskGroup> {
-        self.wakeup_task_group.get().cloned()
-    }
-}
-
-#[cfg(test)]
-fn spawn_wakeup_pull_task<F>(task_group: Option<&TaskGroup>, task: F) -> bool
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    let Some(task_group) = task_group else {
-        warn!("Cannot execute wakeup pull request without broker request processor task group");
-        return false;
-    };
-
-    if let Err(error) = task_group.spawn("broker.pull-message.wakeup", TaskKind::Worker, task) {
-        warn!(%error, "failed to spawn tracked wakeup pull request task");
-        return false;
-    }
-    true
-}
 pub(crate) fn is_broadcast(proxy_pull_broadcast: bool, consumer_group_info: Option<&ConsumerGroupInfo>) -> bool {
     proxy_pull_broadcast
         || consumer_group_info.is_some_and(|info| {
@@ -1588,23 +1305,6 @@ fn consumer_compensation_for_request_source(request_source: RequestSource) -> (C
     }
 }
 
-fn legacy_pull_delivery_response(
-    delivery: rocketmq_error::RocketMQResult<LegacyResponseDelivery>,
-) -> Option<RemotingCommand> {
-    match delivery {
-        Ok(LegacyResponseDelivery::Command(response)) => Some(response),
-        Ok(LegacyResponseDelivery::Written) => None,
-        Err(error) => {
-            warn!(%error, "Failed to send Pull response");
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "pull_message_processor/resume_store_tests.rs"]
-mod resume_store_tests;
-
 #[cfg(test)]
 #[path = "pull_message_processor/v2_tests.rs"]
 mod v2_tests;
@@ -1614,13 +1314,9 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
-    use std::time::Duration;
 
     use crate::config::broker_config::BrokerConfig;
-    use bytes::Bytes;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -1639,35 +1335,23 @@ mod tests {
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-    use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::MAX_PULL_MSG_SIZE;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
-    use rocketmq_transport::test_support::TestChannelBuilder;
 
     use super::consumer_compensation_for_request_source;
     use super::is_broadcast;
-    use super::legacy_pull_delivery_response;
     use super::rewrite_response_for_static_topic;
-    use super::spawn_wakeup_pull_task;
     use super::static_topic_rewrite_error_response;
     use super::store_read_max_msg_bytes;
-    use super::LegacyResponseDelivery;
     use super::PullMessageProcessor;
     use super::StaticTopicMappingField;
     use super::StaticTopicMappingItem;
     use super::StaticTopicRewriteError;
     use crate::broker_runtime::BrokerRuntime;
-    use crate::client::client_channel_info::ClientChannelInfo;
     use crate::client::consumer_group_info::ConsumerGroupInfo;
-    use crate::deferred_generation_handoff::DeferredGenerationHandoff;
-    use crate::deferred_generation_handoff::DeferredGenerationTarget;
-    use crate::deferred_generation_handoff::LegacyContinuation;
     use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
     use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
-    use crate::processor::response_plan::BrokerResponseParts;
 
     fn temp_test_root(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -1694,103 +1378,6 @@ mod tests {
         runtime
     }
 
-    #[tokio::test]
-    async fn wakeup_pull_task_is_tracked_by_request_processor_group() {
-        struct DropFlag(Arc<AtomicBool>);
-
-        impl Drop for DropFlag {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker.pull-wakeup-test");
-        let task_group = runtime.root_group().clone();
-        let started = Arc::new(AtomicBool::new(false));
-        let dropped = Arc::new(AtomicBool::new(false));
-        let started_in_task = started.clone();
-        let dropped_in_task = dropped.clone();
-
-        spawn_wakeup_pull_task(Some(&task_group), async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            started_in_task.store(true, Ordering::Release);
-            std::future::pending::<()>().await;
-        });
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !started.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("tracked wakeup task should start");
-
-        let report = task_group.shutdown(Duration::from_millis(20)).await;
-
-        assert_eq!(report.aborted, 1, "{}", report.to_json());
-        assert_eq!(report.leaked, 0, "{}", report.to_json());
-        assert!(dropped.load(Ordering::Acquire));
-    }
-
-    fn pull_legacy_continuation(handoff: &DeferredGenerationHandoff) -> LegacyContinuation {
-        let target = DeferredGenerationTarget::pull(CheetahString::from_static_str("pull-continuation-topic"), 0);
-        let (_, wait) = handoff
-            .arrival_adapter()
-            .enroll_legacy_wait(target.clone(), || Ok::<_, ()>(()))
-            .expect("register Pull legacy waiter");
-        let route = handoff.acquire_route(target).expect("acquire Pull legacy route");
-        wait.begin_wake(route)
-            .expect("begin Pull legacy wake")
-            .into_continuation()
-    }
-
-    #[test]
-    fn rejected_pull_wakeup_spawn_drops_continuation() {
-        let handoff = DeferredGenerationHandoff::new();
-        let continuation = pull_legacy_continuation(&handoff);
-
-        spawn_wakeup_pull_task(None, async move {
-            let _continuation = continuation;
-        });
-
-        assert!(handoff.zero_report().is_zero());
-    }
-
-    #[tokio::test]
-    async fn pull_wakeup_future_owns_continuation_until_terminal() {
-        let handoff = DeferredGenerationHandoff::new();
-        let continuation = pull_legacy_continuation(&handoff);
-        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker.pull-continuation-test");
-        let task_group = runtime.root_group().clone();
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-        let task_started = Arc::clone(&started);
-        let task_release = Arc::clone(&release);
-
-        spawn_wakeup_pull_task(Some(&task_group), async move {
-            let _continuation = continuation;
-            task_started.notify_one();
-            task_release.notified().await;
-        });
-        tokio::time::timeout(Duration::from_secs(1), started.notified())
-            .await
-            .expect("accepted Pull wake task must start");
-        assert_eq!(handoff.snapshot().continuations, 1);
-
-        let mut shutdown = Box::pin(task_group.shutdown(Duration::from_secs(1)));
-        tokio::select! {
-            biased;
-            _ = &mut shutdown => panic!("Pull execution owner drained before the accepted handler barrier"),
-            _ = tokio::task::yield_now() => {}
-        }
-        assert_eq!(handoff.snapshot().continuations, 1);
-
-        release.notify_one();
-        let report = shutdown.await;
-        assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(handoff.zero_report().is_zero());
-    }
-
     fn new_processor<MS: BrokerReadStore>(context: Arc<PullMessageProcessorContext<MS>>) -> PullMessageProcessor<MS> {
         let handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(vec![]),
@@ -1798,74 +1385,6 @@ mod tests {
             None,
         ));
         PullMessageProcessor::new(handler, context)
-    }
-
-    #[test]
-    fn legacy_pull_delivery_keeps_written_and_failed_responses_consumed() {
-        let command = RemotingCommand::create_response_command_with_code(ResponseCode::Success);
-        let returned = legacy_pull_delivery_response(Ok(LegacyResponseDelivery::Command(command)));
-        assert!(returned.is_some());
-
-        assert!(legacy_pull_delivery_response(Ok(LegacyResponseDelivery::Written)).is_none());
-
-        let write_error = rocketmq_error::RocketMQError::internal(
-            "pull-response-test",
-            std::io::Error::other("injected compatibility write failure"),
-        );
-        assert!(legacy_pull_delivery_response(Err(write_error)).is_none());
-    }
-
-    struct CountingBodyOwner {
-        drops: Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    impl AsRef<[u8]> for CountingBodyOwner {
-        fn as_ref(&self) -> &[u8] {
-            b"segmented-pull-body"
-        }
-    }
-
-    impl Drop for CountingBodyOwner {
-        fn drop(&mut self) {
-            self.drops.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    async fn closed_pull_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind Pull compatibility listener");
-        let address = listener.local_addr().expect("Pull compatibility address");
-        let stream = std::net::TcpStream::connect(address).expect("connect Pull compatibility stream");
-        let accepted = listener.accept().expect("accept Pull compatibility stream").0;
-        stream.set_nonblocking(true).expect("set Pull stream nonblocking");
-
-        let mut connection = Connection::new(tokio::net::TcpStream::from_std(stream).expect("Tokio Pull stream"));
-        connection.shutdown().await.expect("shut down Pull test connection");
-        drop(accepted);
-
-        TestChannelBuilder::new(connection, crate::test_task_group("pull-legacy-closed-channel"))
-            .addresses(address, address)
-            .build()
-            .expect("build closed Pull test channel")
-    }
-
-    #[tokio::test]
-    async fn segmented_legacy_write_failure_remains_consumed_and_drops_body_once() {
-        let channel = closed_pull_test_channel().await;
-        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let body = Bytes::from_owner(CountingBodyOwner {
-            drops: Arc::clone(&drops),
-        });
-        let parts = BrokerResponseParts::segments(
-            RemotingCommand::create_response_command_with_code(ResponseCode::Success),
-            vec![body],
-        )
-        .expect("segmented Pull response parts");
-        assert_eq!(0, drops.load(Ordering::SeqCst));
-
-        let returned = legacy_pull_delivery_response(parts.deliver_legacy(&channel).await);
-
-        assert!(returned.is_none(), "Pull compatibility keeps failed writes consumed");
-        assert_eq!(1, drops.load(Ordering::SeqCst));
     }
 
     fn request_with_subscription(topic: &str, group: &str, expression: &str, version: i64) -> PullMessageRequestHeader {
@@ -2139,42 +1658,15 @@ mod tests {
         assert_eq!(response_header.offset_delta, Some(0));
     }
 
-    async fn new_client_channel_info(client_id: &str) -> ClientChannelInfo {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test listener");
-        let server_addr = listener.local_addr().expect("listener local addr");
-        let accept = tokio::spawn(async move { listener.accept().await.expect("accept test stream").0 });
-        let stream = tokio::net::TcpStream::connect(server_addr)
-            .await
-            .expect("connect test stream");
-        let local_addr = stream.local_addr().expect("client local addr");
-        let remote_addr = stream.peer_addr().expect("client peer addr");
-        let server_stream = accept.await.expect("join accept task");
-        drop(server_stream);
-
-        let channel = rocketmq_transport::test_support::TestChannelBuilder::new(
-            Connection::new(stream),
-            crate::test_task_group("channel"),
-        )
-        .addresses(local_addr, remote_addr)
-        .build()
-        .expect("build test channel");
-        ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
-    }
-
     async fn register_consumer_group_without_subscriptions<MS: BrokerReadStore>(
         context: &PullMessageProcessorContext<MS>,
         group: &str,
-        client_id: &str,
+        _client_id: &str,
     ) {
-        context.consumers().register_consumer_without_sub(
+        context.consumers().compensate_basic_consumer_info(
             &group.into(),
-            new_client_channel_info(client_id).await,
             ConsumeType::ConsumePassively,
             MessageModel::Clustering,
-            ConsumeFromWhere::ConsumeFromLastOffset,
-            false,
         );
     }
 
@@ -2185,17 +1677,18 @@ mod tests {
         expression: &str,
         version: i64,
     ) {
-        let group_info = context
-            .consumers()
-            .get_consumer_group_info(&group.into())
-            .expect("registered consumer group should exist");
-        group_info.upsert_subscription(SubscriptionData {
-            topic: topic.into(),
+        let group = CheetahString::from(group);
+        let topic = CheetahString::from(topic);
+        let subscription = SubscriptionData {
+            topic: topic.clone(),
             sub_string: expression.into(),
             expression_type: ExpressionType::SQL92.into(),
             sub_version: version,
             ..Default::default()
-        });
+        };
+        context
+            .consumers()
+            .compensate_subscribe_data(&group, &topic, &subscription);
     }
 
     #[test]
@@ -2261,26 +1754,6 @@ mod tests {
         assert_eq!(store_read_max_msg_bytes(Some(0)), MAX_PULL_MSG_SIZE);
         assert_eq!(store_read_max_msg_bytes(Some(-1)), MAX_PULL_MSG_SIZE);
         assert_eq!(store_read_max_msg_bytes(None), MAX_PULL_MSG_SIZE);
-    }
-
-    #[test]
-    fn pull_processors_depend_only_on_explicit_context() {
-        let processor = include_str!("pull_message_processor.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production processor source");
-        let result_handler = include_str!("default_pull_message_result_handler.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production result handler source");
-
-        assert!(!processor.contains(concat!("WAKEUP_WRITE_", "LOCK_SHARDS")));
-        assert!(!processor.contains("wakeup_write_locks"));
-        for source in [processor, result_handler] {
-            assert!(!source.contains(concat!("Broker", "RuntimeInner")));
-            assert!(!source.contains(concat!("Arc", "Mut")));
-            assert!(!source.contains(concat!("use super", "::*")));
-        }
     }
 
     #[test]

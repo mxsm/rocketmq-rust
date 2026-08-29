@@ -109,6 +109,10 @@ impl PendingRequestOwner {
         self.accepting.store(false, Ordering::Release);
     }
 
+    pub(crate) fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire)
+    }
+
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         self.table_id == other.table_id
             && self.id == other.id

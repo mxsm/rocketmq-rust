@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
@@ -51,6 +52,8 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::v2::ServerRequestCommand;
 use tracing::warn;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -96,12 +99,17 @@ impl ConsumerRequestHandler {
                     subscription_table.insert(topic, subscription.as_ref().clone());
                 }
 
-                for (channel, channel_info) in consumer_group_info.channel_info_snapshot() {
+                for channel_info in consumer_group_info.session_info_snapshot() {
                     let mut connection = Connection::new();
                     connection.set_client_id(channel_info.client_id().clone());
                     connection.set_language(channel_info.language());
                     connection.set_version(channel_info.version());
-                    connection.set_client_addr(channel.remote_address().to_string().into());
+                    connection.set_client_addr(
+                        channel_info
+                            .remote_address()
+                            .map(CheetahString::from_slice)
+                            .unwrap_or_else(|| format!("session:{:?}", channel_info.session_id()).into()),
+                    );
                     body_data.insert_connection(connection);
                 }
                 let body = body_data.encode()?;
@@ -783,41 +791,54 @@ impl ConsumerRequestHandler {
             .command_factory()
             .create_java_default_error_response_command();
 
-        let client_channel_info = broker_runtime_inner
+        let group: CheetahString = consumer_group.into();
+        let Some((client_session_info, transport)) = broker_runtime_inner
             .consumer_manager()
-            .find_channel_by_client_id(consumer_group, client_id);
-
-        if client_channel_info.is_none() {
+            .session_registry()
+            .find_transport(&group, client_id)
+        else {
             response = response
                 .set_code(ResponseCode::SystemError)
                 .set_remark(format!("The Consumer <{}> <{}> not online", consumer_group, client_id));
             return Ok(Some(response));
-        }
+        };
 
-        let client_channel_info = client_channel_info.unwrap();
-
-        if client_channel_info.version() < RocketMqVersion::V3_1_8_SNAPSHOT.ordinal() as i32 {
+        if client_session_info.version() < RocketMqVersion::V3_1_8_SNAPSHOT.ordinal() as i32 {
             response = response.set_code(ResponseCode::SystemError).set_remark(format!(
                 "The Consumer <{}> Version <{}> too low to finish, please upgrade it to V3_1_8_SNAPSHOT",
                 client_id,
-                RocketMqVersion::from_ordinal(client_channel_info.version() as u32).name()
+                RocketMqVersion::from_ordinal(client_session_info.version() as u32).name()
             ));
             return Ok(Some(response));
         }
 
-        let mut channel = client_channel_info.channel().clone();
+        let command = match RequestCode::from(request.code()) {
+            RequestCode::GetConsumerRunningInfo => ServerRequestCommand::GetConsumerRunningInfo {
+                header: request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>()?,
+            },
+            RequestCode::ConsumeMessageDirectly => {
+                let header = request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
+                let body = request.body().cloned().unwrap_or_default();
+                ServerRequestCommand::ConsumeMessageDirectly { header, body }
+            }
+            code => {
+                return Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
+                    self.broker_to_client.command_factory(),
+                    request.code(),
+                    format!("broker-to-consumer request code {code:?} is not allowlisted"),
+                    request.opaque(),
+                )));
+            }
+        };
 
-        // Default timeout is 5000ms, same as Java implementation
-        let timeout_millis = 5000u64;
-
-        let mut broker_to_client = self.broker_to_client;
-        match broker_to_client
-            .call_client(&mut channel, request, timeout_millis)
+        match transport
+            .request_sender()
+            .request(command, Duration::from_millis(5_000))
             .await
         {
-            Ok(result) => Ok(Some(result)),
+            Ok(result) => Ok(Some(result.into_command())),
             Err(e) => {
-                let (code, error_type) = match &e {
+                let (code, error_type) = match e.source_error() {
                     rocketmq_error::RocketMQError::Network(
                         rocketmq_error::NetworkError::RequestTimeout { .. }
                         | rocketmq_error::NetworkError::ConnectionTimeout { .. },
@@ -978,7 +999,6 @@ impl ConsumerRequestHandler {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::SystemTime;
@@ -987,7 +1007,6 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::config::TopicConfig;
-    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_protocol::code::request_code::RequestCode;
@@ -1014,17 +1033,13 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-    use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::BrokerAdminStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
 
     use super::ConsumerRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
-    use crate::client::client_channel_info::ClientChannelInfo;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -1064,20 +1079,6 @@ mod tests {
         assert_eq!(response.serialize_type(), serialize_type);
     }
 
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
-    }
-
     async fn put_test_message<MS: BrokerAdminStore>(
         admin: &mut crate::broker::broker_admin_runtime::BrokerAdminRuntime<MS>,
         topic: &str,
@@ -1100,7 +1101,9 @@ mod tests {
     #[tokio::test]
     async fn get_all_message_request_mode_returns_configured_modes() {
         let mut runtime = new_test_runtime("message-mode").await;
-        runtime.init_processor_for_test();
+        let _ = runtime
+            .init_v2_processor_checked()
+            .expect("initialize V2 request processors");
         let admin = runtime.admin_runtime_for_test();
         admin
             .query_assignment_processor()
@@ -1478,26 +1481,21 @@ mod tests {
     async fn query_subscription_by_consumer_returns_subscription_body() {
         let runtime = new_test_runtime("query-subscription").await;
         let admin = runtime.admin_runtime_for_test();
-        let register_channel = create_test_channel().await;
-        let client_channel_info = ClientChannelInfo::new(
-            register_channel.clone(),
-            CheetahString::from_static_str("client-a"),
-            LanguageCode::RUST,
-            100,
-        );
-        admin.consumer_manager().register_consumer(
-            &CheetahString::from_static_str("group-a"),
-            client_channel_info,
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+        let subscription = SubscriptionData {
+            topic: topic.clone(),
+            sub_string: CheetahString::from_static_str("*"),
+            ..Default::default()
+        };
+        admin.consumer_manager().compensate_basic_consumer_info(
+            &group,
             ConsumeType::ConsumePassively,
             MessageModel::Clustering,
-            ConsumeFromWhere::ConsumeFromLastOffset,
-            HashSet::from([SubscriptionData {
-                topic: CheetahString::from_static_str("topic-a"),
-                sub_string: CheetahString::from_static_str("*"),
-                ..Default::default()
-            }]),
-            false,
         );
+        admin
+            .consumer_manager()
+            .compensate_subscribe_data(&group, &topic, &subscription);
 
         let handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(

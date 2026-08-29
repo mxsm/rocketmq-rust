@@ -147,15 +147,13 @@ use rocketmq_store::HAService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
 use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::v2::AdmissionController;
+use rocketmq_transport::api::v2::AdmissionLimits;
 use rocketmq_transport::test_support::Connection;
-use rocketmq_transport::test_support::LocalRequestHarness;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -164,7 +162,6 @@ use super::*;
 
 mod pop_lite_core_causality_tests;
 mod pop_lite_deferred_wire_tests;
-mod pop_lite_v1_compatibility_tests;
 
 impl BrokerRuntime {
     pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<BrokerMessageStore>> {
@@ -228,6 +225,22 @@ impl BrokerRuntime {
 
     pub(crate) async fn reput_message_store_once_for_test(&mut self) {
         self.detach_message_store_provider();
+        if let Some(deferred) = self.composition.data_plane.deferred.as_ref() {
+            deferred.unbind_producer_store();
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self
+                .composition
+                .state
+                .message_store
+                .as_ref()
+                .is_some_and(|store| Arc::strong_count(store) != 1 || Arc::weak_count(store) != 0)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("test message store leases should drain after provider detachment");
         self.composition
             .state
             .message_store_exclusive_mut()
@@ -239,6 +252,22 @@ impl BrokerRuntime {
 
     pub(crate) async fn shutdown_message_store_for_test(&mut self) {
         self.detach_message_store_provider();
+        if let Some(deferred) = self.composition.data_plane.deferred.as_ref() {
+            deferred.unbind_producer_store();
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self
+                .composition
+                .state
+                .message_store
+                .as_ref()
+                .is_some_and(|store| Arc::strong_count(store) != 1 || Arc::weak_count(store) != 0)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("test message store leases should drain after provider detachment");
         self.composition
             .state
             .message_store_exclusive_mut()
@@ -809,7 +838,7 @@ async fn schedule_role_status_changes_only_after_final_persistence_succeeds() {
         .load(Ordering::Acquire));
 
     let report = context.shutdown_tasks(Duration::from_secs(1)).await;
-    assert!(report.is_healthy(), "{}", report.to_json());
+    assert!(report.is_healthy(), "{report:?}");
 }
 
 #[test]
@@ -830,8 +859,6 @@ fn broker_basic_shutdown_report_exposes_required_component_names() {
             "scheduled_tasks",
             "message_store",
             "deferred_services",
-            "pull_request_hold",
-            "pop_services",
             "transaction_services",
             "fast_failure",
             "topic_route",
@@ -1521,35 +1548,43 @@ fn controller_test_ports_available_rejects_non_primary_loopback_conflict() {
     assert!(!controller_test_ports_available(&[port], &(0..=0)));
 }
 
-async fn create_test_channel() -> Channel {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-    let local_addr = listener.local_addr().expect("local listener addr");
-    let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-    std_stream.set_nonblocking(true).expect("set nonblocking");
-    drop(listener);
-    let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-    let connection = Connection::new(tcp_stream);
-    rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-        .addresses(local_addr, local_addr)
-        .build()
-        .expect("build test channel")
-}
-
 async fn process_broker_request(
-    processor: &mut DefaultServerProcessor,
+    processor: &DefaultServerProcessorV2,
     request: &mut RemotingCommand,
 ) -> RemotingCommand {
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-    processor
-        .process_request(channel, ctx, request)
+    dispatch_broker_request(processor, request)
         .await
-        .expect("processor dispatch should succeed")
-        .expect("processor should return a response")
+        .expect("canonical V2 dispatch should succeed")
+        .expect("canonical V2 dispatch should return a response")
+}
+
+async fn dispatch_broker_request(
+    processor: &DefaultServerProcessorV2,
+    request: &mut RemotingCommand,
+) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    let mut processor = processor.clone();
+    processor.set_auth_disabled_by_validated_config();
+    let (mut client, server) = crate::processor::v2_leaf_test_support::start_v2_leaf_server(
+        "broker-runtime-v2-fixture",
+        processor,
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .await;
+    client
+        .send_command(request.clone())
+        .await
+        .expect("send request through the canonical V2 server");
+    let response = server
+        .receive_one_then_finish_and_collect(client)
+        .await
+        .into_iter()
+        .next()
+        .expect("canonical V2 server should return a response");
+    Ok(Some(response))
 }
 
 async fn send_message_through_broker_processor(
-    processor: &mut DefaultServerProcessor,
+    processor: &DefaultServerProcessorV2,
     topic: CheetahString,
     body: Bytes,
 ) -> SendMessageResponseHeader {
@@ -1572,22 +1607,7 @@ async fn send_message_through_broker_processor(
     let mut request = RemotingCommand::create_request_command(RequestCode::SendMessage, send_header).set_body(body);
     request.make_custom_header_to_net();
 
-    let mut harness = LocalRequestHarness::new(crate::test_task_group("local-harness"))
-        .await
-        .expect("local harness should start");
-    let direct_response = processor
-        .process_request(harness.channel(), harness.context(), &mut request)
-        .await
-        .expect("send processor dispatch should succeed");
-    assert!(
-        direct_response.is_none(),
-        "successful SendMessage writes response to the remoting context"
-    );
-    let response = tokio::time::timeout(Duration::from_secs(5), harness.receive_response())
-        .await
-        .expect("send response should be written to the remoting peer")
-        .expect("send response receive should succeed")
-        .expect("send response should exist");
+    let response = process_broker_request(processor, &mut request).await;
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
     response
         .decode_command_custom_header::<SendMessageResponseHeader>()
@@ -1676,7 +1696,15 @@ async fn new_phase3_test_runtime(label: &str) -> BrokerRuntime {
 
 async fn new_phase3_lifecycle_test_runtime(label: &str) -> BrokerRuntime {
     let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-{label}-{}", current_millis()));
+    let listen_port = allocate_broker_runtime_test_port();
     let broker_config = Arc::new(BrokerConfig {
+        broker_server_config: ServerConfig {
+            listen_port: listen_port as u32,
+            bind_address: "127.0.0.1".to_owned(),
+            ..ServerConfig::default()
+        },
+        broker_ip1: CheetahString::from_static_str("127.0.0.1"),
+        listen_port: listen_port as u32,
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
         ..BrokerConfig::default()
@@ -3156,7 +3184,9 @@ async fn initialize_message_store_opens_rocksdb_owner_for_rocksdb_store_type() {
 #[tokio::test]
 async fn phase3_broker_production_request_codes_dispatch_to_expected_processors() {
     let mut runtime = new_phase3_test_runtime("phase3-dispatch").await;
-    let (processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     for request_code in [
         RequestCode::SendMessage,
@@ -3215,7 +3245,10 @@ async fn phase3_broker_production_request_codes_dispatch_to_expected_processors(
 #[tokio::test]
 async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pipeline() {
     let mut runtime = new_phase3_test_runtime("pull-session-client-lookup").await;
-    let _ = runtime.init_processor();
+    let (mut processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
+    processor.set_auth_disabled_by_validated_config();
     let pull_processor = runtime
         .composition
         .request_pipeline
@@ -3224,13 +3257,53 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
         .cloned()
         .expect("request pipeline should retain the test Pull processor handle");
     let registration = runtime.composition.state.consumer_manager().client_registration();
-    let session_id = rocketmq_transport::test_support::session_id_for_test(9_845);
-    let replacement_session_id = rocketmq_transport::test_support::session_id_for_test(9_846);
+    let session_registry = runtime.v2_session_registry_for_test();
+    let mut session_events = session_registry.subscribe();
+    let (mut old_client, server) = crate::processor::v2_leaf_test_support::start_v2_leaf_server_with_session_registry(
+        "pull-session-client-lookup",
+        processor,
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        session_registry,
+    )
+    .await;
+    old_client
+        .send_command(RemotingCommand::new_request(RequestCode::GetBrokerConfig, Bytes::new()))
+        .await
+        .expect("activate initial V2 session");
+    let session_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let rocketmq_transport::api::v2::V2SessionEvent::Connected(view) =
+                session_events.recv().await.expect("receive initial V2 session event")
+            {
+                break view.id();
+            }
+        }
+    })
+    .await
+    .expect("initial V2 session should connect");
+    let mut replacement_client = server.connect().await;
+    replacement_client
+        .send_command(RemotingCommand::new_request(RequestCode::GetBrokerConfig, Bytes::new()))
+        .await
+        .expect("activate replacement V2 session");
+    let replacement_session_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let rocketmq_transport::api::v2::V2SessionEvent::Connected(view) = session_events
+                .recv()
+                .await
+                .expect("receive replacement V2 session event")
+            {
+                break view.id();
+            }
+        }
+    })
+    .await
+    .expect("replacement V2 session should connect");
     let group = CheetahString::from_static_str("pull-session-group");
 
     assert!(registration.register_consumer_session(
         &group,
-        crate::client::client_channel_info::ClientSessionInfo::new(
+        crate::client::client_session_info::ClientSessionInfo::new(
             session_id,
             "pull-session-client".into(),
             None,
@@ -3250,7 +3323,7 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
 
     assert!(!registration.register_consumer_session(
         &group,
-        crate::client::client_channel_info::ClientSessionInfo::new(
+        crate::client::client_session_info::ClientSessionInfo::new(
             session_id,
             "pull-session-client".into(),
             None,
@@ -3270,7 +3343,7 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
 
     assert!(registration.register_consumer_session(
         &group,
-        crate::client::client_channel_info::ClientSessionInfo::new(
+        crate::client::client_session_info::ClientSessionInfo::new(
             replacement_session_id,
             "pull-session-client".into(),
             None,
@@ -3300,13 +3373,18 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
         pull_processor.session_client_id_for_test(replacement_session_id, &group),
         None
     );
+    drop(old_client);
+    drop(replacement_client);
+    server.finish().await;
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
     let mut runtime = new_phase3_lifecycle_test_runtime("shared-deferred-lifecycle").await;
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let initial_admission = runtime
         .composition
         .data_plane
@@ -3395,21 +3473,9 @@ async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
     );
 
     let topic = CheetahString::from_static_str("shared-deferred-lifecycle-topic");
-    let pull_legacy = AtomicU64::new(0);
-    let pop_legacy = AtomicU64::new(0);
-    let notification_legacy = AtomicU64::new(0);
-    producer.route_pull_arrival(&topic, 0, 1, None, 0, None, None, || {
-        pull_legacy.fetch_add(1, Ordering::Relaxed);
-    });
-    producer.route_pop_arrival(&topic, 0, None, 0, None, None, || {
-        pop_legacy.fetch_add(1, Ordering::Relaxed);
-    });
-    producer.route_notification_arrival(&topic, 0, None, 0, None, None, || {
-        notification_legacy.fetch_add(1, Ordering::Relaxed);
-    });
-    assert_eq!(pull_legacy.load(Ordering::Relaxed), 1);
-    assert_eq!(pop_legacy.load(Ordering::Relaxed), 1);
-    assert_eq!(notification_legacy.load(Ordering::Relaxed), 1);
+    producer.route_pull_arrival(&topic, 0, 1, None, 0, None, None);
+    producer.route_pop_arrival(&topic, 0, None, 0, None, None);
+    producer.route_notification_arrival(&topic, 0, None, 0, None, None);
 
     let lite_dispatcher = runtime.composition.state.lite_event_dispatcher().clone();
     let lite_client = CheetahString::from_static_str("shared-deferred-lifecycle-client");
@@ -3422,12 +3488,15 @@ async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
     assert_eq!(
         lite_dispatcher.take_pending_events(&lite_client),
         vec![CheetahString::from_static_str("%LMQ%shared-deferred-lifecycle")],
-        "the initial Legacy owner must receive the event exactly once"
+        "the canonical event owner must receive the event exactly once"
     );
-    assert!(
-        deferred.resource_snapshot().handoff_zero,
-        "Legacy-only arrival probes must release every transient route permit"
-    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !deferred.resource_snapshot().handoff_zero {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("canonical arrival probes must release every transient route permit");
     drop(producer);
 
     assert_deferred_lifecycle_shutdown(&mut runtime).await;
@@ -3435,10 +3504,34 @@ async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
 
+#[tokio::test]
+async fn broker_normal_fast_and_embedded_routes_share_the_canonical_v2_dispatcher() {
+    let mut runtime = new_phase3_lifecycle_test_runtime("canonical-v2-route-identity").await;
+    runtime
+        .start_basic_service()
+        .await
+        .expect("start canonical V2 Broker listeners");
+    let identity = runtime
+        .v2_dispatcher_identity_snapshot_for_test()
+        .expect("V2 startup should record dispatcher ownership");
+
+    assert!(identity.normal_is_canonical);
+    assert!(identity.fast_is_canonical);
+    assert!(identity.embedded_proxy_is_canonical);
+
+    let report = runtime
+        .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_secs(10)))
+        .await;
+    assert!(report.is_healthy(), "{report:?}");
+    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initialized_broker_shutdown_unbinds_deferred_replay_store_before_exclusive_store_access() {
     let mut runtime = new_phase3_lifecycle_test_runtime("deferred-replay-store-shutdown").await;
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let store_root = runtime
         .composition
         .state
@@ -3481,10 +3574,11 @@ async fn initialized_broker_shutdown_unbinds_deferred_replay_store_before_exclus
 async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
     use crate::broker_runtime::deferred_producer::BrokerDeferredProducer;
     use crate::broker_runtime::deferred_producer::BrokerDeferredProducerInstallError;
-    use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 
     let mut runtime = new_phase3_lifecycle_test_runtime("deferred-producer-install-transaction").await;
-    let _ = runtime.init_processor();
+    let _ = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     {
         let deferred = runtime
             .composition
@@ -3507,13 +3601,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
             .as_ref()
             .cloned()
             .expect("Pull processor");
-        let pull_hold = runtime
-            .composition
-            .state
-            .pull_request_hold_service
-            .as_ref()
-            .cloned()
-            .expect("Pull hold service");
         let pop_processor = runtime
             .composition
             .state
@@ -3544,7 +3631,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
             Arc::clone(&notification),
             Arc::clone(&pop_lite),
             installed_lite_dispatcher.clone(),
-            &pull_hold,
             &pull_processor,
             &pop_processor,
             &notification_processor,
@@ -3557,7 +3643,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
         };
         assert_eq!(duplicate, BrokerDeferredProducerInstallError::LiteEventObserver);
         assert!(installed_lite_dispatcher.has_deferred_event_observer());
-        assert!(pull_hold.has_master_online_producer());
         assert!(pop_processor.has_lag_refresh_producer());
 
         let rejected_lite_hits = Arc::new(AtomicU64::new(0));
@@ -3570,16 +3655,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
         };
         assert!(installed_lite_dispatcher
             .install_deferred_event_observer(Arc::clone(&rejected_lite_probe))
-            .is_err());
-        let rejected_pull_hits = Arc::new(AtomicU64::new(0));
-        let rejected_pull_probe: Arc<dyn Fn() + Send + Sync + 'static> = {
-            let hits = Arc::clone(&rejected_pull_hits);
-            Arc::new(move || {
-                hits.fetch_add(1, Ordering::Relaxed);
-            })
-        };
-        assert!(pull_hold
-            .install_master_online_producer(Arc::clone(&rejected_pull_probe))
             .is_err());
         let rejected_pop_hits = Arc::new(AtomicU64::new(0));
         let rejected_pop_probe: Arc<crate::processor::pop_message_processor::PopLagRefreshProducer> = {
@@ -3598,53 +3673,12 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
         let events = HashSet::from([CheetahString::from_static_str("%LMQ%producer-owner")]);
         assert_eq!(installed_lite_dispatcher.do_full_dispatch(&client, &group, &events), 1);
         assert_eq!(installed_lite_dispatcher.take_pending_events(&client).len(), 1);
-        pull_hold.notify_master_online();
         let topic = CheetahString::from_static_str("producer-owner-topic");
         let _ = pop_processor.notify_message_arriving_before_lag(&topic, &group);
         assert_eq!(rejected_lite_hits.load(Ordering::Relaxed), 0);
-        assert_eq!(rejected_pull_hits.load(Ordering::Relaxed), 0);
         assert_eq!(rejected_pop_hits.load(Ordering::Relaxed), 0);
 
-        let middle_lite_dispatcher = crate::lite::lite_event_dispatcher::LiteEventDispatcher::default();
-        let middle_pull_hold = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_processor)));
-        let middle_pop_processor = runtime.pop_message_processor_for_test();
-        let middle_pull_hits = Arc::new(AtomicU64::new(0));
-        let middle_pull_probe: Arc<dyn Fn() + Send + Sync + 'static> = {
-            let hits = Arc::clone(&middle_pull_hits);
-            Arc::new(move || {
-                hits.fetch_add(1, Ordering::Relaxed);
-            })
-        };
-        assert!(middle_pull_hold
-            .install_master_online_producer(Arc::clone(&middle_pull_probe))
-            .is_ok());
-        let middle_error = BrokerDeferredProducer::new(
-            Arc::clone(&handoff),
-            Arc::clone(&pop),
-            Arc::clone(&pull),
-            Arc::clone(&notification),
-            Arc::clone(&pop_lite),
-            middle_lite_dispatcher.clone(),
-            &middle_pull_hold,
-            &pull_processor,
-            &middle_pop_processor,
-            &notification_processor,
-            &pop_lite_processor,
-            task_group.clone(),
-            Duration::from_millis(1),
-        );
-        let Err(middle_error) = middle_error else {
-            panic!("a middle-stage conflict must roll back the Lite observer");
-        };
-        assert_eq!(middle_error, BrokerDeferredProducerInstallError::PullMasterOnline);
-        assert!(!middle_lite_dispatcher.has_deferred_event_observer());
-        assert!(middle_pull_hold.has_master_online_producer());
-        assert!(!middle_pop_processor.has_lag_refresh_producer());
-        middle_pull_hold.notify_master_online();
-        assert_eq!(middle_pull_hits.load(Ordering::Relaxed), 1);
-
         let late_lite_dispatcher = crate::lite::lite_event_dispatcher::LiteEventDispatcher::default();
-        let late_pull_hold = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_processor)));
         let late_pop_processor = runtime.pop_message_processor_for_test();
         let late_pop_hits = Arc::new(AtomicU64::new(0));
         let late_pop_probe: Arc<crate::processor::pop_message_processor::PopLagRefreshProducer> = {
@@ -3664,7 +3698,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
             notification,
             pop_lite,
             late_lite_dispatcher.clone(),
-            &late_pull_hold,
             &pull_processor,
             &late_pop_processor,
             &notification_processor,
@@ -3673,11 +3706,10 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
             Duration::from_millis(1),
         );
         let Err(late_error) = late_error else {
-            panic!("a late-stage conflict must roll back Lite and Pull callbacks");
+            panic!("a late-stage conflict must roll back the Lite callback");
         };
         assert_eq!(late_error, BrokerDeferredProducerInstallError::PopLagRefresh);
         assert!(!late_lite_dispatcher.has_deferred_event_observer());
-        assert!(!late_pull_hold.has_master_online_producer());
         assert!(late_pop_processor.has_lag_refresh_producer());
 
         let late_lite_hits = Arc::new(AtomicU64::new(0));
@@ -3691,27 +3723,13 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
         assert!(late_lite_dispatcher
             .install_deferred_event_observer(Arc::clone(&late_lite_probe))
             .is_ok());
-        let late_pull_hits = Arc::new(AtomicU64::new(0));
-        let late_pull_probe: Arc<dyn Fn() + Send + Sync + 'static> = {
-            let hits = Arc::clone(&late_pull_hits);
-            Arc::new(move || {
-                hits.fetch_add(1, Ordering::Relaxed);
-            })
-        };
-        assert!(late_pull_hold
-            .install_master_online_producer(Arc::clone(&late_pull_probe))
-            .is_ok());
         assert_eq!(late_lite_dispatcher.do_full_dispatch(&client, &group, &events), 1);
-        late_pull_hold.notify_master_online();
         let _ = late_pop_processor.notify_message_arriving_before_lag(&topic, &group);
         assert_eq!(late_lite_hits.load(Ordering::Relaxed), 1);
-        assert_eq!(late_pull_hits.load(Ordering::Relaxed), 1);
         assert_eq!(late_pop_hits.load(Ordering::Relaxed), 1);
 
         assert!(late_lite_dispatcher.uninstall_deferred_event_observer(&late_lite_probe));
-        assert!(late_pull_hold.uninstall_master_online_producer(&late_pull_probe));
         assert!(late_pop_processor.uninstall_lag_refresh_producer(&late_pop_probe));
-        assert!(middle_pull_hold.uninstall_master_online_producer(&middle_pull_probe));
     }
 
     assert_deferred_lifecycle_shutdown(&mut runtime).await;
@@ -3727,7 +3745,9 @@ async fn phase3_send_message_processor_writes_to_local_store() {
         .topic_config_manager()
         .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let send_header = SendMessageRequestHeader {
         producer_group: CheetahString::from_static_str("phase3-producer"),
         topic: topic.clone(),
@@ -3748,22 +3768,7 @@ async fn phase3_send_message_processor_writes_to_local_store() {
         .set_body(Bytes::from_static(b"phase3-message-body"));
     request.make_custom_header_to_net();
 
-    let mut harness = LocalRequestHarness::new(crate::test_task_group("local-harness"))
-        .await
-        .expect("local harness should start");
-    let direct_response = processor
-        .process_request(harness.channel(), harness.context(), &mut request)
-        .await
-        .expect("send processor dispatch should succeed");
-    assert!(
-        direct_response.is_none(),
-        "successful SendMessage writes response to the remoting context"
-    );
-    let response = tokio::time::timeout(Duration::from_secs(5), harness.receive_response())
-        .await
-        .expect("send response should be written to the remoting peer")
-        .expect("send response receive should succeed")
-        .expect("send response should exist");
+    let response = process_broker_request(&processor, &mut request).await;
 
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
     let response_header = response
@@ -3773,6 +3778,7 @@ async fn phase3_send_message_processor_writes_to_local_store() {
     assert_eq!(response_header.queue_id(), 0);
     assert_eq!(response_header.queue_offset(), 0);
 
+    drop(processor);
     runtime.reput_message_store_once_for_test().await;
     assert_eq!(
         runtime
@@ -3829,7 +3835,9 @@ async fn phase3_consumer_send_msg_back_writes_retry_delay_message() {
         .expect("seed put should expose append result")
         .wrote_offset;
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let send_back_header = ConsumerSendMsgBackRequestHeader {
         offset: commit_log_offset,
         group: group.clone(),
@@ -3844,7 +3852,7 @@ async fn phase3_consumer_send_msg_back_writes_retry_delay_message() {
         RemotingCommand::create_request_command(RequestCode::ConsumerSendMsgBack, send_back_header);
     send_back_request.make_custom_header_to_net();
 
-    let send_back_response = process_broker_request(&mut processor, &mut send_back_request).await;
+    let send_back_response = process_broker_request(&processor, &mut send_back_request).await;
     assert_eq!(ResponseCode::from(send_back_response.code()), ResponseCode::Success);
 
     let schedule_queue_id = crate::schedule::schedule_message_service::delay_level_to_queue_id(3);
@@ -3877,6 +3885,7 @@ async fn phase3_consumer_send_msg_back_writes_retry_delay_message() {
         "send-back should create the retry topic for the consumer group"
     );
 
+    drop(processor);
     runtime.shutdown_message_store_for_test().await;
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
@@ -3890,9 +3899,11 @@ async fn phase3_topic_config_admin_processor_returns_decodable_bodies() {
         .topic_config_manager()
         .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3), 0);
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let mut all_config_request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
-    let all_config_response = process_broker_request(&mut processor, &mut all_config_request).await;
+    let all_config_response = process_broker_request(&processor, &mut all_config_request).await;
     assert_eq!(ResponseCode::from(all_config_response.code()), ResponseCode::Success);
     let all_config_body = all_config_response
         .body()
@@ -3911,7 +3922,7 @@ async fn phase3_topic_config_admin_processor_returns_decodable_bodies() {
     let mut get_config_request =
         RemotingCommand::create_request_command(RequestCode::GetTopicConfig, get_config_header);
     get_config_request.make_custom_header_to_net();
-    let get_config_response = process_broker_request(&mut processor, &mut get_config_request).await;
+    let get_config_response = process_broker_request(&processor, &mut get_config_request).await;
     assert_eq!(ResponseCode::from(get_config_response.code()), ResponseCode::Success);
     let get_config_body = get_config_response
         .body()
@@ -3927,7 +3938,9 @@ async fn phase3_topic_config_admin_processor_returns_decodable_bodies() {
 #[tokio::test]
 async fn phase4_broker_consumer_request_codes_dispatch_to_expected_processors() {
     let mut runtime = new_phase3_test_runtime("phase4-dispatch").await;
-    let (processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     for (request_code, expected_processor) in [
         (RequestCode::PullMessage, "Pull"),
@@ -3995,7 +4008,9 @@ async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
         .subscription_group_manager_mut()
         .update_subscription_group_config(&mut group_config);
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let update_header = UpdateConsumerOffsetRequestHeader {
         consumer_group: group.clone(),
         topic: topic.clone(),
@@ -4006,7 +4021,7 @@ async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
     let mut update_request = RemotingCommand::create_request_command(RequestCode::UpdateConsumerOffset, update_header);
     update_request.make_custom_header_to_net();
 
-    let update_response = process_broker_request(&mut processor, &mut update_request).await;
+    let update_response = process_broker_request(&processor, &mut update_request).await;
     assert_eq!(ResponseCode::from(update_response.code()), ResponseCode::Success);
 
     let mut query_header = QueryConsumerOffsetRequestHeader::new(group.clone(), topic.clone(), 0);
@@ -4014,7 +4029,7 @@ async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
     let mut query_request = RemotingCommand::create_request_command(RequestCode::QueryConsumerOffset, query_header);
     query_request.make_custom_header_to_net();
 
-    let mut query_response = process_broker_request(&mut processor, &mut query_request).await;
+    let mut query_response = process_broker_request(&processor, &mut query_request).await;
     assert_eq!(ResponseCode::from(query_response.code()), ResponseCode::Success);
     query_response.make_custom_header_to_net();
     let response_header = query_response
@@ -4028,7 +4043,9 @@ async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
 #[tokio::test]
 async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
     let mut runtime = new_phase3_test_runtime("g8-definition-only-unsupported").await;
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     for request_code in [
         RequestCode::QueryBrokerOffset,
@@ -4047,7 +4064,7 @@ async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
         RequestCode::RegisterMessageFilterClass,
     ] {
         let mut request = RemotingCommand::create_remoting_command(request_code);
-        let response = process_broker_request(&mut processor, &mut request).await;
+        let response = process_broker_request(&processor, &mut request).await;
         assert_eq!(
             ResponseCode::from(response.code()),
             ResponseCode::RequestCodeNotSupported,
@@ -4067,7 +4084,9 @@ async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
 #[tokio::test]
 async fn add_remove_broker_without_container_returns_request_code_not_supported() {
     let mut runtime = new_phase3_test_runtime("container-add-remove-unsupported").await;
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     let mut add_request = RemotingCommand::create_request_command(
         RequestCode::AddBroker,
@@ -4076,7 +4095,7 @@ async fn add_remove_broker_without_container_returns_request_code_not_supported(
         },
     );
     add_request.make_custom_header_to_net();
-    let add_response = process_broker_request(&mut processor, &mut add_request).await;
+    let add_response = process_broker_request(&processor, &mut add_request).await;
     assert_eq!(
         ResponseCode::from(add_response.code()),
         ResponseCode::RequestCodeNotSupported
@@ -4094,7 +4113,7 @@ async fn add_remove_broker_without_container_returns_request_code_not_supported(
         },
     );
     remove_request.make_custom_header_to_net();
-    let remove_response = process_broker_request(&mut processor, &mut remove_request).await;
+    let remove_response = process_broker_request(&processor, &mut remove_request).await;
     assert_eq!(
         ResponseCode::from(remove_response.code()),
         ResponseCode::RequestCodeNotSupported
@@ -4109,7 +4128,9 @@ async fn add_remove_broker_without_container_returns_request_code_not_supported(
 #[tokio::test]
 async fn phase5_broker_admin_request_codes_dispatch_to_admin_processor() {
     let mut runtime = new_phase3_test_runtime("phase5-dispatch").await;
-    let (processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     for request_code in [
         RequestCode::UpdateAndCreateTopic,
@@ -4177,12 +4198,14 @@ async fn phase5_broker_admin_request_codes_dispatch_to_admin_processor() {
 async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
     let mut runtime = new_phase3_test_runtime("phase5-subscription-group").await;
     let group = CheetahString::from_static_str("phase5-admin-group");
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     let group_config = SubscriptionGroupConfig::new(group.clone());
     let mut create_request = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
         .set_body(group_config.encode().expect("subscription group config should encode"));
-    let create_response = process_broker_request(&mut processor, &mut create_request).await;
+    let create_response = process_broker_request(&processor, &mut create_request).await;
     assert_eq!(ResponseCode::from(create_response.code()), ResponseCode::Success);
 
     let get_header = GetSubscriptionGroupConfigRequestHeader {
@@ -4191,7 +4214,7 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
     };
     let mut get_request = RemotingCommand::create_request_command(RequestCode::GetSubscriptionGroupConfig, get_header);
     get_request.make_custom_header_to_net();
-    let get_response = process_broker_request(&mut processor, &mut get_request).await;
+    let get_response = process_broker_request(&processor, &mut get_request).await;
     assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
     let decoded_group = SubscriptionGroupConfig::decode(
         get_response
@@ -4203,7 +4226,7 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
     assert_eq!(decoded_group.group_name(), &group);
 
     let mut list_request = RemotingCommand::create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
-    let list_response = process_broker_request(&mut processor, &mut list_request).await;
+    let list_response = process_broker_request(&processor, &mut list_request).await;
     assert_eq!(ResponseCode::from(list_response.code()), ResponseCode::Success);
     let list_body = std::str::from_utf8(
         list_response
@@ -4222,7 +4245,7 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
     let mut delete_request =
         RemotingCommand::create_request_command(RequestCode::DeleteSubscriptionGroup, delete_header);
     delete_request.make_custom_header_to_net();
-    let delete_response = process_broker_request(&mut processor, &mut delete_request).await;
+    let delete_response = process_broker_request(&processor, &mut delete_request).await;
     assert_eq!(ResponseCode::from(delete_response.code()), ResponseCode::Success);
     assert!(
         !runtime
@@ -4240,7 +4263,7 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
     let mut missing_request =
         RemotingCommand::create_request_command(RequestCode::GetSubscriptionGroupConfig, missing_header);
     missing_request.make_custom_header_to_net();
-    let missing_response = process_broker_request(&mut processor, &mut missing_request).await;
+    let missing_response = process_broker_request(&processor, &mut missing_request).await;
     assert_eq!(
         ResponseCode::from(missing_response.code()),
         ResponseCode::SubscriptionGroupNotExist
@@ -4268,10 +4291,12 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
         .subscription_group_manager_mut()
         .update_subscription_group_config(&mut group_config);
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     let mut config_request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
-    let config_response = process_broker_request(&mut processor, &mut config_request).await;
+    let config_response = process_broker_request(&processor, &mut config_request).await;
     assert_eq!(ResponseCode::from(config_response.code()), ResponseCode::Success);
     let config_body = std::str::from_utf8(
         config_response
@@ -4283,7 +4308,7 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
     assert!(config_body.contains("brokerName"));
 
     let mut runtime_request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerRuntimeInfo);
-    let runtime_response = process_broker_request(&mut processor, &mut runtime_request).await;
+    let runtime_response = process_broker_request(&processor, &mut runtime_request).await;
     assert_eq!(ResponseCode::from(runtime_response.code()), ResponseCode::Success);
     let runtime_table: KVTable = serde_json::from_slice(
         runtime_response
@@ -4302,7 +4327,7 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
     let mut topic_stats_request =
         RemotingCommand::create_request_command(RequestCode::GetTopicStatsInfo, topic_stats_header);
     topic_stats_request.make_custom_header_to_net();
-    let topic_stats_response = process_broker_request(&mut processor, &mut topic_stats_request).await;
+    let topic_stats_response = process_broker_request(&processor, &mut topic_stats_request).await;
     assert_eq!(ResponseCode::from(topic_stats_response.code()), ResponseCode::Success);
     let topic_stats: TopicStatsTable = serde_json::from_slice(
         topic_stats_response
@@ -4322,7 +4347,7 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
     let mut consume_stats_request =
         RemotingCommand::create_request_command(RequestCode::GetConsumeStats, consume_stats_header);
     consume_stats_request.make_custom_header_to_net();
-    let consume_stats_response = process_broker_request(&mut processor, &mut consume_stats_request).await;
+    let consume_stats_response = process_broker_request(&processor, &mut consume_stats_request).await;
     assert_eq!(ResponseCode::from(consume_stats_response.code()), ResponseCode::Success);
     let consume_stats = ConsumeStats::decode(
         consume_stats_response
@@ -4340,7 +4365,7 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
     let mut consumer_connection_request =
         RemotingCommand::create_request_command(RequestCode::GetConsumerConnectionList, consumer_connection_header);
     consumer_connection_request.make_custom_header_to_net();
-    let consumer_connection_response = process_broker_request(&mut processor, &mut consumer_connection_request).await;
+    let consumer_connection_response = process_broker_request(&processor, &mut consumer_connection_request).await;
     assert_eq!(
         ResponseCode::from(consumer_connection_response.code()),
         ResponseCode::ConsumerNotOnline
@@ -4353,7 +4378,7 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
     let mut producer_connection_request =
         RemotingCommand::create_request_command(RequestCode::GetProducerConnectionList, producer_connection_header);
     producer_connection_request.make_custom_header_to_net();
-    let producer_connection_response = process_broker_request(&mut processor, &mut producer_connection_request).await;
+    let producer_connection_response = process_broker_request(&processor, &mut producer_connection_request).await;
     assert_eq!(
         ResponseCode::from(producer_connection_response.code()),
         ResponseCode::SystemError
@@ -4365,7 +4390,9 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
 #[tokio::test]
 async fn phase6_store_delay_timer_request_codes_dispatch_to_expected_processors() {
     let mut runtime = new_phase3_test_runtime("phase6-dispatch").await;
-    let (processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     for request_code in [RequestCode::QueryMessage, RequestCode::ViewMessageById] {
         assert_eq!(
@@ -4412,13 +4439,12 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
         .topic_config_manager()
         .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
-    let (mut processor, _) = runtime.init_processor();
-    let send_response_header = send_message_through_broker_processor(
-        &mut processor,
-        topic.clone(),
-        Bytes::from_static(b"phase6-message-body"),
-    )
-    .await;
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
+    let send_response_header =
+        send_message_through_broker_processor(&processor, topic.clone(), Bytes::from_static(b"phase6-message-body"))
+            .await;
     assert_eq!(send_response_header.queue_id(), 0);
     assert_eq!(send_response_header.queue_offset(), 0);
 
@@ -4432,7 +4458,7 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
     };
     let mut max_request = RemotingCommand::create_request_command(RequestCode::GetMaxOffset, max_header);
     max_request.make_custom_header_to_net();
-    let mut max_response = process_broker_request(&mut processor, &mut max_request).await;
+    let mut max_response = process_broker_request(&processor, &mut max_request).await;
     assert_eq!(ResponseCode::from(max_response.code()), ResponseCode::Success);
     max_response.make_custom_header_to_net();
     let max_response_header = max_response
@@ -4447,7 +4473,7 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
     };
     let mut min_request = RemotingCommand::create_request_command(RequestCode::GetMinOffset, min_header);
     min_request.make_custom_header_to_net();
-    let mut min_response = process_broker_request(&mut processor, &mut min_request).await;
+    let mut min_response = process_broker_request(&processor, &mut min_request).await;
     assert_eq!(ResponseCode::from(min_response.code()), ResponseCode::Success);
     min_response.make_custom_header_to_net();
     let min_response_header = min_response
@@ -4466,7 +4492,7 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
     let mut search_request =
         RemotingCommand::create_request_command(RequestCode::SearchOffsetByTimestamp, search_header);
     search_request.make_custom_header_to_net();
-    let mut search_response = process_broker_request(&mut processor, &mut search_request).await;
+    let mut search_response = process_broker_request(&processor, &mut search_request).await;
     assert_eq!(ResponseCode::from(search_response.code()), ResponseCode::Success);
     search_response.make_custom_header_to_net();
     let search_response_header = search_response
@@ -4482,7 +4508,7 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
     let mut earliest_request =
         RemotingCommand::create_request_command(RequestCode::GetEarliestMsgStoreTime, earliest_header);
     earliest_request.make_custom_header_to_net();
-    let mut earliest_response = process_broker_request(&mut processor, &mut earliest_request).await;
+    let mut earliest_response = process_broker_request(&processor, &mut earliest_request).await;
     assert_eq!(ResponseCode::from(earliest_response.code()), ResponseCode::Success);
     earliest_response.make_custom_header_to_net();
     let earliest_response_header = earliest_response
@@ -4500,7 +4526,7 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
     };
     let mut query_cq_request = RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, query_cq_header);
     query_cq_request.make_custom_header_to_net();
-    let query_cq_response = process_broker_request(&mut processor, &mut query_cq_request).await;
+    let query_cq_response = process_broker_request(&processor, &mut query_cq_request).await;
     assert_eq!(ResponseCode::from(query_cq_response.code()), ResponseCode::Success);
     let query_cq_body: QueryConsumeQueueResponseBody = serde_json::from_slice(
         query_cq_response
@@ -4535,10 +4561,12 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
     assert!(timer_message_store.load());
     runtime.runtime_state_mut().set_timer_message_store(timer_message_store);
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     let mut metrics_request = RemotingCommand::create_remoting_command(RequestCode::GetTimerMetrics);
-    let metrics_response = process_broker_request(&mut processor, &mut metrics_request).await;
+    let metrics_response = process_broker_request(&processor, &mut metrics_request).await;
     assert_eq!(ResponseCode::from(metrics_response.code()), ResponseCode::Success);
     let metrics_json: serde_json::Value = serde_json::from_slice(
         metrics_response
@@ -4550,7 +4578,7 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
     assert!(metrics_json.get("timerDist").is_some());
 
     let mut checkpoint_request = RemotingCommand::create_remoting_command(RequestCode::GetTimerCheckPoint);
-    let checkpoint_response = process_broker_request(&mut processor, &mut checkpoint_request).await;
+    let checkpoint_response = process_broker_request(&processor, &mut checkpoint_request).await;
     assert_eq!(ResponseCode::from(checkpoint_response.code()), ResponseCode::Success);
     let checkpoint_snapshot = TimerCheckpointSnapshot::decode(
         checkpoint_response
@@ -4562,7 +4590,7 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
     assert!(checkpoint_snapshot.last_read_time_ms() >= 0);
 
     let mut delay_offset_request = RemotingCommand::create_remoting_command(RequestCode::GetAllDelayOffset);
-    let delay_offset_response = process_broker_request(&mut processor, &mut delay_offset_request).await;
+    let delay_offset_response = process_broker_request(&processor, &mut delay_offset_request).await;
     assert_eq!(ResponseCode::from(delay_offset_response.code()), ResponseCode::Success);
     assert!(!delay_offset_response
         .body()
@@ -4575,7 +4603,7 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
         CheetahString::from_static_str(READ_AHEAD_MODE),
         CommitLogReadMode::Normal.wire_value().to_string(),
     );
-    let read_mode_response = process_broker_request(&mut processor, &mut read_mode_request).await;
+    let read_mode_response = process_broker_request(&processor, &mut read_mode_request).await;
     assert_eq!(ResponseCode::from(read_mode_response.code()), ResponseCode::Success);
 
     for request_code in [
@@ -4584,7 +4612,7 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
         RequestCode::DeleteExpiredCommitlog,
     ] {
         let mut request = RemotingCommand::create_remoting_command(request_code);
-        let response = process_broker_request(&mut processor, &mut request).await;
+        let response = process_broker_request(&processor, &mut request).await;
         assert_eq!(
             ResponseCode::from(response.code()),
             ResponseCode::Success,
@@ -4593,7 +4621,7 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
     }
 
     let mut switch_timer_request = RemotingCommand::create_remoting_command(RequestCode::SwitchTimerEngine);
-    let switch_timer_response = process_broker_request(&mut processor, &mut switch_timer_request).await;
+    let switch_timer_response = process_broker_request(&processor, &mut switch_timer_request).await;
     assert_eq!(
         ResponseCode::from(switch_timer_response.code()),
         ResponseCode::InvalidParameter,
@@ -4606,7 +4634,9 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
 #[tokio::test]
 async fn phase7_broker_auth_request_codes_dispatch_to_admin_processor() {
     let mut runtime = new_phase3_test_runtime("phase7-auth-dispatch").await;
-    let (processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     for request_code in [
         RequestCode::AuthCreateUser,
@@ -4634,7 +4664,9 @@ async fn phase7_broker_auth_request_codes_dispatch_to_admin_processor() {
 async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
     let mut runtime = new_phase3_test_runtime("phase7-auth-user").await;
     let username = CheetahString::from_static_str("phase7-user");
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
 
     let user_info = UserInfo {
         username: None,
@@ -4650,7 +4682,7 @@ async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
     )
     .set_body(user_info.encode().expect("user info should encode"));
     create_request.make_custom_header_to_net();
-    let create_response = process_broker_request(&mut processor, &mut create_request).await;
+    let create_response = process_broker_request(&processor, &mut create_request).await;
     assert_eq!(ResponseCode::from(create_response.code()), ResponseCode::Success);
 
     let mut get_request = RemotingCommand::create_request_command(
@@ -4660,7 +4692,7 @@ async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
         },
     );
     get_request.make_custom_header_to_net();
-    let get_response = process_broker_request(&mut processor, &mut get_request).await;
+    let get_response = process_broker_request(&processor, &mut get_request).await;
     assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
     let get_body = get_response.body().expect("AuthGetUser should include a body");
     let fetched_user = UserInfo::decode(get_body.as_ref()).expect("AuthGetUser body should decode");
@@ -4675,7 +4707,7 @@ async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
         },
     );
     list_request.make_custom_header_to_net();
-    let list_response = process_broker_request(&mut processor, &mut list_request).await;
+    let list_response = process_broker_request(&processor, &mut list_request).await;
     assert_eq!(ResponseCode::from(list_response.code()), ResponseCode::Success);
     let listed_users: Vec<UserInfo> = Vec::decode(
         list_response
@@ -4698,13 +4730,13 @@ async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
         },
     );
     delete_request.make_custom_header_to_net();
-    let delete_response = process_broker_request(&mut processor, &mut delete_request).await;
+    let delete_response = process_broker_request(&processor, &mut delete_request).await;
     assert_eq!(ResponseCode::from(delete_response.code()), ResponseCode::Success);
 
     let mut get_deleted_request =
         RemotingCommand::create_request_command(RequestCode::AuthGetUser, GetUserRequestHeader { username });
     get_deleted_request.make_custom_header_to_net();
-    let get_deleted_response = process_broker_request(&mut processor, &mut get_deleted_request).await;
+    let get_deleted_response = process_broker_request(&processor, &mut get_deleted_request).await;
     assert_eq!(ResponseCode::from(get_deleted_response.code()), ResponseCode::Success);
     assert!(
         get_deleted_response.body().is_none(),
@@ -4729,13 +4761,12 @@ async fn init_processor_routes_lite_subscription_ctl_requests_to_lite_processor(
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
     assert!(runtime.initialize().await.is_ok());
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
         .set_body(Bytes::from_static(b""));
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite subscription control should return a response");
@@ -4752,12 +4783,11 @@ async fn get_broker_lite_info_returns_registry_aggregates() {
     set_parent_topic_lite_expiration(&mut runtime, 600);
     seed_lite_bound_group(&mut runtime, "group-c");
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -4802,15 +4832,15 @@ async fn get_broker_lite_info_reports_pop_lite_order_info_count() {
     seed_lmq_message(&mut runtime, "child-a", b"lite-body").await;
     let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     runtime.composition.state.lite_event_dispatcher().do_full_dispatch(
         &CheetahString::from_static_str("client-1"),
         &CheetahString::from_static_str("group-a"),
         &HashSet::from([lmq_name]),
     );
 
-    let pop_channel = create_test_channel().await;
-    let pop_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
     let pop_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -4824,18 +4854,14 @@ async fn get_broker_lite_info_reports_pop_lite_order_info_count() {
     };
     let mut pop_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, pop_header);
     pop_request.make_custom_header_to_net();
-    let pop_response = processor
-        .process_request(pop_channel, pop_ctx, &mut pop_request)
+    let pop_response = dispatch_broker_request(&processor, &mut pop_request)
         .await
         .expect("pop lite should succeed")
         .expect("pop lite should return a response");
     assert_eq!(ResponseCode::from(pop_response.code()), ResponseCode::Success);
 
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
     let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -4859,17 +4885,16 @@ async fn get_parent_topic_info_returns_group_and_lite_counts() {
     seed_lite_query_state(&mut runtime);
     set_parent_topic_lite_expiration(&mut runtime, 600);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetParentTopicInfoRequestHeader {
         topic: CheetahString::from_static_str("parent-topic"),
         rpc: None,
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetParentTopicInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -4903,17 +4928,16 @@ async fn get_parent_topic_info_rejects_non_lite_parent_topic() {
     seed_lite_query_state(&mut runtime);
     set_parent_topic_message_type(&mut runtime, "NORMAL");
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetParentTopicInfoRequestHeader {
         topic: CheetahString::from_static_str("parent-topic"),
         rpc: None,
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetParentTopicInfo, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -4929,17 +4953,16 @@ async fn get_lite_topic_info_returns_subscribers_for_matching_lite_topic() {
     seed_lite_query_state(&mut runtime);
     seed_lite_topic_publish_route(&mut runtime, &[CheetahString::from_static_str("other-broker")]);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteTopicInfoRequestHeader {
         parent_topic: CheetahString::from_static_str("parent-topic"),
         lite_topic: CheetahString::from_static_str("child-b"),
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -4981,17 +5004,16 @@ async fn get_lite_topic_info_marks_current_broker_when_sharding_route_points_loc
         .clone();
     seed_lite_topic_publish_route(&mut runtime, &[broker_name]);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteTopicInfoRequestHeader {
         parent_topic: CheetahString::from_static_str("parent-topic"),
         lite_topic: CheetahString::from_static_str("child-b"),
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5015,17 +5037,16 @@ async fn get_lite_topic_info_rejects_non_lite_parent_topic() {
     seed_lite_query_state(&mut runtime);
     set_parent_topic_message_type(&mut runtime, "NORMAL");
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteTopicInfoRequestHeader {
         parent_topic: CheetahString::from_static_str("parent-topic"),
         lite_topic: CheetahString::from_static_str("child-b"),
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5040,9 +5061,9 @@ async fn get_lite_client_info_returns_topics_for_bound_client() {
     let mut runtime = new_lite_test_runtime("lite-client-info").await;
     seed_lite_query_state(&mut runtime);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteClientInfoRequestHeader {
         parent_topic: Some(CheetahString::from_static_str("parent-topic")),
         group: Some(CheetahString::from_static_str("group-a")),
@@ -5051,8 +5072,7 @@ async fn get_lite_client_info_returns_topics_for_bound_client() {
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteClientInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5091,9 +5111,9 @@ async fn get_lite_client_info_rejects_non_lite_parent_topic() {
     seed_lite_query_state(&mut runtime);
     set_parent_topic_message_type(&mut runtime, "NORMAL");
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteClientInfoRequestHeader {
         parent_topic: Some(CheetahString::from_static_str("parent-topic")),
         group: Some(CheetahString::from_static_str("group-a")),
@@ -5102,8 +5122,7 @@ async fn get_lite_client_info_rejects_non_lite_parent_topic() {
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteClientInfo, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5120,9 +5139,9 @@ async fn get_lite_group_info_returns_offset_wrapper_for_specific_lite_topic() {
     seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-b", 0);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteGroupInfoRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         lite_topic: CheetahString::from_static_str("child-b"),
@@ -5131,8 +5150,7 @@ async fn get_lite_group_info_returns_offset_wrapper_for_specific_lite_topic() {
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteGroupInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5168,9 +5186,9 @@ async fn get_lite_group_info_returns_topk_aggregates_for_group() {
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-a", 3);
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-b", 0);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteGroupInfoRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         lite_topic: CheetahString::from_static_str(""),
@@ -5179,8 +5197,7 @@ async fn get_lite_group_info_returns_topk_aggregates_for_group() {
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteGroupInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5218,9 +5235,9 @@ async fn get_lite_group_info_uses_offset_table_entries_not_present_in_registry()
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-b", 0);
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-c", 5);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = GetLiteGroupInfoRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         lite_topic: CheetahString::from_static_str(""),
@@ -5229,8 +5246,7 @@ async fn get_lite_group_info_uses_offset_table_entries_not_present_in_registry()
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteGroupInfo, header);
     request.make_custom_header_to_net();
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5268,28 +5284,24 @@ async fn trigger_lite_dispatch_enqueues_events_for_target_client() {
     seed_lite_query_state(&mut runtime);
     seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = TriggerLiteDispatchRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         client_id: Some(CheetahString::from_static_str("client-1")),
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
 
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
 
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
     let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
-    let mut response = processor
-        .process_request(channel, ctx, &mut request)
+    let mut response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("broker lite info should return a response");
@@ -5311,17 +5323,16 @@ async fn trigger_lite_dispatch_without_client_id_enqueues_events_for_group_subsc
     seed_lite_query_state(&mut runtime);
     seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = TriggerLiteDispatchRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         client_id: None,
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5359,17 +5370,16 @@ async fn trigger_lite_dispatch_respects_broker_max_client_event_count_fallback()
         .set_broker_config(broker_config)
         .expect("lite dispatch test configuration should remain valid");
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = TriggerLiteDispatchRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         client_id: Some(CheetahString::from_static_str("client-1")),
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("lite manager should return a response");
@@ -5399,9 +5409,9 @@ async fn pop_lite_message_without_events_returns_polling_timeout() {
     let mut runtime = new_lite_test_runtime("pop-lite-route").await;
     seed_lite_query_state(&mut runtime);
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5415,76 +5425,13 @@ async fn pop_lite_message_without_events_returns_polling_timeout() {
     };
     let mut request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, header);
     request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
+    let response = dispatch_broker_request(&processor, &mut request)
         .await
         .expect("processor dispatch should succeed")
         .expect("pop lite should return a response");
 
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::PollingTimeout);
 
-    let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
-}
-
-#[tokio::test]
-async fn pop_lite_message_without_events_suspends_when_polling_enabled() {
-    let mut runtime = new_lite_test_runtime("pop-lite-suspend").await;
-    seed_lite_query_state(&mut runtime);
-
-    let (mut processor, _) = runtime.init_processor();
-    runtime
-        .composition
-        .state
-        .pop_lite_message_processor
-        .as_ref()
-        .expect("pop lite processor should be initialized")
-        .start()
-        .await;
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-    let header = PopLiteMessageRequestHeader {
-        client_id: CheetahString::from_static_str("client-1"),
-        consumer_group: CheetahString::from_static_str("group-a"),
-        topic: CheetahString::from_static_str("parent-topic"),
-        max_msg_num: 1,
-        invisible_time: 60_000,
-        poll_time: 3_000,
-        born_time: current_millis() as i64,
-        attempt_id: None,
-        rpc: None,
-    };
-    let mut request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, header);
-    request.make_custom_header_to_net();
-    let response = processor
-        .process_request(channel, ctx, &mut request)
-        .await
-        .expect("processor dispatch should succeed");
-
-    assert!(
-        response.is_none(),
-        "polling pop-lite should suspend instead of responding"
-    );
-    assert!(request.suspended());
-    assert_eq!(
-        runtime
-            .composition
-            .state
-            .pop_lite_message_processor
-            .as_ref()
-            .expect("pop lite processor should be initialized")
-            .pop_lite_long_polling_service()
-            .get_polling_num("client-1"),
-        1
-    );
-
-    runtime
-        .composition
-        .state
-        .pop_lite_message_processor
-        .as_ref()
-        .expect("pop lite processor should be initialized")
-        .shutdown()
-        .await;
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
 
@@ -5552,9 +5499,9 @@ async fn pop_lite_message_returns_dispatched_lmq_payload_and_advances_offset() {
         &HashSet::from([lmq_name.clone()]),
     );
 
-    let (mut processor, _) = runtime.init_processor();
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     let pop_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5568,8 +5515,7 @@ async fn pop_lite_message_returns_dispatched_lmq_payload_and_advances_offset() {
     };
     let mut pop_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, pop_header);
     pop_request.make_custom_header_to_net();
-    let mut pop_response = processor
-        .process_request(channel, ctx, &mut pop_request)
+    let mut pop_response = dispatch_broker_request(&processor, &mut pop_request)
         .await
         .expect("pop lite should succeed")
         .expect("pop lite should return a response");
@@ -5617,15 +5563,15 @@ async fn pop_lite_message_blocks_fifo_for_different_attempt_id() {
     seed_lmq_message(&mut runtime, "child-a", b"lite-body-2").await;
     let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     runtime.composition.state.lite_event_dispatcher().do_full_dispatch(
         &CheetahString::from_static_str("client-1"),
         &CheetahString::from_static_str("group-a"),
         &HashSet::from([lmq_name.clone()]),
     );
 
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
     let first_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5639,8 +5585,7 @@ async fn pop_lite_message_blocks_fifo_for_different_attempt_id() {
     };
     let mut first_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, first_header);
     first_request.make_custom_header_to_net();
-    let first_response = processor
-        .process_request(channel, ctx, &mut first_request)
+    let first_response = dispatch_broker_request(&processor, &mut first_request)
         .await
         .expect("first pop lite should succeed")
         .expect("first pop lite should return a response");
@@ -5654,8 +5599,6 @@ async fn pop_lite_message_blocks_fifo_for_different_attempt_id() {
         1
     );
 
-    let channel = create_test_channel().await;
-    let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
     let second_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5669,8 +5612,7 @@ async fn pop_lite_message_blocks_fifo_for_different_attempt_id() {
     };
     let mut second_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, second_header);
     second_request.make_custom_header_to_net();
-    let second_response = processor
-        .process_request(channel, ctx, &mut second_request)
+    let second_response = dispatch_broker_request(&processor, &mut second_request)
         .await
         .expect("second pop lite should succeed")
         .expect("second pop lite should return a response");
@@ -5703,15 +5645,15 @@ async fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption() 
     seed_lmq_message(&mut runtime, "child-a", b"lite-body-2").await;
     let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
 
-    let (mut processor, _) = runtime.init_processor();
+    let (processor, _) = runtime
+        .init_v2_processor_checked()
+        .expect("initialize canonical V2 processors");
     runtime.composition.state.lite_event_dispatcher().do_full_dispatch(
         &CheetahString::from_static_str("client-1"),
         &CheetahString::from_static_str("group-a"),
         &HashSet::from([lmq_name.clone()]),
     );
 
-    let first_channel = create_test_channel().await;
-    let first_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(first_channel.clone()));
     let first_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5725,14 +5667,11 @@ async fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption() 
     };
     let mut first_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, first_header);
     first_request.make_custom_header_to_net();
-    let _ = processor
-        .process_request(first_channel, first_ctx, &mut first_request)
+    let _ = dispatch_broker_request(&processor, &mut first_request)
         .await
         .expect("first pop lite should succeed")
         .expect("first pop lite should return a response");
 
-    let second_channel = create_test_channel().await;
-    let second_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(second_channel.clone()));
     let second_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5746,15 +5685,14 @@ async fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption() 
     };
     let mut second_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, second_header);
     second_request.make_custom_header_to_net();
-    let second_response = processor
-        .process_request(second_channel, second_ctx, &mut second_request)
+    let second_response = dispatch_broker_request(&processor, &mut second_request)
         .await
         .expect("second pop lite should succeed")
         .expect("second pop lite should return a response");
     assert_eq!(ResponseCode::from(second_response.code()), ResponseCode::Success);
     let second_header = second_response
-        .read_custom_header_ref::<PopLiteMessageResponseHeader>()
-        .expect("pop lite success response should keep an in-memory response header");
+        .decode_command_custom_header::<PopLiteMessageResponseHeader>()
+        .expect("pop lite success response should decode its wire response header");
     assert!(second_header.order_count_info.is_some());
     assert_eq!(
         runtime.composition.state.consumer_offset_manager().query_offset(

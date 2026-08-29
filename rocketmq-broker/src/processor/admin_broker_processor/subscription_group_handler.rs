@@ -574,8 +574,6 @@ mod tests {
     use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
@@ -604,26 +602,12 @@ mod tests {
         runtime
     }
 
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
-    }
-
     #[tokio::test]
     async fn update_and_create_subscription_group_list_persists_multiple_groups() {
         let runtime = new_test_runtime("update-list").await;
         let admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
 
         let body = SubscriptionGroupList {
             group_config_list: vec![
@@ -638,7 +622,7 @@ mod tests {
         let response = handler
             .update_and_create_subscription_group_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
                 &mut request,
             )
@@ -667,11 +651,11 @@ mod tests {
         let before_version = admin.subscription_group_manager().data_version().read().clone();
 
         let mut missing = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup);
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .update_and_create_subscription_group(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndCreateSubscriptionGroup,
                 &mut missing,
             )
@@ -682,11 +666,11 @@ mod tests {
 
         let mut malformed = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
             .set_body(Bytes::from_static(b"{not-json"));
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .update_and_create_subscription_group(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndCreateSubscriptionGroup,
                 &mut malformed,
             )
@@ -699,11 +683,11 @@ mod tests {
         let invalid = SubscriptionGroupConfig::new(invalid_group.clone());
         let mut single = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
             .set_body(invalid.encode().expect("invalid config should still encode"));
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .update_and_create_subscription_group(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndCreateSubscriptionGroup,
                 &mut single,
             )
@@ -725,11 +709,11 @@ mod tests {
         let mut list =
             RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroupList, EmptyHeader {})
                 .set_body(body.encode().expect("subscription group list should encode"));
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .update_and_create_subscription_group_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
                 &mut list,
             )
@@ -783,11 +767,11 @@ mod tests {
         );
         request.make_custom_header_to_net();
 
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_subscription_group(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteSubscriptionGroup,
                 &mut request,
             )
@@ -830,11 +814,11 @@ mod tests {
         );
         request.make_custom_header_to_net();
 
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let mut response = handler
             .update_and_get_group_forbidden(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateAndGetGroupForbidden,
                 &mut request,
             )
@@ -892,11 +876,11 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let request_opaque = request.opaque();
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .update_subscription_group_config_cas(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateSubscriptionGroupConfigCas,
                 &mut request,
             )
@@ -939,11 +923,11 @@ mod tests {
             },
         );
         stale_request.make_custom_header_to_net();
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let stale_response = handler
             .update_subscription_group_config_cas(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::UpdateSubscriptionGroupConfigCas,
                 &mut stale_request,
             )
@@ -1003,11 +987,11 @@ mod tests {
         let empty_body = rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody::default();
         let mut empty = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(empty_body.encode().unwrap());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_subscription_group_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteSubscriptionGroupList,
                 &mut empty,
             )
@@ -1024,11 +1008,11 @@ mod tests {
         };
         let mut invalid = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(invalid_body.encode().unwrap());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_subscription_group_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteSubscriptionGroupList,
                 &mut invalid,
             )
@@ -1045,11 +1029,11 @@ mod tests {
         };
         let mut request = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(body.encode().unwrap());
-        let channel = create_test_channel().await;
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
         let response = handler
             .delete_subscription_group_list(
                 &admin,
-                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                &AdminRequestMetadata::network_for_test(peer),
                 RequestCode::DeleteSubscriptionGroupList,
                 &mut request,
             )

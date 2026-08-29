@@ -107,7 +107,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             Arc::clone(&self.slave_master_addr),
             self.broker_outer_api().clone(),
             Arc::clone(&self.shutdown),
-            self.pull_request_hold_service.as_ref(),
             &self.topic_config_manager_handle(),
             self.send_message_policy_state.clone(),
             self.pull_message_policy_state.clone(),
@@ -147,7 +146,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             self.consumer_manager.clone_shared_state(),
             self.broker_stats_manager_handle(),
             Arc::clone(&self.online_role_state),
-            self.pull_request_hold_service.clone(),
             self.rebalance_lock_manager.clone(),
             self.broker_member_group.clone(),
             self.build_controller_runtime(),
@@ -250,13 +248,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             PopStoreCapability::new(&escape_bridge),
             service_context.clone(),
         ));
-        let long_polling_context = PopLongPollingServiceContext::new(
-            PopLongPollingPolicy::from_config(&self.broker_config()),
-            topics,
-            subscriptions,
-            service_context,
-        );
-        PopMessageProcessor::new(context, buffer_context, long_polling_context, queue_lock_manager)
+        PopMessageProcessor::new(context, buffer_context, queue_lock_manager)
     }
 
     pub(super) fn build_pop_revive_context(&self) -> Arc<PopReviveContext<MS>> {
@@ -738,11 +730,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn pull_request_hold_service(&self) -> Option<&PullRequestHoldService<MS>> {
-        self.pull_request_hold_service.as_deref()
-    }
-
-    #[inline]
     pub fn rebalance_lock_manager(&self) -> &RebalanceLockManager {
         &self.rebalance_lock_manager
     }
@@ -915,11 +902,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     #[inline]
     pub fn set_should_start_time(&mut self, should_start_time: Arc<AtomicU64>) {
         self.should_start_time = should_start_time;
-    }
-
-    #[inline]
-    pub fn set_pull_request_hold_service(&mut self, pull_request_hold_service: Arc<PullRequestHoldService<MS>>) {
-        self.pull_request_hold_service = Some(pull_request_hold_service);
     }
 
     #[inline]
@@ -1255,7 +1237,6 @@ impl BrokerRuntime {
             update_master_haserver_addr_periodically: false,
             should_start_time: Default::default(),
             online_role_state,
-            pull_request_hold_service: None,
             rebalance_lock_manager: Default::default(),
             broker_member_group: BrokerMembershipState::new(broker_member_group),
             transactional_message_check_listener: None,
@@ -1397,8 +1378,12 @@ impl BrokerRuntime {
             },
             move |group, client_id| {
                 broadcast_consumers
-                    .find_channel_by_client_id(group, client_id)
-                    .is_some()
+                    .get_consumer_group_info(&CheetahString::from_slice(group))
+                    .is_some_and(|info| {
+                        info.session_info_snapshot()
+                            .iter()
+                            .any(|client| client.client_id().as_str() == client_id)
+                    })
             },
         );
         let subscription_group_manager_config = SubscriptionGroupManagerConfig::from_configs(
@@ -1476,6 +1461,14 @@ impl BrokerRuntime {
         let v2_session_registry = Arc::new(V2SessionRegistry::with_lifecycle_listener(
             v2_session_lifecycle_listener,
         ));
+        assert!(
+            state.producer_manager.install_v2_session_registry(&v2_session_registry),
+            "producer manager V2 session registry is installed exactly once"
+        );
+        assert!(
+            state.consumer_manager.install_v2_session_registry(&v2_session_registry),
+            "consumer manager V2 session registry is installed exactly once"
+        );
         state.client_housekeeping_service = Some(client_housekeeping_service);
         state.slave_synchronize = Some(Arc::new(SlaveSynchronize::new_with_master_addr(
             SlaveSynchronizeContext::new(

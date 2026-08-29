@@ -15,8 +15,6 @@
 //! Listener and background-service startup owned by the Broker request pipeline.
 
 use super::super::*;
-use crate::deferred_generation_handoff::DeferredGenerationV2PublishError;
-use crate::deferred_generation_handoff::DeferredGenerationV2Publisher;
 
 /// Coarse transport gate for the prepared Broker V2 graph.
 ///
@@ -60,7 +58,7 @@ impl BrokerRuntime {
             });
         }
         self.initialize_deferred_lifecycle()?;
-        let (request_processor, _fast_request_processor) = self.init_processor_checked()?;
+        let (mut prepared_v2_processor, _fast_request_processor) = self.init_v2_processor_checked()?;
         self.initialize_consumer_lag_observability();
         let service_context =
             self.composition
@@ -79,10 +77,7 @@ impl BrokerRuntime {
                 component: "authorized_dispatcher",
                 detail: "shared Broker admission boundary was not initialized".to_owned(),
             })?;
-        let transport_security =
-            Arc::new(rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None));
         let prepared_v2_transport_security = prepared_v2_transport_security();
-        let mut prepared_v2_processor = DefaultServerProcessorV2::from_legacy_graph(&request_processor);
         let broker_config = self.composition.state.broker_config();
         if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
             prepared_v2_processor.set_auth_disabled_by_validated_config();
@@ -95,95 +90,26 @@ impl BrokerRuntime {
             });
         }
         let prepared_v2_dispatcher = Arc::new(
-            rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2::new_with_telemetry(
+            rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2::try_new_with_telemetry_and_budget(
                 prepared_v2_processor,
                 Vec::new(),
                 prepared_v2_transport_security,
                 Arc::clone(&admission),
                 self.composition.state.transport_telemetry.clone(),
-            ),
-        );
-        let authorized_dispatcher = Arc::new(
-            rocketmq_transport::api::v1::AuthorizedCommandDispatcher::try_new(
-                request_processor.clone(),
-                Vec::new(),
-                &service_context.process_budget(),
-                self.composition.state.transport_telemetry.clone(),
-                transport_security,
-                admission,
+                self.composition.state.resource_budget(),
             )
             .map_err(|error| BrokerStartupError::Initialization {
-                component: "authorized_dispatcher",
+                component: "server_request_pending",
                 detail: error.to_string(),
             })?,
         );
-        self.composition.request_pipeline.proxy_request_processor = Some(request_processor.clone());
-        self.composition.request_pipeline.authorized_dispatcher = Some(authorized_dispatcher.clone());
-        let deferred_handoff =
-            self.composition
-                .deferred_generation_handoff()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "deferred_generation_handoff",
-                    detail: "Broker deferred handoff must exist before canonical V2 publication".to_owned(),
-                })?;
-        #[cfg(test)]
-        {
-            let pop_lite_processor = self
-                .composition
-                .state
-                .pop_lite_message_processor
-                .as_ref()
-                .cloned()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "broker_v2_pre_publish_checkpoint",
-                    detail: "PopLite processor must exist before the test checkpoint".to_owned(),
-                })?;
-            self.composition
-                .request_pipeline
-                .reach_v2_pre_publish_checkpoint(
-                    Arc::clone(&prepared_v2_dispatcher),
-                    pop_lite_processor,
-                    Arc::clone(&deferred_handoff),
-                )
-                .await;
-        }
-        {
-            let pipeline = &self.composition.request_pipeline;
-            let mut cutover =
-                deferred_handoff
-                    .cutover_transaction()
-                    .map_err(|error| BrokerStartupError::Initialization {
-                        component: "broker_v2_cutover",
-                        detail: format!("failed to begin canonical V2 publication transaction: {error:?}"),
-                    })?;
-            cutover
-                .seal_legacy_acceptance()
-                .map_err(|error| BrokerStartupError::Initialization {
-                    component: "broker_v2_cutover",
-                    detail: format!("failed to seal legacy deferred acceptance: {error:?}"),
-                })?;
-            cutover
-                .publish_v2_aggregate(DeferredGenerationV2Publisher::nonblocking_atomic(|| {
-                    pipeline.publish_canonical_v2_dispatcher(prepared_v2_dispatcher)
-                }))
-                .map_err(|error| BrokerStartupError::Initialization {
-                    component: "broker_v2_dispatcher",
-                    detail: match error {
-                        DeferredGenerationV2PublishError::Cutover(error) => {
-                            format!("canonical V2 dispatcher publication violated cutover ordering: {error:?}")
-                        }
-                        DeferredGenerationV2PublishError::Publish(error) => {
-                            format!("canonical V2 dispatcher publication failed: {error:?}")
-                        }
-                    },
-                })?;
-            cutover
-                .publish_default_new()
-                .map_err(|error| BrokerStartupError::Initialization {
-                    component: "broker_v2_cutover",
-                    detail: format!("failed to publish New as the default deferred generation: {error:?}"),
-                })?;
-        }
+        self.composition
+            .request_pipeline
+            .publish_canonical_v2_dispatcher(prepared_v2_dispatcher)
+            .map_err(|error| BrokerStartupError::Initialization {
+                component: "broker_v2_dispatcher",
+                detail: format!("canonical V2 dispatcher publication failed: {error:?}"),
+            })?;
         let canonical_v2_dispatcher = self
             .composition
             .request_pipeline
@@ -316,25 +242,10 @@ impl BrokerRuntime {
             ack_message_processor.start();
         }
 
-        if let Some(notification_processor) = self.composition.state.notification_processor.as_ref() {
-            notification_processor.start().await;
-        }
-
         if let Some(topic_queue_mapping_clean_service) =
             self.composition.state.topic_queue_mapping_clean_service.as_mut()
         {
             topic_queue_mapping_clean_service.start();
-        }
-
-        let pull_request_hold_task_group = self.broker_task_group_or_current(
-            "rocketmq-broker.long-polling.pull-request-hold",
-            "failed to start PullRequestHoldService outside Tokio runtime",
-        );
-        if let (Some(pull_request_hold_service), Some(task_group)) = (
-            self.composition.state.pull_request_hold_service.as_ref(),
-            pull_request_hold_task_group,
-        ) {
-            PullRequestHoldService::start(pull_request_hold_service, task_group).await;
         }
 
         if let Some(broker_stats_manager) = self.composition.state.broker_stats_manager.as_mut() {
@@ -498,7 +409,3 @@ mod tests {
         assert!(owner.shutdown_background().is_healthy());
     }
 }
-
-#[cfg(test)]
-#[path = "startup/cutover_network_tests.rs"]
-mod cutover_network_tests;

@@ -23,21 +23,17 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v2::SessionId;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::client::client_channel_info::ClientChannelInfo;
-use crate::client::client_channel_info::ClientSessionInfo;
+use crate::client::client_session_info::ClientSessionInfo;
 use crate::client::consumer_ids_change_listener::ConsumerConnectionIdentity;
 
 #[derive(Clone)]
 pub struct ConsumerGroupInfo {
     group_name: CheetahString,
     subscription_table: Arc<DashMap<CheetahString, Arc<SubscriptionData>>>,
-    channel_info_table: Arc<DashMap<Channel, ClientChannelInfo>>,
     session_info_table: Arc<DashMap<SessionId, ClientSessionInfo>>,
     consume_type: ConsumeType,
     message_model: MessageModel,
@@ -55,7 +51,6 @@ impl ConsumerGroupInfo {
         ConsumerGroupInfo {
             group_name: group_name.into(),
             subscription_table: Arc::new(DashMap::new()),
-            channel_info_table: Arc::new(DashMap::new()),
             session_info_table: Arc::new(DashMap::new()),
             consume_type,
             message_model,
@@ -68,22 +63,12 @@ impl ConsumerGroupInfo {
         ConsumerGroupInfo {
             group_name: group_name.into(),
             subscription_table: Arc::new(DashMap::new()),
-            channel_info_table: Arc::new(DashMap::new()),
             session_info_table: Arc::new(DashMap::new()),
             consume_type: ConsumeType::ConsumePassively,
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
             last_update_timestamp: current_millis(),
         }
-    }
-
-    pub fn find_channel_by_client_id(&self, client_id: &str) -> Option<ClientChannelInfo> {
-        for client_channel_info in self.channel_info_table.iter() {
-            if client_channel_info.client_id() == client_id {
-                return Some(client_channel_info.clone());
-            }
-        }
-        None
     }
 
     /// Returns an owned, weakly consistent snapshot of current subscriptions.
@@ -129,67 +114,17 @@ impl ConsumerGroupInfo {
         Arc::clone(&self.subscription_table)
     }
 
-    pub fn find_channel_by_channel(&self, channel: &Channel) -> Option<ClientChannelInfo> {
-        self.channel_info_table.get(channel).map(|item| item.value().clone())
-    }
-
-    /// Returns an owned, weakly consistent snapshot of channel registrations.
-    ///
-    /// Concurrent updates may be observed per entry. The returned values never retain map guards.
-    pub fn channel_info_snapshot(&self) -> Vec<(Channel, ClientChannelInfo)> {
-        self.channel_info_table
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect()
-    }
-
-    /// Returns the number of registered channels.
-    pub fn channel_count(&self) -> usize {
-        self.channel_info_table.len()
-    }
-
-    /// Returns whether the group has neither legacy channels nor V2 sessions.
+    /// Returns whether the group has no live V2 sessions.
     pub fn channels_is_empty(&self) -> bool {
-        self.channel_info_table.is_empty() && self.session_info_table.is_empty()
-    }
-
-    /// Inserts or replaces one channel registration using its channel identity as the key.
-    pub fn upsert_channel_info(&self, info: ClientChannelInfo) -> Option<ClientChannelInfo> {
-        self.channel_info_table.insert(info.channel().clone(), info)
-    }
-
-    /// Removes one channel registration through the group boundary.
-    pub fn remove_channel(&self, channel: &Channel) -> Option<ClientChannelInfo> {
-        self.channel_info_table.remove(channel).map(|(_, info)| info)
-    }
-
-    /// Returns the shared mutable channel table for legacy integrations.
-    ///
-    /// Use the owned snapshot, query, and controlled command methods instead. This compatibility
-    /// API will be removed in 2.0.0.
-    #[deprecated(note = "use channel_info_snapshot/query/command methods; removal in 2.0.0")]
-    pub fn get_channel_info_table(&self) -> Arc<DashMap<Channel, ClientChannelInfo>> {
-        Arc::clone(&self.channel_info_table)
-    }
-
-    pub fn get_all_channels(&self) -> Vec<Channel> {
-        self.channel_info_table
-            .iter()
-            .map(|item| item.key().clone())
-            .collect::<Vec<Channel>>()
+        self.session_info_table.is_empty()
     }
 
     pub fn get_all_client_ids(&self) -> Vec<CheetahString> {
-        let mut client_ids = self
-            .channel_info_table
+        let client_ids = self
+            .session_info_table
             .iter()
             .map(|info| info.value().client_id().clone())
             .collect::<HashSet<_>>();
-        client_ids.extend(
-            self.session_info_table
-                .iter()
-                .map(|info| info.value().client_id().clone()),
-        );
         client_ids.into_iter().collect()
     }
 
@@ -207,22 +142,13 @@ impl ConsumerGroupInfo {
     }
 
     pub(crate) fn connection_identity_snapshot(&self) -> Vec<ConsumerConnectionIdentity> {
-        let mut identities = self
-            .channel_info_table
+        self.session_info_table
             .iter()
-            .map(|entry| ConsumerConnectionIdentity::Legacy {
+            .map(|entry| ConsumerConnectionIdentity::Session {
+                session_id: *entry.key(),
                 client_id: entry.client_id().clone(),
             })
-            .collect::<Vec<_>>();
-        identities.extend(
-            self.session_info_table
-                .iter()
-                .map(|entry| ConsumerConnectionIdentity::Session {
-                    session_id: *entry.key(),
-                    client_id: entry.client_id().clone(),
-                }),
-        );
-        identities
+            .collect()
     }
 
     pub(crate) fn update_session(
@@ -288,76 +214,6 @@ impl ConsumerGroupInfo {
                     .map(|(_, info)| info)
             })
             .collect()
-    }
-
-    pub fn unregister_channel(&self, client_channel_info: &ClientChannelInfo) -> bool {
-        if self.channel_info_table.remove(client_channel_info.channel()).is_some() {
-            info!(
-                "Unregister a consumer [{}] from consumerGroupInfo {}",
-                self.group_name,
-                client_channel_info.client_id()
-            );
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn handle_channel_close_event(&self, channel: &Channel) -> Option<ClientChannelInfo> {
-        if let Some((_, info)) = self.channel_info_table.remove(channel) {
-            warn!(
-                "Channel close event: remove not active channel [{}] from ConsumerGroupInfo groupChannelTable, \
-                 consumer group: {}",
-                info.channel().remote_address(),
-                self.group_name
-            );
-            Some(info)
-        } else {
-            None
-        }
-    }
-
-    pub fn update_channel(
-        &mut self,
-        info_new: ClientChannelInfo,
-        consume_type: ConsumeType,
-        message_model: MessageModel,
-        consume_from_where: ConsumeFromWhere,
-    ) -> bool {
-        let mut updated = false;
-
-        self.consume_type = consume_type;
-
-        self.message_model = message_model;
-
-        self.consume_from_where = consume_from_where;
-
-        if let Some(mut info_old) = self.channel_info_table.get_mut(info_new.channel()) {
-            if info_old.client_id() != info_new.client_id() {
-                error!(
-                    "ConsumerGroupInfo: consumer channel exists in broker, but clientId is not the same one, \
-                     group={}, old clientChannelInfo={}, new clientChannelInfo={}",
-                    self.group_name,
-                    info_old.client_id(),
-                    info_new.client_id()
-                );
-                *info_old = info_new;
-            }
-            info_old.set_last_update_timestamp(current_millis());
-        } else {
-            self.channel_info_table
-                .insert(info_new.channel().clone(), info_new.clone());
-            info!(
-                "New consumer connected, group: {} channel: {}",
-                self.group_name,
-                info_new.channel().remote_address()
-            );
-            updated = true;
-        }
-
-        self.last_update_timestamp = current_millis();
-
-        updated
     }
 
     pub fn update_subscription(&mut self, sub_list: &HashSet<SubscriptionData>) -> bool {

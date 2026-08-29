@@ -1913,10 +1913,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::net::TcpListener;
     use std::str;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
@@ -1989,6 +1994,7 @@ mod tests {
     use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
     use rocketmq_transport::api::v2::SessionId;
     use rocketmq_transport::api::v2::V2SessionEvent;
+    use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::Connection;
     use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
     use rocketmq_transport::test_support::LocalRequestHarness;
@@ -2026,6 +2032,26 @@ mod tests {
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
     use crate::route::types::BrokerSession;
+
+    fn test_broker_session(remote_addr: SocketAddr) -> (BrokerSession, SessionId) {
+        static NEXT_SESSION_OWNER: AtomicU64 = AtomicU64::new(10_000);
+        static SESSION_OWNERS: OnceLock<Mutex<HashMap<SocketAddr, u64>>> = OnceLock::new();
+        let owner_id = *SESSION_OWNERS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .expect("test session owner map should not be poisoned")
+            .entry(remote_addr)
+            .or_insert_with(|| NEXT_SESSION_OWNER.fetch_add(1, Ordering::Relaxed));
+        let session_id = session_id_for_test(owner_id);
+        (
+            BrokerSession::for_test(
+                session_id,
+                CheetahString::from_string(format!("transport-session-{owner_id}")),
+                remote_addr,
+            ),
+            session_id,
+        )
+    }
 
     fn test_service_context() -> ChildServiceContext {
         static OWNER: std::sync::OnceLock<rocketmq_runtime::RuntimeOwner> = std::sync::OnceLock::new();
@@ -2759,8 +2785,11 @@ mod tests {
     ) -> RemotingCommand {
         let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
-        let broker_session = (request.code() == RequestCode::RegisterBroker as i32)
-            .then(|| BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()));
+        let broker_session = matches!(
+            RequestCode::from(request.code()),
+            RequestCode::RegisterBroker | RequestCode::BrokerHeartbeat
+        )
+        .then(|| test_broker_session(harness.remote_address()).0);
         processor
             .handle_command(request, broker_session)
             .await
@@ -2787,8 +2816,11 @@ mod tests {
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let mut processor = bootstrap.name_server_runtime.init_processors();
-        let broker_session = (request.code() == RequestCode::RegisterBroker as i32)
-            .then(|| BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()));
+        let broker_session = matches!(
+            RequestCode::from(request.code()),
+            RequestCode::RegisterBroker | RequestCode::BrokerHeartbeat
+        )
+        .then(|| test_broker_session(harness.remote_address()).0);
         let auth_context = rocketmq_auth::RemotingAuthContext::network(
             harness.channel().remote_address().ip().to_string(),
             harness.channel().channel_id().to_owned(),
@@ -2906,7 +2938,8 @@ mod tests {
         filter_server_list: Vec<CheetahString>,
         timeout_millis: Option<u64>,
         harness: &LocalRequestHarness,
-    ) {
+    ) -> SessionId {
+        let (broker_session, session_id) = test_broker_session(harness.remote_address());
         let result = bootstrap
             .name_server_runtime
             .inner
@@ -2922,10 +2955,11 @@ mod tests {
                 Some(enable_acting_master),
                 topic_config_wrapper,
                 filter_server_list,
-                BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()),
+                broker_session,
             );
 
         assert!(result.is_ok());
+        session_id
     }
 
     async fn register_test_broker(
@@ -3112,6 +3146,13 @@ mod tests {
         )
         .expect("query data version body should decode");
         assert_eq!(returned_data_version, registered_data_version);
+        let heartbeat_generation_before = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_broker_live_info(cluster_name.as_str(), broker_addr.as_str())
+            .expect("registered broker should remain live")
+            .heartbeat_generation();
 
         let mut heartbeat_request = RemotingCommand::create_request_command(
             RequestCode::BrokerHeartbeat,
@@ -3131,6 +3172,14 @@ mod tests {
         heartbeat_request.make_custom_header_to_net();
         let heartbeat_response = process_with_default_processor(&bootstrap, &harness, &mut heartbeat_request).await;
         assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+        let heartbeat_generation_after = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_broker_live_info(cluster_name.as_str(), broker_addr.as_str())
+            .expect("current-session heartbeat should retain the broker")
+            .heartbeat_generation();
+        assert_eq!(heartbeat_generation_after, heartbeat_generation_before + 1);
     }
 
     #[tokio::test]
@@ -3937,7 +3986,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_channel_destroy_submission_is_idempotent_for_acting_master_cleanup() {
+    async fn duplicate_session_destroy_submission_is_idempotent_for_acting_master_cleanup() {
         let namesrv_config = NamesrvConfig {
             support_acting_master: true,
             ..NamesrvConfig::default()
@@ -3956,7 +4005,7 @@ mod tests {
             .await
             .unwrap();
 
-        register_test_broker_with_harness(
+        let master_session_id = register_test_broker_with_harness(
             &bootstrap,
             &cluster_name,
             &broker_name,
@@ -3989,17 +4038,16 @@ mod tests {
         )
         .await;
 
-        let master_channel = master_harness.channel();
         bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_id_destroy(&master_channel.channel_id_owned());
+            .on_session_destroy(master_session_id);
         bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_id_destroy(&master_channel.channel_id_owned());
+            .on_session_destroy(master_session_id);
 
         start_unregister_service(&bootstrap);
 
@@ -4049,7 +4097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_destroy_cleans_removed_broker_and_preserves_survivor() {
+    async fn on_session_destroy_cleans_removed_broker_and_preserves_survivor() {
         let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let removed_broker_name = CheetahString::from_static_str("broker-a");
@@ -4066,7 +4114,7 @@ mod tests {
             .unwrap();
 
         start_unregister_service(&bootstrap);
-        register_test_broker_with_harness(
+        let removed_session_id = register_test_broker_with_harness(
             &bootstrap,
             &cluster_name,
             &removed_broker_name,
@@ -4095,12 +4143,11 @@ mod tests {
         )
         .await;
 
-        let removed_channel = removed_harness.channel();
         bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_id_destroy(&removed_channel.channel_id_owned());
+            .on_session_destroy(removed_session_id);
 
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
@@ -4143,7 +4190,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_destroy_reduces_to_read_only_acting_master() {
+    async fn on_session_destroy_reduces_to_read_only_acting_master() {
         let namesrv_config = NamesrvConfig {
             support_acting_master: true,
             ..NamesrvConfig::default()
@@ -4163,7 +4210,7 @@ mod tests {
             .unwrap();
 
         start_unregister_service(&bootstrap);
-        register_test_broker_with_harness(
+        let master_session_id = register_test_broker_with_harness(
             &bootstrap,
             &cluster_name,
             &broker_name,
@@ -4196,12 +4243,11 @@ mod tests {
         )
         .await;
 
-        let master_channel = master_harness.channel();
         bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
-            .on_channel_id_destroy(&master_channel.channel_id_owned());
+            .on_session_destroy(master_session_id);
 
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();

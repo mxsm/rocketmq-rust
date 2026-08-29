@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::task::Poll;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
+use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::IngressPolicy;
@@ -43,6 +51,14 @@ use crate::dispatch::RemotingRequest;
 use crate::dispatch::ResponsePlan;
 use crate::runtime::processor_v2::RejectRequestDecision;
 use crate::runtime::RPCHook;
+use crate::session_view::SessionId;
+use crate::v2_session_registry::ServerPushCommand;
+use crate::v2_session_registry::ServerPushKind;
+use crate::v2_session_registry::ServerRequestCommand;
+use crate::v2_session_registry::ServerRequestErrorStage;
+use crate::v2_session_registry::SessionCloseReason;
+use crate::v2_session_registry::V2SessionEvent;
+use crate::v2_session_registry::V2SessionRegistry;
 
 #[path = "tests/deferred_expiry.rs"]
 mod deferred_expiry;
@@ -451,6 +467,466 @@ async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without
         .await
         .expect("V2 shutdown should publish EOF");
     assert!(eof.is_none(), "V2 shutdown must not leave an extra response frame");
+}
+
+#[tokio::test]
+async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_session() {
+    let runtime = V2TestRuntime::new("transport-v2-session-capabilities");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::new());
+    let processor = TcpV2Processor {
+        state: Arc::clone(&state),
+        admission: None,
+    };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+
+    client
+        .send_command(RemotingCommand::create_remoting_command(701).set_opaque(9_857))
+        .await
+        .expect("send session identity request");
+    let _ = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("identity response deadline")
+        .expect("identity session remains connected")
+        .expect("identity response frame");
+    let session_id = state
+        .session
+        .lock()
+        .expect("session capture lock")
+        .expect("V2 session id");
+    let (push, close) = registry
+        .capabilities(session_id)
+        .expect("registered session capabilities");
+
+    let receipt = push
+        .send(
+            ServerPushCommand::NotifyConsumerIdsChanged {
+                header: NotifyConsumerIdsChangedRequestHeader {
+                    consumer_group: CheetahString::from_static_str("GroupA"),
+                    rpc_request_header: None,
+                },
+                opaque: Some(9_858),
+            },
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("typed server push should complete its canonical write");
+    assert_eq!(receipt.session_id(), session_id);
+    assert_eq!(receipt.kind(), ServerPushKind::NotifyConsumerIdsChanged);
+    let pushed = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("server push deadline")
+        .expect("server push keeps session connected")
+        .expect("server push frame");
+    assert_eq!(pushed.opaque(), 9_858);
+    assert!(pushed.is_oneway_rpc());
+
+    let transaction_receipt = push
+        .send(
+            ServerPushCommand::CheckTransactionState {
+                header: CheckTransactionStateRequestHeader {
+                    tran_state_table_offset: 11,
+                    commit_log_offset: 22,
+                    ..CheckTransactionStateRequestHeader::default()
+                },
+                body: Bytes::from_static(b"transaction-message"),
+            },
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("typed transaction push should complete its canonical write");
+    assert_eq!(transaction_receipt.kind(), ServerPushKind::CheckTransactionState);
+    let transaction = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("transaction push deadline")
+        .expect("transaction push connection")
+        .expect("transaction push frame");
+    assert_eq!(
+        RequestCode::from(transaction.code()),
+        RequestCode::CheckTransactionState
+    );
+    assert_eq!(transaction.body(), Some(&Bytes::from_static(b"transaction-message")));
+    assert!(transaction.is_oneway_rpc());
+
+    let reset_receipt = push
+        .send(
+            ServerPushCommand::ResetConsumerClientOffset {
+                header: ResetOffsetRequestHeader {
+                    topic: CheetahString::from_static_str("TopicA"),
+                    group: CheetahString::from_static_str("GroupA"),
+                    timestamp: -1,
+                    is_force: true,
+                    ..ResetOffsetRequestHeader::default()
+                },
+                body: Bytes::from_static(b"reset-offsets"),
+            },
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("typed reset push should complete its canonical write");
+    assert_eq!(reset_receipt.kind(), ServerPushKind::ResetConsumerClientOffset);
+    let reset = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("reset push deadline")
+        .expect("reset push connection")
+        .expect("reset push frame");
+    assert_eq!(RequestCode::from(reset.code()), RequestCode::ResetConsumerClientOffset);
+    assert_eq!(reset.body(), Some(&Bytes::from_static(b"reset-offsets")));
+    assert!(reset.is_oneway_rpc());
+
+    close
+        .close(SessionCloseReason::Administrative)
+        .await
+        .expect("typed close should retire the canonical writer");
+    let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("typed close EOF deadline");
+    assert!(eof.is_none());
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn registry_lookups_fail_closed_after_close_now_before_disconnect_cleanup() {
+    let runtime = V2TestRuntime::new("transport-v2-close-now-fail-closed");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::new());
+    let mut events = registry.subscribe();
+    let processor = TcpV2Processor { state, admission: None };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut client).await;
+    let session_id = next_connected_session(&mut events).await;
+
+    assert!(registry.capabilities(session_id).is_some());
+    assert!(registry.server_request_sender(session_id).is_some());
+    assert!(registry.close_now(session_id));
+
+    // This current-thread test has not yielded since close_now, so disconnect
+    // cleanup cannot yet have removed the physical registration.
+    assert!(registry.capabilities(session_id).is_none());
+    assert!(registry.server_request_sender(session_id).is_none());
+
+    let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("close-now session EOF deadline");
+    assert!(eof.is_none());
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("close-now session unregister deadline")
+            .expect("V2 session event stream");
+        if matches!(event, V2SessionEvent::Disconnected(id) if id == session_id) {
+            break;
+        }
+    }
+    assert!(!registry.contains(session_id));
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_deadline() {
+    let runtime = V2TestRuntime::new("transport-v2-server-requests");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::new());
+    let mut events = registry.subscribe();
+    let processor = TcpV2Processor { state, admission: None };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut first_client, address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut first_client).await;
+    let first_session = next_connected_session(&mut events).await;
+    let mut second_client = crate::connection::Connection::new(
+        TcpStream::connect(address)
+            .await
+            .expect("connect second V2 server-request client"),
+    );
+    establish_v2_session(&mut second_client).await;
+    let second_session = next_connected_session(&mut events).await;
+    let first_sender = registry
+        .server_request_sender(first_session)
+        .expect("first typed server-request sender");
+    let second_sender = registry
+        .server_request_sender(second_session)
+        .expect("second typed server-request sender");
+
+    let first_response = first_sender.request(consumer_status_request(), Duration::from_secs(1));
+    tokio::pin!(first_response);
+    let first_wire = tokio::select! {
+        _ = &mut first_response => panic!("response completed before client frame"),
+        frame = first_client.receive_command() => frame
+            .expect("first client connection")
+            .expect("first server-request frame"),
+    };
+    assert_eq!(
+        RequestCode::from(first_wire.code()),
+        RequestCode::GetConsumerStatusFromClient
+    );
+
+    second_client
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_opaque(first_wire.opaque())
+                .set_body(Bytes::from_static(b"wrong-session")),
+        )
+        .await
+        .expect("send same opaque on wrong session");
+    tokio::select! {
+        biased;
+        _ = &mut first_response => panic!("wrong session completed pending request"),
+        () = tokio::task::yield_now() => {}
+    }
+    first_client
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_opaque(first_wire.opaque())
+                .set_body(Bytes::from_static(b"first-session")),
+        )
+        .await
+        .expect("send correctly owned response");
+    let response = first_response.await.expect("correct session should complete request");
+    assert_eq!(response.session_id(), first_session);
+    assert_eq!(response.code(), ResponseCode::Success as i32);
+    assert_eq!(response.body(), Some(&Bytes::from_static(b"first-session")));
+
+    let disconnected = second_sender.request(consumer_status_request(), Duration::from_secs(1));
+    tokio::pin!(disconnected);
+    let _second_wire = tokio::select! {
+        _ = &mut disconnected => panic!("disconnect request completed before frame"),
+        frame = second_client.receive_command() => frame
+            .expect("second client connection")
+            .expect("second server-request frame"),
+    };
+    second_client.shutdown().await.expect("disconnect second V2 client");
+    let disconnect_error = tokio::time::timeout(Duration::from_secs(1), &mut disconnected)
+        .await
+        .expect("disconnect must fail pending response promptly")
+        .expect_err("disconnect cannot produce a response");
+    assert_eq!(disconnect_error.stage(), ServerRequestErrorStage::AwaitResponse);
+    assert_eq!(disconnect_error.session_id(), second_session);
+
+    let interrupted = first_sender.request(consumer_status_request(), Duration::from_secs(5));
+    tokio::pin!(interrupted);
+    let _interrupted_wire = tokio::select! {
+        _ = &mut interrupted => panic!("second pending request completed before frame"),
+        frame = first_client.receive_command() => frame
+            .expect("second pending client connection")
+            .expect("second pending server-request frame"),
+    };
+    let timed_out = first_sender.request(consumer_status_request(), Duration::from_millis(100));
+    tokio::pin!(timed_out);
+    let _timeout_wire = tokio::select! {
+        _ = &mut timed_out => panic!("timeout request completed before frame"),
+        frame = first_client.receive_command() => frame
+            .expect("timeout client connection")
+            .expect("timeout server-request frame"),
+    };
+    std::future::poll_fn(|context| match timed_out.as_mut().poll(context) {
+        Poll::Pending if registry.capabilities(first_session).is_some() => Poll::Pending,
+        Poll::Pending => {
+            assert!(
+                registry.contains(first_session),
+                "timeout transition must fail closed before disconnect cleanup"
+            );
+            assert!(registry.server_request_sender(first_session).is_none());
+            Poll::Ready(())
+        }
+        Poll::Ready(_) => panic!("timeout request completed before its fail-closed transition was observed"),
+    })
+    .await;
+    let timeout_error = timed_out
+        .await
+        .expect_err("missing response must expire absolute deadline");
+    assert_eq!(timeout_error.stage(), ServerRequestErrorStage::AwaitResponse);
+    assert_eq!(timeout_error.session_id(), first_session);
+    assert!(registry.capabilities(first_session).is_none());
+    assert!(registry.server_request_sender(first_session).is_none());
+
+    let eof = tokio::time::timeout(Duration::from_secs(1), first_client.receive_command())
+        .await
+        .expect("timed-out session EOF deadline");
+    assert!(eof.is_none(), "request timeout must close the canonical socket");
+    let interrupted_error = tokio::time::timeout(Duration::from_secs(1), &mut interrupted)
+        .await
+        .expect("same-session pending request must fail promptly")
+        .expect_err("same-session pending request cannot survive timeout retirement");
+    assert_eq!(interrupted_error.stage(), ServerRequestErrorStage::AwaitResponse);
+    assert_eq!(interrupted_error.session_id(), first_session);
+
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("timed-out session unregister deadline")
+            .expect("V2 session event stream");
+        if matches!(event, V2SessionEvent::Disconnected(id) if id == first_session) {
+            break;
+        }
+    }
+    assert!(!registry.contains(first_session));
+    assert!(registry.server_request_sender(first_session).is_none());
+    let retired_error = first_sender
+        .request(consumer_status_request(), Duration::from_secs(1))
+        .await
+        .expect_err("a retained sender cannot reuse the timed-out session owner");
+    assert_eq!(retired_error.stage(), ServerRequestErrorStage::Register);
+    assert_eq!(retired_error.session_id(), first_session);
+
+    let pending = first_sender.pending_usage();
+    assert_eq!(pending.count, 0);
+    assert_eq!(pending.bytes, 0);
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_response_reuse() {
+    let runtime = V2TestRuntime::new("transport-v2-server-request-cancellation");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::new());
+    let mut events = registry.subscribe();
+    let processor = TcpV2Processor { state, admission: None };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut client).await;
+    let session_id = next_connected_session(&mut events).await;
+    let sender = registry
+        .server_request_sender(session_id)
+        .expect("typed server-request sender");
+
+    let request = {
+        let sender = sender.clone();
+        tokio::spawn(async move { sender.request(consumer_status_request(), Duration::from_secs(5)).await })
+    };
+    let written = client
+        .receive_command()
+        .await
+        .expect("server-request client connection")
+        .expect("written server-request frame");
+
+    request.abort();
+    assert!(request
+        .await
+        .expect_err("request caller must be aborted")
+        .is_cancelled());
+    assert!(registry.contains(session_id));
+    assert!(registry.capabilities(session_id).is_none());
+    assert!(registry.server_request_sender(session_id).is_none());
+    assert_eq!(sender.pending_usage().count, 0);
+
+    let retired = sender
+        .request(consumer_status_request(), Duration::from_secs(1))
+        .await
+        .expect_err("cancelled response owner cannot be reused");
+    assert_eq!(retired.stage(), ServerRequestErrorStage::Register);
+    assert_eq!(retired.session_id(), session_id);
+
+    let _ = client
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_opaque(written.opaque())
+                .set_body(Bytes::from_static(b"late-response")),
+        )
+        .await;
+    assert!(client.receive_command().await.is_none());
+    loop {
+        let event = events.recv().await.expect("V2 session event stream");
+        if matches!(event, V2SessionEvent::Disconnected(id) if id == session_id) {
+            break;
+        }
+    }
+    assert!(!registry.contains(session_id));
+    drop(sender);
+
+    let mut replacement = crate::connection::Connection::new(
+        TcpStream::connect(address)
+            .await
+            .expect("connect replacement V2 server-request client"),
+    );
+    establish_v2_session(&mut replacement).await;
+    let replacement_id = next_connected_session(&mut events).await;
+    let replacement_sender = registry
+        .server_request_sender(replacement_id)
+        .expect("replacement server-request sender");
+    let replacement_request = replacement_sender.request(consumer_status_request(), Duration::from_secs(1));
+    tokio::pin!(replacement_request);
+    let replacement_wire = tokio::select! {
+        _ = &mut replacement_request => panic!("late response polluted the replacement owner"),
+        frame = replacement.receive_command() => frame
+            .expect("replacement client connection")
+            .expect("replacement server-request frame"),
+    };
+    tokio::select! {
+        biased;
+        _ = &mut replacement_request => panic!("replacement request completed without its owned response"),
+        () = tokio::task::yield_now() => {}
+    }
+    replacement
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_opaque(replacement_wire.opaque())
+                .set_body(Bytes::from_static(b"replacement-response")),
+        )
+        .await
+        .expect("send replacement response");
+    let response = replacement_request
+        .await
+        .expect("replacement owner should correlate its own response");
+    assert_eq!(response.session_id(), replacement_id);
+    assert_eq!(response.body(), Some(&Bytes::from_static(b"replacement-response")));
+
+    let (_, replacement_close) = registry
+        .capabilities(replacement_id)
+        .expect("replacement close capability");
+    replacement_close
+        .close(SessionCloseReason::Administrative)
+        .await
+        .expect("gracefully close replacement session");
+    assert!(replacement.receive_command().await.is_none());
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+fn consumer_status_request() -> ServerRequestCommand {
+    ServerRequestCommand::GetConsumerStatusFromClient {
+        header: GetConsumerStatusRequestHeader::new(
+            CheetahString::from_static_str("TopicA"),
+            CheetahString::from_static_str("GroupA"),
+        ),
+    }
+}
+
+async fn establish_v2_session(client: &mut crate::connection::Connection) {
+    client
+        .send_command(RemotingCommand::create_remoting_command(701))
+        .await
+        .expect("send V2 session establishment request");
+    tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("V2 session establishment response deadline")
+        .expect("V2 session establishment connection")
+        .expect("V2 session establishment response");
+}
+
+async fn next_connected_session(events: &mut tokio::sync::broadcast::Receiver<V2SessionEvent>) -> SessionId {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("V2 session event deadline")
+            .expect("V2 session event stream")
+        {
+            V2SessionEvent::Connected(session) => return session.id(),
+            V2SessionEvent::Disconnected(_) => {}
+        }
+    }
 }
 
 #[tokio::test]

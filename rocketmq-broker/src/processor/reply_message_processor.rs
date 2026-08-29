@@ -14,6 +14,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -41,17 +42,15 @@ use rocketmq_store::StatsType;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RemotingRequest;
 use rocketmq_transport::api::v2::RequestControlView;
 use rocketmq_transport::api::v2::RequestOrigin;
 use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::v2::ServerRequestCommand;
+use rocketmq_transport::api::v2::ServerRequestSender;
 
-use crate::client::manager::producer_manager::ProducerReplyChannelRegistry;
-use crate::client::net::broker_to_client::Broker2Client;
+use crate::client::manager::producer_manager::ProducerReplySessionRegistry;
 use tracing::info;
 use tracing::warn;
 
@@ -59,8 +58,6 @@ use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::response_plan::BrokerResponseParts;
 use crate::processor::send_message_processor::capability::SendMessageProcessorContext;
 use crate::processor::send_message_processor::structured_store::append_message_with_control_reply;
-use crate::processor::send_message_processor::structured_store::await_store;
-use crate::processor::send_message_processor::structured_store::StoreAwaitControl;
 use crate::processor::send_message_processor::structured_store::StoreHookCompletion;
 use crate::processor::send_message_processor::structured_store::StructuredStoreReply;
 use crate::processor::send_message_processor::structured_store::StructuredStoreReplyError;
@@ -94,11 +91,12 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 }
 
 enum ReplyPushPortError {
-    ChannelNotFound,
+    SessionNotFound,
     Call {
-        source: rocketmq_error::RocketMQError,
-        remote_address: SocketAddr,
+        source: rocketmq_transport::api::v2::ServerRequestError,
     },
+    #[cfg(test)]
+    TestCall,
 }
 
 trait ReplyPushPort {
@@ -115,45 +113,34 @@ trait ReplyPushPort {
     ) -> Result<RemotingCommand, ReplyPushPortError>;
 }
 
-/// MIG-05 compatibility adapter for outbound reply delivery.
-///
-/// `ProducerReplyChannelRegistry` still retains legacy raw channels, so this
-/// adapter is not a stable session authority. It remains isolated here until
-/// XCT-02 provides the typed server-push sender; routing Reply through this
-/// adapter preserves the established V1 delivery behavior in the meantime.
 struct BrokerReplyPushPort {
-    channels: ProducerReplyChannelRegistry,
-    broker_to_client: Broker2Client,
-    command_factory: rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory,
+    sessions: ProducerReplySessionRegistry,
 }
 
 impl ReplyPushPort for BrokerReplyPushPort {
-    type Target = Channel;
+    type Target = ServerRequestSender;
 
     fn acquire(&mut self, sender_id: &str) -> Result<Self::Target, ReplyPushPortError> {
-        self.channels
-            .find_channel(sender_id)
-            .ok_or(ReplyPushPortError::ChannelNotFound)
+        self.sessions
+            .find_request_sender(sender_id)
+            .ok_or(ReplyPushPortError::SessionNotFound)
     }
 
     async fn push(
         &mut self,
-        mut channel: Self::Target,
+        sender: Self::Target,
         header: ReplyMessageRequestHeader,
         body: Option<Bytes>,
         timeout_millis: u64,
     ) -> Result<RemotingCommand, ReplyPushPortError> {
-        let remote_address = channel.remote_address();
-        let mut command = self
-            .command_factory
-            .create_request_command(RequestCode::PushReplyMessageToClient, header);
-        if let Some(body) = body {
-            command.set_body_mut_ref(body);
-        }
-        self.broker_to_client
-            .call_client(&mut channel, command, timeout_millis)
+        sender
+            .request(
+                ServerRequestCommand::PushReplyMessageToClient { header, body },
+                Duration::from_millis(timeout_millis),
+            )
             .await
-            .map_err(|source| ReplyPushPortError::Call { source, remote_address })
+            .map(|response| response.into_command())
+            .map_err(|source| ReplyPushPortError::Call { source })
     }
 }
 
@@ -277,21 +264,6 @@ impl<MS: BrokerWriteStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
     }
 }
 
-impl<MS, TS> RequestProcessor for ReplyMessageProcessor<MS, TS>
-where
-    MS: BrokerWriteStore + BrokerMasterAddressStore,
-    TS: TransactionalMessageService,
-{
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_mut(channel, ctx, request).await
-    }
-}
-
 impl<MS, TS> RequestProcessorV2 for ReplyMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
@@ -354,57 +326,12 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
-    pub async fn process_request_shared(
-        &self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
-        processor.process_request_mut(channel, ctx, request).await
-    }
-
-    async fn process_request_mut(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        info!("ReplyMessageProcessor received request code: {:?}", request_code);
-        match request_code {
-            RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
-                self.process_request_inner(channel, ctx, request_code, request).await
-            }
-            _ => {
-                warn!(
-                    "ReplyMessageProcessor received unknown request code: {:?}",
-                    request_code
-                );
-                let response = request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.inner.context.command_factory,
-                    request.code(),
-                    format!("ReplyMessageProcessor request code {} not supported", request.code()),
-                    request.opaque(),
-                );
-                Ok(Some(response))
-            }
-        }
-    }
-}
-
-impl<MS, TS> ReplyMessageProcessor<MS, TS>
-where
-    MS: BrokerWriteStore + BrokerMasterAddressStore,
-    TS: TransactionalMessageService,
-{
     pub fn new(transactional_message_service: Arc<TS>, context: Arc<SendMessageProcessorContext<MS>>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 send_message_hook_vec: Arc::new(Vec::new()),
                 consume_message_hook_vec: Arc::new(Vec::new()),
                 transactional_message_service,
-                broker_to_client: Broker2Client::new(context.command_factory),
                 context,
             }),
         }
@@ -502,12 +429,10 @@ where
         let mut message = self.build_msg_inner(inbound_peer, request, &request_header, queue_id);
         let completion_facts = ReplyCompletionFacts::capture(request);
         let store_host = self.inner.context.policy.snapshot().store_host;
-        // Outbound reply delivery remains behind the isolated legacy adapter;
-        // the V2 request itself never recovers channel or session authority.
+        // Outbound reply delivery uses the session-owned request capability;
+        // the inbound request never carries that authority.
         let mut push_port = BrokerReplyPushPort {
-            channels: self.inner.context.producer_reply_channels.clone(),
-            broker_to_client: self.inner.broker_to_client,
-            command_factory: self.inner.context.command_factory,
+            sessions: self.inner.context.producer_reply_sessions.clone(),
         };
         let mut push_result =
             push_reply_message(&mut push_port, inbound_peer, store_host, &request_header, &mut message).await;
@@ -563,144 +488,6 @@ where
         self.inner
             .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
         BrokerResponseParts::from_command(response)?.into_handler_outcome()
-    }
-
-    async fn process_request_inner(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut request_header = parse_request_header(request)?;
-        let mut mqtrace_context = self
-            .inner
-            .build_msg_context(&channel, &ctx, &mut request_header, request)
-            .0;
-        self.inner.execute_send_message_hook_before(&mqtrace_context);
-
-        let mut response = self
-            .process_reply_message_request(&ctx, &channel, request, &mut mqtrace_context, request_header)
-            .await;
-
-        self.inner
-            .execute_send_message_hook_after(Some(&mut response), &mut mqtrace_context);
-        Ok(Some(response))
-    }
-
-    async fn process_reply_message_request(
-        &mut self,
-        ctx: &ConnectionHandlerContext,
-        channel: &Channel,
-        request: &mut RemotingCommand,
-        send_message_context: &mut SendMessageContext,
-        request_header: SendMessageRequestHeader,
-    ) -> RemotingCommand {
-        let mut response = self
-            .inner
-            .context
-            .command_factory
-            .create_success_response_command()
-            .set_opaque(request.opaque());
-
-        // Keep one coherent policy generation for the request admission decision.
-        let (region_id, trace_on, start_timstamp, store_reply_message_enable) = {
-            let policy = self.inner.context.policy.snapshot();
-            (
-                policy.region_id.clone(),
-                policy.trace_on,
-                policy.start_accept_send_request_time_stamp as u64,
-                policy.store_reply_message_enable,
-            )
-        };
-
-        add_reply_response_metadata(&mut response, region_id.as_str(), trace_on);
-
-        if current_millis() < start_timstamp {
-            return response
-                .set_code(ResponseCode::SystemError)
-                .set_remark(format!("broker unable to service, until, {start_timstamp}"));
-        }
-        response.set_code_mut(-1);
-        self.inner
-            .msg_check(channel, ctx, request, &request_header, &mut response)
-            .await;
-        if response.code() != -1 {
-            return response;
-        }
-        let mut queue_id_int = request_header.queue_id;
-        let topic_config = match self.inner.context.topics.select_topic_config(request_header.topic()) {
-            Some(config) => config,
-            None => {
-                warn!("Topic {} not found", request_header.topic());
-                return response
-                    .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!("Topic {} does not exist", request_header.topic()));
-            }
-        };
-        if queue_id_int < 0 {
-            queue_id_int = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
-        }
-
-        let inbound_peer = channel.remote_address();
-        // Build message inner with extracted helper
-        let mut msg_inner = self.build_msg_inner(inbound_peer, request, &request_header, queue_id_int);
-        let completion_facts = ReplyCompletionFacts::capture(request);
-        let store_host = self.inner.context.policy.snapshot().store_host;
-        let mut push_port = BrokerReplyPushPort {
-            channels: self.inner.context.producer_reply_channels.clone(),
-            broker_to_client: self.inner.broker_to_client,
-            command_factory: self.inner.context.command_factory,
-        };
-        let mut push_reply_result = push_reply_message(
-            &mut push_port,
-            inbound_peer,
-            store_host,
-            &request_header,
-            &mut msg_inner,
-        )
-        .await;
-
-        // Update properties_string after msg_inner properties are modified
-        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
-
-        let mut response_header = SendMessageResponseHeader::default();
-        Self::handle_push_reply_result(
-            &mut push_reply_result,
-            &mut response,
-            &mut response_header,
-            queue_id_int,
-        );
-
-        // Preserve push-first semantics: optional persistence happens only after
-        // the client push attempt has completed.
-        if store_reply_message_enable {
-            let store_result = await_store(
-                StoreAwaitControl::Legacy,
-                self.inner.context.store.put_message(msg_inner),
-            )
-            .await;
-            let put_message_result = match store_result {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) | Err(_) => {
-                    const STORE_ERROR: &str = "message store not available";
-                    warn!("process reply message, {}", STORE_ERROR);
-                    return response
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark(STORE_ERROR.to_string());
-                }
-            };
-            self.handle_put_message_result(
-                &put_message_result,
-                completion_facts,
-                &mut response_header,
-                send_message_context,
-                queue_id_int,
-                TopicMessageType::Normal,
-                request_header.topic(),
-            );
-        }
-        response.set_command_custom_header(response_header)
     }
 
     // Build MessageExtBrokerInner to improve readability
@@ -829,19 +616,18 @@ async fn push_reply_message<P: ReplyPushPort, M: MessageTrait>(
 
     let target = match port.acquire(sender_id.as_str()) {
         Ok(target) => target,
-        Err(ReplyPushPortError::ChannelNotFound) => {
-            warn!(
-                "push reply message fail, channel of <{}> not found. Topic: {}, QueueId: {}",
-                sender_id,
-                request_header.topic(),
-                request_header.queue_id
-            );
+        Err(ReplyPushPortError::SessionNotFound) => {
+            warn!("typed reply push target session was not found");
             return PushReplyResult::failure(format!(
-                "push reply message fail, channel of <{}> not found.",
+                "push reply message fail, session of <{}> not found.",
                 sender_id
             ));
         }
         Err(ReplyPushPortError::Call { .. }) => {
+            return PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()));
+        }
+        #[cfg(test)]
+        Err(ReplyPushPortError::TestCall) => {
             return PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()));
         }
     };
@@ -866,33 +652,20 @@ async fn push_reply_message<P: ReplyPushPort, M: MessageTrait>(
         Ok(response) if response.code() == ResponseCode::Success as i32 => PushReplyResult::success(),
         Ok(response) => {
             let code = response.code();
-            let remark = response.remark().map(|r| r.as_str()).unwrap_or("unknown error");
-            warn!(
-                "push reply message to <{}> return fail, code: {}, remark: {}. Topic: {}, QueueId: {}, \
-                     CorrelationId: {:?}",
-                sender_id,
-                code,
-                remark,
-                request_header.topic(),
-                request_header.queue_id,
-                msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            );
+            warn!(code, "typed reply push returned a failure response");
             // Reuse extracted values to avoid duplicate format
             PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
         }
-        Err(ReplyPushPortError::ChannelNotFound) => {
+        Err(ReplyPushPortError::SessionNotFound) => {
             PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
         }
-        Err(ReplyPushPortError::Call { source, remote_address }) => {
-            warn!(
-                "push reply message to <{}> failed: {}. Channel: {:?}, Topic: {}, QueueId: {}",
-                sender_id,
-                source,
-                remote_address,
-                request_header.topic(),
-                request_header.queue_id
-            );
+        Err(ReplyPushPortError::Call { source }) => {
+            warn!(stage = ?source.stage(), kind = ?source.kind(), "typed reply push failed");
             // Use compact error message to reduce allocation
+            PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
+        }
+        #[cfg(test)]
+        Err(ReplyPushPortError::TestCall) => {
             PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
         }
     }
@@ -1002,7 +775,6 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::StorePorts;
-    use rocketmq_transport::api::v1::Channel;
 
     use super::add_reply_response_metadata;
     use super::get_correlation_id_with_fallback;
@@ -1025,13 +797,6 @@ mod tests {
         }
 
         let _ = call_shared;
-    }
-
-    #[test]
-    fn reply_push_remains_a_legacy_channel_adapter_until_xct_02() {
-        fn assert_legacy_adapter<T: super::ReplyPushPort<Target = Channel>>() {}
-
-        assert_legacy_adapter::<super::BrokerReplyPushPort>();
     }
 
     #[test]

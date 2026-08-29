@@ -99,9 +99,10 @@ impl ClusterTestRequestProcessor {
 
         if let Some(topic_route_data) = topic_route_data {
             let zone_request = ZoneRequest::from_command(request);
-            let typed_zone_filtered = route_config.namesrv_typed_zone_route_enable && zone_request.is_enabled();
+            let zone_filtered = zone_request.is_enabled();
+            let force_java_zone_legacy_json = route_config.namesrv_typed_zone_route_enable && zone_filtered;
             let filtered_route;
-            let topic_route_data = if route_config.namesrv_typed_zone_route_enable {
+            let topic_route_data = if zone_filtered {
                 request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_ENABLED);
                 filtered_route = filter_route_by_zone(&topic_route_data, &zone_request);
                 filtered_route.as_ref()
@@ -115,7 +116,7 @@ impl ClusterTestRequestProcessor {
                 topic_route_data,
                 request.version(),
                 request_header.accept_standard_json_only,
-                typed_zone_filtered,
+                force_java_zone_legacy_json,
             )?;
             return Ok(Some(
                 self.command_factory

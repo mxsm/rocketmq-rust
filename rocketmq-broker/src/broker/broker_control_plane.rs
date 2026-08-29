@@ -36,7 +36,6 @@ use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::pop_message_processor::capability::PopPolicyState;
 use crate::processor::pull_message_processor::capability::PullMessagePolicyState;
@@ -128,7 +127,6 @@ pub(crate) struct BrokerControllerRuntime<MS: BrokerReplicationStore> {
     slave_master_addr: Arc<SlaveMasterAddress>,
     broker_outer_api: BrokerOuterAPI,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
-    pull_request_hold_service: Option<Weak<PullRequestHoldService<MS>>>,
     topic_config_manager: Weak<TopicConfigManager>,
     send_policy: SendMessagePolicyState,
     pull_policy: PullMessagePolicyState,
@@ -155,7 +153,6 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         slave_master_addr: Arc<SlaveMasterAddress>,
         broker_outer_api: BrokerOuterAPI,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
-        pull_request_hold_service: Option<&Arc<PullRequestHoldService<MS>>>,
         topic_config_manager: &Arc<TopicConfigManager>,
         send_policy: SendMessagePolicyState,
         pull_policy: PullMessagePolicyState,
@@ -176,7 +173,6 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             slave_master_addr,
             broker_outer_api,
             shutdown,
-            pull_request_hold_service: pull_request_hold_service.map(Arc::downgrade),
             topic_config_manager: Arc::downgrade(topic_config_manager),
             send_policy,
             pull_policy,
@@ -378,11 +374,6 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         }
         if min_broker_id == MASTER_ID && min_broker_addr.is_some() {
             self.on_master_online(min_broker_addr, master_ha_addr).await;
-        }
-        if self.role_state.min_broker_id() == MASTER_ID {
-            if let Some(pull_request_hold_service) = self.pull_request_hold_service.as_ref().and_then(Weak::upgrade) {
-                pull_request_hold_service.notify_master_online();
-            }
         }
     }
 

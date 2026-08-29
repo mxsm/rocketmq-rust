@@ -14,9 +14,8 @@
 
 //! Broker-owned aggregate for the formal V2 processor contract.
 //!
-//! The prepared embedded graph shallow-clones the frozen V1 registration table
-//! and reuses every leaf through its formal V2 seam. It remains independent of
-//! production listener publication, which is owned by the later cutover stage.
+//! Production composition constructs this graph directly from formal V2 leaves;
+//! no V1 aggregate is built or adapted on the listener startup path.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -34,7 +33,6 @@ use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::v1::command_from_error_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_opaque;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::IngressRequestView;
 use rocketmq_transport::api::v2::RejectRequestDecision;
@@ -45,34 +43,32 @@ use rocketmq_transport::api::v2::ResponsePlan;
 use rocketmq_transport::api::v2::ResponseWriteObservationV2;
 use tracing::warn;
 
+use super::ack_message_processor::AckMessageProcessor;
+use super::admin_broker_processor::AdminBrokerProcessor;
+use super::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
+use super::client_manage_processor::ClientManageProcessor;
+use super::consumer_manage_processor::ConsumerManageProcessor;
+use super::end_transaction_processor::EndTransactionProcessor;
 use super::fast_failure_dispatch;
 use super::fast_failure_queue_kind;
 use super::is_privileged_maintenance_request;
+use super::lite_manager_processor::LiteManagerProcessor;
+use super::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
+use super::maintenance_request_processor::MaintenanceRequestProcessor;
+use super::notification_processor::NotificationProcessor;
+use super::peek_message_processor::PeekMessageProcessor;
+use super::polling_info_processor::PollingInfoProcessor;
+use super::pop_lite_message_processor::PopLiteMessageProcessor;
+use super::pop_message_processor::PopMessageProcessor;
+use super::pull_message_processor::PullMessageProcessor;
+use super::query_assignment_processor::QueryAssignmentProcessor;
+use super::query_message_processor::QueryMessageProcessor;
+use super::query_message_processor::QueryMessageStoreCapability;
+use super::recall_message_processor::RecallMessageProcessor;
+use super::reply_message_processor::ReplyMessageProcessor;
 use super::request_ordering;
-use super::AckMessageProcessor;
-use super::AdminBrokerProcessor;
-use super::BrokerFastFailure;
-use super::BrokerProcessorType;
-use super::BrokerRequestProcessor;
-use super::ChangeInvisibleTimeProcessor;
-use super::ClientManageProcessor;
-use super::ConsumerManageProcessor;
-use super::EndTransactionProcessor;
-use super::LiteManagerProcessor;
-use super::LiteSubscriptionCtlProcessor;
-use super::MaintenanceRequestProcessor;
-use super::NotificationProcessor;
-use super::PeekMessageProcessor;
-use super::PollingInfoProcessor;
-use super::PopLiteMessageProcessor;
-use super::PopMessageProcessor;
-use super::PullMessageProcessor;
-use super::QueryAssignmentProcessor;
-use super::QueryMessageProcessor;
-use super::QueryMessageStoreCapability;
-use super::RecallMessageProcessor;
-use super::ReplyMessageProcessor;
-use super::SendMessageProcessor;
+use super::send_message_processor::SendMessageProcessor;
+use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::processor::response_plan::BrokerResponseParts;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
@@ -130,6 +126,34 @@ where
     }
 }
 
+#[cfg(test)]
+impl<MS: BrokerStorePort, TS> BrokerProcessorTypeV2<MS, TS> {
+    const fn variant_name_for_test(&self) -> &'static str {
+        match self {
+            Self::Send(_) => "Send",
+            Self::Pull(_) => "Pull",
+            Self::Peek(_) => "Peek",
+            Self::Pop(_) => "Pop",
+            Self::PopLite(_) => "PopLite",
+            Self::Ack(_) => "Ack",
+            Self::ChangeInvisible(_) => "ChangeInvisible",
+            Self::Notification(_) => "Notification",
+            Self::PollingInfo(_) => "PollingInfo",
+            Self::Reply(_) => "Reply",
+            Self::Recall(_) => "Recall",
+            Self::QueryMessage(_) => "QueryMessage",
+            Self::ClientManage(_) => "ClientManage",
+            Self::ConsumerManage(_) => "ConsumerManage",
+            Self::QueryAssignment(_) => "QueryAssignment",
+            Self::LiteManager(_) => "LiteManager",
+            Self::LiteSubscriptionCtl(_) => "LiteSubscriptionCtl",
+            Self::EndTransaction(_) => "EndTransaction",
+            Self::Maintenance(_) => "Maintenance",
+            Self::AdminBroker(_) => "AdminBroker",
+        }
+    }
+}
+
 impl<MS, TS> RequestProcessorV2 for BrokerProcessorTypeV2<MS, TS>
 where
     MS: BrokerStorePort + Send + Sync + 'static,
@@ -160,30 +184,32 @@ where
         }
     }
 
-    fn reject_request(&self, code: i32) -> RejectRequestDecision {
-        let legacy = match self {
-            Self::Send(processor) => RequestProcessor::reject_request(processor.as_ref(), code),
-            Self::Pull(processor) => processor.reject_request_shared(),
-            Self::Pop(processor) => RequestProcessor::reject_request(processor.as_ref(), code),
-            Self::Notification(processor) => RequestProcessor::reject_request(processor.as_ref(), code),
-            Self::Reply(processor) => RequestProcessor::reject_request(processor.as_ref(), code),
-            Self::QueryMessage(processor) => RequestProcessor::reject_request(processor.as_ref(), code),
+    fn reject_request(&self, _code: i32) -> RejectRequestDecision {
+        let response = match self {
+            Self::Send(processor) => processor.rejection_response(),
+            Self::Pull(processor) => processor.rejection_response(),
             Self::Peek(_)
+            | Self::Pop(_)
             | Self::PopLite(_)
             | Self::Ack(_)
             | Self::ChangeInvisible(_)
+            | Self::Notification(_)
             | Self::PollingInfo(_)
+            | Self::Reply(_)
             | Self::Recall(_)
+            | Self::QueryMessage(_)
             | Self::ClientManage(_)
             | Self::ConsumerManage(_)
             | Self::QueryAssignment(_)
             | Self::LiteManager(_)
             | Self::LiteSubscriptionCtl(_)
             | Self::EndTransaction(_)
-            | Self::Maintenance(_) => (false, None),
-            Self::AdminBroker(_) => (false, None),
+            | Self::Maintenance(_) => None,
+            Self::AdminBroker(_) => None,
         };
-        legacy_rejection(legacy)
+        response.map_or(RejectRequestDecision::Proceed, |response| {
+            response_rejection(response, "Broker V2 leaf rejection")
+        })
     }
 
     fn observe_response_write(&self, observation: ResponseWriteObservationV2) {
@@ -231,51 +257,6 @@ where
             }
             Self::AdminBroker(_) => {}
         }
-    }
-}
-
-impl<MS, TS> BrokerProcessorTypeV2<MS, TS>
-where
-    MS: BrokerStorePort,
-{
-    fn from_legacy(processor: &BrokerProcessorType<MS, TS>) -> Self {
-        match processor {
-            BrokerProcessorType::Send(processor) => Self::Send(Arc::clone(processor)),
-            BrokerProcessorType::Pull(processor) => Self::Pull(Arc::clone(processor)),
-            BrokerProcessorType::Peek(processor) => Self::Peek(Arc::clone(processor)),
-            BrokerProcessorType::Pop(processor) => Self::Pop(Arc::clone(processor)),
-            BrokerProcessorType::PopLite(processor) => Self::PopLite(Arc::clone(processor)),
-            BrokerProcessorType::Ack(processor) => Self::Ack(Arc::clone(processor)),
-            BrokerProcessorType::ChangeInvisible(processor) => Self::ChangeInvisible(Arc::clone(processor)),
-            BrokerProcessorType::Notification(processor) => Self::Notification(Arc::clone(processor)),
-            BrokerProcessorType::PollingInfo(processor) => Self::PollingInfo(Arc::clone(processor)),
-            BrokerProcessorType::Reply(processor) => Self::Reply(Arc::clone(processor)),
-            BrokerProcessorType::Recall(processor) => Self::Recall(Arc::clone(processor)),
-            BrokerProcessorType::QueryMessage(processor) => Self::QueryMessage(Arc::clone(processor)),
-            BrokerProcessorType::ClientManage(processor) => Self::ClientManage(Arc::clone(processor)),
-            BrokerProcessorType::ConsumerManage(processor) => Self::ConsumerManage(Arc::clone(processor)),
-            BrokerProcessorType::QueryAssignment(processor) => Self::QueryAssignment(Arc::clone(processor)),
-            BrokerProcessorType::LiteManager(processor) => Self::LiteManager(Arc::clone(processor)),
-            BrokerProcessorType::LiteSubscriptionCtl(processor) => Self::LiteSubscriptionCtl(Arc::clone(processor)),
-            BrokerProcessorType::EndTransaction(processor) => Self::EndTransaction(Arc::clone(processor)),
-            BrokerProcessorType::Maintenance(processor) => Self::Maintenance(Arc::clone(processor)),
-            BrokerProcessorType::AdminBroker(processor) => Self::AdminBroker(Arc::clone(processor)),
-        }
-    }
-
-    fn is_maintenance(&self) -> bool {
-        matches!(self, Self::Maintenance(_))
-    }
-}
-
-fn legacy_rejection(legacy: (bool, Option<RemotingCommand>)) -> RejectRequestDecision {
-    match legacy {
-        (true, Some(response)) => response_rejection(response, "legacy leaf rejection"),
-        (true, None) => {
-            warn!("Broker leaf rejected a V2 request without an owned response; using canonical fallback rejection");
-            fallback_rejection("legacy leaf rejection without response")
-        }
-        (false, _) => RejectRequestDecision::Proceed,
     }
 }
 
@@ -381,46 +362,13 @@ where
     }
 }
 
-impl<MS, TS> BrokerRequestProcessorV2<BrokerProcessorTypeV2<MS, TS>>
-where
-    MS: BrokerStorePort,
-    TS: TransactionalMessageService,
-{
-    /// Builds a prepared V2 router over the exact leaf instances registered in
-    /// the frozen compatibility graph.
-    ///
-    /// This only shallow-clones leaf `Arc`s and immutable routing metadata. It
-    /// does not publish a listener, create a second service owner, or duplicate
-    /// processor state.
-    pub(crate) fn from_legacy_graph(legacy: &BrokerRequestProcessor<MS, TS>) -> Self {
-        let process_table = legacy
-            .process_table
-            .iter()
-            .map(|(code, processor)| (*code, BrokerProcessorTypeV2::from_legacy(processor)))
-            .collect::<HashMap<_, _>>();
-        let maintenance_routes = process_table
-            .iter()
-            .filter_map(|(code, processor)| processor.is_maintenance().then_some(*code))
-            .collect::<HashSet<_>>();
-        let default_request_processor = legacy
-            .default_request_processor
-            .as_ref()
-            .map(|processor| Arc::new(BrokerProcessorTypeV2::from_legacy(processor.as_ref())));
-        let auth = legacy
-            .auth_runtime
-            .as_ref()
-            .map_or(BrokerAuthState::Unconfigured, |runtime| {
-                BrokerAuthState::Runtime(Arc::clone(runtime))
-            });
-
-        Self {
-            command_factory: legacy.command_factory,
-            process_table: Arc::new(process_table),
-            default_request_processor,
-            maintenance_routes: Arc::new(maintenance_routes),
-            broker_fast_failure: legacy.broker_fast_failure.clone(),
-            auth,
-        }
+#[cfg(test)]
+impl<MS: BrokerStorePort, TS> BrokerRequestProcessorV2<BrokerProcessorTypeV2<MS, TS>> {
+    pub(crate) fn dispatch_processor_variant_for_test(&self, request_code: RequestCode) -> Option<&'static str> {
+        self.process_table
+            .get(&request_code.to_i32())
+            .or(self.default_request_processor.as_deref())
+            .map(BrokerProcessorTypeV2::variant_name_for_test)
     }
 }
 

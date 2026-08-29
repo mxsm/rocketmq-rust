@@ -125,7 +125,7 @@ impl ReplyPushPort for ProbePushPort {
 
     fn acquire(&mut self, sender_id: &str) -> Result<Self::Target, ReplyPushPortError> {
         if matches!(self.behavior, PushBehavior::MissingChannel) {
-            Err(ReplyPushPortError::ChannelNotFound)
+            Err(ReplyPushPortError::SessionNotFound)
         } else {
             Ok(sender_id.to_string())
         }
@@ -158,10 +158,7 @@ impl ReplyPushPort for ProbePushPort {
                 "probe remote non-success",
             )),
             PushBehavior::MissingChannel => unreachable!("missing channels stop before message mutation"),
-            PushBehavior::CallError => Err(ReplyPushPortError::Call {
-                source: RocketMQError::network_connection_failed("127.0.0.1:10911", "probe"),
-                remote_address: "127.0.0.1:10911".parse().expect("probe address"),
-            }),
+            PushBehavior::CallError => Err(ReplyPushPortError::TestCall),
         }
     }
 }
@@ -421,7 +418,7 @@ async fn reply_push_capability_covers_success_missing_channel_non_success_and_ca
         (
             PushBehavior::MissingChannel,
             false,
-            "push reply message fail, channel of <reply-client> not found.",
+            "push reply message fail, session of <reply-client> not found.",
         ),
         (
             PushBehavior::NonSuccess,

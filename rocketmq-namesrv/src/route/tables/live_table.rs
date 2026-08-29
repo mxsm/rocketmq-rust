@@ -28,7 +28,6 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::ChannelId;
 use rocketmq_transport::api::v2::SessionId;
 use rocketmq_transport::api::v2::SessionStateView;
 
@@ -60,7 +59,7 @@ pub struct BrokerLiveInfo {
     pub remote_addr: SocketAddr,
 
     /// Channel ID for the broker connection
-    pub channel_id: ChannelId,
+    pub channel_id: CheetahString,
 
     /// Stable transport session identity, when registered through V2 ingress.
     pub session_id: Option<SessionId>,
@@ -81,7 +80,7 @@ impl BrokerLiveInfo {
     /// # Arguments
     /// * `timestamp` - Current timestamp in milliseconds
     /// * `data_version` - Data version
-    pub fn new(timestamp: u64, data_version: DataVersion, remote_addr: SocketAddr, channel_id: ChannelId) -> Self {
+    pub fn new(timestamp: u64, data_version: DataVersion, remote_addr: SocketAddr, channel_id: CheetahString) -> Self {
         Self {
             last_update_timestamp: AtomicU64::new(timestamp),
             heartbeat_generation: AtomicU64::new(0),
@@ -112,7 +111,7 @@ impl BrokerLiveInfo {
 
     /// Attach the narrow V2 session facts used for lifecycle cleanup.
     pub(crate) fn with_session(mut self, session: BrokerSession) -> Self {
-        self.session_id = session.id;
+        self.session_id = Some(session.id);
         self.session_state = session.state;
         self
     }
@@ -236,7 +235,6 @@ impl fmt::Debug for BrokerLiveInfo {
 #[derive(Clone)]
 pub struct BrokerLiveTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>>,
-    by_channel: DashMap<ChannelId, Arc<BrokerAddrInfo>>,
     by_session: DashMap<SessionId, Arc<BrokerAddrInfo>>,
     by_remote_addr: DashMap<SocketAddr, Arc<BrokerAddrInfo>>,
     expiry_index: Arc<ExpiryIndex>,
@@ -311,7 +309,6 @@ impl BrokerLiveTable {
     pub fn new() -> Self {
         Self {
             inner: DashMap::new(),
-            by_channel: DashMap::new(),
             by_session: DashMap::new(),
             by_remote_addr: DashMap::new(),
             expiry_index: Arc::new(ExpiryIndex::new(ExpiryIndexMode::Off)),
@@ -330,7 +327,6 @@ impl BrokerLiveTable {
     pub fn with_capacity_and_expiry_index(capacity: usize, expiry_index_mode: ExpiryIndexMode) -> Self {
         Self {
             inner: DashMap::with_capacity(capacity),
-            by_channel: DashMap::with_capacity(capacity),
             by_session: DashMap::with_capacity(capacity),
             by_remote_addr: DashMap::with_capacity(capacity),
             expiry_index: Arc::new(ExpiryIndex::new(expiry_index_mode)),
@@ -350,19 +346,16 @@ impl BrokerLiveTable {
         broker_addr_info: Arc<BrokerAddrInfo>,
         live_info: BrokerLiveInfo,
     ) -> Option<Arc<BrokerLiveInfo>> {
-        let channel_id = live_info.channel_id.clone();
         let session_id = live_info.session_id;
         let remote_addr = live_info.remote_addr;
         let live_info = Arc::new(live_info);
         let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::clone(&live_info));
         if let Some(previous) = &previous {
-            self.remove_channel_index_if_current(&previous.channel_id, &broker_addr_info);
             if let Some(session_id) = previous.session_id {
                 self.remove_session_index_if_current(session_id, &broker_addr_info);
             }
             self.remove_remote_index_if_current(previous.remote_addr, &broker_addr_info);
         }
-        self.by_channel.insert(channel_id, Arc::clone(&broker_addr_info));
         if let Some(session_id) = session_id {
             self.by_session.insert(session_id, Arc::clone(&broker_addr_info));
         }
@@ -381,6 +374,29 @@ impl BrokerLiveTable {
     /// true if broker exists and was updated
     pub fn update_heartbeat(&self, broker_addr_info: &BrokerAddrInfo, timestamp: u64) -> bool {
         if let Some(entry) = self.inner.get(broker_addr_info) {
+            entry.update_timestamp(timestamp);
+            self.expiry_index.schedule(Arc::clone(entry.key()), entry.value());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update a broker heartbeat only when it belongs to the current V2 session.
+    ///
+    /// The live-table read guard serializes this identity check with replacement
+    /// registration on the same broker key. A delayed heartbeat from a retired
+    /// or unregistered session therefore cannot refresh the replacement entry.
+    pub fn update_heartbeat_for_session(
+        &self,
+        broker_addr_info: &BrokerAddrInfo,
+        session_id: SessionId,
+        timestamp: u64,
+    ) -> bool {
+        if let Some(entry) = self.inner.get(broker_addr_info) {
+            if entry.session_id != Some(session_id) {
+                return false;
+            }
             entry.update_timestamp(timestamp);
             self.expiry_index.schedule(Arc::clone(entry.key()), entry.value());
             true
@@ -415,7 +431,6 @@ impl BrokerLiveTable {
     pub fn remove(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
         let (key, live_info) = self.inner.remove(broker_addr_info)?;
         self.expiry_index.remove(&key);
-        self.remove_channel_index_if_current(&live_info.channel_id, &key);
         if let Some(session_id) = live_info.session_id {
             self.remove_session_index_if_current(session_id, &key);
         }
@@ -499,7 +514,6 @@ impl BrokerLiveTable {
     /// Clear all data
     pub fn clear(&self) {
         self.inner.clear();
-        self.by_channel.clear();
         self.by_session.clear();
         self.by_remote_addr.clear();
         self.expiry_index.clear();
@@ -556,15 +570,6 @@ impl BrokerLiveTable {
         None
     }
 
-    /// Retrieve broker address information by the compatibility channel ID.
-    pub fn get_broker_info_by_channel_id(&self, channel_id: &ChannelId) -> Option<Arc<BrokerAddrInfo>> {
-        let broker_addr_info = self.by_channel.get(channel_id)?.clone();
-        self.inner
-            .get(broker_addr_info.as_ref())
-            .filter(|live| &live.channel_id == channel_id)
-            .map(|_| broker_addr_info)
-    }
-
     /// Retrieve broker address information by the stable V2 session identity.
     pub fn get_broker_info_by_session_id(&self, session_id: SessionId) -> Option<Arc<BrokerAddrInfo>> {
         let broker_addr_info = self.by_session.get(&session_id)?.clone();
@@ -597,7 +602,7 @@ impl BrokerLiveTable {
         broker_addr: &str,
         timestamp: u64,
         _remote_addr: SocketAddr,
-        _channel_id: ChannelId,
+        _channel_id: CheetahString,
     ) {
         for entry in &self.inner {
             let key_addr: &str = entry.key().broker_addr.as_ref();
@@ -617,11 +622,6 @@ impl BrokerLiveTable {
     /// * `broker_addr_info` - BrokerAddrInfo containing cluster name and broker address
     pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) -> bool {
         self.update_heartbeat(broker_addr_info, current_millis())
-    }
-
-    fn remove_channel_index_if_current(&self, channel_id: &ChannelId, broker_addr_info: &BrokerAddrInfo) {
-        self.by_channel
-            .remove_if(channel_id, |_, indexed| indexed.as_ref() == broker_addr_info);
     }
 
     fn remove_session_index_if_current(&self, session_id: SessionId, broker_addr_info: &BrokerAddrInfo) {
@@ -647,6 +647,8 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Barrier;
     use std::thread;
+
+    use rocketmq_transport::test_support::session_id_for_test;
 
     use super::*;
 
@@ -867,6 +869,40 @@ mod tests {
         );
         assert_eq!(updated.remote_addr, remote_addr);
         assert_eq!(updated.channel_id, channel_id);
+    }
+
+    #[test]
+    fn heartbeat_refresh_requires_the_current_registered_session() {
+        let table = BrokerLiveTable::new();
+        let broker_info = create_test_broker_addr_info("broker-session-heartbeat", 0);
+        let remote_addr = SocketAddr::from_str("127.0.0.1:10913").unwrap();
+        let old_session_id = session_id_for_test(51_001);
+        let current_session_id = session_id_for_test(51_002);
+        let unregistered_session_id = session_id_for_test(51_003);
+
+        table.register(
+            Arc::clone(&broker_info),
+            create_test_live_info(1000).with_session(BrokerSession::for_test(
+                old_session_id,
+                CheetahString::from_static_str("old-session"),
+                remote_addr,
+            )),
+        );
+        table.register(
+            Arc::clone(&broker_info),
+            create_test_live_info(2000).with_session(BrokerSession::for_test(
+                current_session_id,
+                CheetahString::from_static_str("current-session"),
+                remote_addr,
+            )),
+        );
+
+        assert!(!table.update_heartbeat_for_session(&broker_info, old_session_id, 3000));
+        assert!(!table.update_heartbeat_for_session(&broker_info, unregistered_session_id, 3000));
+        assert_eq!(table.get(&broker_info).unwrap().last_update_timestamp(), 2000);
+
+        assert!(table.update_heartbeat_for_session(&broker_info, current_session_id, 4000));
+        assert_eq!(table.get(&broker_info).unwrap().last_update_timestamp(), 4000);
     }
 
     #[test]
