@@ -38,7 +38,6 @@ use rocketmq_transport::api::v2::RequestProcessorV2;
 use rocketmq_transport::api::v2::ResponsePlan;
 use rocketmq_transport::api::v2::ResponseWriteObservationV2;
 use rocketmq_transport::api::v2::ResponseWriteOutcomeV2;
-use rocketmq_transport::api::v2::SessionView;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
@@ -172,6 +171,7 @@ impl NameServerRequestProcessor {
     pub(crate) async fn process_command(
         &mut self,
         auth_context: &RemotingAuthContext,
+        original_code: i32,
         request: &mut RemotingCommand,
         broker_session: Option<crate::route::types::BrokerSession>,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -180,8 +180,8 @@ impl NameServerRequestProcessor {
             .in_flight_requests
             .as_ref()
             .map(|in_flight_requests| in_flight_requests.enter());
-        let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
-        let request_class = match classify_namesrv_request(RequestCode::from(request.code())) {
+        let route_request_started = (original_code == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
+        let request_class = match classify_namesrv_request(RequestCode::from(original_code)) {
             Some(request_class) => request_class,
             None => {
                 let error = RocketMQError::authentication_failed("request code is not authorized by NameServer");
@@ -201,7 +201,11 @@ impl NameServerRequestProcessor {
                 .unwrap_or(LayerRequirement::Optional)
         });
         let detailed = match &self.auth_runtime {
-            Some(auth_runtime) => auth_runtime.evaluate_remoting_detailed(auth_context, request).await,
+            Some(auth_runtime) => {
+                auth_runtime
+                    .evaluate_remoting_detailed_for_code(auth_context, request, original_code)
+                    .await
+            }
             None => Ok(DetailedDecision::Abstain),
         };
         if matches!(
@@ -295,12 +299,12 @@ impl NameServerRequestProcessor {
             None
         };
         let had_admission_lease = _admission_lease.is_some();
-        let response = match self.processor_table.get(request.code_ref()).cloned() {
+        let response = match self.processor_table.get(&original_code).cloned() {
             None => match self.default_request_processor.clone() {
                 None => {
                     let response = self
                         .command_factory
-                        .request_code_not_supported_with_opaque(request.code(), request.opaque());
+                        .request_code_not_supported_with_opaque(original_code, request.opaque());
                     Ok(Some(response))
                 }
                 Some(mut processor) => processor_response(&mut processor, request, broker_session).await,
@@ -367,14 +371,15 @@ impl NameServerRequestProcessor {
 
 impl RequestProcessorV2 for NameServerRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let auth_context = remoting_auth_context(request);
-        let broker_session = if request.command().code() == RequestCode::RegisterBroker as i32 {
+        let auth_context = RemotingAuthContext::from_request(request)?;
+        let original_code = request.original_identity().original_code();
+        let broker_session = if original_code == RequestCode::RegisterBroker as i32 {
             Some(crate::processor::default_request_processor::broker_session_from_request(request)?)
         } else {
             None
         };
         let response = self
-            .process_command(&auth_context, request.command_mut(), broker_session)
+            .process_command(&auth_context, original_code, request.command_mut(), broker_session)
             .await?;
         response_outcome(response)
     }
@@ -415,19 +420,6 @@ pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> rocketmq_er
     let plan = ResponsePlan::from_command(response)
         .map_err(|error| RocketMQError::response_process_failed("namesrv.response_plan", error.to_string()))?;
     Ok(HandlerOutcome::Reply(plan))
-}
-
-fn remoting_auth_context(request: &RemotingRequest) -> RemotingAuthContext {
-    let source_ip = match request.session() {
-        SessionView::Network { remote_addr, .. } => Some(remote_addr.ip().to_string()),
-        SessionView::Embedded { .. } => None,
-        _ => None,
-    };
-    let channel_id = Some(format!(
-        "transport-session-{}",
-        request.original_identity().request_id().owner_id()
-    ));
-    RemotingAuthContext::new(source_ip, channel_id)
 }
 
 fn record_admission_metric(
@@ -503,7 +495,7 @@ mod tests {
     }
 
     fn auth_context() -> RemotingAuthContext {
-        RemotingAuthContext::new(Some("127.0.0.1".to_owned()), Some("namesrv-v2-test-session".to_owned()))
+        RemotingAuthContext::network("127.0.0.1", "namesrv-v2-test-session")
     }
 
     #[test]
@@ -562,13 +554,50 @@ mod tests {
             RemotingCommand::create_remoting_command(RequestCode::RegisterBroker.to_i32()).set_opaque(0x5a5a);
 
         let response = processor
-            .process_command(&auth_context(), &mut request, None)
+            .process_command(&auth_context(), request.code(), &mut request, None)
             .await
             .expect("authorization denial should be encoded as a response")
             .expect("authorization denial should return a command");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
         assert_eq!(response.opaque(), 0x5a5a);
+        auth_runtime.shutdown().await.expect("auth runtime should shut down");
+    }
+
+    #[tokio::test]
+    async fn mutated_command_code_cannot_replace_the_original_authorization_operation() {
+        let runtime = RuntimeContext::from_current("namesrv-original-auth-code-test");
+        let mutated_code = RequestCode::GetRouteinfoByTopic.to_i32().to_string();
+        let auth_runtime = Arc::new(
+            AuthRuntimeBuilder::new(
+                AuthConfig {
+                    authentication_enabled: true,
+                    authorization_enabled: true,
+                    authentication_whitelist: CheetahString::from_string(mutated_code.clone()),
+                    authorization_whitelist: CheetahString::from_string(mutated_code),
+                    ..AuthConfig::default()
+                },
+                runtime.service_context("namesrv.original-auth-code"),
+            )
+            .build()
+            .await
+            .expect("test auth runtime should initialize"),
+        );
+        let mut processor = NameServerRequestProcessor::new().with_auth_runtime(Some(Arc::clone(&auth_runtime)));
+        let mut request = route_request(0x5a5f);
+
+        let response = processor
+            .process_command(
+                &auth_context(),
+                RequestCode::RegisterBroker.to_i32(),
+                &mut request,
+                None,
+            )
+            .await
+            .expect("authorization denial should be encoded as a response")
+            .expect("authorization denial should return a command");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
         auth_runtime.shutdown().await.expect("auth runtime should shut down");
     }
 
@@ -584,7 +613,7 @@ mod tests {
         let mut request = route_request(0x5a5b);
 
         let response = processor
-            .process_command(&auth_context(), &mut request, None)
+            .process_command(&auth_context(), request.code(), &mut request, None)
             .await
             .expect("required abstention should produce a response")
             .expect("required abstention should return a command");
@@ -605,7 +634,7 @@ mod tests {
         let mut request = route_request(0x5a5c);
 
         let response = processor
-            .process_command(&auth_context(), &mut request, None)
+            .process_command(&auth_context(), request.code(), &mut request, None)
             .await
             .expect("optional abstention should reach the route handler")
             .expect("route handler should return a command");
@@ -615,6 +644,32 @@ mod tests {
             ResponseCode::from(response.code()),
             ResponseCode::RequestCodeNotSupported
         );
+    }
+
+    #[tokio::test]
+    async fn leaf_lookup_uses_the_original_code_after_command_mutation() {
+        let runtime = RuntimeContext::from_current("namesrv-original-route-code-test");
+        let bootstrap = crate::bootstrap::Builder::new(
+            runtime.service_context("namesrv-bootstrap"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .build();
+        let mut processor = route_processor(&bootstrap, None, LayerRequirement::Optional);
+        let mut request = route_request(0x5a60);
+        request.set_code_ref(RequestCode::GetBrokerClusterInfo.to_i32());
+
+        let response = processor
+            .process_command(
+                &auth_context(),
+                RequestCode::GetRouteinfoByTopic.to_i32(),
+                &mut request,
+                None,
+            )
+            .await
+            .expect("original route must reach the registered leaf")
+            .expect("route handler must return a command");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
     }
 
     #[tokio::test]
@@ -648,7 +703,7 @@ mod tests {
         );
         let mut allowed_request = route_request(0x5a5d);
         let allowed = allowed_processor
-            .process_command(&auth_context(), &mut allowed_request, None)
+            .process_command(&auth_context(), allowed_request.code(), &mut allowed_request, None)
             .await
             .expect("whitelisted authorization should reach the route handler")
             .expect("route handler should return a command");
@@ -674,7 +729,7 @@ mod tests {
         );
         let mut denied_request = route_request(0x5a5e);
         let denied = denied_processor
-            .process_command(&auth_context(), &mut denied_request, None)
+            .process_command(&auth_context(), denied_request.code(), &mut denied_request, None)
             .await
             .expect("detailed denial should produce a response")
             .expect("detailed denial should return a command");

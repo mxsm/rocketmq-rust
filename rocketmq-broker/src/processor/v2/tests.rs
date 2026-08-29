@@ -16,14 +16,19 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::Decision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
+use rocketmq_transport::api::v1::no_permission_with_remark;
 use rocketmq_transport::api::v1::AdmissionController;
 use rocketmq_transport::api::v1::AdmissionLimits;
 use rocketmq_transport::api::v1::RPCHook;
@@ -199,6 +204,7 @@ async fn router_selects_by_immutable_original_code_and_forwards_mutable_command(
     let seen = Arc::clone(&probe.seen);
     let observations = Arc::clone(&probe.observations);
     let mut router = BrokerRequestProcessorV2::new();
+    router.set_auth_disabled_by_validated_config();
     router.register_processor(ROUTED_CODE, probe);
     let fixture = RouterFixture::new(PreMutatingRouter { inner: router }, Vec::new());
 
@@ -228,6 +234,7 @@ async fn router_v2_ordering_matches_v1_before_command_mutation() {
     let probe = ProbeProcessor::new(false);
     let seen = Arc::clone(&probe.seen);
     let mut router = BrokerRequestProcessorV2::new();
+    router.set_auth_disabled_by_validated_config();
     router.register_processor(RequestCode::SendMessage as i32, probe.clone());
     router.register_processor(RequestCode::QueryMessage as i32, probe.clone());
     router.register_maintenance_processor(RequestCode::MaintenanceGetCapabilities as i32, probe);
@@ -307,6 +314,75 @@ fn malformed_chosen_rejection_fails_closed_with_an_owned_fallback() {
     assert_eq!(plan.body_kind(), rocketmq_transport::api::v2::ResponseBodyKind::Empty);
 }
 
+#[tokio::test]
+async fn unconfigured_auth_fails_closed_before_leaf_dispatch() {
+    let probe = ProbeProcessor::new(false);
+    let calls = Arc::clone(&probe.calls);
+    let mut router = BrokerRequestProcessorV2::new();
+    router.register_processor(ROUTED_CODE, probe);
+    assert!(!router.is_auth_configured());
+    let fixture = RouterFixture::new(router, Vec::new());
+
+    let outcome = fixture
+        .harness
+        .dispatch(None, RemotingCommand::create_remoting_command(ROUTED_CODE))
+        .await
+        .expect("unconfigured auth must produce an owned denial");
+    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+        panic!("unconfigured auth must return one denial reply");
+    };
+    assert_eq!(
+        plan.response_code(),
+        no_permission_with_remark("expected denial").code()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn broker_auth_uses_original_code_after_a_before_hook_mutates_the_command() {
+    let runtime_context = RuntimeContext::from_current("broker-v2-original-auth-code-test");
+    let auth_runtime = Arc::new(
+        AuthRuntimeBuilder::new(
+            AuthConfig {
+                authentication_enabled: true,
+                authentication_whitelist: CheetahString::from(MUTATED_CODE.to_string()),
+                ..AuthConfig::default()
+            },
+            runtime_context.service_context("broker-v2.original-auth-code"),
+        )
+        .build()
+        .await
+        .expect("test auth runtime should initialize"),
+    );
+    let probe = ProbeProcessor::new(false);
+    let calls = Arc::clone(&probe.calls);
+    let mut router = BrokerRequestProcessorV2::new();
+    router.register_processor(ROUTED_CODE, probe);
+    router.set_auth_runtime(Arc::clone(&auth_runtime));
+    let fixture = RouterFixture::new(PreMutatingRouter { inner: router }, Vec::new());
+
+    let outcome = fixture
+        .harness
+        .dispatch(None, RemotingCommand::create_remoting_command(ROUTED_CODE))
+        .await
+        .expect("Broker auth denial should remain an owned response");
+    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+        panic!("Broker auth denial must return one reply");
+    };
+    assert_eq!(
+        plan.response_code(),
+        no_permission_with_remark("expected denial").code()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    fixture.finish().await;
+    auth_runtime
+        .shutdown()
+        .await
+        .expect("test auth runtime should shut down");
+}
+
 fn fast_failure(max_count: usize) -> BrokerFastFailure {
     BrokerFastFailure::new(Arc::new(BrokerConfig {
         broker_fast_failure_enable: true,
@@ -323,6 +399,7 @@ async fn router_fast_failure_keeps_response_affine_and_releases_run_resources() 
     let probe = ProbeProcessor::new(false);
     let calls = Arc::clone(&probe.calls);
     let mut router = BrokerRequestProcessorV2::new();
+    router.set_auth_disabled_by_validated_config();
     router.register_processor(RequestCode::SendMessage as i32, probe);
     router.set_broker_fast_failure(service.clone());
     let fixture = RouterFixture::new(router, Vec::new());

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_auth::RemotingAuthContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::entity::ClientGroup;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -99,6 +100,12 @@ use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
+use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::v2::HandlerOutcome;
+use rocketmq_transport::api::v2::RejectRequestDecision;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::v2::ResponsePlan;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -247,10 +254,8 @@ where
         }
         if let Some(auth_runtime) = &self.auth_runtime {
             let source_ip = channel.remote_address().ip().to_string();
-            match auth_runtime
-                .authenticate_remoting(request, Some(channel.channel_id()), Some(source_ip.as_str()))
-                .await
-            {
+            let auth_context = RemotingAuthContext::new(Some(source_ip), Some(channel.channel_id().to_owned()));
+            match auth_runtime.authenticate_remoting(request, &auth_context).await {
                 Ok(Some(principal)) => context.set_authenticated_principal(principal),
                 Ok(None) => {}
                 Err(error) => {
@@ -267,7 +272,7 @@ where
                     request.opaque(),
                 )));
             }
-            if let Err(error) = auth_runtime.authorize_remoting(&channel, request).await {
+            if let Err(error) = auth_runtime.authorize_remoting(&auth_context, request).await {
                 return Ok(Some(auth_error_response(
                     &self.dispatcher.command_factory,
                     request.opaque(),
@@ -298,6 +303,92 @@ where
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {
         (false, None)
     }
+}
+
+impl<P> RequestProcessorV2 for ProxyRequestProcessor<P>
+where
+    P: MessagingProcessor + 'static,
+{
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let original_code = request.original_identity().original_code();
+        let mut auth_command = request.command().clone();
+        auth_command.set_code_ref(original_code);
+        let mut context =
+            ProxyContext::from_remoting_request_v2(RemotingIngressRoute::rpc_name(original_code), request);
+        let drain_management = is_drain_management_request(original_code);
+        if drain_management && self.auth_runtime.is_none() {
+            return response_plan(authentication_required_response(
+                &self.dispatcher.command_factory,
+                request.original_identity().original_opaque(),
+            ));
+        }
+
+        if let Some(auth_runtime) = &self.auth_runtime {
+            let auth_context = match RemotingAuthContext::from_request(request) {
+                Ok(auth_context) => auth_context,
+                Err(error) => {
+                    return response_plan(auth_error_response(
+                        &self.dispatcher.command_factory,
+                        request.original_identity().original_opaque(),
+                        ProxyError::from(error),
+                    ));
+                }
+            };
+            match auth_runtime.authenticate_remoting(&auth_command, &auth_context).await {
+                Ok(Some(principal)) => context.set_authenticated_principal(principal),
+                Ok(None) => {}
+                Err(error) => {
+                    return response_plan(auth_error_response(
+                        &self.dispatcher.command_factory,
+                        request.original_identity().original_opaque(),
+                        error,
+                    ));
+                }
+            }
+            if drain_management && context.authenticated_principal().is_none() {
+                return response_plan(authentication_required_response(
+                    &self.dispatcher.command_factory,
+                    request.original_identity().original_opaque(),
+                ));
+            }
+            if let Err(error) = auth_runtime.authorize_remoting(&auth_context, &auth_command).await {
+                return response_plan(auth_error_response(
+                    &self.dispatcher.command_factory,
+                    request.original_identity().original_opaque(),
+                    error,
+                ));
+            }
+        }
+
+        let _drain_admission = if drain_management {
+            None
+        } else {
+            match self.drain.try_admit() {
+                Ok(admission) => Some(admission),
+                Err(_) => {
+                    return response_plan(
+                        self.dispatcher
+                            .command_factory
+                            .create_response_command_with_code(ResponseCode::ServiceNotAvailable)
+                            .set_remark("Proxy is draining and does not accept new requests")
+                            .set_opaque(request.original_identity().original_opaque()),
+                    );
+                }
+            }
+        };
+
+        self.dispatcher.dispatch_v2(&context, request).await
+    }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestDecision {
+        RejectRequestDecision::Proceed
+    }
+}
+
+fn response_plan(response: RemotingCommand) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ResponsePlan::from_command(response)
+        .map(HandlerOutcome::Reply)
+        .map_err(|error| RocketMQError::response_process_failed("proxy_v2_response_plan", error.to_string()))
 }
 
 #[doc(hidden)]
@@ -752,6 +843,61 @@ where
                 ),
             ),
         }
+    }
+
+    async fn dispatch_v2(
+        &self,
+        context: &ProxyContext,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let route =
+            rocketmq_proxy_core::remoting::classify_remoting_request(request.original_identity().original_code());
+        if matches!(
+            route,
+            RemotingIngressRoute::ForwardBackend
+                | RemotingIngressRoute::LockBatchMessageQueue
+                | RemotingIngressRoute::UnlockBatchMessageQueue
+        ) {
+            let Some(backend) = self.remoting_backend.as_ref() else {
+                return response_plan(unsupported_response(
+                    &self.command_factory,
+                    request.original_identity().original_opaque(),
+                    format!(
+                        "proxy remoting backend is unavailable for request code {}",
+                        request.original_identity().original_code()
+                    ),
+                ));
+            };
+            let mut backend_command = request.command().clone();
+            backend_command.set_code_ref(request.original_identity().original_code());
+            backend_command.set_opaque_mut(request.original_identity().original_opaque());
+            return match backend.process_v2(backend_command).await {
+                Ok(EmbeddedDispatchOutcome::Reply(plan)) => Ok(HandlerOutcome::Reply(plan)),
+                Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(
+                    ResponseCode::Success as i32,
+                ))),
+                Ok(EmbeddedDispatchOutcome::NoReply { reason, .. }) => request
+                    .protocol_no_response(reason)
+                    .map(HandlerOutcome::NoReply)
+                    .map_err(Into::into),
+                Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(RocketMQError::invariant_violated(
+                    "terminal Proxy backend route returned an unresolved deferred outcome",
+                )),
+                Err(error) => response_plan(proxy_error_response(
+                    &self.command_factory,
+                    request.original_identity().original_opaque(),
+                    error,
+                )),
+                Ok(_) => Err(RocketMQError::invariant_violated(
+                    "Proxy backend returned an unsupported embedded dispatch outcome",
+                )),
+            };
+        }
+
+        let mut dispatch_command = request.command().clone();
+        dispatch_command.set_code_ref(request.original_identity().original_code());
+        dispatch_command.set_opaque_mut(request.original_identity().original_opaque());
+        response_plan(self.dispatch(context, &dispatch_command).await)
     }
 
     async fn dispatch_forward_backend(&self, request: &RemotingCommand) -> RemotingCommand {
@@ -2253,6 +2399,8 @@ fn auth_error_response(command_factory: &RemotingCommandFactory, opaque: i32, er
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
+    #[cfg(feature = "local-mode")]
+    use std::net::TcpListener;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -2264,6 +2412,7 @@ mod tests {
     use rocketmq_auth::Policy;
     use rocketmq_auth::PolicyDecision;
     use rocketmq_auth::PolicyResource;
+    use rocketmq_auth::RemotingAuthContext;
     use rocketmq_auth::SubjectType;
     use rocketmq_auth::User;
     use rocketmq_auth::UserStatus;
@@ -2280,6 +2429,8 @@ mod tests {
     use rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
+    #[cfg(feature = "local-mode")]
+    use rocketmq_observability::TelemetryHandle;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
@@ -2292,6 +2443,7 @@ mod tests {
     use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
     use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
     use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
     use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
     use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
@@ -2324,17 +2476,42 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_protocol::protocol::SerializeType;
+    #[cfg(feature = "local-mode")]
+    use rocketmq_proxy_local::LocalBrokerFacadeClient;
+    #[cfg(feature = "local-mode")]
+    use rocketmq_proxy_local::LocalConfig;
+    #[cfg(feature = "local-mode")]
+    use rocketmq_proxy_local::LocalRemotingBackend;
+    #[cfg(feature = "local-mode")]
+    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeContext;
+    #[cfg(feature = "local-mode")]
+    use rocketmq_runtime::RuntimeOwner;
     use rocketmq_runtime::ServiceLifecycle;
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
+    use rocketmq_security_api::AuthenticatedRequestContext;
+    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::Principal;
+    use rocketmq_security_api::RequestPolicy;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
     use rocketmq_transport::api::v1::RemotingDeserializable;
     use rocketmq_transport::api::v1::RemotingSerializable;
     use rocketmq_transport::api::v1::RequestProcessor;
+    use rocketmq_transport::api::v1::TransportSecurity;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::HandlerOutcome;
+    use rocketmq_transport::api::v2::RejectRequestDecision;
+    use rocketmq_transport::api::v2::RemotingRequest;
+    use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use tokio::time::timeout;
 
     use super::response_with_header;
+    use super::ProxyDrainPhase;
     use super::ProxyRemotingBackend;
     use super::ProxyRemotingDispatcher;
     use super::ProxyRequestProcessor;
@@ -2427,6 +2604,131 @@ mod tests {
             },
             ..ProxyConfig::default()
         })
+    }
+
+    #[cfg(feature = "local-mode")]
+    fn available_embedded_broker_port() -> u16 {
+        loop {
+            let broker = TcpListener::bind(("0.0.0.0", 0)).expect("reserve an ephemeral embedded Broker port");
+            let port = broker.local_addr().expect("read ephemeral Broker port").port();
+            let Some(fast_port) = port.checked_sub(2) else {
+                continue;
+            };
+            let Some(ha_port) = port.checked_add(1) else {
+                continue;
+            };
+            if port == 10_912 || fast_port == 10_912 {
+                continue;
+            }
+            let Ok(fast) = TcpListener::bind(("0.0.0.0", fast_port)) else {
+                continue;
+            };
+            let Ok(ha) = TcpListener::bind(("0.0.0.0", ha_port)) else {
+                continue;
+            };
+            drop((broker, fast, ha));
+            return port;
+        }
+    }
+
+    #[cfg(feature = "local-mode")]
+    #[test]
+    fn outer_v1_proxy_request_reaches_local_broker_v2_compatibility_path() {
+        let mut runtime_config = RuntimeConfig::server_default("proxy-v1-local-backend-v2-compatibility-test");
+        runtime_config.thread_stack_size = Some(16 * 1024 * 1024);
+        let owner = RuntimeOwner::new(runtime_config).expect("construct V2 compatibility test runtime");
+        owner.block_on(outer_v1_proxy_request_reaches_local_broker_v2_compatibility_path_body(
+            &owner,
+        ));
+        let report = owner
+            .shutdown_runtime_blocking()
+            .expect("V2 compatibility test runtime shuts down");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[cfg(feature = "local-mode")]
+    async fn outer_v1_proxy_request_reaches_local_broker_v2_compatibility_path_body(owner: &RuntimeOwner) {
+        let service = owner
+            .root_context()
+            .component("proxy-v1-local-backend-v2-compatibility");
+        let store = tempfile::tempdir().expect("create embedded Broker store directory");
+        let local_client = LocalBrokerFacadeClient::new(
+            LocalConfig {
+                broker_listen_port: available_embedded_broker_port(),
+                store_root_dir: store.path().to_string_lossy().into_owned(),
+                command_queue_max_age_millis: 10_000,
+                ..LocalConfig::default()
+            },
+            &service,
+            TelemetryHandle::noop(),
+        )
+        .expect("construct production local Broker facade client");
+        let backend = Arc::new(LocalRemotingBackend::new(local_client));
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let mut request_processor = ProxyRequestProcessor::new(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            ClientSessionRegistry::default(),
+            None,
+            Some(backend),
+        );
+        let harness = LocalRequestHarness::new(service.component("outer-v1").task_group().clone())
+            .await
+            .expect("local remoting harness should start");
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ConsumerSendMsgBack,
+            ConsumerSendMsgBackRequestHeader {
+                offset: 0,
+                group: CheetahString::from("missing-v2-compatibility-group"),
+                delay_level: 0,
+                ..ConsumerSendMsgBackRequestHeader::default()
+            },
+        )
+        .set_opaque(9_852);
+        request.make_custom_header_to_net();
+        assert_eq!(
+            request
+                .decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()
+                .expect("outer V1 fixture must carry wire header fields")
+                .group
+                .as_str(),
+            "missing-v2-compatibility-group"
+        );
+
+        let response = request_processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("outer V1 Proxy dispatch succeeds")
+            .expect("ordinary request returns one compatibility response");
+
+        assert_eq!(response.opaque(), 9_852);
+        let remark = response.remark().map(CheetahString::as_str).unwrap_or_default();
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::SystemError,
+            "{remark}"
+        );
+        assert!(
+            remark.contains("look message by offset failed, the offset is 0"),
+            "{remark}"
+        );
+
+        drop(request_processor);
+        drop(harness);
+        let report = service.task_group().shutdown(Duration::from_secs(10)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
@@ -2534,6 +2836,128 @@ mod tests {
                 ))
             })
         }
+    }
+
+    struct AllowEmbeddedProxyPolicy;
+
+    impl RequestPolicy for AllowEmbeddedProxyPolicy {
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
+            Decision::Allow
+        }
+    }
+
+    #[derive(Clone)]
+    struct MutatingV2Fixture<P> {
+        inner: P,
+    }
+
+    impl<P> RequestProcessorV2 for MutatingV2Fixture<P>
+    where
+        P: RequestProcessorV2 + Clone + Sync,
+    {
+        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+            request.command_mut().set_code_ref(RequestCode::BeginProxyDrain);
+            request.command_mut().set_opaque_mut(-9_852);
+            self.inner.process(request).await
+        }
+
+        fn reject_request(&self, code: i32) -> RejectRequestDecision {
+            self.inner.reject_request(code)
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_v2_routes_and_binds_from_original_identity_without_a_channel() {
+        let backend = Arc::new(TestRemotingBackend::default());
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let drain = ProxyDrainController::default();
+        let proxy = ProxyRequestProcessor::new_with_drain_controller(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            ClientSessionRegistry::default(),
+            None,
+            Some(backend.clone()),
+            drain.clone(),
+        );
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            MutatingV2Fixture { inner: proxy },
+            Vec::new(),
+            Arc::new(TransportSecurity::secure_enforced(
+                Some(Arc::new(AllowEmbeddedProxyPolicy)),
+                None,
+            )),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let runtime = RuntimeContext::from_current("proxy-embedded-v2-original-identity-test");
+        let service = runtime.service_context("proxy-embedded-v2-original-identity");
+        let harness =
+            EmbeddedRequestHarnessV2::new(dispatcher, service.task_group().clone(), Principal::new("broker-proxy"));
+
+        let response = harness
+            .dispatch(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::ConsumerSendMsgBack).set_opaque(9_701),
+            )
+            .await
+            .expect("embedded V2 Proxy reply");
+        let EmbeddedDispatchOutcome::Reply(plan) = response else {
+            panic!("forward backend must produce a reply")
+        };
+        assert_eq!(plan.response_code(), ResponseCode::Success.to_i32());
+
+        let local_response = harness
+            .dispatch(
+                None,
+                RemotingCommand::new_request(
+                    RequestCode::CheckClientConfig,
+                    ProxyDrainOperationRequestBody {
+                        schema_version: PROXY_DRAIN_SCHEMA_VERSION.to_owned(),
+                        operation_id: "must-not-start".to_owned(),
+                    }
+                    .encode()
+                    .expect("decoy drain body should encode"),
+                )
+                .set_opaque(9_703),
+            )
+            .await
+            .expect("embedded V2 non-backend reply");
+        let EmbeddedDispatchOutcome::Reply(plan) = local_response else {
+            panic!("original CheckClientConfig route must produce a reply")
+        };
+        assert_eq!(plan.response_code(), ResponseCode::Success.to_i32());
+        assert_eq!(drain.phase(), ProxyDrainPhase::Accepting);
+
+        let mut one_way = RemotingCommand::create_remoting_command(RequestCode::ConsumerSendMsgBack).set_opaque(9_702);
+        one_way.mark_oneway_rpc_ref();
+        let one_way_outcome = harness
+            .dispatch(None, one_way)
+            .await
+            .expect("embedded V2 one-way compatibility mapping");
+        assert!(matches!(one_way_outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+
+        {
+            let seen = backend.seen_requests.lock().expect("backend mutex poisoned");
+            assert_eq!(seen.len(), 2);
+            assert_eq!(seen[0].code(), RequestCode::ConsumerSendMsgBack.to_i32());
+            assert_eq!(seen[0].opaque(), 9_701);
+            assert_eq!(seen[1].code(), RequestCode::ConsumerSendMsgBack.to_i32());
+            assert_eq!(seen[1].opaque(), 9_702);
+        }
+
+        let shutdown = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(shutdown.is_healthy(), "{}", shutdown.to_json());
     }
 
     async fn test_auth_runtime(authentication_enabled: bool, authorization_enabled: bool) -> ProxyAuthRuntime {
@@ -3737,9 +4161,10 @@ mod tests {
         );
         command.make_custom_header_to_net();
         let command = sign_remoting_command(command, "alice", "secret");
+        let auth_context = RemotingAuthContext::network("127.0.0.1", "channel-a");
 
         let principal = auth_runtime
-            .authenticate_remoting(&command, Some("channel-a"), Some("127.0.0.1"))
+            .authenticate_remoting(&command, &auth_context)
             .await
             .expect("authentication should succeed");
         assert_eq!(
@@ -3747,19 +4172,20 @@ mod tests {
             "alice"
         );
         auth_runtime
-            .authorize_remoting(&(), &command)
+            .authorize_remoting(&auth_context, &command)
             .await
             .expect("authorization should succeed");
 
         let denied_runtime = test_auth_runtime(true, true).await;
         seed_normal_user(&denied_runtime, "bob", "secret").await;
         let denied_command = sign_remoting_command(command.clone(), "bob", "secret");
+        let denied_auth_context = RemotingAuthContext::network("127.0.0.1", "channel-b");
         denied_runtime
-            .authenticate_remoting(&denied_command, Some("channel-b"), Some("127.0.0.1"))
+            .authenticate_remoting(&denied_command, &denied_auth_context)
             .await
             .expect("authentication should still succeed");
         let error = denied_runtime
-            .authorize_remoting(&(), &denied_command)
+            .authorize_remoting(&denied_auth_context, &denied_command)
             .await
             .expect_err("authorization should fail without matching acl");
         assert!(matches!(

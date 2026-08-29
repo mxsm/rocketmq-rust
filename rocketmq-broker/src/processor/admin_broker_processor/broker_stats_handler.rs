@@ -20,8 +20,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -36,8 +34,6 @@ impl BrokerStatsHandler {
 
     pub async fn view_broker_stats_data(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

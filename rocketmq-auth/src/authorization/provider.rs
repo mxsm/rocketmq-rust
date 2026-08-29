@@ -38,6 +38,7 @@ use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::config::AuthConfig;
 use crate::runtime::ProviderRegistry;
 use crate::AuthMetrics;
+use crate::RemotingAuthContext;
 
 /// Result type for authorization operations.
 pub type AuthorizationResult<T> = Result<T, AuthorizationError>;
@@ -276,13 +277,13 @@ pub trait AuthorizationProvider: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Create authorization contexts from channel context and remoting command.
+    /// Create authorization contexts from trusted remoting ingress facts and command.
     ///
-    /// Parses channel context (connection info) and RocketMQ remoting command
+    /// Parses typed ingress facts and RocketMQ remoting command
     /// to construct authorization contexts for TCP-based protocols.
     ///
     /// # Arguments
-    /// * `channel_context` - Channel context (connection, remote address, etc.)
+    /// * `auth_context` - Trusted, read-only source and session facts
     /// * `command` - RocketMQ remoting command containing request code and data
     ///
     /// # Returns
@@ -293,7 +294,7 @@ pub trait AuthorizationProvider: Send + Sync {
     #[allow(unused_variables)]
     fn new_contexts_from_remoting_command(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         // Default implementation returns empty list (no-op)
@@ -341,7 +342,7 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
 
     fn new_contexts_from_remoting_command(
         &self,
-        _channel_context: &(dyn std::any::Any + Send + Sync),
+        _auth_context: &RemotingAuthContext,
         _command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         // Return empty contexts (no authorization needed)
@@ -592,13 +593,13 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
 
     fn new_contexts_from_remoting_command(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         let builder = self.context_builder.as_ref().ok_or_else(|| {
             AuthorizationError::NotInitialized("Authorization context builder is not configured".to_string())
         })?;
-        builder.build_from_remoting(channel_context, command)
+        builder.build_from_remoting(auth_context, command)
     }
 }
 

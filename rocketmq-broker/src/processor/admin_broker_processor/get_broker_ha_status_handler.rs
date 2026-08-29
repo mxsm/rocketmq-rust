@@ -16,8 +16,6 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
@@ -31,8 +29,6 @@ impl GetBrokerHaStatusHandler {
     pub async fn get_broker_ha_status<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -82,8 +78,6 @@ mod tests {
     use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
 
@@ -95,20 +89,6 @@ mod tests {
             .expect("time should move forward")
             .as_millis();
         std::env::temp_dir().join(format!("rocketmq-rust-ha-status-{label}-{millis}"))
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
     }
 
     #[tokio::test]
@@ -127,15 +107,11 @@ mod tests {
         assert!(runtime.initialize().await.is_ok());
 
         let handler = GetBrokerHaStatusHandler::new();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerHaStatus);
 
         let response = handler
             .get_broker_ha_status(
                 &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
                 RequestCode::GetBrokerHaStatus,
                 &mut request,
             )
@@ -157,15 +133,11 @@ mod tests {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let runtime = BrokerRuntime::new(broker_config, message_store_config);
         let handler = GetBrokerHaStatusHandler::new();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerHaStatus);
 
         let response = handler
             .get_broker_ha_status(
                 &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
                 RequestCode::GetBrokerHaStatus,
                 &mut request,
             )

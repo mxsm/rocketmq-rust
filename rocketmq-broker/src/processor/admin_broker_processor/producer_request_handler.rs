@@ -4,7 +4,6 @@ use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 use crate::client::manager::producer_manager::ProducerChannelRegistry;
 
@@ -18,7 +17,6 @@ impl ProducerRequestHandler {
     }
     pub async fn get_producer_connection_list(
         &self,
-        _ctx: ConnectionHandlerContext,
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
@@ -48,7 +46,6 @@ impl ProducerRequestHandler {
 
     pub async fn get_all_producer_info(
         &self,
-        _ctx: ConnectionHandlerContext,
         _request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let producer_table_info = self.producer_registry.producer_table();

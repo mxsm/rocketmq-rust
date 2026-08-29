@@ -23,6 +23,7 @@ use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
 
 use crate::proto::v2;
 use crate::status::ProxyPayloadStatus;
@@ -42,6 +43,24 @@ pub trait ProxyRemotingBackend: Send + Sync {
     /// request. The facade is responsible for mapping that error to a wire
     /// response.
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, RemotingCommand>;
+
+    /// Processes a canonical command through the channel-free Broker V2 boundary.
+    ///
+    /// Implementations that own an embedded Broker override this method and
+    /// return its affine local dispatch result. Remote cluster backends keep
+    /// using [`Self::process`] because they do not own an in-process Broker
+    /// dispatcher.
+    fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+        Box::pin(async move {
+            let response = self.process(request).await?;
+            let plan = rocketmq_transport::api::v2::ResponsePlan::from_command(response).map_err(|error| {
+                crate::ProxyError::Transport {
+                    message: format!("backend response could not become a V2 response plan: {error}"),
+                }
+            })?;
+            Ok(EmbeddedDispatchOutcome::Reply(plan))
+        })
+    }
 }
 
 /// Stable operations recognized by the Remoting ingress.

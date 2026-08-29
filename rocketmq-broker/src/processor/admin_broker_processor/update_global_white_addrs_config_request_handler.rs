@@ -19,7 +19,6 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -35,8 +34,6 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
 
     pub async fn update_global_white_addrs_config(
         &self,
-        _channel: Channel,
-        _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -102,8 +99,6 @@ mod tests {
     use rocketmq_auth::AuthConfig;
     use rocketmq_auth::ProviderRegistry;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
@@ -132,20 +127,6 @@ mod tests {
         runtime
     }
 
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
-    }
-
     #[test]
     fn parse_global_white_addrs_splits_comma_values() {
         assert_eq!(
@@ -165,8 +146,6 @@ mod tests {
         .expect("create provider registry");
         let auth_admin_service = Arc::new(AuthAdminService::with_provider_registry(provider_registry.clone()));
         let handler = UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateGlobalWhiteAddrsConfig,
@@ -177,7 +156,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .update_global_white_addrs_config(channel, ctx, RequestCode::UpdateGlobalWhiteAddrsConfig, &mut request)
+            .update_global_white_addrs_config(RequestCode::UpdateGlobalWhiteAddrsConfig, &mut request)
             .await
             .expect("request should be handled")
             .expect("response should exist");

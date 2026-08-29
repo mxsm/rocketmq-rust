@@ -14,15 +14,16 @@
 
 //! Broker-owned aggregate for the formal V2 processor contract.
 //!
-//! This aggregate deliberately has no legacy default/Admin variant. Admin is
-//! retained by the V1 compatibility aggregate until its child handlers expose
-//! formal V2 leaves; production server composition must not publish this route
-//! before that dependency is complete.
+//! The prepared embedded graph shallow-clones the frozen V1 registration table
+//! and reuses every leaf through its formal V2 seam. It remains independent of
+//! production listener publication, which is owned by the later cutover stage.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::RemotingAuthContext;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -49,7 +50,10 @@ use super::fast_failure_queue_kind;
 use super::is_privileged_maintenance_request;
 use super::request_ordering;
 use super::AckMessageProcessor;
+use super::AdminBrokerProcessor;
 use super::BrokerFastFailure;
+use super::BrokerProcessorType;
+use super::BrokerRequestProcessor;
 use super::ChangeInvisibleTimeProcessor;
 use super::ClientManageProcessor;
 use super::ConsumerManageProcessor;
@@ -72,11 +76,7 @@ use super::SendMessageProcessor;
 use crate::processor::response_plan::BrokerResponseParts;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-/// Every Broker leaf that already implements the formal V2 processor contract.
-///
-/// Admin is intentionally absent. Adding it requires the MIG-06 child-handler
-/// migration and is the prerequisite for publishing this aggregate as the
-/// production server route.
+/// Every Broker leaf that implements the formal V2 processor contract.
 pub enum BrokerProcessorTypeV2<MS: BrokerStorePort, TS> {
     Send(Arc<SendMessageProcessor<MS, TS>>),
     Pull(Arc<PullMessageProcessor<MS>>),
@@ -97,6 +97,7 @@ pub enum BrokerProcessorTypeV2<MS: BrokerStorePort, TS> {
     LiteSubscriptionCtl(Arc<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
     Maintenance(Arc<MaintenanceRequestProcessor>),
+    AdminBroker(Arc<AdminBrokerProcessor<MS>>),
 }
 
 impl<MS, TS> Clone for BrokerProcessorTypeV2<MS, TS>
@@ -124,6 +125,7 @@ where
             Self::LiteSubscriptionCtl(processor) => Self::LiteSubscriptionCtl(Arc::clone(processor)),
             Self::EndTransaction(processor) => Self::EndTransaction(Arc::clone(processor)),
             Self::Maintenance(processor) => Self::Maintenance(Arc::clone(processor)),
+            Self::AdminBroker(processor) => Self::AdminBroker(Arc::clone(processor)),
         }
     }
 }
@@ -154,6 +156,7 @@ where
             Self::LiteSubscriptionCtl(processor) => processor.process_v2_shared(request).await,
             Self::EndTransaction(processor) => processor.process_v2_shared(request).await,
             Self::Maintenance(processor) => processor.process_v2_shared(request).await,
+            Self::AdminBroker(processor) => processor.process_v2_shared(request).await,
         }
     }
 
@@ -178,6 +181,7 @@ where
             | Self::LiteSubscriptionCtl(_)
             | Self::EndTransaction(_)
             | Self::Maintenance(_) => (false, None),
+            Self::AdminBroker(_) => (false, None),
         };
         legacy_rejection(legacy)
     }
@@ -225,7 +229,42 @@ where
             Self::Maintenance(processor) => {
                 RequestProcessorV2::observe_response_write(processor.as_ref(), observation);
             }
+            Self::AdminBroker(_) => {}
         }
+    }
+}
+
+impl<MS, TS> BrokerProcessorTypeV2<MS, TS>
+where
+    MS: BrokerStorePort,
+{
+    fn from_legacy(processor: &BrokerProcessorType<MS, TS>) -> Self {
+        match processor {
+            BrokerProcessorType::Send(processor) => Self::Send(Arc::clone(processor)),
+            BrokerProcessorType::Pull(processor) => Self::Pull(Arc::clone(processor)),
+            BrokerProcessorType::Peek(processor) => Self::Peek(Arc::clone(processor)),
+            BrokerProcessorType::Pop(processor) => Self::Pop(Arc::clone(processor)),
+            BrokerProcessorType::PopLite(processor) => Self::PopLite(Arc::clone(processor)),
+            BrokerProcessorType::Ack(processor) => Self::Ack(Arc::clone(processor)),
+            BrokerProcessorType::ChangeInvisible(processor) => Self::ChangeInvisible(Arc::clone(processor)),
+            BrokerProcessorType::Notification(processor) => Self::Notification(Arc::clone(processor)),
+            BrokerProcessorType::PollingInfo(processor) => Self::PollingInfo(Arc::clone(processor)),
+            BrokerProcessorType::Reply(processor) => Self::Reply(Arc::clone(processor)),
+            BrokerProcessorType::Recall(processor) => Self::Recall(Arc::clone(processor)),
+            BrokerProcessorType::QueryMessage(processor) => Self::QueryMessage(Arc::clone(processor)),
+            BrokerProcessorType::ClientManage(processor) => Self::ClientManage(Arc::clone(processor)),
+            BrokerProcessorType::ConsumerManage(processor) => Self::ConsumerManage(Arc::clone(processor)),
+            BrokerProcessorType::QueryAssignment(processor) => Self::QueryAssignment(Arc::clone(processor)),
+            BrokerProcessorType::LiteManager(processor) => Self::LiteManager(Arc::clone(processor)),
+            BrokerProcessorType::LiteSubscriptionCtl(processor) => Self::LiteSubscriptionCtl(Arc::clone(processor)),
+            BrokerProcessorType::EndTransaction(processor) => Self::EndTransaction(Arc::clone(processor)),
+            BrokerProcessorType::Maintenance(processor) => Self::Maintenance(Arc::clone(processor)),
+            BrokerProcessorType::AdminBroker(processor) => Self::AdminBroker(Arc::clone(processor)),
+        }
+    }
+
+    fn is_maintenance(&self) -> bool {
+        matches!(self, Self::Maintenance(_))
     }
 }
 
@@ -265,6 +304,15 @@ pub struct BrokerRequestProcessorV2<P> {
     default_request_processor: Option<Arc<P>>,
     maintenance_routes: Arc<HashSet<i32>>,
     broker_fast_failure: Option<BrokerFastFailure>,
+    auth: BrokerAuthState,
+}
+
+#[derive(Clone, Default)]
+enum BrokerAuthState {
+    #[default]
+    Unconfigured,
+    DisabledByValidatedConfig,
+    Runtime(Arc<AuthRuntime>),
 }
 
 impl<P> BrokerRequestProcessorV2<P>
@@ -282,6 +330,7 @@ where
             default_request_processor: None,
             maintenance_routes: Arc::new(HashSet::new()),
             broker_fast_failure: None,
+            auth: BrokerAuthState::Unconfigured,
         }
     }
 
@@ -304,6 +353,23 @@ where
         }
         self.broker_fast_failure = Some(broker_fast_failure);
     }
+
+    /// Installs the Broker ACL runtime used before any ordinary leaf dispatch.
+    pub(crate) fn set_auth_runtime(&mut self, auth_runtime: Arc<AuthRuntime>) {
+        self.auth = BrokerAuthState::Runtime(auth_runtime);
+    }
+
+    /// Explicitly records that both Broker authentication and authorization
+    /// were disabled by validated composition configuration.
+    pub(crate) fn set_auth_disabled_by_validated_config(&mut self) {
+        self.auth = BrokerAuthState::DisabledByValidatedConfig;
+    }
+
+    /// Returns whether composition made an explicit fail-closed ACL decision.
+    #[must_use]
+    pub(crate) const fn is_auth_configured(&self) -> bool {
+        !matches!(self.auth, BrokerAuthState::Unconfigured)
+    }
 }
 
 impl<P> Default for BrokerRequestProcessorV2<P>
@@ -315,6 +381,49 @@ where
     }
 }
 
+impl<MS, TS> BrokerRequestProcessorV2<BrokerProcessorTypeV2<MS, TS>>
+where
+    MS: BrokerStorePort,
+    TS: TransactionalMessageService,
+{
+    /// Builds a prepared V2 router over the exact leaf instances registered in
+    /// the frozen compatibility graph.
+    ///
+    /// This only shallow-clones leaf `Arc`s and immutable routing metadata. It
+    /// does not publish a listener, create a second service owner, or duplicate
+    /// processor state.
+    pub(crate) fn from_legacy_graph(legacy: &BrokerRequestProcessor<MS, TS>) -> Self {
+        let process_table = legacy
+            .process_table
+            .iter()
+            .map(|(code, processor)| (*code, BrokerProcessorTypeV2::from_legacy(processor)))
+            .collect::<HashMap<_, _>>();
+        let maintenance_routes = process_table
+            .iter()
+            .filter_map(|(code, processor)| processor.is_maintenance().then_some(*code))
+            .collect::<HashSet<_>>();
+        let default_request_processor = legacy
+            .default_request_processor
+            .as_ref()
+            .map(|processor| Arc::new(BrokerProcessorTypeV2::from_legacy(processor.as_ref())));
+        let auth = legacy
+            .auth_runtime
+            .as_ref()
+            .map_or(BrokerAuthState::Unconfigured, |runtime| {
+                BrokerAuthState::Runtime(Arc::clone(runtime))
+            });
+
+        Self {
+            command_factory: legacy.command_factory,
+            process_table: Arc::new(process_table),
+            default_request_processor,
+            maintenance_routes: Arc::new(maintenance_routes),
+            broker_fast_failure: legacy.broker_fast_failure.clone(),
+            auth,
+        }
+    }
+}
+
 impl<P> Clone for BrokerRequestProcessorV2<P> {
     fn clone(&self) -> Self {
         Self {
@@ -323,6 +432,7 @@ impl<P> Clone for BrokerRequestProcessorV2<P> {
             default_request_processor: self.default_request_processor.clone(),
             maintenance_routes: Arc::clone(&self.maintenance_routes),
             broker_fast_failure: self.broker_fast_failure.clone(),
+            auth: self.auth.clone(),
         }
     }
 }
@@ -348,6 +458,50 @@ where
                 opaque,
             );
             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+        }
+
+        if !is_privileged_maintenance_request(RequestCode::from(request_code)) {
+            match &self.auth {
+                BrokerAuthState::Unconfigured => {
+                    let error = rocketmq_error::RocketMQError::authentication_failed(
+                        "Broker V2 authentication is not configured",
+                    );
+                    let response = command_from_error_with_factory_remark_and_opaque(
+                        &self.command_factory,
+                        &error,
+                        error.to_string(),
+                        opaque,
+                    );
+                    return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                }
+                BrokerAuthState::DisabledByValidatedConfig => {}
+                BrokerAuthState::Runtime(auth_runtime) => {
+                    let auth_context = match RemotingAuthContext::from_request(request) {
+                        Ok(auth_context) => auth_context,
+                        Err(error) => {
+                            let response = command_from_error_with_factory_remark_and_opaque(
+                                &self.command_factory,
+                                &error,
+                                error.to_string(),
+                                opaque,
+                            );
+                            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                        }
+                    };
+                    if let Err(error) = auth_runtime
+                        .check_remoting_for_code(&auth_context, request.command(), request_code)
+                        .await
+                    {
+                        let response = command_from_error_with_factory_remark_and_opaque(
+                            &self.command_factory,
+                            &error,
+                            error.to_string(),
+                            opaque,
+                        );
+                        return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                    }
+                }
+            }
         }
 
         let (processor, default_processor) = match self.process_table.get(&request_code).cloned() {

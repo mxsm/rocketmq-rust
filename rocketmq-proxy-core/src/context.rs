@@ -20,6 +20,8 @@ use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::v1::ConnectionContext;
+use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::SessionView;
 use tonic::metadata::MetadataMap;
 use tonic::Request;
 use uuid::Uuid;
@@ -185,6 +187,43 @@ impl<P> ProxyContextWithPrincipal<P> {
             connection_id: Some(channel.connection_id().to_owned()),
             deadline_at: None,
             received_at: Instant::now(),
+            authenticated_principal: None,
+        }
+    }
+
+    /// Builds Proxy metadata from the immutable V2 request and session views.
+    ///
+    /// Network addresses are read only from the transport-owned session. An
+    /// embedded session deliberately produces no socket metadata.
+    pub fn from_remoting_request_v2(rpc_name: &'static str, request: &RemotingRequest) -> Self {
+        let command = request.command();
+        let received_at = Instant::now();
+        let deadline_at = request
+            .control()
+            .deadline()
+            .map(|deadline| received_at.checked_add(deadline.remaining()).unwrap_or(received_at));
+        let (remote_addr, local_addr) = match request.session() {
+            SessionView::Network {
+                local_addr,
+                remote_addr,
+                ..
+            } => (Some(remote_addr.to_string()), Some(local_addr.to_string())),
+            SessionView::Embedded { .. } => (None, None),
+            _ => (None, None),
+        };
+
+        Self {
+            request_id: request.original_identity().original_opaque().to_string(),
+            rpc_name,
+            remote_addr,
+            local_addr,
+            client_id: remoting_ext_field(command, "clientID"),
+            language: Some(format!("{:?}", command.language())),
+            client_version: Some(command.version().to_string()),
+            namespace: remoting_ext_field(command, "namespace"),
+            connection_id: Some(format!("{:?}", request.session().id())),
+            deadline_at,
+            received_at,
             authenticated_principal: None,
         }
     }

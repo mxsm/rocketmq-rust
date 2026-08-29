@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::RemotingAuthContext;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
@@ -237,9 +238,7 @@ where
             BrokerProcessorType::Maintenance(processor) => {
                 processor.legacy_adapter().process_legacy(&channel, request).await
             }
-            BrokerProcessorType::AdminBroker(processor) => {
-                processor.process_request_shared(channel, ctx, request).await
-            }
+            BrokerProcessorType::AdminBroker(processor) => processor.process_request_shared(channel, request).await,
         }
     }
 
@@ -392,7 +391,11 @@ where
         }
         if !privileged_maintenance {
             if let Some(auth_runtime) = &self.auth_runtime {
-                if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
+                let auth_context = RemotingAuthContext::network(
+                    ctx.remote_address().ip().to_string(),
+                    ctx.channel().channel_id().to_owned(),
+                );
+                if let Err(error) = auth_runtime.check_remoting(&auth_context, request).await {
                     let response = command_from_error_with_factory_remark_and_opaque(
                         &self.command_factory,
                         &error,

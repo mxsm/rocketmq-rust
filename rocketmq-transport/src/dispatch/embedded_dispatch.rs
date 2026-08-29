@@ -17,6 +17,7 @@ use std::fmt;
 
 use rocketmq_runtime::RuntimeError;
 
+use super::DeferredCommitError;
 use super::HandlerOutcomeContractError;
 use super::ProtocolNoResponseReason;
 use super::RequestId;
@@ -91,6 +92,8 @@ pub enum EmbeddedDispatchErrorKind {
     ResponseBinding,
     /// The processor violated the affine handler-outcome contract.
     HandlerContract,
+    /// Trusted deferred storage could not commit the provisional waiter.
+    DeferredCommit,
     /// A one-way request produced a deferred or no-reply contract.
     OneWayContract,
     /// The caller dropped the sole terminal result receiver.
@@ -190,6 +193,13 @@ impl EmbeddedDispatchError {
         )
     }
 
+    pub(crate) fn deferred_commit(error: DeferredCommitError) -> Self {
+        Self::new(
+            EmbeddedDispatchErrorKind::DeferredCommit,
+            EmbeddedDispatchErrorSource::DeferredCommit(error),
+        )
+    }
+
     pub(crate) fn one_way_contract(outcome: &'static str) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::OneWayContract,
@@ -252,6 +262,7 @@ enum EmbeddedDispatchErrorSource {
     ResponseConstruction(ResponsePlanError),
     ResponseBinding(ResponseBindingError),
     HandlerContract(HandlerOutcomeContractError),
+    DeferredCommit(DeferredCommitError),
     OneWayContract(OneWayContract),
     CompletionClosed(CompletionClosed),
     Response(ResponseError),
@@ -268,6 +279,7 @@ impl EmbeddedDispatchErrorSource {
             Self::ResponseConstruction(error) => error,
             Self::ResponseBinding(error) => error,
             Self::HandlerContract(error) => error,
+            Self::DeferredCommit(error) => error,
             Self::OneWayContract(error) => error,
             Self::CompletionClosed(error) => error,
             Self::Response(error) => error,

@@ -23,9 +23,6 @@ use rocketmq_security_api::LayerFailureKind;
 use rocketmq_security_api::LayerRequirement;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -494,22 +491,45 @@ impl AuthRuntime {
 
     pub async fn check_remoting(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> RocketMQResult<()> {
-        let source_ip = source_ip_from_channel_context(channel_context);
-        let channel_id = channel_id_from_channel_context(channel_context);
-        self.check_remoting_with_source_ip(channel_context, command, source_ip.as_deref(), channel_id.as_deref())
+        self.check_remoting_for_code(auth_context, command, command.code())
             .await
+    }
+
+    /// Checks a remoting command using the immutable operation captured at
+    /// ingress rather than the processor-mutable command code.
+    pub async fn check_remoting_for_code(
+        &self,
+        auth_context: &RemotingAuthContext,
+        command: &RemotingCommand,
+        original_code: i32,
+    ) -> RocketMQResult<()> {
+        let mut authoritative_command = command.clone();
+        authoritative_command.set_code_mut(original_code);
+        self.check_remoting_with_source_ip(
+            auth_context,
+            &authoritative_command,
+            auth_context.source_ip(),
+            auth_context.channel_id(),
+        )
+        .await
     }
 
     pub async fn check_remoting_with_source_ip(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
         source_ip: Option<&str>,
         channel_id: Option<&str>,
     ) -> RocketMQResult<()> {
+        auth_context.validate()?;
+        if source_ip != auth_context.source_ip() || channel_id != auth_context.channel_id() {
+            return Err(RocketMQError::authentication_failed(
+                "remoting authentication metadata does not match its typed ingress context",
+            ));
+        }
         if self.is_acl_white_remote_address(access_key_from_command(command), source_ip)? {
             return Ok(());
         }
@@ -518,7 +538,7 @@ impl AuthRuntime {
             .authenticate_remoting(command, channel_id)
             .await?;
         self.authorization_service
-            .authorize_remoting(channel_context, command)
+            .authorize_remoting(auth_context, command)
             .await
     }
 
@@ -530,24 +550,38 @@ impl AuthRuntime {
     /// become an abstention and deliberately carry no request or credential data.
     pub async fn evaluate_remoting_detailed(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> LayerEvaluation<DetailedDecision> {
-        let source_ip = source_ip_from_channel_context(channel_context);
-        let channel_id = channel_id_from_channel_context(channel_context);
+        self.evaluate_remoting_detailed_for_code(auth_context, command, command.code())
+            .await
+    }
+
+    /// Evaluates remoting authentication and authorization against the
+    /// immutable operation code captured by trusted ingress.
+    pub async fn evaluate_remoting_detailed_for_code(
+        &self,
+        auth_context: &RemotingAuthContext,
+        command: &RemotingCommand,
+        original_code: i32,
+    ) -> LayerEvaluation<DetailedDecision> {
+        let mut authoritative_command = command.clone();
+        authoritative_command.set_code_mut(original_code);
+        let command = &authoritative_command;
+        auth_context.validate().map_err(|_| LayerFailureKind::Error)?;
         let is_whitelisted = self
-            .is_acl_white_remote_address(access_key_from_command(command), source_ip.as_deref())
+            .is_acl_white_remote_address(access_key_from_command(command), auth_context.source_ip())
             .map_err(|_| LayerFailureKind::Error)?;
         if is_whitelisted {
             return Ok(DetailedDecision::Allow);
         }
 
         self.authentication_service
-            .authenticate_remoting(command, channel_id.as_deref())
+            .authenticate_remoting(command, auth_context.channel_id())
             .await
             .map_err(|_| LayerFailureKind::Error)?;
         self.authorization_service
-            .authorize_remoting_detailed(channel_context, command)
+            .authorize_remoting_detailed(auth_context, command)
             .await
     }
 
@@ -669,9 +703,10 @@ impl AuthorizationService {
 
     pub async fn authorize_remoting(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> RocketMQResult<()> {
+        auth_context.validate()?;
         if !self.config.authorization_enabled {
             return Ok(());
         }
@@ -682,7 +717,7 @@ impl AuthorizationService {
 
         let contexts = self
             .provider
-            .new_contexts_from_remoting_command(channel_context, command)
+            .new_contexts_from_remoting_command(auth_context, command)
             .map_err(|error| {
                 self.metrics.record_authorization_result(false);
                 map_authorization_error(error)
@@ -705,9 +740,10 @@ impl AuthorizationService {
     /// denials, while provider and context errors retain a fail-closed failure kind.
     pub async fn authorize_remoting_detailed(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> LayerEvaluation<DetailedDecision> {
+        auth_context.validate().map_err(|_| LayerFailureKind::Error)?;
         if !self.config.authorization_enabled {
             return Ok(DetailedDecision::Abstain);
         }
@@ -718,7 +754,7 @@ impl AuthorizationService {
 
         let contexts = self
             .provider
-            .new_contexts_from_remoting_command(channel_context, command)
+            .new_contexts_from_remoting_command(auth_context, command)
             .map_err(|error| {
                 self.metrics.record_authorization_result(false);
                 project_authorization_error(&error)
@@ -1162,38 +1198,6 @@ fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
     })
 }
 
-fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
-    if let Some(context) = channel_context.downcast_ref::<RemotingAuthContext>() {
-        return context.source_ip().map(str::to_owned);
-    }
-    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
-        return Some(ctx.remote_address().ip().to_string());
-    }
-    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
-        return Some(ctx.remote_address().ip().to_string());
-    }
-    if let Some(channel) = channel_context.downcast_ref::<Channel>() {
-        return Some(channel.remote_address().ip().to_string());
-    }
-    None
-}
-
-fn channel_id_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
-    if let Some(context) = channel_context.downcast_ref::<RemotingAuthContext>() {
-        return context.channel_id().map(str::to_owned);
-    }
-    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
-        return Some(ctx.channel().channel_id().to_owned());
-    }
-    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
-        return Some(ctx.channel().channel_id().to_owned());
-    }
-    if let Some(channel) = channel_context.downcast_ref::<Channel>() {
-        return Some(channel.channel_id().to_owned());
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1374,7 +1378,10 @@ accounts:
         .unwrap();
 
         let broker_get = signed_command(RequestCode::GetBrokerRuntimeInfo, "sre-reader", "reader-secret", &[]);
-        runtime.check_remoting(&(), &broker_get).await.unwrap();
+        runtime
+            .check_remoting(&RemotingAuthContext::embedded("test-session"), &broker_get)
+            .await
+            .unwrap();
 
         let topic_mutation = signed_command(
             RequestCode::UpdateAndCreateTopic,
@@ -1382,7 +1389,10 @@ accounts:
             "reader-secret",
             &[("topic", "Orders")],
         );
-        let error = runtime.check_remoting(&(), &topic_mutation).await.unwrap_err();
+        let error = runtime
+            .check_remoting(&RemotingAuthContext::embedded("test-session"), &topic_mutation)
+            .await
+            .unwrap_err();
         assert!(
             matches!(error, RocketMQError::BrokerPermissionDenied { .. }),
             "unexpected mutation denial error: {error:?}"
@@ -1443,7 +1453,50 @@ accounts:
         let signature = acl_signer::cal_signature("alicetopic-a".as_bytes(), "secret").unwrap();
         let command = send_message_command("topic-a", "alice", &signature);
 
-        runtime.check_remoting(&(), &command).await.unwrap();
+        runtime
+            .check_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn remoting_runtime_rejects_missing_or_mismatched_ingress_metadata() {
+        let runtime = AuthRuntimeBuilder::new(AuthConfig::default()).build().await.unwrap();
+        let command = RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32());
+
+        runtime
+            .check_remoting(&RemotingAuthContext::default(), &command)
+            .await
+            .expect_err("missing session and source metadata must fail closed");
+
+        let context = RemotingAuthContext::network("192.0.2.10", "session-a");
+        runtime
+            .check_remoting_with_source_ip(&context, &command, Some("192.0.2.11"), Some("session-a"))
+            .await
+            .expect_err("metadata overrides must match the typed ingress context");
+    }
+
+    #[tokio::test]
+    async fn authoritative_operation_code_cannot_be_replaced_by_a_mutated_command_code() {
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            authentication_enabled: true,
+            authentication_whitelist: CheetahString::from(RequestCode::HeartBeat.to_i32().to_string()),
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+        let context = RemotingAuthContext::embedded("test-session");
+        let mutated = RemotingCommand::create_remoting_command(RequestCode::HeartBeat.to_i32());
+
+        runtime
+            .check_remoting(&context, &mutated)
+            .await
+            .expect("the test command code is explicitly whitelisted");
+        runtime
+            .check_remoting_for_code(&context, &mutated, RequestCode::SendMessage.to_i32())
+            .await
+            .expect_err("the immutable SendMessage operation must still require authentication");
     }
 
     #[tokio::test]
@@ -1487,7 +1540,9 @@ accounts:
                 .expect("test signature should be generated"),
         );
         assert_eq!(
-            runtime.evaluate_remoting_detailed(&(), &command).await,
+            runtime
+                .evaluate_remoting_detailed(&RemotingAuthContext::embedded("test-session"), &command)
+                .await,
             Ok(DetailedDecision::Allow)
         );
 
@@ -1651,18 +1706,27 @@ accounts:
 
         let global_command = send_message_command_without_credentials("TopicA");
         runtime
-            .check_remoting_with_source_ip(&(), &global_command, Some("10.10.1.2"), None)
+            .check_remoting(
+                &RemotingAuthContext::network("10.10.1.2", "test-session"),
+                &global_command,
+            )
             .await
             .unwrap();
 
         let account_command = send_message_command("TopicA", "alice", "");
         runtime
-            .check_remoting_with_source_ip(&(), &account_command, Some("192.168.0.7"), None)
+            .check_remoting(
+                &RemotingAuthContext::network("192.168.0.7", "test-session"),
+                &account_command,
+            )
             .await
             .unwrap();
 
         runtime
-            .check_remoting_with_source_ip(&(), &account_command, Some("192.168.1.7"), None)
+            .check_remoting(
+                &RemotingAuthContext::network("192.168.1.7", "test-session"),
+                &account_command,
+            )
             .await
             .expect_err("non-whitelisted source should still require a valid signature");
     }
@@ -1766,7 +1830,10 @@ accounts:
         let signature = acl_signer::cal_signature("alicetopic-a".as_bytes(), "secret").unwrap();
         let command = send_message_command("topic-a", "alice", &signature);
 
-        restarted.check_remoting(&(), &command).await.unwrap();
+        restarted
+            .check_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+            .await
+            .unwrap();
         restarted.shutdown().await.unwrap();
     }
 
@@ -2210,13 +2277,16 @@ accounts:
         let signature = acl_signer::cal_signature("aliceTopicA".as_bytes(), "secret").unwrap();
         let valid_command = send_message_command("TopicA", "alice", &signature);
         runtime
-            .check_remoting_with_source_ip(&(), &valid_command, Some("127.0.0.1"), Some("channel-a"))
+            .check_remoting(&RemotingAuthContext::network("127.0.0.1", "channel-a"), &valid_command)
             .await
             .unwrap();
 
         let invalid_command = send_message_command("TopicA", "alice", "bad-signature");
         runtime
-            .check_remoting_with_source_ip(&(), &invalid_command, Some("127.0.0.1"), Some("channel-b"))
+            .check_remoting(
+                &RemotingAuthContext::network("127.0.0.1", "channel-b"),
+                &invalid_command,
+            )
             .await
             .expect_err("invalid signature should fail authentication");
 

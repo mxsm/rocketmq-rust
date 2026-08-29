@@ -2789,12 +2789,13 @@ mod tests {
         let mut processor = bootstrap.name_server_runtime.init_processors();
         let broker_session = (request.code() == RequestCode::RegisterBroker as i32)
             .then(|| BrokerSession::detached(harness.channel().channel_id_owned(), harness.channel().remote_address()));
-        let auth_context = rocketmq_auth::RemotingAuthContext::new(
-            Some(harness.channel().remote_address().ip().to_string()),
-            Some(harness.channel().channel_id().to_owned()),
+        let auth_context = rocketmq_auth::RemotingAuthContext::network(
+            harness.channel().remote_address().ip().to_string(),
+            harness.channel().channel_id().to_owned(),
         );
+        let original_code = request.code();
         processor
-            .process_command(&auth_context, request, broker_session)
+            .process_command(&auth_context, original_code, request, broker_session)
             .await
             .expect("request processing should succeed")
             .expect("processor should always return a response")

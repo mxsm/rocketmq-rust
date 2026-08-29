@@ -80,6 +80,7 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
         builder,
         original,
         request_started,
+        false,
     )
     .await
     .expect_err("expired local handoff must preserve the deadline stop");

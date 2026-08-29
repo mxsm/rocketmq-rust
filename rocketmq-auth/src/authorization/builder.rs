@@ -14,17 +14,16 @@
 
 pub mod default_authorization_context_builder;
 
-use std::any::Any;
-
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::provider::AuthorizationResult;
+use crate::RemotingAuthContext;
 
 pub trait AuthorizationContextBuilder: Send + Sync {
     fn build_from_remoting(
         &self,
-        channel_context: &(dyn Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>>;
 }

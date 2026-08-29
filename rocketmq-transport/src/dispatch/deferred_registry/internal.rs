@@ -824,6 +824,15 @@ where
     }
 
     #[cfg(test)]
+    pub(super) fn is_active(&self, id: DeferredId) -> bool {
+        self.state
+            .lock()
+            .primary
+            .get(&id)
+            .is_some_and(|entry| matches!(entry.phase, EntryPhase::Active(_)))
+    }
+
+    #[cfg(test)]
     pub(super) fn claim_marker_count(&self) -> usize {
         self.state.lock().claims.len()
     }

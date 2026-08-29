@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -33,9 +32,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
 
 use crate::authentication::enums::subject_type::SubjectType;
 use crate::authorization::builder::AuthorizationContextBuilder;
@@ -99,24 +95,11 @@ impl DefaultAuthorizationContextBuilder {
             .map(|username| format!("{}:{}", SubjectType::User.name(), username))
     }
 
-    fn source_ip(&self, channel_context: &dyn Any) -> String {
-        if let Some(context) = channel_context.downcast_ref::<RemotingAuthContext>() {
-            return context.source_ip().unwrap_or("unknown").to_owned();
-        }
-
-        if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
-            return ctx.remote_address().ip().to_string();
-        }
-
-        if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
-            return ctx.remote_address().ip().to_string();
-        }
-
-        if let Some(channel) = channel_context.downcast_ref::<Channel>() {
-            return channel.remote_address().ip().to_string();
-        }
-
-        String::from("unknown")
+    fn source_ip(auth_context: &RemotingAuthContext) -> AuthorizationResult<String> {
+        auth_context
+            .validate()
+            .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+        Ok(auth_context.source_ip().unwrap_or("embedded").to_owned())
     }
 
     fn push_topic_sub_if_not_retry(
@@ -504,9 +487,12 @@ impl DefaultAuthorizationContextBuilder {
 impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
     fn build_from_remoting(
         &self,
-        channel_context: &(dyn Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+        auth_context
+            .validate()
+            .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
         let mut contexts = Vec::new();
         let empty_fields = HashMap::new();
         let fields = match command.ext_fields() {
@@ -523,7 +509,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
 
         let subject_key = self.subject_key(command);
         let subject_key = subject_key.as_deref();
-        let source_ip = self.source_ip(channel_context);
+        let source_ip = Self::source_ip(auth_context)?;
         let rpc_code = command.code().to_string();
 
         match RequestCode::from(command.code()) {
@@ -875,7 +861,9 @@ mod tests {
             &[("AccessKey", "alice"), ("topic", "test-topic")],
         );
 
-        let contexts = builder.build_from_remoting(&(), &command).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+            .unwrap();
         assert_eq!(contexts.len(), 1);
         assert_eq!(contexts[0].subject_key(), Some("User:alice"));
         assert_eq!(contexts[0].resource_key(), Some("Topic:test-topic".to_string()));
@@ -894,7 +882,9 @@ mod tests {
             ],
         );
 
-        let contexts = builder.build_from_remoting(&(), &command).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+            .unwrap();
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].subject_key(), Some("User:alice"));
         assert_eq!(contexts[1].resource_key(), Some("Group:group-a".to_string()));
@@ -922,7 +912,9 @@ mod tests {
             .set_ext_fields(ext_fields)
             .set_body(serde_json::to_vec(&heartbeat).unwrap());
 
-        let contexts = builder.build_from_remoting(&(), &command).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+            .unwrap();
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].subject_key(), Some("User:alice"));
         assert_eq!(contexts[0].resource_key(), Some("Group:group-a".to_string()));
@@ -947,7 +939,9 @@ mod tests {
             .set_ext_fields(ext_fields)
             .set_body(serde_json::to_vec(&body).unwrap());
 
-        let contexts = builder.build_from_remoting(&(), &command).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+            .unwrap();
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].resource_key(), Some("Group:group-a".to_string()));
         assert_eq!(contexts[1].resource_key(), Some("Topic:topic-a".to_string()));
@@ -964,7 +958,9 @@ mod tests {
             RequestCode::UpdateAndCreateTopic,
             &[("AccessKey", "rocketmq"), ("topic", "topic")],
         );
-        let topic_contexts = builder.build_from_remoting(&(), &topic_command).unwrap();
+        let topic_contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &topic_command)
+            .unwrap();
         assert_eq!(topic_contexts.len(), 1);
         assert_eq!(topic_contexts[0].subject_key(), Some("User:rocketmq"));
         assert_eq!(topic_contexts[0].resource_key(), Some("Topic:topic".to_string()));
@@ -978,7 +974,9 @@ mod tests {
             RequestCode::AuthCreateUser,
             &[("AccessKey", "rocketmq"), ("username", "alice")],
         );
-        let cluster_contexts = builder.build_from_remoting(&(), &cluster_command).unwrap();
+        let cluster_contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &cluster_command)
+            .unwrap();
         assert_eq!(cluster_contexts.len(), 1);
         assert_eq!(cluster_contexts[0].subject_key(), Some("User:rocketmq"));
         assert_eq!(
@@ -1005,14 +1003,18 @@ mod tests {
             RequestCode::CancelProxyDrain,
         ] {
             let command = command_with_fields(code, &[("AccessKey", "rocketmq")]);
-            let contexts = builder.build_from_remoting(&(), &command).unwrap();
+            let contexts = builder
+                .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+                .unwrap();
             assert_eq!(contexts.len(), 1);
             assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
             assert_eq!(contexts[0].actions(), &[Action::Update]);
         }
 
         let query = command_with_fields(RequestCode::GetProxyDrainState, &[("AccessKey", "rocketmq")]);
-        let contexts = builder.build_from_remoting(&(), &query).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &query)
+            .unwrap();
         assert_eq!(contexts.len(), 1);
         assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
         assert_eq!(contexts[0].actions(), &[Action::Get]);
@@ -1035,7 +1037,9 @@ mod tests {
             RequestCode::GetNamesrvConfig,
         ] {
             let command = command_with_fields(code, &[("AccessKey", "reader")]);
-            let contexts = builder.build_from_remoting(&(), &command).unwrap();
+            let contexts = builder
+                .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+                .unwrap();
             assert_eq!(contexts.len(), 1, "missing authorization context for {code:?}");
             assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
             assert_eq!(contexts[0].actions(), &[Action::Get]);
@@ -1045,7 +1049,9 @@ mod tests {
             RequestCode::GetBrokerMemberGroup,
             &[("AccessKey", "reader"), ("clusterName", "ClusterA")],
         );
-        let contexts = builder.build_from_remoting(&(), &member).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &member)
+            .unwrap();
         assert_eq!(contexts[0].resource_key(), Some("Cluster:ClusterA".to_string()));
         assert_eq!(contexts[0].actions(), &[Action::Get]);
 
@@ -1053,7 +1059,9 @@ mod tests {
             RequestCode::GetTopicsByCluster,
             &[("AccessKey", "reader"), ("cluster", "ClusterA")],
         );
-        let contexts = builder.build_from_remoting(&(), &topics).unwrap();
+        let contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &topics)
+            .unwrap();
         assert_eq!(contexts[0].resource_key(), Some("Cluster:ClusterA".to_string()));
         assert_eq!(contexts[0].actions(), &[Action::List]);
     }
@@ -1068,7 +1076,9 @@ mod tests {
         let topic_command = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(serde_json::to_vec(&topic_body).unwrap());
 
-        let topic_contexts = builder.build_from_remoting(&(), &topic_command).unwrap();
+        let topic_contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &topic_command)
+            .unwrap();
         assert_eq!(2, topic_contexts.len());
         assert_eq!(Some("Topic:TopicA".to_string()), topic_contexts[0].resource_key());
         assert_eq!(Some("Topic:TopicB".to_string()), topic_contexts[1].resource_key());
@@ -1083,7 +1093,9 @@ mod tests {
         let group_command = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(serde_json::to_vec(&group_body).unwrap());
 
-        let group_contexts = builder.build_from_remoting(&(), &group_command).unwrap();
+        let group_contexts = builder
+            .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &group_command)
+            .unwrap();
         assert_eq!(2, group_contexts.len());
         assert_eq!(Some("Group:GroupA".to_string()), group_contexts[0].resource_key());
         assert_eq!(Some("Group:GroupB".to_string()), group_contexts[1].resource_key());
@@ -1100,7 +1112,29 @@ mod tests {
             RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
                 .set_body(b"not-json".to_vec()),
         ] {
-            assert!(builder.build_from_remoting(&(), &command).is_err());
+            assert!(builder
+                .build_from_remoting(&RemotingAuthContext::embedded("test-session"), &command)
+                .is_err());
         }
+    }
+
+    #[test]
+    fn missing_typed_ingress_metadata_is_rejected() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig::default());
+        let command = command_with_fields(
+            RequestCode::SendMessage,
+            &[("AccessKey", "alice"), ("topic", "test-topic")],
+        );
+
+        let error = builder
+            .build_from_remoting(&RemotingAuthContext::default(), &command)
+            .expect_err("missing trusted session metadata must fail closed");
+        assert!(matches!(error, AuthorizationError::InvalidContext(_)));
+
+        let command_without_ext_fields = RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32());
+        let error = builder
+            .build_from_remoting(&RemotingAuthContext::default(), &command_without_ext_fields)
+            .expect_err("missing trusted metadata must fail closed before the no-context fast path");
+        assert!(matches!(error, AuthorizationError::InvalidContext(_)));
     }
 }

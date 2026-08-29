@@ -472,7 +472,9 @@ impl LocalBrokerCommand {
             | Self::QueryTopicMessageType { .. }
             | Self::QuerySubscriptionGroup { .. }
             | Self::QueryAssignment { .. } => LocalExecutionClass::Control,
-            Self::ProcessRemoting { request, .. } => match RequestCode::from(request.code()) {
+            Self::ProcessRemoting { request, .. }
+            | Self::ProcessRemotingV2Compatibility { request, .. }
+            | Self::ProcessRemotingV2 { request, .. } => match RequestCode::from(request.code()) {
                 RequestCode::PopMessage | RequestCode::PullMessage => LocalExecutionClass::LongPoll,
                 RequestCode::AckMessage
                 | RequestCode::BatchAckMessage
@@ -504,7 +506,9 @@ impl LocalBrokerCommand {
             | Self::EndTransaction {
                 client_id, request_id, ..
             } => LocalOrderingKey::new("producer", [client_id.clone().unwrap_or_else(|| request_id.clone())]),
-            Self::ProcessRemoting { request, .. } => remoting_ordering_key(request),
+            Self::ProcessRemoting { request, .. }
+            | Self::ProcessRemotingV2Compatibility { request, .. }
+            | Self::ProcessRemotingV2 { request, .. } => remoting_ordering_key(request),
         }
     }
 }

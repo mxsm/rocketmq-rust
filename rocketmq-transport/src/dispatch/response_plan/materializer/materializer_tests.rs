@@ -272,6 +272,60 @@ async fn empty_bytes_single_segment_and_multi_segment_follow_their_copy_contract
 }
 
 #[tokio::test]
+async fn embedded_v2_v1_compatibility_seam_reuses_bounded_segments_and_file_region_materialization() {
+    let (harness, _) = ControlHarness::new("embedded-v2-compatibility-materializer", None);
+    let segments = ResponsePlan::segments(
+        response_head(74, 9_852),
+        vec![Bytes::from_static(b"v2-"), Bytes::from_static(b"compatibility")],
+    )
+    .expect("segments plan");
+    let segments = materialize_embedded_v2_compatibility_response(segments, None, &harness.parent, harness.blocking())
+        .await
+        .expect("segments materialize through V1-only seam");
+    assert_eq!(segments.opaque(), 9_852);
+    assert_eq!(segments.body().expect("segments body").as_ref(), b"v2-compatibility");
+
+    let (regions, lease, accesses, drops) = counting_region(b"leased-file-region");
+    let file = ResponsePlan::file_regions(response_head(75, 9_853), regions).expect("file plan");
+    let file = materialize_embedded_v2_compatibility_response(file, None, &harness.parent, harness.blocking())
+        .await
+        .expect("file regions materialize on the injected blocking lane");
+    assert_eq!(file.opaque(), 9_853);
+    assert_eq!(file.body().expect("file body").as_ref(), b"leased-file-region");
+    assert!(accesses.load(Ordering::SeqCst) > 1);
+    drop(file);
+    drop(lease);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+    harness.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn embedded_v2_v1_compatibility_seam_preserves_the_absolute_deadline_and_typed_error() {
+    let (harness, _) = ControlHarness::new("embedded-v2-compatibility-deadline", None);
+    let deadline = RequestDeadline::after(Duration::from_secs(1));
+    tokio::time::advance(Duration::from_secs(1)).await;
+
+    let result = materialize_embedded_v2_compatibility_response(
+        ResponsePlan::command(response_head(76, 9_854)).expect("empty plan"),
+        Some(deadline),
+        &harness.parent,
+        harness.blocking(),
+    )
+    .await;
+    let error = match result {
+        Ok(_) => panic!("expired absolute deadline must reject materialization"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.kind(),
+        EmbeddedV2CompatibilityMaterializationErrorKind::DeadlineExceeded
+    );
+
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn cached_body_and_part_limits_are_exact_and_reject_one_over_before_encoding_or_file_access() {
     let (harness, control) = ControlHarness::new("legacy-materializer-cached-limits", None);
 

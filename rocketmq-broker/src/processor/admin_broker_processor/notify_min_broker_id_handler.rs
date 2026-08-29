@@ -24,8 +24,6 @@ use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::tokio_lock::RocketMQTokioRwLock;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -62,8 +60,6 @@ impl NotifyMinBrokerChangeIdHandler {
     pub async fn notify_min_broker_id_change<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

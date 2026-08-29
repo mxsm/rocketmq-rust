@@ -8,8 +8,6 @@ use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -24,8 +22,6 @@ impl UpdateUserRequestHandler {
 
     pub async fn update_user(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

@@ -838,6 +838,11 @@ where
     }
 
     #[cfg(test)]
+    pub(crate) fn test_is_active(&self, id: DeferredId) -> bool {
+        self.inner.is_active(id)
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_session_member_count(&self, session_id: SessionId) -> usize {
         self.inner.session_member_count(session_id)
     }
@@ -932,7 +937,7 @@ impl DeferredRegistration {
     }
 
     #[cfg(test)]
-    fn set_commit_checkpoint(&mut self, checkpoint: impl FnOnce() + Send + 'static) {
+    pub(crate) fn set_commit_checkpoint(&mut self, checkpoint: impl FnOnce() + Send + 'static) {
         self.owner
             .as_mut()
             .expect("active registration owns its transaction")

@@ -18,8 +18,6 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::list_users_request_header::ListUsersRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -34,8 +32,6 @@ impl ListUsersRequestHandler {
 
     pub async fn list_users(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

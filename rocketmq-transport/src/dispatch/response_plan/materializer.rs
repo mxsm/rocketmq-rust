@@ -18,6 +18,9 @@ use std::collections::TryReserveError;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use bytes::Bytes;
 use rocketmq_error::RocketMQError;
@@ -25,16 +28,23 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::TaskGroup;
 
 use super::ResponseBody;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::dispatch::LocalResponsePlanReceiver;
 use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseError;
+use crate::dispatch::ResponsePlan;
 use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegionSequence;
 use crate::file_region_io::read_file_region_chunk;
 use crate::file_region_io::FILE_REGION_READ_CHUNK_BYTES;
+use crate::session_view::EmbeddedSessionRecord;
+
+const EMBEDDED_V2_COMPATIBILITY_MAX_BODY_PARTS: usize = 1_024;
+static EMBEDDED_V2_COMPATIBILITY_SESSION_OWNER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LegacyMaterializationLimits {
@@ -99,6 +109,94 @@ enum LegacyLocalMaterializationErrorKind {
     Allocation,
     Runtime,
     FileIo,
+}
+
+/// Stable failure category for the V1-only embedded V2 compatibility bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum EmbeddedV2CompatibilityMaterializationErrorKind {
+    /// The parent request lifecycle was cancelled.
+    Cancelled,
+    /// The compatibility materialization session closed.
+    SessionClosed,
+    /// The original request deadline elapsed.
+    DeadlineExceeded,
+    /// Local response delivery failed.
+    Response,
+    /// The response exceeded the fixed compatibility bounds.
+    Limits,
+    /// The response head and body do not fit the compatibility frame profile.
+    Frame,
+    /// A bounded destination allocation failed.
+    Allocation,
+    /// The injected blocking executor rejected or failed the operation.
+    Runtime,
+    /// Reading a leased file region failed.
+    FileIo,
+}
+
+/// Typed, redacted failure from V1-only materialization of a V2 response plan.
+pub struct EmbeddedV2CompatibilityMaterializationError {
+    kind: EmbeddedV2CompatibilityMaterializationErrorKind,
+    source: LegacyLocalMaterializationError,
+}
+
+impl EmbeddedV2CompatibilityMaterializationError {
+    /// Returns the stable failure category.
+    #[must_use]
+    pub const fn kind(&self) -> EmbeddedV2CompatibilityMaterializationErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Debug for EmbeddedV2CompatibilityMaterializationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EmbeddedV2CompatibilityMaterializationError")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for EmbeddedV2CompatibilityMaterializationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "embedded V2 compatibility response materialization failed: {:?}",
+            self.kind
+        )
+    }
+}
+
+impl Error for EmbeddedV2CompatibilityMaterializationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl From<LegacyLocalMaterializationError> for EmbeddedV2CompatibilityMaterializationError {
+    fn from(source: LegacyLocalMaterializationError) -> Self {
+        let kind = match source.kind() {
+            LegacyLocalMaterializationErrorKind::Cancelled => {
+                EmbeddedV2CompatibilityMaterializationErrorKind::Cancelled
+            }
+            LegacyLocalMaterializationErrorKind::SessionClosed => {
+                EmbeddedV2CompatibilityMaterializationErrorKind::SessionClosed
+            }
+            LegacyLocalMaterializationErrorKind::DeadlineExceeded => {
+                EmbeddedV2CompatibilityMaterializationErrorKind::DeadlineExceeded
+            }
+            LegacyLocalMaterializationErrorKind::Response => EmbeddedV2CompatibilityMaterializationErrorKind::Response,
+            LegacyLocalMaterializationErrorKind::Limits => EmbeddedV2CompatibilityMaterializationErrorKind::Limits,
+            LegacyLocalMaterializationErrorKind::Frame => EmbeddedV2CompatibilityMaterializationErrorKind::Frame,
+            LegacyLocalMaterializationErrorKind::Allocation => {
+                EmbeddedV2CompatibilityMaterializationErrorKind::Allocation
+            }
+            LegacyLocalMaterializationErrorKind::Runtime => EmbeddedV2CompatibilityMaterializationErrorKind::Runtime,
+            LegacyLocalMaterializationErrorKind::FileIo => EmbeddedV2CompatibilityMaterializationErrorKind::FileIo,
+        };
+        Self { kind, source }
+    }
 }
 
 impl LegacyLocalMaterializationErrorKind {
@@ -235,26 +333,62 @@ impl LocalResponsePlanReceiver {
             .receive()
             .await
             .map_err(LegacyLocalMaterializationError::response)?;
-        ensure_running(&control)?;
+        materialize_plan(plan, control, limits, blocking).await
+    }
+}
 
-        let body_len = plan.body_len();
-        let body_part_count = plan.body_part_count();
-        limits.validate_plan(body_len, body_part_count)?;
+pub(crate) async fn materialize_embedded_v2_compatibility_response(
+    plan: ResponsePlan,
+    deadline: Option<crate::deadline::RequestDeadline>,
+    task_group: &TaskGroup,
+    blocking: &BlockingExecutor,
+) -> Result<RemotingCommand, EmbeddedV2CompatibilityMaterializationError> {
+    let session_owner = EMBEDDED_V2_COMPATIBILITY_SESSION_OWNER
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |owner| owner.checked_add(1))
+        .map_err(|_| {
+            EmbeddedV2CompatibilityMaterializationError::from(LegacyLocalMaterializationError::limits(
+                RocketMQError::invariant_violated("embedded V2 compatibility session identity exhausted"),
+            ))
+        })?;
+    let session = EmbeddedSessionRecord::new(session_owner);
+    let meta = RequestMeta::new(Instant::now(), deadline);
+    let control = RequestControlView::from_meta(&meta, session.view().state().clone(), task_group);
+    let frame_limits = FrameLimits::java_compatibility();
+    let limits = LegacyMaterializationLimits::try_new(
+        frame_limits,
+        frame_limits.max_body_bytes,
+        EMBEDDED_V2_COMPATIBILITY_MAX_BODY_PARTS,
+    )
+    .map_err(EmbeddedV2CompatibilityMaterializationError::from)?;
+    materialize_plan(plan, control, limits, blocking)
+        .await
+        .map_err(EmbeddedV2CompatibilityMaterializationError::from)
+}
 
-        let (head, body, body_len, _) = plan.into_materialization_parts();
-        limits
-            .frame_limits
-            .encode_frame_head(head.clone(), body_len)
-            .map_err(LegacyLocalMaterializationError::frame)?;
-        ensure_running(&control)?;
+async fn materialize_plan(
+    plan: ResponsePlan,
+    control: RequestControlView,
+    limits: LegacyMaterializationLimits,
+    blocking: &BlockingExecutor,
+) -> Result<RemotingCommand, LegacyLocalMaterializationError> {
+    ensure_running(&control)?;
+    let body_len = plan.body_len();
+    let body_part_count = plan.body_part_count();
+    limits.validate_plan(body_len, body_part_count)?;
 
-        match body {
-            ResponseBody::Empty => Ok(head),
-            ResponseBody::Bytes(body) => Ok(head.set_body(body)),
-            ResponseBody::Segments(segments) => materialize_segments(head, segments, body_len),
-            ResponseBody::FileRegions(regions) => {
-                materialize_file_regions(head, regions, body_len, control, blocking).await
-            }
+    let (head, body, body_len, _) = plan.into_materialization_parts();
+    limits
+        .frame_limits
+        .encode_frame_head(head.clone(), body_len)
+        .map_err(LegacyLocalMaterializationError::frame)?;
+    ensure_running(&control)?;
+
+    match body {
+        ResponseBody::Empty => Ok(head),
+        ResponseBody::Bytes(body) => Ok(head.set_body(body)),
+        ResponseBody::Segments(segments) => materialize_segments(head, segments, body_len),
+        ResponseBody::FileRegions(regions) => {
+            materialize_file_regions(head, regions, body_len, control, blocking).await
         }
     }
 }
