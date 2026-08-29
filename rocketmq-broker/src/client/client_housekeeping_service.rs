@@ -28,6 +28,9 @@ use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelEventListener;
+use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::v2::V2SessionLifecycleListener;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
@@ -207,15 +210,34 @@ impl ChannelEventListener for ClientHousekeepingService {
     }
 }
 
+impl V2SessionLifecycleListener for ClientHousekeepingService {
+    fn on_session_connected(&self, _session: &SessionView) {
+        self.broker_stats_manager.inc_channel_connect_num()
+    }
+
+    fn on_session_disconnected(&self, session_id: SessionId) {
+        self.producer_housekeeping.do_session_close_event(session_id);
+        self.consumer_housekeeping.do_session_close_event(session_id);
+        self.broker_stats_manager.inc_channel_close_num()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use crate::config::broker_config::BrokerConfig;
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::test_support::session_id_for_test;
 
     use crate::broker_runtime::BrokerRuntime;
+    use crate::client::client_channel_info::ClientSessionInfo;
 
     use super::*;
 
@@ -279,6 +301,46 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
         let broker_report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
+    }
+
+    #[test]
+    fn typed_v2_disconnect_cleans_producer_and_consumer_session_state() {
+        let mut broker_runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let inner = broker_runtime.runtime_state_mut();
+        let producer = inner.producer_manager().clone_shared_state();
+        let consumer = inner.consumer_manager().clone_shared_state();
+        let service = ClientHousekeepingService::new(
+            producer.connection_housekeeping(),
+            consumer.connection_housekeeping(),
+            inner.broker_stats_manager_handle(),
+            inner.broker_service_context(),
+        );
+        let session_id = session_id_for_test(9_851);
+        let client_id = CheetahString::from_static_str("v2-housekeeping-client");
+        let producer_group = CheetahString::from_static_str("v2-housekeeping-producer");
+        let consumer_group = CheetahString::from_static_str("v2-housekeeping-consumer");
+        producer.client_registration().register_producer_session(
+            &producer_group,
+            ClientSessionInfo::new(session_id, client_id.clone(), None, LanguageCode::RUST, 1),
+        );
+        assert!(consumer.client_registration().register_consumer_session_without_sub(
+            &consumer_group,
+            ClientSessionInfo::new(session_id, client_id, None, LanguageCode::RUST, 1),
+            ConsumeType::ConsumePassively,
+            MessageModel::Clustering,
+            ConsumeFromWhere::ConsumeFromLastOffset,
+            false,
+        ));
+        assert!(producer.group_online(producer_group.as_str()));
+        assert!(consumer.get_consumer_group_info(&consumer_group).is_some());
+
+        V2SessionLifecycleListener::on_session_disconnected(&service, session_id);
+
+        assert!(!producer.group_online(producer_group.as_str()));
+        assert!(consumer.get_consumer_group_info(&consumer_group).is_none());
     }
 
     #[test]

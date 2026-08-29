@@ -15,6 +15,8 @@
 //! Listener and background-service startup owned by the Broker request pipeline.
 
 use super::super::*;
+use crate::deferred_generation_handoff::DeferredGenerationV2PublishError;
+use crate::deferred_generation_handoff::DeferredGenerationV2Publisher;
 
 /// Coarse transport gate for the prepared Broker V2 graph.
 ///
@@ -58,7 +60,7 @@ impl BrokerRuntime {
             });
         }
         self.initialize_deferred_lifecycle()?;
-        let (request_processor, fast_request_processor) = self.init_processor_checked()?;
+        let (request_processor, _fast_request_processor) = self.init_processor_checked()?;
         self.initialize_consumer_lag_observability();
         let service_context =
             self.composition
@@ -117,7 +119,79 @@ impl BrokerRuntime {
         );
         self.composition.request_pipeline.proxy_request_processor = Some(request_processor.clone());
         self.composition.request_pipeline.authorized_dispatcher = Some(authorized_dispatcher.clone());
-        self.composition.request_pipeline.prepared_v2_dispatcher = Some(prepared_v2_dispatcher);
+        let deferred_handoff =
+            self.composition
+                .deferred_generation_handoff()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "deferred_generation_handoff",
+                    detail: "Broker deferred handoff must exist before canonical V2 publication".to_owned(),
+                })?;
+        #[cfg(test)]
+        {
+            let pop_lite_processor = self
+                .composition
+                .state
+                .pop_lite_message_processor
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "broker_v2_pre_publish_checkpoint",
+                    detail: "PopLite processor must exist before the test checkpoint".to_owned(),
+                })?;
+            self.composition
+                .request_pipeline
+                .reach_v2_pre_publish_checkpoint(
+                    Arc::clone(&prepared_v2_dispatcher),
+                    pop_lite_processor,
+                    Arc::clone(&deferred_handoff),
+                )
+                .await;
+        }
+        {
+            let pipeline = &self.composition.request_pipeline;
+            let mut cutover =
+                deferred_handoff
+                    .cutover_transaction()
+                    .map_err(|error| BrokerStartupError::Initialization {
+                        component: "broker_v2_cutover",
+                        detail: format!("failed to begin canonical V2 publication transaction: {error:?}"),
+                    })?;
+            cutover
+                .seal_legacy_acceptance()
+                .map_err(|error| BrokerStartupError::Initialization {
+                    component: "broker_v2_cutover",
+                    detail: format!("failed to seal legacy deferred acceptance: {error:?}"),
+                })?;
+            cutover
+                .publish_v2_aggregate(DeferredGenerationV2Publisher::nonblocking_atomic(|| {
+                    pipeline.publish_canonical_v2_dispatcher(prepared_v2_dispatcher)
+                }))
+                .map_err(|error| BrokerStartupError::Initialization {
+                    component: "broker_v2_dispatcher",
+                    detail: match error {
+                        DeferredGenerationV2PublishError::Cutover(error) => {
+                            format!("canonical V2 dispatcher publication violated cutover ordering: {error:?}")
+                        }
+                        DeferredGenerationV2PublishError::Publish(error) => {
+                            format!("canonical V2 dispatcher publication failed: {error:?}")
+                        }
+                    },
+                })?;
+            cutover
+                .publish_default_new()
+                .map_err(|error| BrokerStartupError::Initialization {
+                    component: "broker_v2_cutover",
+                    detail: format!("failed to publish New as the default deferred generation: {error:?}"),
+                })?;
+        }
+        let canonical_v2_dispatcher = self
+            .composition
+            .request_pipeline
+            .canonical_v2_dispatcher()
+            .ok_or_else(|| BrokerStartupError::Initialization {
+                component: "broker_v2_dispatcher",
+                detail: "canonical V2 dispatcher was not visible after successful publication".to_owned(),
+            })?;
         self.lifecycle
             .startup_journal
             .complete(BrokerComponent::RequestProcessors);
@@ -134,28 +208,37 @@ impl BrokerRuntime {
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.composition.state.broker_config();
-        let mut server = TransportServer::new_with_telemetry(
+        let normal_dispatcher = Arc::clone(&canonical_v2_dispatcher);
+        let fast_dispatcher = Arc::clone(&canonical_v2_dispatcher);
+        #[cfg(test)]
+        {
+            let embedded_proxy_dispatcher = self
+                .composition
+                .request_pipeline
+                .canonical_v2_dispatcher()
+                .expect("canonical V2 dispatcher was published above");
+            self.composition.request_pipeline.record_v2_dispatcher_identity(
+                &canonical_v2_dispatcher,
+                &normal_dispatcher,
+                &fast_dispatcher,
+                &embedded_proxy_dispatcher,
+            );
+        }
+        let v2_session_registry = self.composition.request_pipeline.v2_session_registry();
+        let server = TransportServerV2::new_with_authorized_dispatcher(
             Arc::new(broker_config.broker_server_config.clone()),
             service_context.component("broker.remoting-server.normal"),
-            self.composition.state.transport_telemetry.clone(),
+            normal_dispatcher,
         )
-        .with_authorized_dispatcher(authorized_dispatcher.clone());
+        .with_telemetry(self.composition.state.transport_telemetry.clone())
+        .with_session_registry(Arc::clone(&v2_session_registry));
         // Start the normal Broker remoting server.
-        let client_housekeeping_service_main = self
-            .composition
-            .state
-            .client_housekeeping_service
-            .clone()
-            .map(|item| item as Arc<dyn ChannelEventListener>);
-        let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (normal_report_tx, normal_report_rx) = oneshot::channel();
         let (normal_startup_tx, normal_startup_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.normal", async move {
             let report = server
                 .try_run_with_shutdown_report_and_startup(
-                    request_processor,
-                    client_housekeeping_service_main,
                     async move {
                         shutdown_token.cancelled().await;
                     },
@@ -172,20 +255,19 @@ impl BrokerRuntime {
         // Start the fast Broker remoting server.
         let mut fast_server_config = broker_config.broker_server_config.clone();
         fast_server_config.listen_port = broker_config.broker_server_config.listen_port - 2;
-        let mut fast_server = TransportServer::new_with_telemetry(
+        let fast_server = TransportServerV2::new_with_authorized_dispatcher(
             Arc::new(fast_server_config),
             service_context.component("broker.remoting-server.fast"),
-            self.composition.state.transport_telemetry.clone(),
+            fast_dispatcher,
         )
-        .with_authorized_dispatcher(authorized_dispatcher);
+        .with_telemetry(self.composition.state.transport_telemetry.clone())
+        .with_session_registry(v2_session_registry);
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (fast_report_tx, fast_report_rx) = oneshot::channel();
         let (fast_startup_tx, fast_startup_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.fast", async move {
             let report = fast_server
                 .try_run_with_shutdown_report_and_startup(
-                    fast_request_processor,
-                    client_housekeeping_service_fast,
                     async move {
                         shutdown_token.cancelled().await;
                     },
@@ -416,3 +498,7 @@ mod tests {
         assert!(owner.shutdown_background().is_healthy());
     }
 }
+
+#[cfg(test)]
+#[path = "startup/cutover_network_tests.rs"]
+mod cutover_network_tests;

@@ -562,20 +562,7 @@ where
             }
 
             if !replay_list.is_empty() {
-                replay_list.retain(|request| {
-                    if request.legacy_session_closed() {
-                        request.release_legacy_wait();
-                        false
-                    } else {
-                        true
-                    }
-                });
-                if let Some(deadline) = replay_list.iter().map(PullRequest::deadline_millis).min() {
-                    self.note_request_deadline(deadline);
-                }
-                let mut table = self.pull_request_table.write();
-                let mpr = table.entry(key).or_insert_with(ManyPullRequest::new);
-                mpr.add_pull_requests(replay_list);
+                self.requeue_legacy_requests(key, replay_list);
             }
             deadline_changed = true;
         }
@@ -633,6 +620,28 @@ where
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn requeue_legacy_requests(&self, key: String, requests: Vec<PullRequest>) {
+        if let Some(deadline) = requests.iter().map(PullRequest::deadline_millis).min() {
+            self.note_request_deadline(deadline);
+        }
+        let terminal_requests = {
+            let mut table = self.pull_request_table.write();
+            let requests_for_key = table.entry(key.clone()).or_insert_with(ManyPullRequest::new);
+            // Session cleanup publishes terminal before attempting table
+            // removal. Keep both the outer table publication lock and the node
+            // lock through add plus reread so neither cleanup nor another
+            // notifier can claim the just-published node in between.
+            requests_for_key
+                .add_and_drain_with_claim(requests, |request| request.legacy_session_closed().then_some(()))
+                .into_iter()
+                .map(|(request, ())| request)
+                .collect::<Vec<_>>()
+        };
+        for request in terminal_requests {
+            request.release_legacy_wait();
+        }
     }
 
     fn begin_wake(&self, request: &PullRequest, route: Option<RoutePermit>) -> Option<PullWakeupClaim> {
@@ -729,14 +738,18 @@ where
             let Ok(queue_id) = queue_id.parse::<i32>() else {
                 continue;
             };
-            requests.extend(self.claim_legacy_requests(&key, &CheetahString::from(topic), queue_id));
+            requests.extend(
+                self.claim_legacy_requests(&key, &CheetahString::from(topic), queue_id)
+                    .into_iter()
+                    .map(|(request, route)| (key.clone(), request, route)),
+            );
         }
-        for (request, route) in requests {
+        for (key, request, route) in requests {
             info!("notify master online, wakeup {}", request.request_command());
             if let Some(wake) = self.begin_wake(&request, route) {
                 self.submit_wake(&request, wake);
             } else {
-                request.release_legacy_wait();
+                self.requeue_legacy_requests(key, vec![request]);
             }
         }
         self.rebuild_next_deadline();
@@ -971,6 +984,56 @@ mod tests {
             .read(&mut byte)
             .expect_err("cancelled Pull session wrote no response bytes");
         assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    #[tokio::test]
+    async fn pull_close_between_requeue_publication_and_terminal_reread_releases_once() {
+        let processor = Arc::new(TestPullProcessor);
+        let service = Arc::new(PullRequestHoldService::<StorePorts, _>::new(Arc::downgrade(&processor)));
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install Pull requeue coordinator");
+        PullRequestHoldService::start(&service, task_group("pull-terminal-requeue-service")).await;
+        let topic = CheetahString::from_static_str("pull-terminal-requeue");
+        let key = build_key(topic.as_str(), 0);
+        let (session, session_group, channel, context, _peer) =
+            session_execution_test_channel_context(8_504, None).await;
+        let session = Arc::new(session);
+        register_session_waiter(&service, channel, context, &topic);
+        let (request, route) = claim_session_waiter(&service, &topic);
+        let terminal_view = request.clone();
+
+        let (terminal_requests, closing) = {
+            let mut table = service.pull_request_table.write();
+            let requests = table.entry(key.clone()).or_insert_with(ManyPullRequest::new);
+            requests.add_pull_request(request);
+            let closing_session = Arc::clone(&session);
+            let closing = std::thread::spawn(move || closing_session.close());
+            while !terminal_view.legacy_session_closed() {
+                std::thread::yield_now();
+            }
+            let terminal_requests = requests
+                .drain_with_claim(|request| request.legacy_session_closed().then_some(()))
+                .into_iter()
+                .map(|(request, ())| request)
+                .collect::<Vec<_>>();
+            (terminal_requests, closing)
+        };
+        closing.join().expect("Pull close completes after table publication");
+        assert_eq!(terminal_requests.len(), 1);
+        assert!(service.pull_request_table.read()[&key].is_empty());
+        for request in terminal_requests {
+            request.release_legacy_wait();
+        }
+        drop(route);
+        assert!(handoff.zero_report().is_zero());
+
+        let report = session_group
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        service.shutdown().await;
     }
 
     #[tokio::test]

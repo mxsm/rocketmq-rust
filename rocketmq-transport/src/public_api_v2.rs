@@ -103,6 +103,7 @@ pub use crate::session_view::SessionId;
 pub use crate::session_view::SessionStateView;
 pub use crate::session_view::SessionView;
 pub use crate::v2_session_registry::V2SessionEvent;
+pub use crate::v2_session_registry::V2SessionLifecycleListener;
 pub use crate::v2_session_registry::V2SessionRegistry;
 
 /// Persistent endpoint client whose omitted processor parameter is V2-native.

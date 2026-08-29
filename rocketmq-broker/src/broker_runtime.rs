@@ -25,6 +25,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
@@ -78,10 +79,10 @@ use rocketmq_store::StorePorts;
 #[cfg(all(test, feature = "rocksdb_store"))]
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::api::v1::ChannelEventListener;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v1::TransportServer;
+use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::v2::V2SessionRegistry;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -290,9 +291,12 @@ type DefaultServerProcessor =
 type FasterServerProcessor =
     BrokerRequestProcessor<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>;
 
-type DefaultServerProcessorV2 = BrokerRequestProcessorV2<
+pub(crate) type DefaultServerProcessorV2 = BrokerRequestProcessorV2<
     BrokerProcessorTypeV2<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,
 >;
+
+pub(crate) type DefaultBrokerDispatcherV2 =
+    rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2<DefaultServerProcessorV2>;
 
 type BrokerScheduledTasks = ScheduledTaskManager;
 
