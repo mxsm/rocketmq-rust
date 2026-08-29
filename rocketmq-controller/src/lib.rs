@@ -80,7 +80,6 @@ mod processor;
 mod qualification;
 mod security;
 mod storage;
-mod task;
 mod typ;
 pub mod protobuf {
     tonic::include_proto!("rocketmq_rust_controller");
