@@ -32,12 +32,12 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::collections::HashSet;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+
+use super::AdminRequestMetadata;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasError;
 
 pub(super) struct SubscriptionGroupHandler;
@@ -50,8 +50,7 @@ impl SubscriptionGroupHandler {
     pub async fn update_and_create_subscription_group<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -61,7 +60,7 @@ impl SubscriptionGroupHandler {
 
         info!(
             "AdminBrokerProcessor#updateAndCreateSubscriptionGroup called by {}",
-            _channel.remote_address()
+            metadata
         );
         let Some(body) = request.get_body() else {
             return Ok(Some(
@@ -117,8 +116,7 @@ impl SubscriptionGroupHandler {
     pub async fn update_subscription_group_config_cas<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -134,8 +132,7 @@ impl SubscriptionGroupHandler {
             };
         info!(
             "Broker receive version-checked Subscription Group patch for group={}, caller address={}",
-            request_header.group,
-            channel.remote_address()
+            request_header.group, metadata
         );
 
         if let Err(error) = validate_subscription_group_name(request_header.group.as_str()) {
@@ -287,8 +284,6 @@ impl SubscriptionGroupHandler {
     pub async fn get_subscription_group_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -340,14 +335,13 @@ impl SubscriptionGroupHandler {
     pub async fn update_and_create_subscription_group_list<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         info!(
             "AdminBrokerProcessor#updateAndCreateSubscriptionGroupList called by {}",
-            channel.remote_address()
+            metadata
         );
 
         let response = RemotingCommand::create_java_default_error_response_command();
@@ -392,16 +386,12 @@ impl SubscriptionGroupHandler {
     pub async fn delete_subscription_group<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<DeleteSubscriptionGroupRequestHeader>()?;
-        info!(
-            "AdminBrokerProcessor#deleteSubscriptionGroup called by {}",
-            channel.remote_address()
-        );
+        info!("AdminBrokerProcessor#deleteSubscriptionGroup called by {}", metadata);
 
         let should_clean_offset = request_header.clean_offset
             || broker_runtime_inner
@@ -441,8 +431,7 @@ impl SubscriptionGroupHandler {
     pub async fn delete_subscription_group_list<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -488,8 +477,7 @@ impl SubscriptionGroupHandler {
         }
         info!(
             "AdminBrokerProcessor#deleteSubscriptionGroupList: groupNames={:?}, caller={}",
-            groups,
-            channel.remote_address()
+            groups, metadata
         );
 
         let clean_offsets = groups
@@ -531,18 +519,14 @@ impl SubscriptionGroupHandler {
     pub async fn update_and_get_group_forbidden<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateGroupForbiddenRequestHeader>()?;
         info!(
             "AdminBrokerProcessor#updateAndGetGroupForbidden called by {} for object {}@{} readable={:?}",
-            channel.remote_address(),
-            request_header.group,
-            request_header.topic,
-            request_header.readable
+            metadata, request_header.group, request_header.topic, request_header.readable
         );
 
         if let Some(readable) = request_header.readable {
@@ -591,7 +575,6 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
 
     use super::*;
@@ -640,6 +623,7 @@ mod tests {
         let runtime = new_test_runtime("update-list").await;
         let admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
+        let channel = create_test_channel().await;
 
         let body = SubscriptionGroupList {
             group_config_list: vec![
@@ -651,13 +635,10 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroupList, EmptyHeader {})
                 .set_body(body.encode().expect("encode subscription group list"));
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
                 &mut request,
             )
@@ -687,12 +668,10 @@ mod tests {
 
         let mut missing = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup);
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndCreateSubscriptionGroup,
                 &mut missing,
             )
@@ -704,12 +683,10 @@ mod tests {
         let mut malformed = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
             .set_body(Bytes::from_static(b"{not-json"));
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndCreateSubscriptionGroup,
                 &mut malformed,
             )
@@ -723,12 +700,10 @@ mod tests {
         let mut single = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
             .set_body(invalid.encode().expect("invalid config should still encode"));
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndCreateSubscriptionGroup,
                 &mut single,
             )
@@ -751,12 +726,10 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroupList, EmptyHeader {})
                 .set_body(body.encode().expect("subscription group list should encode"));
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
                 &mut list,
             )
@@ -811,9 +784,13 @@ mod tests {
         request.make_custom_header_to_net();
 
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .delete_subscription_group(&admin, channel, ctx, RequestCode::DeleteSubscriptionGroup, &mut request)
+            .delete_subscription_group(
+                &admin,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::DeleteSubscriptionGroup,
+                &mut request,
+            )
             .await
             .expect("delete group request should succeed")
             .expect("delete group request should return response");
@@ -854,12 +831,10 @@ mod tests {
         request.make_custom_header_to_net();
 
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut response = handler
             .update_and_get_group_forbidden(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndGetGroupForbidden,
                 &mut request,
             )
@@ -918,12 +893,10 @@ mod tests {
         request.make_custom_header_to_net();
         let request_opaque = request.opaque();
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_subscription_group_config_cas(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateSubscriptionGroupConfigCas,
                 &mut request,
             )
@@ -967,12 +940,10 @@ mod tests {
         );
         stale_request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let stale_response = handler
             .update_subscription_group_config_cas(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateSubscriptionGroupConfigCas,
                 &mut stale_request,
             )
@@ -999,16 +970,8 @@ mod tests {
             },
         );
         get_request.make_custom_header_to_net();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let get_response = handler
-            .get_subscription_group_config(
-                &admin,
-                channel,
-                ctx,
-                RequestCode::GetSubscriptionGroupConfig,
-                &mut get_request,
-            )
+            .get_subscription_group_config(&admin, RequestCode::GetSubscriptionGroupConfig, &mut get_request)
             .await
             .expect("get Subscription Group config should run")
             .expect("get Subscription Group config should return a response");
@@ -1041,12 +1004,10 @@ mod tests {
         let mut empty = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(empty_body.encode().unwrap());
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .delete_subscription_group_list(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::DeleteSubscriptionGroupList,
                 &mut empty,
             )
@@ -1064,12 +1025,10 @@ mod tests {
         let mut invalid = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(invalid_body.encode().unwrap());
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .delete_subscription_group_list(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::DeleteSubscriptionGroupList,
                 &mut invalid,
             )
@@ -1087,12 +1046,10 @@ mod tests {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
             .set_body(body.encode().unwrap());
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .delete_subscription_group_list(
                 &admin,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::DeleteSubscriptionGroupList,
                 &mut request,
             )

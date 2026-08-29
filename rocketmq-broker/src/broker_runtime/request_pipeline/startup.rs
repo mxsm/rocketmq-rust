@@ -16,6 +16,28 @@
 
 use super::super::*;
 
+/// Coarse transport gate for the prepared Broker V2 graph.
+///
+/// This decision only continues to the Broker-owned AuthRuntime check. It is
+/// deliberately not a substitute for Broker authentication or ACL policy.
+struct BrokerV2IngressPolicy;
+
+impl rocketmq_security_api::IngressPolicy for BrokerV2IngressPolicy {
+    fn evaluate_ingress(
+        &self,
+        _request: rocketmq_security_api::SecurityRequestView<'_>,
+    ) -> rocketmq_security_api::LayerEvaluation<rocketmq_security_api::IngressDecision> {
+        Ok(rocketmq_security_api::IngressDecision::AllowToContinue)
+    }
+}
+
+fn prepared_v2_transport_security() -> Arc<rocketmq_transport::api::v1::TransportSecurity> {
+    Arc::new(
+        rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None)
+            .with_ingress_policy(Arc::new(BrokerV2IngressPolicy)),
+    )
+}
+
 impl BrokerRuntime {
     pub(in crate::broker_runtime) async fn start_basic_service(
         &mut self,
@@ -55,13 +77,37 @@ impl BrokerRuntime {
                 component: "authorized_dispatcher",
                 detail: "shared Broker admission boundary was not initialized".to_owned(),
             })?;
+        let transport_security =
+            Arc::new(rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None));
+        let prepared_v2_transport_security = prepared_v2_transport_security();
+        let mut prepared_v2_processor = DefaultServerProcessorV2::from_legacy_graph(&request_processor);
+        let broker_config = self.composition.state.broker_config();
+        if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
+            prepared_v2_processor.set_auth_disabled_by_validated_config();
+        }
+        if !prepared_v2_processor.is_auth_configured() {
+            return Err(BrokerStartupError::Initialization {
+                component: "broker_v2_auth",
+                detail: "prepared Broker V2 dispatcher requires an explicit AuthRuntime or validated disabled state"
+                    .to_owned(),
+            });
+        }
+        let prepared_v2_dispatcher = Arc::new(
+            rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2::new_with_telemetry(
+                prepared_v2_processor,
+                Vec::new(),
+                prepared_v2_transport_security,
+                Arc::clone(&admission),
+                self.composition.state.transport_telemetry.clone(),
+            ),
+        );
         let authorized_dispatcher = Arc::new(
             rocketmq_transport::api::v1::AuthorizedCommandDispatcher::try_new(
                 request_processor.clone(),
                 Vec::new(),
                 &service_context.process_budget(),
                 self.composition.state.transport_telemetry.clone(),
-                Arc::new(rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None)),
+                transport_security,
                 admission,
             )
             .map_err(|error| BrokerStartupError::Initialization {
@@ -71,6 +117,7 @@ impl BrokerRuntime {
         );
         self.composition.request_pipeline.proxy_request_processor = Some(request_processor.clone());
         self.composition.request_pipeline.authorized_dispatcher = Some(authorized_dispatcher.clone());
+        self.composition.request_pipeline.prepared_v2_dispatcher = Some(prepared_v2_dispatcher);
         self.lifecycle
             .startup_journal
             .complete(BrokerComponent::RequestProcessors);
@@ -260,5 +307,112 @@ impl BrokerRuntime {
             .startup_journal
             .complete(BrokerComponent::BackgroundServices);
         Ok((normal_listener, fast_listener))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_security_api::Principal;
+    use rocketmq_transport::api::v1::AdmissionController;
+    use rocketmq_transport::api::v1::AdmissionLimits;
+    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::HandlerOutcome;
+    use rocketmq_transport::api::v2::RemotingRequest;
+    use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::api::v2::ResponsePlan;
+
+    use super::prepared_v2_transport_security;
+    use crate::processor::v2::BrokerRequestProcessorV2;
+
+    const STARTUP_PROBE_CODE: i32 = 98_520;
+
+    #[derive(Clone)]
+    struct StartupProbe {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl RequestProcessorV2 for StartupProbe {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(
+                ResponseCode::Success as i32,
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_v2_security_continues_to_broker_acl_and_acl_remains_fail_closed() {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-prepared-v2-security-test"))
+            .expect("prepared V2 security test runtime");
+        let service = owner.root_context().component("broker-prepared-v2-security");
+
+        let allowed_calls = Arc::new(AtomicUsize::new(0));
+        let mut explicitly_disabled = BrokerRequestProcessorV2::new();
+        explicitly_disabled.set_auth_disabled_by_validated_config();
+        explicitly_disabled.register_processor(
+            STARTUP_PROBE_CODE,
+            StartupProbe {
+                calls: Arc::clone(&allowed_calls),
+            },
+        );
+        let allowed = AuthorizedCommandDispatcherV2::new(
+            explicitly_disabled,
+            Vec::new(),
+            prepared_v2_transport_security(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        )
+        .dispatch_embedded_v2(
+            service.task_group(),
+            Principal::new("broker-proxy"),
+            None,
+            RemotingCommand::create_remoting_command(STARTUP_PROBE_CODE),
+        )
+        .await
+        .expect("coarse ingress should continue to Broker ACL");
+        let EmbeddedDispatchOutcome::Reply(plan) = allowed else {
+            panic!("explicitly disabled Broker ACL should reach the leaf")
+        };
+        assert_eq!(plan.response_code(), ResponseCode::Success as i32);
+        assert_eq!(allowed_calls.load(Ordering::SeqCst), 1);
+
+        let denied_calls = Arc::new(AtomicUsize::new(0));
+        let mut unconfigured = BrokerRequestProcessorV2::new();
+        unconfigured.register_processor(
+            STARTUP_PROBE_CODE,
+            StartupProbe {
+                calls: Arc::clone(&denied_calls),
+            },
+        );
+        let denied = AuthorizedCommandDispatcherV2::new(
+            unconfigured,
+            Vec::new(),
+            prepared_v2_transport_security(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        )
+        .dispatch_embedded_v2(
+            service.task_group(),
+            Principal::new("broker-proxy"),
+            None,
+            RemotingCommand::create_remoting_command(STARTUP_PROBE_CODE),
+        )
+        .await
+        .expect("Broker ACL denial should be a response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = denied else {
+            panic!("unconfigured Broker ACL should fail closed with one reply")
+        };
+        assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
+        assert_eq!(denied_calls.load(Ordering::SeqCst), 0);
+
+        assert!(owner.shutdown_tasks().await.is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
     }
 }

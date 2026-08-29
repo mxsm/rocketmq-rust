@@ -227,6 +227,8 @@ use crate::processor::send_message_processor::capability::SendMessageProcessorCo
 use crate::processor::send_message_processor::capability::SendMessageStoreCapability;
 use crate::processor::send_message_processor::capability::SendMessageTopicCapability;
 use crate::processor::send_message_processor::SendMessageProcessor;
+use crate::processor::v2::BrokerProcessorTypeV2;
+use crate::processor::v2::BrokerRequestProcessorV2;
 use crate::processor::BrokerProcessorType;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -287,6 +289,10 @@ type DefaultServerProcessor =
 
 type FasterServerProcessor =
     BrokerRequestProcessor<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>;
+
+type DefaultServerProcessorV2 = BrokerRequestProcessorV2<
+    BrokerProcessorTypeV2<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,
+>;
 
 type BrokerScheduledTasks = ScheduledTaskManager;
 

@@ -147,13 +147,13 @@ impl AuthorizationFactory {
 
     pub fn new_contexts_from_command(
         config: &AuthConfig,
-        channel_context: &(dyn Any + Send + Sync),
+        auth_context: &crate::RemotingAuthContext,
         command: &RemotingCommand,
     ) -> RocketMQResult<Option<Vec<DefaultAuthorizationContext>>> {
         let _provider = Self::get_provider(config)?;
         let builder = DefaultAuthorizationContextBuilder::new(config.clone());
         builder
-            .build_from_remoting(channel_context, command)
+            .build_from_remoting(auth_context, command)
             .map(Some)
             .map_err(RocketMQError::from)
     }
@@ -261,9 +261,13 @@ mod tests {
         let command =
             RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(fields);
 
-        let contexts = AuthorizationFactory::new_contexts_from_command(&config, &(), &command)
-            .unwrap()
-            .unwrap();
+        let contexts = AuthorizationFactory::new_contexts_from_command(
+            &config,
+            &crate::RemotingAuthContext::embedded("test-session"),
+            &command,
+        )
+        .unwrap()
+        .unwrap();
 
         assert_eq!(contexts.len(), 1);
         assert_eq!(contexts[0].subject_key(), Some("User:alice"));

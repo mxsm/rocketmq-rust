@@ -35,8 +35,6 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MessageFilter;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RpcClient;
 use rocketmq_transport::api::v1::RpcRequest;
 use serde::Serialize;
@@ -56,8 +54,6 @@ impl MessageRelatedHandler {
     pub async fn search_offset_by_timestamp<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -110,8 +106,6 @@ impl MessageRelatedHandler {
     pub async fn resume_check_half_message<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -183,8 +177,6 @@ impl MessageRelatedHandler {
     pub async fn query_consume_queue<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -298,8 +290,6 @@ impl MessageRelatedHandler {
     pub async fn pop_rollback<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -525,7 +515,6 @@ mod tests {
     use rocketmq_store::DispatchRequest;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
 
     use super::cq_ext_unit_response_serialize_error;
@@ -620,8 +609,6 @@ mod tests {
             .expect("put message should return msg id");
 
         let handler = MessageRelatedHandler::new();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ResumeCheckHalfMessage,
             ResumeCheckHalfMessageRequestHeader {
@@ -632,7 +619,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .resume_check_half_message(&admin, channel, ctx, RequestCode::ResumeCheckHalfMessage, &mut request)
+            .resume_check_half_message(&admin, RequestCode::ResumeCheckHalfMessage, &mut request)
             .await
             .expect("resume check half message should succeed")
             .expect("resume check half message should return response");
@@ -694,8 +681,6 @@ mod tests {
             });
 
         let handler = MessageRelatedHandler::new();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QueryConsumeQueue,
             QueryConsumeQueueRequestHeader {
@@ -710,7 +695,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let mut response = handler
-            .query_consume_queue(&admin, channel, ctx, RequestCode::QueryConsumeQueue, &mut request)
+            .query_consume_queue(&admin, RequestCode::QueryConsumeQueue, &mut request)
             .await
             .expect("query consume queue should succeed")
             .expect("query consume queue should return response");
@@ -760,13 +745,11 @@ mod tests {
         pop_message_processor.start().await;
 
         let handler = MessageRelatedHandler::new();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader::default());
         request.make_custom_header_to_net();
 
         let response = handler
-            .pop_rollback(&admin, channel, ctx, RequestCode::PopRollback, &mut request)
+            .pop_rollback(&admin, RequestCode::PopRollback, &mut request)
             .await
             .expect("pop rollback should succeed")
             .expect("pop rollback should return response");

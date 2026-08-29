@@ -19,8 +19,6 @@ use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 #[derive(Clone)]
 pub struct UpdateColdDataFlowCtrGroupConfigRequestHandler {
@@ -36,8 +34,6 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
 
     pub async fn update_cold_data_flow_ctr_group_config(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -76,8 +72,6 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
 
     pub async fn remove_cold_data_flow_ctr_group_config(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -102,8 +96,6 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
 
     pub async fn get_cold_data_flow_ctr_info(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -131,8 +123,6 @@ mod tests {
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
@@ -162,20 +152,6 @@ mod tests {
         runtime
     }
 
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
-    }
-
     #[tokio::test]
     async fn update_and_get_cold_data_flow_ctr_info_round_trips_config() {
         let runtime = new_test_runtime("update-get", true).await;
@@ -185,15 +161,8 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a=128\ngroup-b=256");
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .update_cold_data_flow_ctr_group_config(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::UpdateColdDataFlowCtrConfig,
-                &mut request,
-            )
+            .update_cold_data_flow_ctr_group_config(RequestCode::UpdateColdDataFlowCtrConfig, &mut request)
             .await
             .expect("update cold data flow ctr should succeed")
             .expect("update cold data flow ctr should return response");
@@ -215,7 +184,7 @@ mod tests {
         let mut info_request =
             RemotingCommand::create_request_command(RequestCode::GetColdDataFlowCtrInfo, EmptyHeader {});
         let mut info_response = handler
-            .get_cold_data_flow_ctr_info(channel, ctx, RequestCode::GetColdDataFlowCtrInfo, &mut info_request)
+            .get_cold_data_flow_ctr_info(RequestCode::GetColdDataFlowCtrInfo, &mut info_request)
             .await
             .expect("get cold data flow ctr info should succeed")
             .expect("get cold data flow ctr info should return response");
@@ -258,18 +227,10 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-
         let mut update_request =
             RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {});
         let update_response = handler
-            .update_cold_data_flow_ctr_group_config(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::UpdateColdDataFlowCtrConfig,
-                &mut update_request,
-            )
+            .update_cold_data_flow_ctr_group_config(RequestCode::UpdateColdDataFlowCtrConfig, &mut update_request)
             .await
             .expect("empty update should succeed")
             .expect("empty update should return response");
@@ -279,12 +240,7 @@ mod tests {
         let mut remove_request =
             RemotingCommand::create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {});
         let remove_response = handler
-            .remove_cold_data_flow_ctr_group_config(
-                channel,
-                ctx,
-                RequestCode::RemoveColdDataFlowCtrConfig,
-                &mut remove_request,
-            )
+            .remove_cold_data_flow_ctr_group_config(RequestCode::RemoveColdDataFlowCtrConfig, &mut remove_request)
             .await
             .expect("empty remove should succeed")
             .expect("empty remove should return response");
@@ -307,15 +263,8 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a");
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .remove_cold_data_flow_ctr_group_config(
-                channel,
-                ctx,
-                RequestCode::RemoveColdDataFlowCtrConfig,
-                &mut request,
-            )
+            .remove_cold_data_flow_ctr_group_config(RequestCode::RemoveColdDataFlowCtrConfig, &mut request)
             .await
             .expect("remove cold data flow ctr should succeed")
             .expect("remove cold data flow ctr should return response");
@@ -333,19 +282,12 @@ mod tests {
     #[tokio::test]
     async fn missing_cold_data_service_returns_system_error() {
         let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(None);
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a=128");
 
         let response = handler
-            .update_cold_data_flow_ctr_group_config(
-                channel,
-                ctx,
-                RequestCode::UpdateColdDataFlowCtrConfig,
-                &mut request,
-            )
+            .update_cold_data_flow_ctr_group_config(RequestCode::UpdateColdDataFlowCtrConfig, &mut request)
             .await
             .expect("missing service should return broker response")
             .expect("missing service response");

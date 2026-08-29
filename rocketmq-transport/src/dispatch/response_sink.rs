@@ -268,6 +268,46 @@ impl ResponseSink {
         )
     }
 
+    /// Builds the deferred responder seed for a canonical embedded local-plan
+    /// owner. The lifecycle proof prevents a sink, session view, and task group
+    /// from unrelated dispatches being combined.
+    pub(crate) fn local_deferred_seed_with_resume(
+        &self,
+        telemetry: crate::telemetry::TransportTelemetry,
+        session: &crate::session_view::SessionView,
+        task_group: &TaskGroup,
+        ordering: crate::request_ordering::RequestOrdering,
+        class: crate::admission::AdmissionClass,
+        executor: crate::session_executor::DeferredResumeExecutor,
+    ) -> Option<DeferredResponseSeed> {
+        if !matches!(session, crate::session_view::SessionView::Embedded { .. })
+            || !self.is_local_plan_owner(session.state(), task_group)
+        {
+            return None;
+        }
+        Some(
+            DeferredResponseSeed::new(
+                self.clone(),
+                telemetry,
+                session.id(),
+                self.local_plan_control()?.clone(),
+            )
+            .with_resume_context(ordering, class, executor),
+        )
+    }
+
+    fn local_plan_control(&self) -> Option<&crate::dispatch::RequestControlView> {
+        match self {
+            Self::Local(LocalResponseSink {
+                mode: LocalResponseMode::Plan(state),
+            }) => Some(state.control()),
+            Self::Network(_)
+            | Self::Local(LocalResponseSink {
+                mode: LocalResponseMode::Legacy(_),
+            }) => None,
+        }
+    }
+
     #[allow(
         dead_code,
         reason = "DSP-05 bridge provenance remains dormant until DSP-06 coexistence routing"

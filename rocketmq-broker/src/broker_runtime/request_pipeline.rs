@@ -22,6 +22,8 @@ pub(super) struct BrokerRequestPipeline {
     pub(super) proxy_request_processor: Option<DefaultServerProcessor>,
     pub(super) authorized_dispatcher:
         Option<Arc<rocketmq_transport::api::v1::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
+    pub(super) prepared_v2_dispatcher:
+        Option<Arc<rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2<DefaultServerProcessorV2>>>,
     pub(super) auth_runtime: Option<Arc<AuthRuntime>>,
     pub(super) maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
     pub(super) auth_admin_service: Option<Arc<AuthAdminService>>,
@@ -39,6 +41,7 @@ impl BrokerRequestPipeline {
             admission_controller: None,
             proxy_request_processor: None,
             authorized_dispatcher: None,
+            prepared_v2_dispatcher: None,
             auth_runtime: None,
             maintenance_authorizer: None,
             auth_admin_service: None,
@@ -870,5 +873,11 @@ impl BrokerRuntime {
         &self,
     ) -> Option<Arc<rocketmq_transport::api::v1::AuthorizedCommandDispatcher<DefaultServerProcessor>>> {
         self.composition.request_pipeline.authorized_dispatcher.clone()
+    }
+
+    pub(crate) fn prepared_v2_dispatcher(
+        &self,
+    ) -> Option<Arc<rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2<DefaultServerProcessorV2>>> {
+        self.composition.request_pipeline.prepared_v2_dispatcher.clone()
     }
 }

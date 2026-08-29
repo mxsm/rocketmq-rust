@@ -301,12 +301,12 @@ where
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original = request.original_identity();
-        let inbound_peer = send_request_peer(request.origin())?;
+        let origin = request.origin().clone();
         let control = request.control().clone();
         let (receive_span, parsed_request) = self.receive_span_and_request(request.command());
         let result = self
             .process_v2_request(
-                inbound_peer,
+                origin,
                 control,
                 original.request_id(),
                 original.original_code(),
@@ -333,7 +333,7 @@ where
 
     async fn process_v2_request(
         &self,
-        inbound_peer: SocketAddr,
+        origin: RequestOrigin,
         control: rocketmq_transport::api::v2::RequestControlView,
         request_id: RequestId,
         original_code: i32,
@@ -346,6 +346,7 @@ where
         debug!("SendMessageProcessor V2 received request code: {:?}", request_code);
         match request_code {
             RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage => {
+                let inbound_peer = send_request_peer(&origin)?;
                 self.process_v2_send_message(
                     inbound_peer,
                     control,

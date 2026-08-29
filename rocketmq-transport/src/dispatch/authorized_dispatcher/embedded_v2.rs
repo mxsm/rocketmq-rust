@@ -29,6 +29,7 @@ use crate::base::pending_request_table::materialize_and_estimate_remoting_comman
 use crate::deadline::RequestDeadline;
 use crate::dispatch::remoting_request::RemotingRequestBuilder;
 use crate::dispatch::remoting_request::RequestLifecycleProvenance;
+use crate::dispatch::DeferredSessionCleanupOwner;
 use crate::dispatch::EmbeddedCaller;
 use crate::dispatch::EmbeddedDispatchError;
 use crate::dispatch::EmbeddedDispatchOutcome;
@@ -81,7 +82,43 @@ where
         task_group: &TaskGroup,
         principal: Principal,
         deadline: Option<RequestDeadline>,
+        command: RemotingCommand,
+    ) -> TerminalResult {
+        self.dispatch_embedded_v2_inner(task_group, principal, deadline, command, false)
+            .await
+    }
+
+    /// Dispatches one embedded command and resolves an accepted deferred
+    /// response into its final in-process response plan.
+    ///
+    /// This terminal form is intended for the Broker-owned local Proxy. It
+    /// retains the embedded session and its deferred cleanup owner while the
+    /// processor's registration is live, but waits only after the admitted
+    /// processor future has returned and released its processor permit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed, redacted error for the same boundary failures as
+    /// [`Self::dispatch_embedded_v2`], plus deferred response cancellation,
+    /// deadline, session-close, or local handoff failure.
+    pub async fn dispatch_embedded_v2_wait_response(
+        &self,
+        task_group: &TaskGroup,
+        principal: Principal,
+        deadline: Option<RequestDeadline>,
+        command: RemotingCommand,
+    ) -> TerminalResult {
+        self.dispatch_embedded_v2_inner(task_group, principal, deadline, command, true)
+            .await
+    }
+
+    async fn dispatch_embedded_v2_inner(
+        &self,
+        task_group: &TaskGroup,
+        principal: Principal,
+        deadline: Option<RequestDeadline>,
         mut command: RemotingCommand,
+        wait_for_deferred_response: bool,
     ) -> TerminalResult {
         let (terminal_sender, mut terminal_receiver) = terminal();
         let request_started = Instant::now();
@@ -93,6 +130,9 @@ where
             }
         };
         let session_record = EmbeddedSessionRecord::new(session_id);
+        let embedded_session_view = session_record.view();
+        let deferred_cleanup =
+            wait_for_deferred_response.then(|| DeferredSessionCleanupOwner::new(embedded_session_view.id()));
         let principal_for_security = principal.clone();
         let context =
             match RequestContext::try_embedded_with_caller(EmbeddedCaller::BrokerProxy, Some(principal), deadline) {
@@ -107,6 +147,8 @@ where
             };
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
         let lifecycle = RequestLifecycleProvenance::from_embedded_session(&session_record, task_group);
+        let mut session_record = Some(session_record);
+        let mut deferred_cleanup = deferred_cleanup;
         let builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
         let ordering = self
             .core
@@ -115,6 +157,8 @@ where
         let control = builder.control().clone();
         terminal_receiver.attach_control(control, original.is_one_way());
         let mut admitted_session = None;
+        let mut deferred_lifecycle = None;
+        let mut deferred_receiver = None;
 
         if builder.deadline().is_some_and(RequestDeadline::is_expired) {
             match ResponsePlan::command(deadline_response(original.original_opaque())) {
@@ -169,17 +213,79 @@ where
             {
                 Ok(scope) => match self.boundary.session(task_group, scope) {
                     Ok(session) => {
-                        self.admit_embedded(
-                            &session,
-                            builder,
-                            ordering,
-                            retained_bytes,
-                            original,
-                            request_started,
-                            terminal_sender,
-                        )
-                        .await;
-                        admitted_session = Some(session);
+                        let class = AdmissionClass::for_request_code(original.original_code());
+                        let builder = if wait_for_deferred_response && !original.is_one_way() {
+                            let (response, receiver) = ResponseSink::local_plan(builder.control().clone());
+                            deferred_receiver = Some(receiver);
+                            response
+                                .local_deferred_seed_with_resume(
+                                    self.telemetry.clone(),
+                                    &embedded_session_view,
+                                    task_group,
+                                    ordering,
+                                    class,
+                                    session.executor.deferred_resume_executor(),
+                                )
+                                .map(|seed| {
+                                    let seed = match deferred_cleanup.as_ref() {
+                                        Some(cleanup) => seed.with_session_cleanup(cleanup.registration()),
+                                        None => seed,
+                                    };
+                                    builder.with_deferred_response_seed(seed)
+                                })
+                                .ok_or(crate::dispatch::remoting_request::RemotingRequestBuildError::DeferredResponseOwnerMismatch)
+                        } else {
+                            Ok(builder)
+                        };
+                        match builder {
+                            Ok(builder) => {
+                                if wait_for_deferred_response {
+                                    match (session_record.take(), deferred_cleanup.take()) {
+                                        (Some(record), Some(cleanup)) => {
+                                            deferred_lifecycle =
+                                                Some(EmbeddedDeferredLifecycle::new(session, record, cleanup));
+                                            if let Some(lifecycle) = deferred_lifecycle.as_ref() {
+                                                self.admit_embedded(
+                                                    lifecycle.session(),
+                                                    builder,
+                                                    ordering,
+                                                    retained_bytes,
+                                                    original,
+                                                    request_started,
+                                                    terminal_sender,
+                                                    true,
+                                                )
+                                                .await;
+                                            } else {
+                                                let _ = terminal_sender
+                                                    .complete(Err(EmbeddedDispatchError::completion_closed()));
+                                            }
+                                        }
+                                        _ => {
+                                            let _ = terminal_sender
+                                                .complete(Err(EmbeddedDispatchError::completion_closed()));
+                                        }
+                                    }
+                                } else {
+                                    self.admit_embedded(
+                                        &session,
+                                        builder,
+                                        ordering,
+                                        retained_bytes,
+                                        original,
+                                        request_started,
+                                        terminal_sender,
+                                        false,
+                                    )
+                                    .await;
+                                    admitted_session = Some(session);
+                                }
+                            }
+                            Err(error) => {
+                                let _ =
+                                    terminal_sender.complete(Err(EmbeddedDispatchError::request_construction(error)));
+                            }
+                        }
                     }
                     Err(error) => {
                         let _ = terminal_sender.complete(Err(EmbeddedDispatchError::runtime(error)));
@@ -191,14 +297,36 @@ where
             }
         }
 
-        let result = terminal_receiver.receive().await;
-        if let Some(session) = admitted_session {
+        let initial_result = terminal_receiver.receive().await;
+        let result = match initial_result {
+            Ok(EmbeddedDispatchOutcome::Deferred { .. }) if wait_for_deferred_response => {
+                match deferred_receiver.take() {
+                    Some(receiver) => receiver
+                        .receive()
+                        .await
+                        .map(EmbeddedDispatchOutcome::Reply)
+                        .map_err(EmbeddedDispatchError::response),
+                    None => Err(EmbeddedDispatchError::completion_closed()),
+                }
+            }
+            result => result,
+        };
+        if let Some(lifecycle) = deferred_lifecycle.as_mut() {
+            lifecycle.close();
+        }
+        let session = deferred_lifecycle
+            .as_ref()
+            .map(EmbeddedDeferredLifecycle::session)
+            .or(admitted_session.as_ref());
+        if let Some(session) = session {
+            session.begin_close();
             let drain_budget = deadline.map_or(Duration::from_secs(3), RequestDeadline::remaining);
             session
                 .drain_until(ShutdownDeadline::after(drain_budget))
                 .await
                 .log_if_unhealthy();
         }
+        drop(deferred_lifecycle);
         drop(session_record);
         result
     }
@@ -212,6 +340,7 @@ where
         original: OriginalRequestIdentity,
         request_started: Instant,
         terminal_sender: EmbeddedTerminalSender,
+        commit_deferred: bool,
     ) {
         let admitted_core = Arc::clone(&self.core);
         let rejected_core = Arc::clone(&self.core);
@@ -227,7 +356,15 @@ where
             ordering,
             move |_operation| async move {
                 let mut processor = admitted_core.clone_explicit_processor();
-                let result = execute_admitted(&admitted_core, &mut processor, builder, original, request_started).await;
+                let result = execute_admitted(
+                    &admitted_core,
+                    &mut processor,
+                    builder,
+                    original,
+                    request_started,
+                    commit_deferred,
+                )
+                .await;
                 if admitted_terminal.complete(result).is_err() {
                     admitted_core.report_failure_category("completion_closed");
                 }
@@ -291,6 +428,48 @@ where
     }
 }
 
+struct EmbeddedDeferredLifecycle {
+    session: AuthorizedDispatchSession,
+    session_record: EmbeddedSessionRecord,
+    cleanup: DeferredSessionCleanupOwner,
+    active: bool,
+}
+
+impl EmbeddedDeferredLifecycle {
+    fn new(
+        session: AuthorizedDispatchSession,
+        session_record: EmbeddedSessionRecord,
+        cleanup: DeferredSessionCleanupOwner,
+    ) -> Self {
+        Self {
+            session,
+            session_record,
+            cleanup,
+            active: true,
+        }
+    }
+
+    const fn session(&self) -> &AuthorizedDispatchSession {
+        &self.session
+    }
+
+    fn close(&mut self) {
+        if !self.active {
+            return;
+        }
+        let _ = self.cleanup.close();
+        self.session_record.close();
+        self.session.begin_close();
+        self.active = false;
+    }
+}
+
+impl Drop for EmbeddedDeferredLifecycle {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 fn capture_identity(command: &RemotingCommand) -> Result<(u64, OriginalRequestIdentity), EmbeddedDispatchError> {
     let session_id = crate::dispatch::reserve_session_owner().ok_or_else(EmbeddedDispatchError::identity_exhausted)?;
     let sequence = AtomicU64::new(1);
@@ -305,6 +484,7 @@ async fn execute_admitted<P>(
     builder: RemotingRequestBuilder,
     original: OriginalRequestIdentity,
     request_started: Instant,
+    commit_deferred: bool,
 ) -> TerminalResult
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
@@ -356,6 +536,7 @@ where
         request_started,
         outcome,
         observe_write,
+        commit_deferred,
     )
     .await
 }
@@ -396,6 +577,7 @@ where
         request_started,
         outcome,
         candidate.observe_write,
+        false,
     )
     .await
 }
@@ -426,6 +608,7 @@ where
         request_started,
         outcome,
         candidate.observe_write,
+        false,
     )
     .await
 }
@@ -437,6 +620,7 @@ async fn finish_resolved<P>(
     request_started: Instant,
     outcome: EmbeddedResolvedOutcome,
     observe_write: bool,
+    commit_deferred: bool,
 ) -> TerminalResult
 where
     P: RequestProcessorV2 + Clone + Sync + 'static,
@@ -445,9 +629,13 @@ where
         EmbeddedResolvedOutcome::OneWay => Ok(EmbeddedDispatchOutcome::OneWay {
             request_id: original.request_id(),
         }),
-        EmbeddedResolvedOutcome::Deferred(registration) => Ok(EmbeddedDispatchOutcome::Deferred {
-            request_id: registration.request_id(),
-        }),
+        EmbeddedResolvedOutcome::Deferred(registration) => {
+            let request_id = registration.request_id();
+            if commit_deferred {
+                registration.commit().map_err(EmbeddedDispatchError::deferred_commit)?;
+            }
+            Ok(EmbeddedDispatchOutcome::Deferred { request_id })
+        }
         EmbeddedResolvedOutcome::NoReply(marker) => Ok(EmbeddedDispatchOutcome::NoReply {
             request_id: marker.request_id(),
             reason: marker.reason(),

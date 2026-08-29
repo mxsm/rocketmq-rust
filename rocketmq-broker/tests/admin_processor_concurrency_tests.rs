@@ -19,7 +19,7 @@ fn admin_dispatch_is_shared_without_a_request_wide_mutex() {
     let admin = include_str!("../src/processor/admin_broker_processor.rs").replace("\r\n", "\n");
 
     assert!(processor.contains("AdminBroker(Arc<AdminBrokerProcessor<MS>>)"));
-    assert!(processor.contains("processor.process_request_shared(channel, ctx, request).await"));
+    assert!(processor.contains("processor.process_request_shared(channel, request).await"));
     assert!(!processor.contains("Mutex<AdminBrokerProcessor"));
     assert!(!processor.contains("processor.lock().await.process_request"));
     assert!(!request_pipeline.contains("Mutex::new(AdminBrokerProcessor::new"));

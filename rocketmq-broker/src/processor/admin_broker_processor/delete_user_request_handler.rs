@@ -6,8 +6,6 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -23,8 +21,6 @@ impl DeleteUserRequestHandler {
 
     pub async fn delete_user(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

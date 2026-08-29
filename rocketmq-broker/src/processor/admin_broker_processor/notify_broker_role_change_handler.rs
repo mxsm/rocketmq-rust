@@ -19,12 +19,11 @@ use rocketmq_protocol::protocol::header::notify_broker_role_change_request_heade
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tracing::info;
 use tracing::warn;
 
 use super::broker_config_request_handler::BrokerConfigRequestHandler;
+use super::AdminRequestMetadata;
 
 #[derive(Clone)]
 pub struct NotifyBrokerRoleChangeHandler;
@@ -37,8 +36,7 @@ impl NotifyBrokerRoleChangeHandler {
     pub async fn notify_broker_role_changed<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -75,6 +73,13 @@ impl NotifyBrokerRoleChangeHandler {
             request_header
         );
 
+        let Some(controller_leader_address) = metadata.network_remote_addr() else {
+            warn!("Reject embedded notifyBrokerRoleChanged because the controller network peer is unavailable");
+            return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(
+                "notify broker role change requires a trusted network controller peer",
+            )));
+        };
+
         if broker_config_request_handler
             .broker_runtime_inner()
             .replicas_manager()
@@ -85,7 +90,7 @@ impl NotifyBrokerRoleChangeHandler {
         }
 
         let sync_state_set = sync_state_set_info.get_sync_state_set().cloned().unwrap_or_default();
-        let controller_leader_address = channel.remote_address().to_string().into();
+        let controller_leader_address = controller_leader_address.to_string().into();
 
         if let Err(error) = broker_config_request_handler
             .apply_controller_role_change(
@@ -123,11 +128,14 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
+    use crate::processor::admin_broker_processor::trusted_admin_metadata;
+    use crate::processor::admin_broker_processor::AdminOriginFact;
+    use crate::processor::admin_broker_processor::AdminSessionFact;
 
+    use super::AdminRequestMetadata;
     use super::BrokerConfigRequestHandler;
     use super::NotifyBrokerRoleChangeHandler;
 
@@ -156,7 +164,6 @@ mod tests {
         let handler = NotifyBrokerRoleChangeHandler::new();
 
         let channel = create_test_channel().await;
-        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = NotifyBrokerRoleChangedRequestHeader {
             master_address: Some(CheetahString::from_static_str("127.0.0.1:10911")),
             master_epoch: Some(1),
@@ -172,8 +179,7 @@ mod tests {
         let response = handler
             .notify_broker_role_changed(
                 &broker_config_request_handler,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::NotifyBrokerRoleChanged,
                 &mut request,
             )
@@ -182,5 +188,46 @@ mod tests {
             .expect("notification should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+    }
+
+    #[tokio::test]
+    async fn embedded_proxy_cannot_supply_a_controller_network_endpoint() {
+        let runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let admin = runtime.admin_runtime_for_test();
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(admin);
+        let handler = NotifyBrokerRoleChangeHandler::new();
+        let header = NotifyBrokerRoleChangedRequestHeader {
+            master_address: Some(CheetahString::from_static_str("127.0.0.1:10911")),
+            master_epoch: Some(1),
+            sync_state_set_epoch: Some(1),
+            master_broker_id: Some(0),
+        };
+        let body = SyncStateSet::with_values(HashSet::from([0]), 1);
+        let mut request = RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, header)
+            .set_body(Bytes::from(
+                serde_json::to_vec(&body).expect("serialize sync-state set"),
+            ));
+        let metadata = trusted_admin_metadata(AdminOriginFact::BrokerProxy, AdminSessionFact::Embedded)
+            .expect("trusted embedded Broker Proxy metadata");
+
+        let response = handler
+            .notify_broker_role_changed(
+                &broker_config_request_handler,
+                &metadata,
+                RequestCode::NotifyBrokerRoleChanged,
+                &mut request,
+            )
+            .await
+            .expect("embedded notification should return a response")
+            .expect("embedded notification should fail closed with a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("notify broker role change requires a trusted network controller peer")
+        );
     }
 }

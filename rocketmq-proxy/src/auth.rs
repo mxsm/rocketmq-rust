@@ -38,6 +38,7 @@ use rocketmq_auth::DefaultAuthorizationContext;
 use rocketmq_auth::DefaultAuthorizationProvider;
 use rocketmq_auth::PolicyResource;
 use rocketmq_auth::ProviderRegistry;
+use rocketmq_auth::RemotingAuthContext;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
@@ -60,9 +61,6 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::Action;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
-use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
 use tonic::Request;
 #[cfg(feature = "cluster-mode")]
 use tracing::warn;
@@ -393,9 +391,9 @@ impl ProxyAuthRuntime {
     pub async fn authenticate_remoting(
         &self,
         command: &RemotingCommand,
-        channel_id: Option<&str>,
-        source_ip: Option<&str>,
+        auth_context: &RemotingAuthContext,
     ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
+        auth_context.validate().map_err(ProxyError::from)?;
         let code = command.code().to_string();
         let requires_authentication = self.authentication_required(code.as_str());
         let requires_authorization = self.authorization_required(code.as_str());
@@ -405,15 +403,15 @@ impl ProxyAuthRuntime {
 
         let authentication_context = self
             .authentication_builder
-            .build_from_remoting(command, channel_id)
+            .build_from_remoting(command, auth_context.channel_id())
             .map_err(|error| ProxyError::from(RocketMQError::authentication_failed(error.to_string())))?;
         let username = authentication_context.username().map(ToString::to_string);
-        let source_ip = source_ip.unwrap_or("unknown").to_owned();
+        let source_ip = auth_context.source_ip().unwrap_or("embedded").to_owned();
         let channel_id = authentication_context
             .base
             .channel_id()
             .map(ToString::to_string)
-            .or_else(|| channel_id.map(ToOwned::to_owned));
+            .or_else(|| auth_context.channel_id().map(ToOwned::to_owned));
 
         if self
             .auth_runtime
@@ -448,18 +446,18 @@ impl ProxyAuthRuntime {
 
     pub async fn authorize_remoting(
         &self,
-        channel_context: &(dyn std::any::Any + Send + Sync),
+        auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> ProxyResult<()> {
+        auth_context.validate().map_err(ProxyError::from)?;
         let code = command.code().to_string();
         if !self.authorization_required(code.as_str()) {
             return Ok(());
         }
 
-        let source_ip = source_ip_from_channel_context(channel_context);
         if self
             .auth_runtime
-            .is_acl_white_remote_address(access_key_from_command(command), source_ip.as_deref())
+            .is_acl_white_remote_address(access_key_from_command(command), auth_context.source_ip())
             .map_err(ProxyError::from)?
         {
             return Ok(());
@@ -467,7 +465,7 @@ impl ProxyAuthRuntime {
 
         let contexts = self
             .authorization_provider
-            .new_contexts_from_remoting_command(channel_context, command)
+            .new_contexts_from_remoting_command(auth_context, command)
             .map_err(map_authorization_error)?;
         let sync_metadata = should_sync_remoting_auth_metadata(command.code());
         if sync_metadata {
@@ -882,19 +880,6 @@ impl Subject for MetadataSubject {
     }
 }
 
-fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
-    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
-        return Some(ctx.remote_address().ip().to_string());
-    }
-    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
-        return Some(ctx.remote_address().ip().to_string());
-    }
-    if let Some(channel) = channel_context.downcast_ref::<Channel>() {
-        return Some(channel.remote_address().ip().to_string());
-    }
-    None
-}
-
 fn should_sync_remoting_auth_metadata(code: i32) -> bool {
     !matches!(
         RequestCode::from(code),
@@ -948,6 +933,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("test temp directory should be created");
         dir
+    }
+
+    fn remoting_auth_context(source_ip: &str, channel_id: &str) -> RemotingAuthContext {
+        RemotingAuthContext::new(Some(source_ip.to_owned()), Some(channel_id.to_owned()))
     }
 
     #[tokio::test]
@@ -1242,13 +1231,13 @@ mod tests {
                 "read-secret",
             );
             let principal = runtime
-                .authenticate_remoting(&command, Some("proxy-management"), Some("127.0.0.1"))
+                .authenticate_remoting(&command, &remoting_auth_context("127.0.0.1", "proxy-management"))
                 .await
                 .expect("local Proxy credential should authenticate")
                 .expect("principal should exist");
             assert_eq!(principal.username(), "sre-reader");
             runtime
-                .authorize_remoting(&(), &command)
+                .authorize_remoting(&remoting_auth_context("127.0.0.1", "proxy-management"), &command)
                 .await
                 .expect("local Proxy ACL should authorize the operation");
         }
@@ -1327,7 +1316,7 @@ accounts:
         command.add_ext_field("AccessKey", "alice");
 
         let principal = runtime
-            .authenticate_remoting(&command, Some("channel-a"), Some("192.168.0.7"))
+            .authenticate_remoting(&command, &remoting_auth_context("192.168.0.7", "channel-a"))
             .await
             .expect("white remote address should bypass signature")
             .expect("principal should be returned");
@@ -1402,14 +1391,14 @@ accounts:
             .expect("runtime should be enabled");
         let command = send_message_command("TopicA", "alice", "secret");
         let principal = restarted
-            .authenticate_remoting(&command, Some("channel-a"), Some("127.0.0.1"))
+            .authenticate_remoting(&command, &remoting_auth_context("127.0.0.1", "channel-a"))
             .await
             .expect("authentication should use persisted user")
             .expect("principal should exist");
         assert_eq!(principal.username(), "alice");
 
         restarted
-            .authorize_remoting(&(), &command)
+            .authorize_remoting(&remoting_auth_context("127.0.0.1", "channel-a"), &command)
             .await
             .expect("authorization should use persisted ACL");
 
@@ -1446,11 +1435,11 @@ accounts:
 
         let command = send_message_command("TopicA", "alice", "secret");
         runtime
-            .authenticate_remoting(&command, Some("channel-a"), Some("127.0.0.1"))
+            .authenticate_remoting(&command, &remoting_auth_context("127.0.0.1", "channel-a"))
             .await
             .expect("authentication should pass");
         let error = runtime
-            .authorize_remoting(&(), &command)
+            .authorize_remoting(&remoting_auth_context("127.0.0.1", "channel-a"), &command)
             .await
             .expect_err("authorization should deny");
         assert!(matches!(

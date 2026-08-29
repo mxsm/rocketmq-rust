@@ -44,13 +44,13 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+
+use super::AdminRequestMetadata;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::topic::manager::topic_config_manager::TopicConfigCasError;
@@ -130,8 +130,7 @@ impl TopicRequestHandler {
     pub async fn update_and_create_topic<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -141,8 +140,7 @@ impl TopicRequestHandler {
             request.decode_required_header::<CreateTopicRequestHeader>("decode create-topic request header")?;
         info!(
             "Broker receive request to update or create topic={}, caller address={}",
-            request_header.topic,
-            channel.remote_address()
+            request_header.topic, metadata
         );
         let topic = request_header.topic.clone();
         let result = TopicValidator::validate_topic(topic.as_str());
@@ -209,7 +207,7 @@ impl TopicRequestHandler {
                 "Broker receive request to update or create topic={}, but topicConfig has  no changes , so \
                  idempotent, caller address={}",
                 topic.as_str(),
-                channel.remote_address(),
+                metadata,
             );
             return Ok(Some(RemotingCommand::create_success_response_command()));
         }
@@ -227,8 +225,7 @@ impl TopicRequestHandler {
     pub async fn update_topic_config_cas<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -244,8 +241,7 @@ impl TopicRequestHandler {
         };
         info!(
             "Broker receive version-checked Topic patch for topic={}, caller address={}",
-            request_header.topic,
-            channel.remote_address()
+            request_header.topic, metadata
         );
 
         let topic = request_header.topic;
@@ -392,8 +388,7 @@ impl TopicRequestHandler {
     pub async fn update_and_create_static_topic<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -402,8 +397,7 @@ impl TopicRequestHandler {
         let request_header = request.decode_command_custom_header::<CreateTopicRequestHeader>()?;
         info!(
             "Broker receive request to update or create static topic={}, caller address={}",
-            request_header.topic,
-            channel.remote_address()
+            request_header.topic, metadata
         );
 
         let Some(body) = request.body() else {
@@ -492,8 +486,7 @@ impl TopicRequestHandler {
     pub async fn update_and_create_topic_list<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -506,8 +499,7 @@ impl TopicRequestHandler {
         }
         info!(
             "AdminBrokerProcessor#updateAndCreateTopicList: topicNames: {}, called by {}",
-            topic_names,
-            channel.remote_address()
+            topic_names, metadata
         );
         let response = RemotingCommand::create_java_default_error_response_command();
         for topic_config in request_body.topic_config_list.iter() {
@@ -545,8 +537,7 @@ impl TopicRequestHandler {
                 info!(
                     "Broker receive request to update or create topic={}, but topicConfig has  no changes , so \
                      idempotent, caller address={}",
-                    topic,
-                    channel.remote_address(),
+                    topic, metadata,
                 );
                 return Ok(Some(RemotingCommand::create_success_response_command()));
             }
@@ -566,8 +557,7 @@ impl TopicRequestHandler {
     pub async fn delete_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -577,8 +567,7 @@ impl TopicRequestHandler {
         let topic = &request_header.topic;
         info!(
             "AdminBrokerProcessor#deleteTopic: broker receive request to delete topic={}, caller={}",
-            topic,
-            channel.remote_address()
+            topic, metadata
         );
         if topic.is_empty() {
             return Ok(Some(
@@ -652,8 +641,7 @@ impl TopicRequestHandler {
     pub async fn delete_topic_list<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -712,8 +700,7 @@ impl TopicRequestHandler {
 
         info!(
             "AdminBrokerProcessor#deleteTopicList: broker receive request to delete topics={:?}, caller={}",
-            topics,
-            channel.remote_address()
+            topics, metadata
         );
         let original_topics = topics.clone();
         for topic in &original_topics {
@@ -780,8 +767,6 @@ impl TopicRequestHandler {
     pub async fn get_all_topic_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -817,8 +802,6 @@ impl TopicRequestHandler {
 
     pub async fn get_system_topic_list_from_broker(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -835,8 +818,6 @@ impl TopicRequestHandler {
     pub async fn get_topic_stats_info<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -897,8 +878,6 @@ impl TopicRequestHandler {
     pub async fn get_topic_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -957,8 +936,6 @@ impl TopicRequestHandler {
     pub async fn query_topic_consume_by_who<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -980,8 +957,6 @@ impl TopicRequestHandler {
     pub async fn query_topics_by_consumer<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -1008,8 +983,6 @@ impl TopicRequestHandler {
     pub async fn clean_unused_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -1067,10 +1040,10 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
 
     use super::decode_topic_queue_mapping_detail;
+    use super::AdminRequestMetadata;
     use super::TopicRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
@@ -1150,6 +1123,7 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = TopicRequestHandler::new();
         let broker_config_request_handler = BrokerConfigRequestHandler::new(admin.clone());
+        let channel = create_test_channel().await;
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:
@@ -1183,14 +1157,11 @@ mod tests {
         );
         request.make_custom_header_to_net();
         request.set_body_mut_ref(detail.encode().expect("encode topic queue mapping detail"));
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .update_and_create_static_topic(
                 &broker_config_request_handler,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateAndCreateStaticTopic,
                 &mut request,
             )
@@ -1243,12 +1214,10 @@ mod tests {
         request.make_custom_header_to_net();
         let request_opaque = request.opaque();
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_topic_config_cas(
                 &broker_config_request_handler,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateTopicConfigCas,
                 &mut request,
             )
@@ -1288,12 +1257,10 @@ mod tests {
         );
         stale_request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let stale_response = handler
             .update_topic_config_cas(
                 &broker_config_request_handler,
-                channel,
-                ctx,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
                 RequestCode::UpdateTopicConfigCas,
                 &mut stale_request,
             )
@@ -1328,10 +1295,8 @@ mod tests {
             },
         );
         get_request.make_custom_header_to_net();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let get_response = handler
-            .get_topic_config(&admin, channel, ctx, RequestCode::GetTopicConfig, &mut get_request)
+            .get_topic_config(&admin, RequestCode::GetTopicConfig, &mut get_request)
             .await
             .expect("get Topic config should run")
             .expect("get Topic config should return a response");
@@ -1365,9 +1330,13 @@ mod tests {
         let mut empty = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(empty_body.encode().unwrap());
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .delete_topic_list(&admin, channel, ctx, RequestCode::DeleteTopicInBrokerList, &mut empty)
+            .delete_topic_list(
+                &admin,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::DeleteTopicInBrokerList,
+                &mut empty,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -1382,9 +1351,13 @@ mod tests {
         let mut invalid = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(invalid_body.encode().unwrap());
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .delete_topic_list(&admin, channel, ctx, RequestCode::DeleteTopicInBrokerList, &mut invalid)
+            .delete_topic_list(
+                &admin,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::DeleteTopicInBrokerList,
+                &mut invalid,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -1398,9 +1371,13 @@ mod tests {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
             .set_body(body.encode().unwrap());
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .delete_topic_list(&admin, channel, ctx, RequestCode::DeleteTopicInBrokerList, &mut request)
+            .delete_topic_list(
+                &admin,
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::DeleteTopicInBrokerList,
+                &mut request,
+            )
             .await
             .unwrap()
             .unwrap();

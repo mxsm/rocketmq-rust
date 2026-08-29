@@ -69,6 +69,8 @@ pub use crate::dispatch::AuthorizedCommandDispatcher;
 pub use crate::dispatch::AuthorizedDispatchBoundary;
 pub use crate::dispatch::DispatchError;
 pub use crate::dispatch::DispatchOutcome;
+pub use crate::dispatch::EmbeddedV2CompatibilityMaterializationError;
+pub use crate::dispatch::EmbeddedV2CompatibilityMaterializationErrorKind;
 pub use crate::dispatch::LocalResponseReceiver;
 pub use crate::dispatch::RequestContext;
 pub use crate::dispatch::RequestContextError;
@@ -141,6 +143,28 @@ pub use crate::tls::PrivateKeyLoader;
 pub use crate::tls::TlsServerRuntime;
 pub use rocketmq_protocol::protocol::RemotingDeserializable;
 pub use rocketmq_protocol::protocol::RemotingSerializable;
+
+/// Materializes one V2 response plan for a frozen V1 embedded compatibility
+/// consumer without exposing V2 response storage.
+///
+/// The conversion uses the Java-compatible 16 MiB body envelope, at most 1024
+/// body parts, the supplied absolute deadline and parent task lifecycle, and
+/// the injected blocking lane for leased file regions. This function is
+/// intentionally exported only from [`crate::api::v1`].
+///
+/// # Errors
+///
+/// Returns a typed, redacted error when the lifecycle stops, the fixed limits
+/// are exceeded, a destination allocation fails, or file-region I/O fails.
+pub async fn materialize_embedded_v2_compatibility_response(
+    plan: crate::api::v2::ResponsePlan,
+    deadline: Option<RequestDeadline>,
+    task_group: &rocketmq_runtime::TaskGroup,
+    blocking: &rocketmq_runtime::BlockingExecutor,
+) -> Result<rocketmq_protocol::protocol::remoting_command::RemotingCommand, EmbeddedV2CompatibilityMaterializationError>
+{
+    crate::dispatch::materialize_embedded_v2_compatibility_response(plan, deadline, task_group, blocking).await
+}
 
 pub use crate::error_response::apply_error_to_response;
 pub use crate::error_response::command_from_error;

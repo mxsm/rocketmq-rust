@@ -165,6 +165,7 @@ impl AuthorizedDispatchBoundary {
 pub struct AuthorizedCommandDispatcherV2<P> {
     boundary: Arc<AuthorizedDispatchBoundary>,
     core: Arc<AuthorizedDispatcherCore<crate::dispatch::ExplicitV2Processor<P>>>,
+    telemetry: TransportTelemetry,
 }
 
 impl<P> AuthorizedCommandDispatcherV2<P>
@@ -179,9 +180,28 @@ where
         security: Arc<TransportSecurity>,
         admission: Arc<AdmissionController>,
     ) -> Self {
+        Self::new_with_telemetry(
+            request_processor,
+            rpc_hooks,
+            security,
+            admission,
+            TransportTelemetry::noop(),
+        )
+    }
+
+    /// Creates a V2 dispatcher with the composition-owned transport telemetry.
+    #[must_use]
+    pub fn new_with_telemetry(
+        request_processor: P,
+        rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        security: Arc<TransportSecurity>,
+        admission: Arc<AdmissionController>,
+        telemetry: TransportTelemetry,
+    ) -> Self {
         Self {
             boundary: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
             core: Arc::new(AuthorizedDispatcherCore::new(request_processor, rpc_hooks)),
+            telemetry,
         }
     }
 

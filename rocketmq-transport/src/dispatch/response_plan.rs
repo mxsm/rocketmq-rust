@@ -30,6 +30,9 @@ use crate::file_region::FileRegionSequence;
 
 pub(crate) use binding::BoundResponsePlan;
 pub(crate) use binding::ResponseBindingError;
+pub(crate) use materializer::materialize_embedded_v2_compatibility_response;
+pub use materializer::EmbeddedV2CompatibilityMaterializationError;
+pub use materializer::EmbeddedV2CompatibilityMaterializationErrorKind;
 pub(crate) use materializer::LegacyLocalMaterializationError;
 pub(crate) use materializer::LegacyMaterializationLimits;
 

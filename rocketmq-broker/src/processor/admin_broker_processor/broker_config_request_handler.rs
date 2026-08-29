@@ -39,8 +39,6 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
 use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use sysinfo::Disks;
 
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -48,6 +46,8 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::broker::log_filter_control::BrokerLogFilterRequest;
 use crate::broker::log_filter_control::LOG_FILTER_KEYS;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
+
+use super::AdminRequestMetadata;
 
 #[derive(Clone)]
 pub(super) struct BrokerConfigRequestHandler<MS: BrokerAdminStore> {
@@ -129,8 +129,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(
         &self,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -187,7 +186,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
                     "generation-checked broker config updates do not accept log filter properties",
                 )));
             }
-            return self.update_log_filter(channel, request, response, &properties).await;
+            return self.update_log_filter(metadata, request, response, &properties).await;
         }
 
         let commit_result = match expected_generation {
@@ -241,7 +240,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     async fn update_log_filter(
         &self,
-        channel: Channel,
+        metadata: &AdminRequestMetadata,
         request: &RemotingCommand,
         response: RemotingCommand,
         properties: &HashMap<CheetahString, CheetahString>,
@@ -259,7 +258,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
                     .set_remark("remote log filter reload is disabled or unavailable"),
             ));
         };
-        let source_ip = channel.remote_address().ip().to_string();
+        let source_ip = metadata.source_ip();
         let operator = request
             .get_ext_fields()
             .and_then(|fields| fields.get(&CheetahString::from_static_str("AccessKey")))
@@ -331,8 +330,6 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn get_broker_config(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -372,8 +369,6 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn get_broker_runtime_info(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -386,8 +381,6 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn set_commitlog_read_mode(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -439,9 +432,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn export_rocksdb_config_to_json(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
+        request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
@@ -512,7 +503,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
         Ok(Some(
             request_code_not_supported_with_remark(
-                request.code(),
+                request_code.to_i32(),
                 "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
                  file-backed config managers",
             )
@@ -522,8 +513,6 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn get_timer_metrics(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -532,8 +521,6 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn get_timer_check_point(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -542,8 +529,6 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn switch_timer_engine(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -1093,11 +1078,11 @@ mod tests {
     use rocketmq_store::TimerMessageStore;
     use rocketmq_store::TimerMetricsSerializeWrapper;
     use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
 
+    use super::AdminRequestMetadata;
     use super::BrokerConfigRequestHandler;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
@@ -1213,8 +1198,6 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
         request.add_ext_field(
@@ -1223,7 +1206,7 @@ mod tests {
         );
 
         let response = handler
-            .set_commitlog_read_mode(channel, ctx, RequestCode::SetCommitlogReadMode, &mut request)
+            .set_commitlog_read_mode(RequestCode::SetCommitlogReadMode, &mut request)
             .await
             .expect("set commitlog read mode should succeed")
             .expect("set commitlog read mode should return response");
@@ -1235,8 +1218,6 @@ mod tests {
             .expect("message store should exist")
             .data_read_ahead_enabled());
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
         request.add_ext_field(
@@ -1245,7 +1226,7 @@ mod tests {
         );
 
         let response = handler
-            .set_commitlog_read_mode(channel, ctx, RequestCode::SetCommitlogReadMode, &mut request)
+            .set_commitlog_read_mode(RequestCode::SetCommitlogReadMode, &mut request)
             .await
             .expect("set commitlog read mode should succeed")
             .expect("set commitlog read mode should return response");
@@ -1338,17 +1319,10 @@ mod tests {
         let runtime = new_test_runtime("get-broker-config-generation", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin);
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
 
         let response = handler
-            .get_broker_config(
-                channel.clone(),
-                Arc::clone(&ctx),
-                RequestCode::GetBrokerConfig,
-                &mut request,
-            )
+            .get_broker_config(RequestCode::GetBrokerConfig, &mut request)
             .await
             .expect("get broker config should return broker response")
             .expect("get broker config should return a response");
@@ -1377,7 +1351,7 @@ mod tests {
             .is_some_and(|body| String::from_utf8_lossy(body).contains("flushDelayOffsetInterval")));
 
         let second_response = handler
-            .get_broker_config(channel, ctx, RequestCode::GetBrokerConfig, &mut request)
+            .get_broker_config(RequestCode::GetBrokerConfig, &mut request)
             .await
             .expect("repeated get broker config should return broker response")
             .expect("repeated get broker config should return a response");
@@ -1397,9 +1371,8 @@ mod tests {
         let runtime = new_test_runtime("update-broker-config", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
-
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
             "enableLiteEventMode=false\n",
             "maxLiteSubscriptionCount=5\n",
@@ -1408,7 +1381,11 @@ mod tests {
         ));
 
         let response = handler
-            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfig, &mut request)
+            .update_broker_config(
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::UpdateBrokerConfig,
+                &mut request,
+            )
             .await
             .expect("update broker config should return broker response")
             .expect("update broker config should return a response");
@@ -1427,9 +1404,8 @@ mod tests {
         let runtime = new_test_runtime("update-broker-config-cas", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
-
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateBrokerConfigCas,
             UpdateBrokerConfigRequestHeader { expected_generation: 1 },
@@ -1439,7 +1415,11 @@ mod tests {
         let request_opaque = request.opaque();
 
         let response = handler
-            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut request)
+            .update_broker_config(
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::UpdateBrokerConfigCas,
+                &mut request,
+            )
             .await
             .expect("CAS update should return broker response")
             .expect("CAS update should return a response");
@@ -1458,8 +1438,6 @@ mod tests {
         );
         assert_eq!(admin.broker_config().max_client_event_count, 7);
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut stale_request = RemotingCommand::create_request_command(
             RequestCode::UpdateBrokerConfigCas,
             UpdateBrokerConfigRequestHeader { expected_generation: 1 },
@@ -1468,7 +1446,11 @@ mod tests {
         stale_request.make_custom_header_to_net();
 
         let stale_response = handler
-            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut stale_request)
+            .update_broker_config(
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::UpdateBrokerConfigCas,
+                &mut stale_request,
+            )
             .await
             .expect("stale CAS update should return broker response")
             .expect("stale CAS update should return a response");
@@ -1497,7 +1479,6 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin);
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
             "logFilter=info,rocketmq_broker=debug\n",
             "logFilterReason=incident investigation\n",
@@ -1505,7 +1486,11 @@ mod tests {
         ));
 
         let response = handler
-            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfig, &mut request)
+            .update_broker_config(
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::UpdateBrokerConfig,
+                &mut request,
+            )
             .await
             .expect("log filter update should return broker response")
             .expect("log filter update should return a response");
@@ -1524,12 +1509,15 @@ mod tests {
         let handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig)
             .set_body("unknownKey=true\nmaxClientEventCount=0");
 
         let response = handler
-            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfig, &mut request)
+            .update_broker_config(
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::UpdateBrokerConfig,
+                &mut request,
+            )
             .await
             .expect("update broker config should return broker response")
             .expect("update broker config should return a response");
@@ -1541,12 +1529,15 @@ mod tests {
         assert_eq!(admin.broker_config().max_client_event_count, 100);
 
         let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body("unknownKey=true");
 
         let response = handler
-            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfig, &mut request)
+            .update_broker_config(
+                &AdminRequestMetadata::legacy_network(channel.remote_address()),
+                RequestCode::UpdateBrokerConfig,
+                &mut request,
+            )
             .await
             .expect("update broker config should return broker response")
             .expect("update broker config should return a response");
@@ -1625,8 +1616,6 @@ mod tests {
     async fn export_rocksdb_config_without_rocksdb_returns_not_supported() {
         let runtime = new_test_runtime("export-config", false).await;
         let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ExportRocksdbConfigToJson,
             ExportRocksdbConfigToJsonRequestHeader {
@@ -1636,7 +1625,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .export_rocksdb_config_to_json(channel, ctx, RequestCode::ExportRocksdbConfigToJson, &mut request)
+            .export_rocksdb_config_to_json(RequestCode::ExportRocksdbConfigToJson, &mut request)
             .await
             .expect("export config should succeed")
             .expect("export config should return response");
@@ -1685,8 +1674,6 @@ mod tests {
         }
 
         let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ExportRocksdbConfigToJson,
             ExportRocksdbConfigToJsonRequestHeader {
@@ -1696,7 +1683,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .export_rocksdb_config_to_json(channel, ctx, RequestCode::ExportRocksdbConfigToJson, &mut request)
+            .export_rocksdb_config_to_json(RequestCode::ExportRocksdbConfigToJson, &mut request)
             .await
             .expect("export config should succeed")
             .expect("export config should return response");
@@ -1727,8 +1714,6 @@ mod tests {
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut file_request =
             RemotingCommand::create_remoting_command(RequestCode::SwitchTimerEngine).set_ext_fields(HashMap::new());
         file_request.add_ext_field(
@@ -1737,7 +1722,7 @@ mod tests {
         );
 
         let response = handler
-            .switch_timer_engine(channel, ctx, RequestCode::SwitchTimerEngine, &mut file_request)
+            .switch_timer_engine(RequestCode::SwitchTimerEngine, &mut file_request)
             .await
             .expect("switch timer engine should succeed")
             .expect("switch timer engine should return response");
@@ -1748,8 +1733,6 @@ mod tests {
             .expect("timer message store should exist")
             .is_should_running_dequeue());
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut rocksdb_request =
             RemotingCommand::create_remoting_command(RequestCode::SwitchTimerEngine).set_ext_fields(HashMap::new());
         rocksdb_request.add_ext_field(
@@ -1758,7 +1741,7 @@ mod tests {
         );
 
         let response = handler
-            .switch_timer_engine(channel, ctx, RequestCode::SwitchTimerEngine, &mut rocksdb_request)
+            .switch_timer_engine(RequestCode::SwitchTimerEngine, &mut rocksdb_request)
             .await
             .expect("switch timer engine should succeed")
             .expect("switch timer engine should return response");

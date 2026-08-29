@@ -129,6 +129,7 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::api::v1::RemotingDeserializable;
 use rocketmq_transport::api::v1::RpcRequestHeader;
 use rocketmq_transport::api::v1::TopicRequestHeader;
+use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
@@ -208,6 +209,16 @@ pub(crate) enum LocalBrokerCommand {
         timeout: Duration,
         reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
     },
+    ProcessRemotingV2Compatibility {
+        request: RemotingCommand,
+        timeout: Duration,
+        reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
+    },
+    ProcessRemotingV2 {
+        request: RemotingCommand,
+        timeout: Duration,
+        reply: oneshot::Sender<ProxyResult<EmbeddedDispatchOutcome>>,
+    },
 }
 
 impl QueuedLocalBrokerCommand {
@@ -223,8 +234,13 @@ impl QueuedLocalBrokerCommand {
         let Some(deadline_at) = self.deadline_at else {
             return;
         };
-        if let LocalBrokerCommand::ProcessRemoting { timeout, .. } = &mut self.command {
-            *timeout = deadline_at.saturating_duration_since(now);
+        match &mut self.command {
+            LocalBrokerCommand::ProcessRemoting { timeout, .. }
+            | LocalBrokerCommand::ProcessRemotingV2Compatibility { timeout, .. }
+            | LocalBrokerCommand::ProcessRemotingV2 { timeout, .. } => {
+                *timeout = deadline_at.saturating_duration_since(now);
+            }
+            _ => {}
         }
     }
 }
@@ -232,7 +248,9 @@ impl QueuedLocalBrokerCommand {
 impl LocalBrokerCommand {
     fn timeout(&self) -> Option<Duration> {
         match self {
-            Self::ProcessRemoting { timeout, .. } => Some(*timeout),
+            Self::ProcessRemoting { timeout, .. }
+            | Self::ProcessRemotingV2Compatibility { timeout, .. }
+            | Self::ProcessRemotingV2 { timeout, .. } => Some(*timeout),
             _ => None,
         }
     }
@@ -310,7 +328,11 @@ impl LocalBrokerCommand {
                 .saturating_add(request.commit_log_message_id.as_ref().map_or(0, String::len))
                 .saturating_add(client_id.as_ref().map_or(0, String::len))
                 .saturating_add(request_id.len()),
-            Self::ProcessRemoting { request, .. } => base.saturating_add(request.body().map_or(0, bytes::Bytes::len)),
+            Self::ProcessRemoting { request, .. }
+            | Self::ProcessRemotingV2Compatibility { request, .. }
+            | Self::ProcessRemotingV2 { request, .. } => {
+                base.saturating_add(request.body().map_or(0, bytes::Bytes::len))
+            }
         }
         .max(1)
     }
@@ -361,6 +383,12 @@ impl LocalBrokerCommand {
                 let _ = reply.send(Err(error));
             }
             Self::ProcessRemoting { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ProcessRemotingV2Compatibility { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ProcessRemotingV2 { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
         }
@@ -540,6 +568,73 @@ impl LocalBrokerFacadeClient {
         .await
     }
 
+    /// Processes one command through Broker V2 and materializes the terminal
+    /// response for the outer V1 Proxy remoting listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the local Broker worker is unavailable, V2
+    /// dispatch fails, or bounded compatibility materialization fails.
+    pub async fn process_remoting_v2_compatibility(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
+        self.process_remoting_v2_compatibility_with_timeout(request, Duration::from_secs(3))
+            .await
+    }
+
+    /// Processes one command through Broker V2 and materializes the terminal
+    /// response for the outer V1 Proxy remoting listener with an explicit
+    /// timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the local Broker worker is unavailable, V2
+    /// dispatch fails, or bounded compatibility materialization cannot finish
+    /// within `timeout`.
+    pub async fn process_remoting_v2_compatibility_with_timeout(
+        &self,
+        mut request: RemotingCommand,
+        timeout: Duration,
+    ) -> ProxyResult<RemotingCommand> {
+        request.make_custom_header_to_net();
+        self.execute(|reply| LocalBrokerCommand::ProcessRemotingV2Compatibility {
+            request,
+            timeout,
+            reply,
+        })
+        .await
+    }
+
+    /// Processes one local remoting command through the Broker V2 dispatcher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the local Broker worker is unavailable, rejects
+    /// the command, or does not complete within the default timeout.
+    pub async fn process_remoting_v2(&self, request: RemotingCommand) -> ProxyResult<EmbeddedDispatchOutcome> {
+        self.process_remoting_v2_with_timeout(request, Duration::from_secs(3))
+            .await
+    }
+
+    /// Processes one local remoting command through the Broker V2 dispatcher
+    /// with an explicit terminal-response timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the local Broker worker is unavailable, rejects
+    /// the command, or does not complete within `timeout`.
+    pub async fn process_remoting_v2_with_timeout(
+        &self,
+        mut request: RemotingCommand,
+        timeout: Duration,
+    ) -> ProxyResult<EmbeddedDispatchOutcome> {
+        request.make_custom_header_to_net();
+        self.execute(|reply| LocalBrokerCommand::ProcessRemotingV2 {
+            request,
+            timeout,
+            reply,
+        })
+        .await
+    }
+
     pub async fn send_message(
         &self,
         request: SendMessageRequest,
@@ -651,7 +746,11 @@ impl LocalRemotingBackend {
 
 impl ProxyRemotingBackend for LocalRemotingBackend {
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, RemotingCommand> {
-        Box::pin(async move { self.client.process_remoting(request).await })
+        Box::pin(async move { self.client.process_remoting_v2_compatibility(request).await })
+    }
+
+    fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+        Box::pin(async move { self.client.process_remoting_v2(request).await })
     }
 }
 
@@ -1202,6 +1301,37 @@ async fn handle_local_broker_command(
                     .process_request_with_timeout(request, timeout)
                     .await
                     .map_err(Into::into)
+            };
+            let _ = reply.send(result);
+        }
+        LocalBrokerCommand::ProcessRemotingV2Compatibility {
+            request,
+            timeout,
+            reply,
+        } => {
+            let result = if let Some(message) = startup_error {
+                Err(ProxyError::Transport {
+                    message: message.to_owned(),
+                })
+            } else {
+                facade
+                    .process_request_v2_compatibility(request, timeout)
+                    .await
+                    .map_err(Into::into)
+            };
+            let _ = reply.send(result);
+        }
+        LocalBrokerCommand::ProcessRemotingV2 {
+            request,
+            timeout,
+            reply,
+        } => {
+            let result = if let Some(message) = startup_error {
+                Err(ProxyError::Transport {
+                    message: message.to_owned(),
+                })
+            } else {
+                facade.process_request_v2(request, timeout).await.map_err(Into::into)
             };
             let _ = reply.send(result);
         }
@@ -2560,6 +2690,7 @@ mod tests {
     use rocketmq_proxy_core::MessageQueueTarget;
     use rocketmq_proxy_core::ProxyError;
     use rocketmq_proxy_core::ProxyMessage;
+    use rocketmq_proxy_core::ProxyRemotingBackend;
     use rocketmq_proxy_core::ProxyTopicMessageType;
     use rocketmq_proxy_core::PullMessageRequest;
     use rocketmq_proxy_core::ReceiveMessageRequest;
@@ -2583,6 +2714,7 @@ mod tests {
     use super::transaction_resolution_flag;
     use super::validate_local_queue_config;
     use super::LocalBrokerFacadeClient;
+    use super::LocalRemotingBackend;
     use crate::LocalConfig;
 
     fn batch_entry(id: &str) -> SendMessageEntry {
@@ -2884,6 +3016,49 @@ mod tests {
                 resource: "local broker command queue"
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn outer_v1_local_backend_enqueues_only_v2_compatibility_dispatch() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let client = LocalBrokerFacadeClient {
+            sender,
+            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
+            byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
+            rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            broker_name: "broker-a".to_owned(),
+        };
+        let backend = LocalRemotingBackend::new(client);
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
+
+        let call = tokio::spawn(async move { backend.process(request).await });
+        let queued = receiver.recv().await.expect("V1 backend must enqueue local work");
+        match queued.command {
+            super::LocalBrokerCommand::ProcessRemotingV2Compatibility {
+                request,
+                timeout,
+                reply,
+            } => {
+                assert_eq!(RequestCode::from(request.code()), RequestCode::GetBrokerConfig);
+                assert_eq!(request.opaque(), 9_852);
+                assert_eq!(timeout, Duration::from_secs(3));
+                let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                    .set_opaque(request.opaque())
+                    .mark_response_type();
+                assert!(
+                    reply.send(Ok(response)).is_ok(),
+                    "backend call must own the reply receiver"
+                );
+            }
+            super::LocalBrokerCommand::ProcessRemoting { .. } => {
+                panic!("outer V1 backend must not enqueue the legacy embedded dispatcher")
+            }
+            _ => panic!("outer V1 backend enqueued an unrelated command"),
+        }
+
+        let response = call.await.expect("backend task joins").expect("backend succeeds");
+        assert_eq!(response.opaque(), 9_852);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
     }
 
     #[test]

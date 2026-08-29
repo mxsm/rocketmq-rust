@@ -19,8 +19,6 @@ use rocketmq_protocol::protocol::header::exchange_ha_info_request_header::Exchan
 use rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -35,8 +33,6 @@ impl UpdateBrokerHaHandler {
     pub async fn update_broker_ha_info<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

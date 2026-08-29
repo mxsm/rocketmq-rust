@@ -13,6 +13,7 @@ use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::AuthorizationRequest;
 use rocketmq_auth::Policy;
 use rocketmq_auth::PolicyResource;
+use rocketmq_auth::RemotingAuthContext;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
@@ -42,6 +43,10 @@ fn temp_auth_config(temp: &TempDir) -> AuthConfig {
         auth_config_path: CheetahString::from(temp.path().join("auth-store").to_string_lossy().as_ref()),
         ..AuthConfig::default()
     }
+}
+
+fn network_auth_context(source_ip: &str, channel_id: &str) -> RemotingAuthContext {
+    RemotingAuthContext::network(source_ip, channel_id)
 }
 
 fn send_message_command(
@@ -129,7 +134,7 @@ async fn remoting_signature_matches_java_sorted_value_only_content() {
         Some(b"body"),
     );
     runtime
-        .check_remoting(&(), &command)
+        .check_remoting(&network_auth_context("127.0.0.1", "test-session"), &command)
         .await
         .expect("Java value-only signed content should authenticate");
 
@@ -143,7 +148,7 @@ async fn remoting_signature_matches_java_sorted_value_only_content() {
         Some(b"body"),
     );
     runtime
-        .check_remoting(&(), &command)
+        .check_remoting(&network_auth_context("127.0.0.1", "test-session"), &command)
         .await
         .expect_err("key+value signed content must not match Java remoting signature semantics");
 }
@@ -194,33 +199,33 @@ accounts:
     let signature = cal_signature(b"aliceTopicA", "secret").expect("signature should calculate");
     let command = send_message_command("TopicA", Some("alice"), Some(signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
+        .check_remoting(&network_auth_context("172.16.0.1", "test-session"), &command)
         .await
         .expect("custom TopicA=PUB should override default topic DENY");
 
     let signature = cal_signature(b"aliceTopicB", "secret").expect("signature should calculate");
     let command = send_message_command("TopicB", Some("alice"), Some(signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
+        .check_remoting(&network_auth_context("172.16.0.1", "test-session"), &command)
         .await
         .expect_err("defaultTopicPerm=DENY should reject non-custom topic");
 
     let command = send_message_command("TopicB", Some("alice"), Some(""), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("192.168.0.7"), None)
+        .check_remoting(&network_auth_context("192.168.0.7", "test-session"), &command)
         .await
         .expect("account whiteRemoteAddress should bypass signature and ACL checks");
 
     let command = send_message_command("TopicB", None, None, &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("10.10.1.2"), None)
+        .check_remoting(&network_auth_context("10.10.1.2", "test-session"), &command)
         .await
         .expect("globalWhiteRemoteAddresses should bypass missing credentials");
 
     let signature = cal_signature(b"adminTopicB", "admin-secret").expect("signature should calculate");
     let command = send_message_command("TopicB", Some("admin"), Some(signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
+        .check_remoting(&network_auth_context("172.16.0.1", "test-session"), &command)
         .await
         .expect("admin=true should map to SUPER user and bypass ACL DENY");
 }
@@ -261,7 +266,7 @@ async fn custom_deny_takes_precedence_over_custom_allow_for_same_resource() {
     let signature = cal_signature(b"aliceTopicA", "secret").expect("signature should calculate");
     let command = send_message_command("TopicA", Some("alice"), Some(signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
+        .check_remoting(&network_auth_context("172.16.0.1", "test-session"), &command)
         .await
         .expect_err("DENY should have higher priority than ALLOW for the same custom resource");
 }
@@ -284,7 +289,7 @@ async fn super_user_short_circuits_acl_lookup() {
     let signature = cal_signature(b"rootTopicWithoutAcl", "secret").expect("signature should calculate");
     let command = send_message_command("TopicWithoutAcl", Some("root"), Some(signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
+        .check_remoting(&network_auth_context("172.16.0.1", "test-session"), &command)
         .await
         .expect("SUPER user should pass without a matching ACL");
 }
@@ -321,7 +326,7 @@ accounts:
     let old_signature = cal_signature(b"aliceTopicA", "first").expect("signature should calculate");
     let old_command = send_message_command("TopicA", Some("alice"), Some(old_signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &old_command, Some("172.16.0.1"), Some("channel-a"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-a"), &old_command)
         .await
         .expect("initial ACL should authorize TopicA with the first secret");
     let generation_before_reload = runtime.acl_generation();
@@ -333,10 +338,8 @@ accounts:
         workers.push(tokio::spawn(async move {
             for _ in 0..25 {
                 let command = send_message_command("TopicA", Some("alice"), Some(old_signature.as_str()), &[], None);
-                let channel_context = ();
-                let _ = runtime
-                    .check_remoting_with_source_ip(&channel_context, &command, Some("172.16.0.1"), Some("channel-a"))
-                    .await;
+                let auth_context = network_auth_context("172.16.0.1", "channel-a");
+                let _ = runtime.check_remoting(&auth_context, &command).await;
                 tokio::task::yield_now().await;
             }
         }));
@@ -369,14 +372,14 @@ accounts:
 
     let old_command = send_message_command("TopicA", Some("alice"), Some(old_signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &old_command, Some("172.16.0.1"), Some("channel-a"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-a"), &old_command)
         .await
         .expect_err("reloaded ACL should reject the old secret and old topic");
 
     let new_signature = cal_signature(b"aliceTopicB", "second").expect("signature should calculate");
     let new_command = send_message_command("TopicB", Some("alice"), Some(new_signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &new_command, Some("172.16.0.1"), Some("channel-a"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-a"), &new_command)
         .await
         .expect("reloaded ACL should authorize TopicB with the second secret");
 
@@ -435,14 +438,14 @@ accounts:
     let old_signature = cal_signature(b"aliceTopicA", "first").expect("signature should calculate");
     let old_command = send_message_command("TopicA", Some("alice"), Some(old_signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &old_command, Some("172.16.0.1"), Some("channel-a"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-a"), &old_command)
         .await
         .expect("failed reload must keep the previous working ACL snapshot");
 
     let new_signature = cal_signature(b"aliceTopicB", "first").expect("signature should calculate");
     let new_command = send_message_command("TopicB", Some("alice"), Some(new_signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &new_command, Some("172.16.0.1"), Some("channel-a"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-a"), &new_command)
         .await
         .expect_err("failed reload must not partially apply the invalid ACL file");
 }
@@ -482,7 +485,7 @@ accounts:
     let bob_signature = cal_signature(b"bobTopicB", "second").expect("signature should calculate");
     let bob_command = send_message_command("TopicB", Some("bob"), Some(bob_signature.as_str()), &[], None);
     runtime
-        .check_remoting_with_source_ip(&(), &bob_command, Some("172.16.0.1"), Some("channel-b"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-b"), &bob_command)
         .await
         .expect("initial ACL should authorize bob and populate provider caches");
     let generation_before_reload = runtime.acl_generation();
@@ -509,7 +512,7 @@ accounts:
     );
 
     runtime
-        .check_remoting_with_source_ip(&(), &bob_command, Some("172.16.0.1"), Some("channel-b"))
+        .check_remoting(&network_auth_context("172.16.0.1", "channel-b"), &bob_command)
         .await
         .expect_err("successful reload must remove deleted ACL-file accounts and invalidate cached ACLs");
 }
@@ -527,9 +530,13 @@ fn authorization_factory_caches_provider_by_config_name_and_builds_contexts() {
     assert!(Arc::ptr_eq(&provider1, &provider2));
 
     let command = send_message_command("TopicA", Some("alice"), Some("signature"), &[], None);
-    let contexts = AuthorizationFactory::new_contexts_from_command(&config, &(), &command)
-        .expect("contexts should be built through the factory")
-        .expect("default provider should create contexts");
+    let contexts = AuthorizationFactory::new_contexts_from_command(
+        &config,
+        &network_auth_context("127.0.0.1", "test-session"),
+        &command,
+    )
+    .expect("contexts should be built through the factory")
+    .expect("default provider should create contexts");
 
     assert_eq!(contexts.len(), 1);
     assert_eq!(contexts[0].subject_key(), Some("User:alice"));

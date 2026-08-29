@@ -57,6 +57,8 @@ mod lifecycle;
 mod ownership;
 #[path = "tests/policy.rs"]
 mod policy;
+#[path = "tests/terminal_wait.rs"]
+mod terminal_wait;
 use policy::DenyPolicy;
 
 #[derive(Clone, Copy)]

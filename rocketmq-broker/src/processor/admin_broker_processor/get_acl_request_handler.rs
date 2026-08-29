@@ -20,7 +20,6 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::api::v1::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -36,8 +35,6 @@ impl GetAclRequestHandler {
 
     pub async fn get_acl(
         &self,
-        _channel: Channel,
-        _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -96,9 +93,6 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_security_api::Action;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::auth::auth_admin_service::AuthAdminService;
@@ -133,20 +127,6 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
     }
 
     fn build_acl_info(resource: &str, actions: &str) -> AclInfo {
@@ -197,8 +177,6 @@ mod tests {
         let create_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
         let update_handler = UpdateAclRequestHandler::new(auth_admin_service.clone());
         let get_handler = GetAclRequestHandler::new(auth_admin_service.clone());
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut create_request = RemotingCommand::create_request_command(
             RequestCode::AuthCreateAcl,
@@ -215,12 +193,7 @@ mod tests {
         create_request.add_ext_field("AccessKey", "admin");
         create_request.make_custom_header_to_net();
         let create_response = create_handler
-            .create_acl(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthCreateAcl,
-                &mut create_request,
-            )
+            .create_acl(RequestCode::AuthCreateAcl, &mut create_request)
             .await
             .expect("create acl should succeed")
             .expect("create acl should return response");
@@ -242,12 +215,7 @@ mod tests {
         update_request.add_ext_field("AccessKey", "admin");
         update_request.make_custom_header_to_net();
         let update_response = update_handler
-            .update_acl(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthUpdateAcl,
-                &mut update_request,
-            )
+            .update_acl(RequestCode::AuthUpdateAcl, &mut update_request)
             .await
             .expect("update acl should succeed")
             .expect("update acl should return response");
@@ -262,7 +230,7 @@ mod tests {
         );
         get_request.make_custom_header_to_net();
         let mut get_response = get_handler
-            .get_acl(channel, ctx, RequestCode::AuthGetAcl, &mut get_request)
+            .get_acl(RequestCode::AuthGetAcl, &mut get_request)
             .await
             .expect("get acl should succeed")
             .expect("get acl should return response");
@@ -305,8 +273,6 @@ mod tests {
         let update_user_handler = UpdateUserRequestHandler::new(auth_admin_service.clone());
         let create_acl_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
         let update_acl_handler = UpdateAclRequestHandler::new(auth_admin_service);
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut create_user_request = RemotingCommand::create_request_command(
             RequestCode::AuthCreateUser,
@@ -317,12 +283,7 @@ mod tests {
         .set_body(b"{not-json".to_vec());
         create_user_request.make_custom_header_to_net();
         let create_user_response = create_user_handler
-            .create_user(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthCreateUser,
-                &mut create_user_request,
-            )
+            .create_user(RequestCode::AuthCreateUser, &mut create_user_request)
             .await
             .expect("malformed user body should return a response")
             .expect("malformed user body should return a response");
@@ -340,12 +301,7 @@ mod tests {
         .set_body(b"{not-json".to_vec());
         update_user_request.make_custom_header_to_net();
         let update_user_response = update_user_handler
-            .update_user(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthUpdateUser,
-                &mut update_user_request,
-            )
+            .update_user(RequestCode::AuthUpdateUser, &mut update_user_request)
             .await
             .expect("malformed update user body should return a response")
             .expect("malformed update user body should return a response");
@@ -363,12 +319,7 @@ mod tests {
         .set_body(b"{not-json".to_vec());
         create_acl_request.make_custom_header_to_net();
         let create_acl_response = create_acl_handler
-            .create_acl(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthCreateAcl,
-                &mut create_acl_request,
-            )
+            .create_acl(RequestCode::AuthCreateAcl, &mut create_acl_request)
             .await
             .expect("malformed acl body should return a response")
             .expect("malformed acl body should return a response");
@@ -386,12 +337,7 @@ mod tests {
         .set_body(b"{not-json".to_vec());
         update_acl_request.make_custom_header_to_net();
         let update_acl_response = update_acl_handler
-            .update_acl(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthUpdateAcl,
-                &mut update_acl_request,
-            )
+            .update_acl(RequestCode::AuthUpdateAcl, &mut update_acl_request)
             .await
             .expect("malformed update acl body should return a response")
             .expect("malformed update acl body should return a response");
@@ -420,8 +366,6 @@ mod tests {
         );
         let list_users_handler = ListUsersRequestHandler::new(auth_admin_service.clone());
         let list_acl_handler = ListAclRequestHandler::new(auth_admin_service);
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut list_users_request = RemotingCommand::create_request_command(
             RequestCode::AuthListUsers,
@@ -431,12 +375,7 @@ mod tests {
         );
         list_users_request.make_custom_header_to_net();
         let list_users_response = list_users_handler
-            .list_users(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthListUsers,
-                &mut list_users_request,
-            )
+            .list_users(RequestCode::AuthListUsers, &mut list_users_request)
             .await
             .expect("empty user list should return a response")
             .expect("empty user list should return a response");
@@ -453,12 +392,7 @@ mod tests {
         );
         list_acl_request.make_custom_header_to_net();
         let list_acl_response = list_acl_handler
-            .list_acl(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthListAcl,
-                &mut list_acl_request,
-            )
+            .list_acl(RequestCode::AuthListAcl, &mut list_acl_request)
             .await
             .expect("empty acl list should return a response")
             .expect("empty acl list should return a response");
@@ -492,8 +426,6 @@ mod tests {
         auth_admin_service.create_user(alice).await.expect("create alice user");
 
         let handler = UpdateUserRequestHandler::new(auth_admin_service.clone());
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::AuthUpdateUser,
             UpdateUserRequestHeader {
@@ -515,7 +447,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .update_user(channel, ctx, RequestCode::AuthUpdateUser, &mut request)
+            .update_user(RequestCode::AuthUpdateUser, &mut request)
             .await
             .expect("update should return response")
             .expect("update should return response");
@@ -551,9 +483,6 @@ mod tests {
         alice.set_user_status(UserStatus::Enable);
         auth_admin_service.create_user(alice).await.expect("create alice user");
 
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-
         let create_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
         let mut create_request = RemotingCommand::create_request_command(
             RequestCode::AuthCreateUser,
@@ -575,12 +504,7 @@ mod tests {
         create_request.add_ext_field("AccessKey", "alice");
         create_request.make_custom_header_to_net();
         let create_response = create_handler
-            .create_user(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthCreateUser,
-                &mut create_request,
-            )
+            .create_user(RequestCode::AuthCreateUser, &mut create_request)
             .await
             .expect("create super response")
             .expect("create super response");
@@ -611,7 +535,7 @@ mod tests {
         update_request.add_ext_field("AccessKey", "alice");
         update_request.make_custom_header_to_net();
         let update_response = update_handler
-            .update_user(channel, ctx, RequestCode::AuthUpdateUser, &mut update_request)
+            .update_user(RequestCode::AuthUpdateUser, &mut update_request)
             .await
             .expect("update super response")
             .expect("update super response");
@@ -667,8 +591,6 @@ mod tests {
 
         let delete_handler = DeleteAclRequestHandler::new(auth_admin_service.clone());
         let get_handler = GetAclRequestHandler::new(auth_admin_service);
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut delete_request = RemotingCommand::create_request_command(
             RequestCode::AuthDeleteAcl,
             DeleteAclRequestHeader::with_policy_type(
@@ -679,12 +601,7 @@ mod tests {
         );
         delete_request.make_custom_header_to_net();
         let delete_response = delete_handler
-            .delete_acl(
-                channel.clone(),
-                ctx.clone(),
-                RequestCode::AuthDeleteAcl,
-                &mut delete_request,
-            )
+            .delete_acl(RequestCode::AuthDeleteAcl, &mut delete_request)
             .await
             .expect("delete acl response")
             .expect("delete acl response");
@@ -698,7 +615,7 @@ mod tests {
         );
         get_request.make_custom_header_to_net();
         let mut get_response = get_handler
-            .get_acl(channel, ctx, RequestCode::AuthGetAcl, &mut get_request)
+            .get_acl(RequestCode::AuthGetAcl, &mut get_request)
             .await
             .expect("get acl response")
             .expect("get acl response");

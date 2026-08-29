@@ -28,13 +28,13 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RpcClient;
 use rocketmq_transport::api::v1::RpcRequest;
 use tracing::error;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+
+use super::AdminRequestMetadata;
 
 pub(super) struct OffsetRequestHandler;
 
@@ -46,8 +46,6 @@ impl OffsetRequestHandler {
     pub async fn get_max_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -78,8 +76,6 @@ impl OffsetRequestHandler {
     pub async fn get_min_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -245,8 +241,6 @@ impl OffsetRequestHandler {
     pub async fn get_all_delay_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -267,8 +261,6 @@ impl OffsetRequestHandler {
     pub async fn get_earliest_msg_store_time<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -297,8 +289,6 @@ impl OffsetRequestHandler {
     pub async fn clean_expired_consumequeue<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -312,8 +302,6 @@ impl OffsetRequestHandler {
     pub async fn delete_expired_commitlog<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -326,15 +314,13 @@ impl OffsetRequestHandler {
 
     pub async fn check_rocksdb_cq_write_progress(
         &self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
+        request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let _request_header = request.decode_command_custom_header::<CheckRocksdbCqWriteProgressRequestHeader>()?;
         Ok(Some(
             request_code_not_supported_with_remark(
-                request.code(),
+                request_code.to_i32(),
                 "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker \
                  uses file-backed consume queues",
             )
@@ -345,18 +331,14 @@ impl OffsetRequestHandler {
     pub async fn get_all_subscription_group_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
-        channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response_command = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.subscription_group_manager().encode_pretty(false);
         if content.is_empty() {
-            error!(
-                "No subscription group config in this broker,client:{}",
-                channel.remote_address()
-            );
+            error!("No subscription group config in this broker,client:{}", metadata);
             return Ok(Some(
                 response_command
                     .set_code(ResponseCode::SystemError)
@@ -474,9 +456,6 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::Channel;
-    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::test_support::Connection;
 
     use super::static_topic_offset_broker_name_missing;
     use super::static_topic_offset_mapping_missing;
@@ -505,20 +484,6 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
-    }
-
-    async fn create_test_channel() -> Channel {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
-        let local_addr = listener.local_addr().expect("local listener addr");
-        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
-        std_stream.set_nonblocking(true).expect("set nonblocking");
-        drop(listener);
-        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
-        let connection = Connection::new(tcp_stream);
-        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
-            .addresses(local_addr, local_addr)
-            .build()
-            .expect("build test channel")
     }
 
     #[test]
@@ -558,11 +523,9 @@ mod tests {
             },
         );
         request.make_custom_header_to_net();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .get_earliest_msg_store_time(&admin, channel, ctx, RequestCode::GetEarliestMsgStoreTime, &mut request)
+            .get_earliest_msg_store_time(&admin, RequestCode::GetEarliestMsgStoreTime, &mut request)
             .await
             .expect("get earliest msg store time should succeed")
             .expect("get earliest msg store time should return response");
@@ -585,14 +548,10 @@ mod tests {
         let handler = OffsetRequestHandler::new();
         let mut request =
             RemotingCommand::create_request_command(RequestCode::CleanExpiredConsumequeue, EmptyHeader {});
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .clean_expired_consumequeue(
                 &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
                 RequestCode::CleanExpiredConsumequeue,
                 &mut request,
             )
@@ -618,11 +577,9 @@ mod tests {
             },
         );
         request.make_custom_header_to_net();
-        let channel = create_test_channel().await;
-        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .check_rocksdb_cq_write_progress(channel, ctx, RequestCode::CheckRocksdbCqWriteProgress, &mut request)
+            .check_rocksdb_cq_write_progress(RequestCode::CheckRocksdbCqWriteProgress, &mut request)
             .await
             .expect("check rocksdb cq write progress should succeed")
             .expect("check rocksdb cq write progress should return response");

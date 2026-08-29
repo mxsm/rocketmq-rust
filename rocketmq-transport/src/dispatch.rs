@@ -173,11 +173,14 @@ pub use response::ResponseErrorKind;
 pub use response::ResponseReceipt;
 pub use response::ResponseTerminalState;
 pub use response::WriteProgress;
+pub(crate) use response_plan::materialize_embedded_v2_compatibility_response;
 #[allow(
     unused_imports,
     reason = "later private response stages name the RSP-03 binding capability through dispatch"
 )]
 pub(crate) use response_plan::BoundResponsePlan;
+pub use response_plan::EmbeddedV2CompatibilityMaterializationError;
+pub use response_plan::EmbeddedV2CompatibilityMaterializationErrorKind;
 #[allow(
     unused_imports,
     reason = "RSP-06 exposes the private legacy materialization failure to later embedded wiring"
