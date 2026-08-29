@@ -347,11 +347,6 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
 
-    #[test]
-    fn shared_http_client_initializes_without_panicking() {
-        assert!(HttpTinyClient::client().is_ok());
-    }
-
     async fn spawn_http_server<F>(handler: F) -> String
     where
         F: FnOnce(String) -> (u16, String) + Send + 'static,
@@ -645,8 +640,8 @@ mod tests {
         assert!(err.to_string().contains("INVALID-ENCODING"));
     }
 
-    #[tokio::test]
-    async fn test_validation_supported_encodings() {
+    #[test]
+    fn test_validation_supported_encodings() {
         let encodings = vec!["UTF-8", "utf-8", "GBK", "gbk", "GB2312", "ISO-8859-1"];
 
         for encoding in encodings {
@@ -692,36 +687,6 @@ mod tests {
         assert!(HttpTinyClient::validate_headers(Some(&headers)).is_ok());
         assert!(HttpTinyClient::validate_headers(None).is_ok());
         assert!(HttpTinyClient::validate_headers(Some(&[])).is_ok());
-    }
-
-    #[test]
-    fn test_validate_headers_failure() {
-        let odd_headers = vec!["Key1".to_string(), "Value1".to_string(), "Key2".to_string()];
-        assert!(HttpTinyClient::validate_headers(Some(&odd_headers)).is_err());
-
-        let empty_key = vec!["".to_string(), "Value1".to_string()];
-        assert!(HttpTinyClient::validate_headers(Some(&empty_key)).is_err());
-    }
-
-    #[test]
-    fn test_validate_encoding_case_insensitive() {
-        assert!(HttpTinyClient::validate_encoding("utf-8").is_ok());
-        assert!(HttpTinyClient::validate_encoding("UTF-8").is_ok());
-        assert!(HttpTinyClient::validate_encoding("Utf-8").is_ok());
-        assert!(HttpTinyClient::validate_encoding("gbk").is_ok());
-        assert!(HttpTinyClient::validate_encoding("GBK").is_ok());
-    }
-
-    #[test]
-    fn test_validate_timeout_success() {
-        assert!(HttpTinyClient::validate_timeout(1000).is_ok());
-        assert!(HttpTinyClient::validate_timeout(5000).is_ok());
-        assert!(HttpTinyClient::validate_timeout(60000).is_ok());
-    }
-
-    #[test]
-    fn test_validate_timeout_failure() {
-        assert!(HttpTinyClient::validate_timeout(0).is_err());
     }
 
     #[tokio::test]

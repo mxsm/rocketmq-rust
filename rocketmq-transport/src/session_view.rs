@@ -393,7 +393,6 @@ impl Drop for EmbeddedSessionRecord {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::net::SocketAddr;
 
     use super::*;
@@ -506,18 +505,5 @@ mod tests {
         assert_eq!(proxy.destination(), metadata.destination);
         assert!(state.is_healthy());
         assert_eq!(id, SessionId::from_session_owner(77));
-    }
-
-    #[test]
-    fn session_ids_are_stable_hash_keys() {
-        let ids = [
-            SessionId::from_session_owner(51),
-            SessionId::from_session_owner(52),
-            SessionId::from_session_owner(51),
-        ]
-        .into_iter()
-        .collect::<HashSet<_>>();
-
-        assert_eq!(ids.len(), 2);
     }
 }

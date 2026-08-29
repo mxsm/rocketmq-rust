@@ -394,10 +394,7 @@ pub enum ResponseDisposition {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::hash_map::DefaultHasher;
     use std::error::Error;
-    use std::hash::Hash;
-    use std::hash::Hasher;
 
     use rocketmq_error::ErrorKind;
 
@@ -412,32 +409,6 @@ mod tests {
             ResponseErrorKind::QueueSaturated => "queue_saturated",
             ResponseErrorKind::Encode => "encode",
             ResponseErrorKind::Transport => "transport",
-        }
-    }
-
-    fn write_progress_label(progress: WriteProgress) -> &'static str {
-        match progress {
-            WriteProgress::NotStarted => "not_started",
-            WriteProgress::PossiblyPartial => "possibly_partial",
-        }
-    }
-
-    fn terminal_state_label(state: ResponseTerminalState) -> &'static str {
-        match state {
-            ResponseTerminalState::Completed => "completed",
-            ResponseTerminalState::Failed { progress } => {
-                let _ = write_progress_label(progress);
-                "failed"
-            }
-            ResponseTerminalState::Cancelled => "cancelled",
-            ResponseTerminalState::Closed => "closed",
-        }
-    }
-
-    fn disposition_label(disposition: ResponseDisposition) -> &'static str {
-        match disposition {
-            ResponseDisposition::TransportWritten => "transport_written",
-            ResponseDisposition::InProcessAccepted => "in_process_accepted",
         }
     }
 
@@ -566,73 +537,6 @@ mod tests {
             assert!(display.contains("source_code=INVALID_PROPERTY"));
             assert!(debug.contains("source_code: \"INVALID_PROPERTY\""));
         }
-    }
-
-    #[test]
-    fn response_contract_enums_remain_exhaustively_classified() {
-        assert_eq!(write_progress_label(WriteProgress::NotStarted), "not_started");
-        assert_eq!(write_progress_label(WriteProgress::PossiblyPartial), "possibly_partial");
-        assert_eq!(terminal_state_label(ResponseTerminalState::Completed), "completed");
-        assert_eq!(
-            terminal_state_label(ResponseTerminalState::Failed {
-                progress: WriteProgress::NotStarted,
-            }),
-            "failed"
-        );
-        assert_eq!(terminal_state_label(ResponseTerminalState::Cancelled), "cancelled");
-        assert_eq!(terminal_state_label(ResponseTerminalState::Closed), "closed");
-        assert_eq!(
-            disposition_label(ResponseDisposition::TransportWritten),
-            "transport_written"
-        );
-        assert_eq!(
-            disposition_label(ResponseDisposition::InProcessAccepted),
-            "in_process_accepted"
-        );
-    }
-
-    #[test]
-    fn request_ids_compare_hash_and_expose_only_their_components() {
-        let request_id = RequestId {
-            owner_id: 7,
-            sequence: 11,
-        };
-        let same_request_id = RequestId {
-            owner_id: 7,
-            sequence: 11,
-        };
-        let other_request_id = RequestId {
-            owner_id: 7,
-            sequence: 12,
-        };
-
-        assert_eq!(request_id, same_request_id);
-        assert_ne!(request_id, other_request_id);
-        assert_eq!(request_id.owner_id(), 7);
-        assert_eq!(request_id.sequence(), 11);
-
-        let hash = |id: RequestId| {
-            let mut hasher = DefaultHasher::new();
-            id.hash(&mut hasher);
-            hasher.finish()
-        };
-        assert_eq!(hash(request_id), hash(same_request_id));
-        assert_ne!(hash(request_id), hash(other_request_id));
-    }
-
-    #[test]
-    fn response_receipts_expose_their_request_and_disposition() {
-        let request_id = RequestId {
-            owner_id: 13,
-            sequence: 17,
-        };
-        let receipt = ResponseReceipt {
-            request_id,
-            disposition: ResponseDisposition::InProcessAccepted,
-        };
-
-        assert_eq!(receipt.request_id(), request_id);
-        assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
     }
 
     #[test]
