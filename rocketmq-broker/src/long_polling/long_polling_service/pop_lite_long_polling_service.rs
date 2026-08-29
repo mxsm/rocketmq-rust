@@ -591,19 +591,40 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             return false;
         };
         let Some(wake_claim) = self.begin_wake(&pop_request, route) else {
-            if pop_request.legacy_session_closed() {
-                pop_request.release_resource_permit();
-                pop_request.release_legacy_wait();
-            } else {
-                self.polling_map
-                    .entry(client_id.clone())
-                    .or_default()
-                    .insert(pop_request);
-                restore_published_polling_count(&self.total_polling_num);
-            }
+            self.requeue_claimed_request(client_id, pop_request);
             return false;
         };
         self.wake_up_with_claim(pop_request, Some(claim), wake_claim)
+    }
+
+    fn requeue_claimed_request(&self, client_id: &CheetahString, request: Arc<PopRequest>) {
+        // Restore accounting before publishing the node, matching fresh
+        // registration. A concurrent cleanup can then remove the node without
+        // observing an uncounted waiter.
+        restore_published_polling_count(&self.total_polling_num);
+        self.polling_map
+            .entry(client_id.clone())
+            .or_default()
+            .insert(Arc::clone(&request));
+        let _ = self.retract_terminal_requeue(client_id, &request);
+    }
+
+    fn retract_terminal_requeue(&self, client_id: &CheetahString, request: &Arc<PopRequest>) -> bool {
+        if !request.legacy_session_closed() {
+            return false;
+        }
+        let removed = self
+            .polling_map
+            .get(client_id)
+            .is_some_and(|queue| queue.remove(request).is_some());
+        // Cleanup and terminal reread race to remove the exact Arc. Only the
+        // winner owns count, retained-budget, and handoff release.
+        if removed {
+            release_published_polling_count(&self.total_polling_num);
+            request.release_resource_permit();
+            request.release_legacy_wait();
+        }
+        removed
     }
 
     fn wake_up(&self, pop_request: Arc<PopRequest>) -> bool {
@@ -849,12 +870,8 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             };
             if let Some(wake) = self.begin_wake(&first, route) {
                 self.wake_up_with_claim(first, None, wake);
-            } else if !first.legacy_session_closed() {
-                self.polling_map.entry(client_id.clone()).or_default().insert(first);
-                restore_published_polling_count(&self.total_polling_num);
             } else {
-                first.release_resource_permit();
-                first.release_legacy_wait();
+                self.requeue_claimed_request(client_id, first);
             }
         }
     }
@@ -1128,6 +1145,62 @@ mod tests {
             .read(&mut byte)
             .expect_err("cancelled PopLite session wrote no response bytes");
         assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    #[tokio::test]
+    async fn pop_lite_terminal_requeue_races_have_one_release_owner() {
+        let processor = Arc::new(ImmediateResponseProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = session_test_service(&processor);
+        let handoff = Arc::new(DeferredGenerationHandoff::new());
+        service
+            .install_handoff(Arc::clone(&handoff))
+            .expect("install PopLite terminal requeue coordinator");
+        let client_id = CheetahString::from_static_str("pop-lite-terminal-requeue");
+
+        let (missed_session, missed_group, missed_context, _missed_peer) =
+            session_execution_test_context(8_411, None).await;
+        let registered = register_session_waiter(&service, missed_context, &client_id);
+        let (request, route) = service
+            .claim_request(&client_id, Some(&registered))
+            .expect("claim PopLite waiter before terminal cleanup misses the table");
+        missed_session.close();
+        service.requeue_claimed_request(&client_id, request);
+        drop(route);
+        assert_eq!(service.get_polling_num(&client_id), 0);
+        assert!(handoff.zero_report().is_zero());
+        let report = missed_group
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+
+        let (winning_session, winning_group, winning_context, _winning_peer) =
+            session_execution_test_context(8_412, None).await;
+        let registered = register_session_waiter(&service, winning_context, &client_id);
+        let (request, route) = service
+            .claim_request(&client_id, Some(&registered))
+            .expect("claim PopLite waiter before terminal publication races the reread");
+        restore_published_polling_count(&service.total_polling_num);
+        service
+            .polling_map
+            .entry(client_id.clone())
+            .or_default()
+            .insert(Arc::clone(&request));
+        winning_session.close();
+        assert!(
+            !service.retract_terminal_requeue(&client_id, &request),
+            "session cleanup already owns the exact published PopLite waiter"
+        );
+        drop(route);
+        assert_eq!(service.get_polling_num(&client_id), 0);
+        assert!(handoff.zero_report().is_zero());
+        let report = winning_group
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+
+        service.shutdown().await;
     }
 
     #[tokio::test]

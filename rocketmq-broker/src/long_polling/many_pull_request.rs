@@ -39,6 +39,25 @@ impl ManyPullRequest {
         list.extend(many);
     }
 
+    pub(crate) fn add_and_drain_with_claim<T>(
+        &self,
+        many: Vec<PullRequest>,
+        mut acquire: impl FnMut(&PullRequest) -> Option<T>,
+    ) -> Vec<(PullRequest, T)> {
+        let mut list = self.pull_request_list.lock();
+        list.extend(many);
+        let requests = std::mem::take(&mut *list);
+        let mut claimed = Vec::with_capacity(requests.len());
+        for request in requests {
+            if let Some(claim) = acquire(&request) {
+                claimed.push((request, claim));
+            } else {
+                list.push(request);
+            }
+        }
+        claimed
+    }
+
     pub fn clone_list_and_clear(&self) -> Option<Vec<PullRequest>> {
         let mut list = self.pull_request_list.lock();
         if !list.is_empty() {

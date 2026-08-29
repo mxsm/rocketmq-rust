@@ -41,12 +41,13 @@ impl BrokerComposition {
         state: Box<BrokerRuntimeState<BrokerMessageStore>>,
         escape_bridge_owner: Arc<EscapeBridge<BrokerMessageStore>>,
         consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
+        v2_session_registry: Arc<V2SessionRegistry>,
         configuration_error: Option<String>,
         #[cfg(feature = "rocksdb_store")] rocksdb_config_managers: Option<BrokerRocksDbConfigManagers>,
     ) -> Self {
         Self {
             state,
-            request_pipeline: BrokerRequestPipeline::new(consumer_ids_change_listener),
+            request_pipeline: BrokerRequestPipeline::new(consumer_ids_change_listener, v2_session_registry),
             data_plane: BrokerDataPlane::new(escape_bridge_owner),
             control_plane: BrokerControlPlane::new(),
             metadata: BrokerMetadata::new(
@@ -1464,12 +1465,18 @@ impl BrokerRuntime {
                 .clone()
                 .expect("BrokerRuntime always owns an injected service context"),
         )));
-        state.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(
+        let client_housekeeping_service = Arc::new(ClientHousekeepingService::new(
             state.producer_manager.connection_housekeeping(),
             state.consumer_manager.connection_housekeeping(),
             stats_manager,
             state.broker_service_context(),
-        )));
+        ));
+        let v2_session_lifecycle_listener: Arc<dyn rocketmq_transport::api::v2::V2SessionLifecycleListener> =
+            client_housekeeping_service.clone();
+        let v2_session_registry = Arc::new(V2SessionRegistry::with_lifecycle_listener(
+            v2_session_lifecycle_listener,
+        ));
+        state.client_housekeeping_service = Some(client_housekeeping_service);
         state.slave_synchronize = Some(Arc::new(SlaveSynchronize::new_with_master_addr(
             SlaveSynchronizeContext::new(
                 SlaveSynchronizePolicy::from_config(state.get_broker_addr().clone(), &state.message_store_config()),
@@ -1498,6 +1505,7 @@ impl BrokerRuntime {
                 state,
                 escape_bridge,
                 consumer_ids_change_listener,
+                v2_session_registry,
                 None,
                 #[cfg(feature = "rocksdb_store")]
                 rocksdb_config_managers,

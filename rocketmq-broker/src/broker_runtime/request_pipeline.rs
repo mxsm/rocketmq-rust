@@ -22,8 +22,8 @@ pub(super) struct BrokerRequestPipeline {
     pub(super) proxy_request_processor: Option<DefaultServerProcessor>,
     pub(super) authorized_dispatcher:
         Option<Arc<rocketmq_transport::api::v1::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
-    pub(super) prepared_v2_dispatcher:
-        Option<Arc<rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2<DefaultServerProcessorV2>>>,
+    canonical_v2_dispatcher: CanonicalV2DispatcherSlot<DefaultBrokerDispatcherV2>,
+    v2_session_registry: Arc<V2SessionRegistry>,
     pub(super) auth_runtime: Option<Arc<AuthRuntime>>,
     pub(super) maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
     pub(super) auth_admin_service: Option<Arc<AuthAdminService>>,
@@ -31,17 +31,89 @@ pub(super) struct BrokerRequestPipeline {
     pub(super) processor_wiring_complete: bool,
     #[cfg(test)]
     pub(super) pull_message_processor_for_test: Option<Arc<PullMessageProcessor<BrokerMessageStore>>>,
+    #[cfg(test)]
+    v2_pre_publish_checkpoint: Option<BrokerV2PrePublishCheckpoint>,
+    #[cfg(test)]
+    v2_dispatcher_identity_snapshot: Option<BrokerV2DispatcherIdentitySnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CanonicalV2DispatcherPublishError {
+    AlreadyPublished,
+}
+
+struct CanonicalV2DispatcherSlot<T> {
+    value: OnceLock<Arc<T>>,
+}
+
+impl<T> CanonicalV2DispatcherSlot<T> {
+    const fn new() -> Self {
+        Self { value: OnceLock::new() }
+    }
+
+    fn publish(&self, value: Arc<T>) -> Result<(), CanonicalV2DispatcherPublishError> {
+        self.value
+            .set(value)
+            .map_err(|_| CanonicalV2DispatcherPublishError::AlreadyPublished)
+    }
+
+    fn get(&self) -> Option<Arc<T>> {
+        self.value.get().cloned()
+    }
+}
+
+#[cfg(test)]
+mod canonical_v2_dispatcher_slot_tests {
+    use super::*;
+
+    #[test]
+    fn publish_is_single_assignment_and_rejects_replacement() {
+        let slot = CanonicalV2DispatcherSlot::new();
+        let first = Arc::new(1_u8);
+        let replacement = Arc::new(2_u8);
+
+        assert_eq!(slot.publish(Arc::clone(&first)), Ok(()));
+        assert!(Arc::ptr_eq(&slot.get().expect("published dispatcher"), &first));
+        assert_eq!(
+            slot.publish(replacement),
+            Err(CanonicalV2DispatcherPublishError::AlreadyPublished)
+        );
+        assert!(Arc::ptr_eq(&slot.get().expect("original dispatcher remains"), &first));
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BrokerV2DispatcherIdentitySnapshot {
+    pub(crate) normal_is_canonical: bool,
+    pub(crate) fast_is_canonical: bool,
+    pub(crate) embedded_proxy_is_canonical: bool,
+}
+
+#[cfg(test)]
+pub(crate) struct BrokerV2PrePublishSnapshot {
+    pub(crate) dispatcher: Arc<DefaultBrokerDispatcherV2>,
+    pub(crate) pop_lite_processor: Arc<PopLiteMessageProcessor<BrokerMessageStore>>,
+    pub(crate) handoff: Arc<crate::deferred_generation_handoff::DeferredGenerationHandoff>,
+}
+
+#[cfg(test)]
+struct BrokerV2PrePublishCheckpoint {
+    reached: oneshot::Sender<BrokerV2PrePublishSnapshot>,
+    release: oneshot::Receiver<()>,
 }
 
 impl BrokerRequestPipeline {
     pub(super) fn new(
         consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
+        v2_session_registry: Arc<V2SessionRegistry>,
     ) -> Self {
         Self {
             admission_controller: None,
             proxy_request_processor: None,
             authorized_dispatcher: None,
-            prepared_v2_dispatcher: None,
+            canonical_v2_dispatcher: CanonicalV2DispatcherSlot::new(),
+            v2_session_registry,
             auth_runtime: None,
             maintenance_authorizer: None,
             auth_admin_service: None,
@@ -49,7 +121,58 @@ impl BrokerRequestPipeline {
             processor_wiring_complete: false,
             #[cfg(test)]
             pull_message_processor_for_test: None,
+            #[cfg(test)]
+            v2_pre_publish_checkpoint: None,
+            #[cfg(test)]
+            v2_dispatcher_identity_snapshot: None,
         }
+    }
+
+    pub(super) fn publish_canonical_v2_dispatcher(
+        &self,
+        dispatcher: Arc<DefaultBrokerDispatcherV2>,
+    ) -> Result<(), CanonicalV2DispatcherPublishError> {
+        self.canonical_v2_dispatcher.publish(dispatcher)
+    }
+
+    pub(super) fn canonical_v2_dispatcher(&self) -> Option<Arc<DefaultBrokerDispatcherV2>> {
+        self.canonical_v2_dispatcher.get()
+    }
+
+    pub(super) fn v2_session_registry(&self) -> Arc<V2SessionRegistry> {
+        Arc::clone(&self.v2_session_registry)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn reach_v2_pre_publish_checkpoint(
+        &mut self,
+        dispatcher: Arc<DefaultBrokerDispatcherV2>,
+        pop_lite_processor: Arc<PopLiteMessageProcessor<BrokerMessageStore>>,
+        handoff: Arc<crate::deferred_generation_handoff::DeferredGenerationHandoff>,
+    ) {
+        if let Some(checkpoint) = self.v2_pre_publish_checkpoint.take() {
+            let _ = checkpoint.reached.send(BrokerV2PrePublishSnapshot {
+                dispatcher,
+                pop_lite_processor,
+                handoff,
+            });
+            let _ = checkpoint.release.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_v2_dispatcher_identity(
+        &mut self,
+        canonical: &Arc<DefaultBrokerDispatcherV2>,
+        normal: &Arc<DefaultBrokerDispatcherV2>,
+        fast: &Arc<DefaultBrokerDispatcherV2>,
+        embedded_proxy: &Arc<DefaultBrokerDispatcherV2>,
+    ) {
+        self.v2_dispatcher_identity_snapshot = Some(BrokerV2DispatcherIdentitySnapshot {
+            normal_is_canonical: Arc::ptr_eq(canonical, normal),
+            fast_is_canonical: Arc::ptr_eq(canonical, fast),
+            embedded_proxy_is_canonical: Arc::ptr_eq(canonical, embedded_proxy),
+        });
     }
 
     pub(super) fn install_admission_controller(
@@ -875,9 +998,29 @@ impl BrokerRuntime {
         self.composition.request_pipeline.authorized_dispatcher.clone()
     }
 
-    pub(crate) fn prepared_v2_dispatcher(
-        &self,
-    ) -> Option<Arc<rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2<DefaultServerProcessorV2>>> {
-        self.composition.request_pipeline.prepared_v2_dispatcher.clone()
+    pub(crate) fn canonical_v2_dispatcher(&self) -> Option<Arc<DefaultBrokerDispatcherV2>> {
+        self.composition.request_pipeline.canonical_v2_dispatcher()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_v2_pre_publish_checkpoint_for_test(
+        &mut self,
+    ) -> (oneshot::Receiver<BrokerV2PrePublishSnapshot>, oneshot::Sender<()>) {
+        assert!(
+            self.composition.request_pipeline.v2_pre_publish_checkpoint.is_none(),
+            "Broker V2 pre-publication checkpoint may only be installed once"
+        );
+        let (reached, reached_rx) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        self.composition.request_pipeline.v2_pre_publish_checkpoint = Some(BrokerV2PrePublishCheckpoint {
+            reached,
+            release: release_rx,
+        });
+        (reached_rx, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn v2_dispatcher_identity_snapshot_for_test(&self) -> Option<BrokerV2DispatcherIdentitySnapshot> {
+        self.composition.request_pipeline.v2_dispatcher_identity_snapshot
     }
 }

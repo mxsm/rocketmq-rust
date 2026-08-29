@@ -328,7 +328,7 @@ impl ProxyBrokerFacade {
         request.make_custom_header_to_net();
         let dispatcher = self
             .runtime
-            .prepared_v2_dispatcher()
+            .canonical_v2_dispatcher()
             .ok_or_else(embedded_broker_v2_request_processor_not_ready)?;
         dispatcher
             .dispatch_embedded_v2_wait_response(
