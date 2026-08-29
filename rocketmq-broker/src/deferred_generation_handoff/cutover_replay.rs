@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, MutexGuard};
 
 use super::state::DeferredGenerationHandoffState;
-use super::{DeferredGeneration, DeferredGenerationTarget, DeferredGenerationTargetSnapshot};
+use super::{DeferredGenerationTarget, DeferredGenerationTargetSnapshot};
 
 /// Issued after an explicit Legacy → New transition.
 #[derive(Debug)]
@@ -103,6 +105,7 @@ impl<F> DeferredGenerationV2Publisher<F> {
 pub(crate) struct DeferredGenerationCutover<'a> {
     pub(super) state: MutexGuard<'a, DeferredGenerationHandoffState>,
     pub(super) stage: DeferredGenerationCutoverStage,
+    pub(super) transition_scan_ready: &'a AtomicBool,
 }
 
 impl DeferredGenerationCutover<'_> {
@@ -158,8 +161,9 @@ impl DeferredGenerationCutover<'_> {
         if self.stage != DeferredGenerationCutoverStage::V2AggregatePublished {
             return Err(DeferredGenerationCutoverError::InvalidStage);
         }
-        self.state.default_generation = DeferredGeneration::New;
+        self.state.publish_default_new();
         self.stage = DeferredGenerationCutoverStage::DefaultNewPublished;
+        self.transition_scan_ready.store(true, Ordering::Release);
         Ok(())
     }
 }

@@ -86,6 +86,7 @@ pub(crate) mod reply_message_processor;
 mod request_ordering;
 pub(crate) mod response_plan;
 pub(crate) mod send_message_processor;
+pub(crate) mod v2;
 #[cfg(test)]
 pub(crate) mod v2_leaf_test_support;
 

@@ -171,6 +171,19 @@ where
     MS: BrokerWriteStore + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<TM, MS> EndTransactionProcessor<TM, MS>
+where
+    TM: TransactionalMessageService,
+    MS: BrokerWriteStore,
+{
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = match self.process_command(request.command_mut()).await {
@@ -207,13 +220,13 @@ where
         &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
+        let processor = self.clone();
         processor.process_command(request).await
     }
 
     /// V2 leaf business contract; transaction completion does not need a transport handle.
     async fn process_command(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
@@ -252,7 +265,7 @@ where
     MS: BrokerWriteStore,
 {
     async fn process_command_inner(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<EndTransactionRequestHeader>()?;
@@ -520,7 +533,7 @@ where
         command
     }
 
-    async fn send_final_message(&mut self, msg_inner: MessageExtBrokerInner) -> RemotingCommand {
+    async fn send_final_message(&self, msg_inner: MessageExtBrokerInner) -> RemotingCommand {
         // Save topic before moving msg_inner
         let topic = msg_inner.get_topic().clone();
 

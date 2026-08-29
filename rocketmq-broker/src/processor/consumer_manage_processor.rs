@@ -77,6 +77,15 @@ where
     MS: BrokerStorePort + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<MS: BrokerStorePort> ConsumerManageProcessor<MS> {
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let request_source = trusted_request_source(request)?;
         let result = self.process_command(request_source, request.command_mut()).await;
@@ -112,7 +121,7 @@ where
         request_source: CheetahString,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
+        let processor = self.clone();
         processor.process_command(request_source, request).await
     }
 }
@@ -139,7 +148,7 @@ where
     MS: BrokerStorePort,
 {
     async fn process_command(
-        &mut self,
+        &self,
         request_source: CheetahString,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -165,7 +174,7 @@ where
     }
 
     pub async fn get_consumer_list_by_group(
-        &mut self,
+        &self,
         request_source: &str,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -206,7 +215,7 @@ where
     }
 
     async fn update_consumer_offset(
-        &mut self,
+        &self,
         request_source: CheetahString,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -274,7 +283,7 @@ where
     }
 
     async fn query_consumer_offset(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()?;
@@ -335,7 +344,7 @@ where
     /// This handles the case where the consumer offset needs to be committed to a different broker
     /// based on the static topic queue mapping.
     async fn rewrite_request_for_static_topic_for_consume_offset(
-        &mut self,
+        &self,
         request_header: &mut UpdateConsumerOffsetRequestHeader,
         mapping_context: &mut TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
@@ -411,7 +420,7 @@ where
     }
 
     async fn rewrite_request_for_static_topic(
-        &mut self,
+        &self,
         request_header: &mut QueryConsumerOffsetRequestHeader,
         mapping_context: &mut TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
@@ -535,7 +544,7 @@ where
     }
 
     fn rewrite_response_for_static_topic(
-        &mut self,
+        &self,
         request_header: &QueryConsumerOffsetRequestHeader,
         response_header: &mut QueryConsumerOffsetResponseHeader,
         mapping_context: &TopicQueueMappingContext,

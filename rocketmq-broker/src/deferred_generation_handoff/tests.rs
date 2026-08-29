@@ -298,6 +298,65 @@ fn cutover_seals_then_explicitly_transitions_drained_legacy_target() {
 }
 
 #[test]
+fn transition_scan_is_o1_closed_before_publish_and_bounded_after_publish() {
+    let handoff = DeferredGenerationHandoff::new();
+    let target = pop_target();
+    let wait = enroll(&handoff, target.clone());
+    let probes = AtomicUsize::new(0);
+
+    assert!(!handoff.transition_scan_ready_for_test());
+    assert!(handoff.take_transition_candidates(1).is_empty());
+    assert_eq!(handoff.transition_candidate_scans_for_test(), 0);
+    assert_eq!(probes.load(Ordering::Relaxed), 0);
+
+    publish_new(&handoff);
+    drop(wait);
+    assert!(handoff.transition_scan_ready_for_test());
+    let candidates = handoff.take_transition_candidates(1);
+    assert_eq!(handoff.transition_candidate_scans_for_test(), 1);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].target, target);
+    assert_eq!(candidates[0].kind, DeferredGenerationTransitionKind::LegacyTarget);
+    let replay = handoff
+        .try_transition_target_to_new(target, |_| {
+            probes.fetch_add(1, Ordering::Relaxed);
+            false
+        })
+        .expect("published candidate probes then transitions");
+    assert_eq!(probes.load(Ordering::Relaxed), 1);
+    replay.complete_after_replay_accepted();
+    assert!(handoff.zero_report().is_zero());
+}
+
+#[test]
+fn transition_candidates_requeue_at_the_tail_without_fixed_prefix_starvation() {
+    let handoff = DeferredGenerationHandoff::new();
+    let targets = [
+        DeferredGenerationTarget::pull(string("pull-a"), 0),
+        DeferredGenerationTarget::pull(string("pull-b"), 0),
+        DeferredGenerationTarget::pull(string("pull-c"), 0),
+    ];
+    let waits = targets
+        .iter()
+        .cloned()
+        .map(|target| enroll(&handoff, target))
+        .collect::<Vec<_>>();
+    publish_new(&handoff);
+    drop(waits);
+
+    let first = handoff
+        .take_transition_candidates(1)
+        .pop()
+        .expect("first bounded candidate");
+    handoff.requeue_transition_candidate(&first.target);
+    let second = handoff
+        .take_transition_candidates(1)
+        .pop()
+        .expect("next bounded candidate");
+    assert_ne!(second.target, first.target, "requeued work moves behind its peers");
+}
+
+#[test]
 fn transition_rejects_absent_and_explicitly_new_targets() {
     let handoff = DeferredGenerationHandoff::new();
     publish_new(&handoff);
@@ -351,17 +410,34 @@ fn dropped_replay_token_stays_abandoned_until_explicit_retry_completion() {
     assert_eq!(snapshot.tracked_targets, 1);
     assert!(!handoff.zero_report().is_zero());
 
+    let abandoned = handoff
+        .take_transition_candidates(1)
+        .pop()
+        .expect("abandoned replay is returned to the transition queue");
+    assert_eq!(abandoned.target, target);
+    assert_eq!(abandoned.kind, DeferredGenerationTransitionKind::AbandonedReplay);
     let retry = handoff
-        .retry_abandoned_replay(target)
+        .retry_abandoned_replay(abandoned.target)
         .expect("abandoned replay remains explicitly retryable");
     assert_eq!(handoff.snapshot().replay_tokens, 1);
     assert_eq!(handoff.snapshot().abandoned_replays, 0);
+
+    drop(retry);
+    let retried = handoff
+        .take_transition_candidates(1)
+        .pop()
+        .expect("a failed replay is requeued at the tail");
+    assert_eq!(retried.target, target);
+    assert_eq!(retried.kind, DeferredGenerationTransitionKind::AbandonedReplay);
+    let retry = handoff
+        .retry_abandoned_replay(retried.target)
+        .expect("requeued replay remains retryable");
     retry.complete_after_replay_accepted();
     assert!(handoff.zero_report().is_zero());
 }
 
 #[test]
-fn shutdown_prunes_quiescent_legacy_marker_but_not_abandoned_replay() {
+fn shutdown_prunes_quiescent_legacy_marker_and_abandoned_replay() {
     let handoff = DeferredGenerationHandoff::new();
     let legacy = pop_target();
     let wait = enroll(&handoff, legacy.clone());
@@ -388,9 +464,28 @@ fn shutdown_prunes_quiescent_legacy_marker_but_not_abandoned_replay() {
     );
     assert_eq!(handoff.seal(), DeferredGenerationSeal::Sealed);
     let snapshot = handoff.snapshot();
-    assert_eq!(snapshot.abandoned_replays, 1);
-    assert_eq!(snapshot.tracked_targets, 1);
-    assert!(!handoff.zero_report().is_zero());
+    assert_eq!(snapshot.abandoned_replays, 0);
+    assert_eq!(snapshot.tracked_targets, 0);
+    assert!(handoff.zero_report().is_zero());
+}
+
+#[test]
+fn replay_token_dropped_after_shutdown_does_not_create_abandoned_work() {
+    let handoff = DeferredGenerationHandoff::new();
+    let target = pop_target();
+    let wait = enroll(&handoff, target.clone());
+    publish_new(&handoff);
+    drop(wait);
+    let replay = handoff
+        .try_transition_target_to_new(target, |_| false)
+        .expect("drained target transition");
+
+    assert_eq!(handoff.seal(), DeferredGenerationSeal::Sealed);
+    assert_eq!(handoff.snapshot().replay_tokens, 1);
+    drop(replay);
+
+    assert!(handoff.take_transition_candidates(1).is_empty());
+    assert!(handoff.zero_report().is_zero());
 }
 
 #[test]
@@ -421,6 +516,9 @@ fn interrupted_cutover_resumes_from_the_last_published_stage() {
         let mut transaction = handoff.cutover_transaction().expect("cutover transaction");
         transaction.seal_legacy_acceptance().expect("seal legacy acceptance");
     }
+    assert!(!handoff.transition_scan_ready_for_test());
+    assert!(handoff.take_transition_candidates(1).is_empty());
+    assert_eq!(handoff.transition_candidate_scans_for_test(), 0);
     {
         let mut transaction = handoff.cutover_transaction().expect("resumed transaction");
         transaction
@@ -430,6 +528,9 @@ fn interrupted_cutover_resumes_from_the_last_published_stage() {
             .publish_v2_aggregate(DeferredGenerationV2Publisher::nonblocking_atomic(|| Ok::<_, ()>(())))
             .expect("publish V2 aggregate");
     }
+    assert!(!handoff.transition_scan_ready_for_test());
+    assert!(handoff.take_transition_candidates(1).is_empty());
+    assert_eq!(handoff.transition_candidate_scans_for_test(), 0);
     let mut transaction = handoff.cutover_transaction().expect("second resumed transaction");
     transaction
         .publish_v2_aggregate(DeferredGenerationV2Publisher::nonblocking_atomic(|| Ok::<_, ()>(())))
@@ -538,6 +639,9 @@ fn shutdown_and_producer_routing_serialize_after_controlled_publish_commit() {
 
     shutdown_started_rx.recv().expect("shutdown started");
     route_started_rx.recv().expect("producer route started");
+    while handoff.seal_gate_attempts_for_test() == 0 {
+        std::thread::yield_now();
+    }
     assert!(
         shutdown_done_rx.try_recv().is_err(),
         "shutdown must wait for publish commit"
@@ -563,6 +667,10 @@ fn shutdown_and_producer_routing_serialize_after_controlled_publish_commit() {
     assert!(snapshot.sealed);
     assert!(snapshot.v2_aggregate_published);
     assert_eq!(snapshot.default_generation, DeferredGeneration::New);
+    assert!(!handoff.transition_scan_ready_for_test());
+    let scans = handoff.transition_candidate_scans_for_test();
+    assert!(handoff.take_transition_candidates(1).is_empty());
+    assert_eq!(handoff.transition_candidate_scans_for_test(), scans);
 }
 
 #[test]

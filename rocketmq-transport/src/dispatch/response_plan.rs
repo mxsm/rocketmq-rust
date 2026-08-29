@@ -167,6 +167,21 @@ pub struct ResponsePlan {
 }
 
 impl ResponsePlan {
+    /// Creates an empty response plan from a response code.
+    ///
+    /// Unlike [`Self::command`], this constructor is infallible because it
+    /// creates the response head itself: the head is response-typed, is not
+    /// one-way, and has no attached body.
+    #[must_use]
+    pub fn empty_response(code: i32) -> Self {
+        Self::new(
+            RemotingCommand::create_response_command_with_code(code),
+            ResponseBody::Empty,
+            0,
+            0,
+        )
+    }
+
     /// Creates a response with an empty body.
     ///
     /// # Errors
@@ -498,6 +513,9 @@ mod tests {
 
     #[test]
     fn constructors_keep_exactly_one_normalized_body_owner() {
+        let infallible_empty = ResponsePlan::empty_response(7);
+        assert_metadata(&infallible_empty, ResponseBodyKind::Empty, 0, 0);
+
         let empty = ResponsePlan::command(response_head()).expect("valid empty response");
         assert_metadata(&empty, ResponseBodyKind::Empty, 0, 0);
 

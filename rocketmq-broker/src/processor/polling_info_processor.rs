@@ -101,6 +101,15 @@ impl Clone for PollingInfoProcessor {
 
 impl RequestProcessorV2 for PollingInfoProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl PollingInfoProcessor {
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
@@ -120,13 +129,13 @@ impl PollingInfoProcessor {
         peer_label: String,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
+        let processor = self.clone();
         processor.process_command(&peer_label, request).await
     }
 
     /// V2 leaf business contract; the trusted peer label is diagnostic metadata only.
     async fn process_command(
-        &mut self,
+        &self,
         peer_label: &str,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

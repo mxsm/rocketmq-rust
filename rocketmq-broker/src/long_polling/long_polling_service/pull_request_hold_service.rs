@@ -289,6 +289,17 @@ where
         }
     }
 
+    pub(crate) fn legacy_target_occupied(&self, target: &DeferredGenerationTarget) -> bool {
+        let DeferredGenerationTarget::Pull { topic, queue_id } = target else {
+            return false;
+        };
+        let key = build_key(topic.as_str(), *queue_id);
+        self.pull_request_table
+            .read()
+            .get(&key)
+            .is_some_and(|requests| !requests.is_empty())
+    }
+
     pub(crate) fn install_handoff(
         &self,
         handoff: Arc<DeferredGenerationHandoff>,
@@ -1100,12 +1111,18 @@ mod tests {
             assert!(service.suspend_pull_request(topic.as_str(), 0, request));
         }
         let key = build_key(topic.as_str(), 0);
+        let target = DeferredGenerationTarget::pull(topic.clone(), 0);
         assert_eq!(service.pull_request_table.read()[&key].len(), 2);
         assert_eq!(handoff.snapshot().occupancy, 2);
 
         first_session.close();
         assert_eq!(service.pull_request_table.read()[&key].len(), 1);
         assert_eq!(handoff.snapshot().occupancy, 1);
+        assert!(service.legacy_target_occupied(&target));
+        assert!(!service.legacy_target_occupied(&DeferredGenerationTarget::pull(
+            CheetahString::from_static_str("unrelated-pull-topic"),
+            0,
+        )));
 
         second_session.close();
         assert!(service.pull_request_table.read()[&key].is_empty());
@@ -1199,6 +1216,7 @@ mod tests {
 
         session.close();
         assert!(service.pull_request_table.read()[&key].is_empty());
+        assert!(!service.legacy_target_occupied(&target));
         let replay = handoff
             .try_transition_target_to_new(target, |_| false)
             .expect("empty Pull table may transition exactly once");

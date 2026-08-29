@@ -560,6 +560,10 @@ impl<MS> NotificationProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
+    pub(crate) fn pop_long_polling_service(&self) -> &Arc<PopLongPollingService<NotificationProcessor<MS>>> {
+        &self.pop_long_polling_service
+    }
+
     pub(crate) fn install_deferred_generation_handoff(
         &self,
         handoff: Arc<DeferredGenerationHandoff>,

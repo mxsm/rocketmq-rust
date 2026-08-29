@@ -42,6 +42,18 @@ pub(crate) enum DeferredGenerationTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeferredGenerationTransitionKind {
+    LegacyTarget,
+    AbandonedReplay,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DeferredGenerationTransitionCandidate {
+    pub(crate) target: DeferredGenerationTarget,
+    pub(crate) kind: DeferredGenerationTransitionKind,
+}
+
 impl DeferredGenerationTarget {
     #[must_use]
     pub(crate) const fn pop(topic: CheetahString, consumer_group: CheetahString, queue_id: i32) -> Self {

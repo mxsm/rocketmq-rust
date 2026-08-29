@@ -324,6 +324,15 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
 
 impl<MS: BrokerReadWriteStore + 'static> RequestProcessorV2 for LiteManagerProcessor<MS> {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = self.process_command(request.command_mut()).await;
