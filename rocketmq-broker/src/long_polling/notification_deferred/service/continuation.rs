@@ -177,9 +177,13 @@ impl PendingArrivalValue for NotificationPendingArrival {
         self.retained_bytes
     }
 
-    fn coalesce_refresh(&mut self) {
+    fn rewind_from_start(&mut self) {
         self.cursor.restart_for_refresh();
         self.remaining_conflicts = self.max_conflicts;
+    }
+
+    fn coalesce_refresh(&mut self) {
+        self.rewind_from_start();
     }
 }
 

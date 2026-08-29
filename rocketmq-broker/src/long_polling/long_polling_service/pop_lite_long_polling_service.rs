@@ -873,6 +873,15 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
         self.polling_map.get(key).map(|queue| queue.len() as i32).unwrap_or(0)
     }
 
+    pub(crate) fn legacy_target_occupied(&self, target: &DeferredGenerationTarget) -> bool {
+        let DeferredGenerationTarget::PopLite { client_id } = target else {
+            return false;
+        };
+        let _admission = self.polling_admission.lock();
+        self.polling_map.get(client_id).is_some_and(|queue| !queue.is_empty())
+            || self.waking_clients.contains_key(client_id)
+    }
+
     pub(crate) fn resource_snapshot(&self) -> PopLiteLongPollingResourceSnapshot {
         let oldest_request_age = self.polling_map.iter().fold(None::<Duration>, |oldest, queue| {
             queue.value().iter().fold(oldest, |oldest, request| {
@@ -1297,6 +1306,12 @@ mod tests {
         cutover.join().expect("cutover thread");
 
         let target = DeferredGenerationTarget::pop_lite(client_id.clone());
+        assert!(service.legacy_target_occupied(&target));
+        assert!(
+            !service.legacy_target_occupied(&DeferredGenerationTarget::pop_lite(CheetahString::from_static_str(
+                "unrelated-pop-lite-client"
+            ),))
+        );
         assert!(matches!(
             handoff.try_transition_target_to_new(target.clone(), |_| {
                 service
@@ -1308,6 +1323,7 @@ mod tests {
                 | Err(crate::deferred_generation_handoff::DeferredGenerationTargetTransitionError::LegacyTableOccupied)
         ));
         session.close();
+        assert!(!service.legacy_target_occupied(&target));
         let replay = handoff
             .try_transition_target_to_new(target, |_| {
                 service
@@ -1553,11 +1569,11 @@ mod tests {
             started: Notify::new(),
             release: Notify::new(),
         });
-        let tree = ResourceBudgetTree::new(
-            "pop-lite-handoff-single-flight",
-            BudgetLimit::new(4, 256 * 1024, FullPolicy::Reject),
-        )
-        .expect("root budget");
+        let mut runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let state = runtime.runtime_state_mut();
         let context = PopLiteLongPollingServiceContext::try_with_resource_budget(
             PopLiteLongPollingPolicy {
                 pop_polling_map_size: 2,
@@ -1565,8 +1581,8 @@ mod tests {
                 pop_polling_size: 4,
             },
             LiteEventDispatcher::default(),
-            None,
-            &tree.root(),
+            state.broker_service_context(),
+            state.resource_budget(),
         )
         .expect("PopLite request budget");
         let service = Arc::new(PopLiteLongPollingService::new(context, Arc::downgrade(&processor)));
@@ -1575,12 +1591,17 @@ mod tests {
             .install_handoff(Arc::clone(&handoff))
             .expect("install the Broker coordinator");
         PopLiteLongPollingService::start(&service).await;
+        assert!(service.is_running(), "Broker-owned PopLite service must start");
         let client_id = CheetahString::from_static_str("single-flight-client");
-        for _ in 0..2 {
+        let (first_session, first_session_group, first_context, _first_peer) =
+            session_execution_test_context(8_404, None).await;
+        let (second_session, second_session_group, second_context, _second_peer) =
+            session_execution_test_context(8_405, None).await;
+        for context in [first_context, second_context] {
             let mut command = RemotingCommand::create_remoting_command(0);
             assert_eq!(
                 service.polling(
-                    test_context().await,
+                    context,
                     &mut command,
                     &client_id,
                     i64::try_from(current_millis()).expect("test clock fits i64"),
@@ -1602,7 +1623,10 @@ mod tests {
 
         processor.release.notify_one();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while handoff.snapshot().continuations != 0 {
+            while handoff.snapshot().continuations != 0
+                || service.legacy_resource_snapshot().waking_clients != 0
+                || service.legacy_resource_snapshot().active_executions != 0
+            {
                 tokio::task::yield_now().await;
             }
         })
@@ -1612,14 +1636,27 @@ mod tests {
         processor.release.notify_one();
         assert!(service.wake_up_client(&client_id));
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !handoff.zero_report().is_zero() {
+            while !handoff.zero_report().is_zero()
+                || service.legacy_resource_snapshot().waking_clients != 0
+                || service.legacy_resource_snapshot().active_executions != 0
+            {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("second PopLite terminal releases final ownership");
         assert_eq!(processor.calls.load(Ordering::Acquire), 2);
+        first_session.close();
+        second_session.close();
         service.shutdown().await;
+        for session_group in [first_session_group, second_session_group] {
+            let report = session_group
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+                .await;
+            assert!(report.is_healthy(), "{}", report.to_json());
+        }
+        assert!(service.legacy_resource_snapshot().is_zero());
+        assert!(handoff.zero_report().is_zero());
     }
 
     fn assert_budget_released_and_readmits(

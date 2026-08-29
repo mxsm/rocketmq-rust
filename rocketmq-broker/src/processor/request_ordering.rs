@@ -16,6 +16,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::v1::RequestOrdering;
 use rocketmq_transport::api::v1::RequestOrderingKey;
+use rocketmq_transport::api::v2::IngressRequestView;
 
 const CLIENT_LIFECYCLE_KEY: u64 = 0x434c_4945_4e54;
 const SEND_NAMESPACE: u64 = 0x5345_4e44;
@@ -25,7 +26,18 @@ const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 pub(super) fn broker_request_ordering(request: &RemotingCommand) -> RequestOrdering {
-    match RequestCode::from(request.code()) {
+    broker_request_ordering_parts(request.code(), request.ext_fields())
+}
+
+pub(super) fn broker_request_ordering_v2(ingress: IngressRequestView<'_>) -> RequestOrdering {
+    broker_request_ordering_parts(ingress.original_identity().original_code(), ingress.ext_fields())
+}
+
+fn broker_request_ordering_parts(
+    request_code: i32,
+    ext_fields: Option<&std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>>,
+) -> RequestOrdering {
+    match RequestCode::from(request_code) {
         RequestCode::HeartBeat | RequestCode::UnregisterClient | RequestCode::CheckClientConfig => {
             RequestOrdering::Ordered(RequestOrderingKey::new(CLIENT_LIFECYCLE_KEY))
         }
@@ -34,17 +46,17 @@ pub(super) fn broker_request_ordering(request: &RemotingCommand) -> RequestOrder
         | RequestCode::SendBatchMessage
         | RequestCode::SendReplyMessage
         | RequestCode::SendReplyMessageV2 => ordered_by_fields(
-            request,
+            ext_fields,
             SEND_NAMESPACE,
             &[&["producerGroup", "a"], &["topic", "b"], &["queueId", "e"]],
         ),
         RequestCode::UpdateConsumerOffset | RequestCode::QueryConsumerOffset => ordered_by_fields(
-            request,
+            ext_fields,
             OFFSET_NAMESPACE,
             &[&["consumerGroup"], &["topic"], &["queueId"]],
         ),
         RequestCode::EndTransaction => ordered_by_fields(
-            request,
+            ext_fields,
             TRANSACTION_NAMESPACE,
             &[
                 &["producerGroup"],
@@ -59,10 +71,13 @@ pub(super) fn broker_request_ordering(request: &RemotingCommand) -> RequestOrder
     }
 }
 
-fn ordered_by_fields(request: &RemotingCommand, namespace: u64, fields: &[&[&str]]) -> RequestOrdering {
+fn ordered_by_fields(
+    ext_fields: Option<&std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>>,
+    namespace: u64,
+    fields: &[&[&str]],
+) -> RequestOrdering {
     let mut hash = FNV_OFFSET_BASIS;
     hash_u64(&mut hash, namespace);
-    let ext_fields = request.ext_fields();
     for aliases in fields {
         let value = aliases
             .iter()

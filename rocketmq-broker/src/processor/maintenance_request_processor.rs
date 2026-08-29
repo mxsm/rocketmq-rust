@@ -286,6 +286,12 @@ impl LegacyMaintenanceRequestProcessor {
 
 impl RequestProcessorV2 for MaintenanceRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl MaintenanceRequestProcessor {
+    pub(crate) async fn process_v2_shared(&self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let result = match self.authorize_v2(request) {
             Ok(grant) => self.process_authorized(&grant, request.command_mut()).await.map(Some),

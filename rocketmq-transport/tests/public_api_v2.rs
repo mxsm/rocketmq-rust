@@ -197,6 +197,7 @@ fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
     }
 
     let _: fn(RemotingCommand) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::command;
+    let _: fn(i32) -> ResponsePlan = ResponsePlan::empty_response;
     let _: fn(RemotingCommand, Bytes) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::bytes;
     let _: fn(RemotingCommand, Vec<Bytes>) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::segments;
     let _: fn(RemotingCommand, FileRegionSequence) -> Result<ResponsePlan, ResponsePlanError> =
@@ -581,6 +582,11 @@ fn v2_processor_contract_preserves_local_and_send_future_boundaries() {
 
 #[test]
 fn v2_processor_side_contracts_are_typed_and_body_free() {
+    let empty = ResponsePlan::empty_response(6);
+    assert_eq!(empty.response_code(), 6);
+    assert_eq!(empty.body_kind(), ResponseBodyKind::Empty);
+    assert_eq!(empty.body_len(), 0);
+
     let plan = ResponsePlan::bytes(
         RemotingCommand::create_response_command_with_code(7),
         Bytes::from_static(b"owned rejection"),

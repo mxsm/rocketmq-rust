@@ -14,6 +14,10 @@
 
 //! Broker-private accounting and cutover control for deferred generations.
 
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -38,6 +42,11 @@ pub(crate) use target::*;
 #[derive(Debug)]
 pub(crate) struct DeferredGenerationHandoff {
     write_gate: Arc<Mutex<DeferredGenerationHandoffState>>,
+    transition_scan_ready: AtomicBool,
+    #[cfg(test)]
+    transition_candidate_scans: AtomicUsize,
+    #[cfg(test)]
+    seal_gate_attempts: AtomicUsize,
 }
 
 impl Default for DeferredGenerationHandoff {
@@ -51,6 +60,11 @@ impl DeferredGenerationHandoff {
     pub(crate) fn new() -> Self {
         Self {
             write_gate: Arc::new(Mutex::new(DeferredGenerationHandoffState::default())),
+            transition_scan_ready: AtomicBool::new(false),
+            #[cfg(test)]
+            transition_candidate_scans: AtomicUsize::new(0),
+            #[cfg(test)]
+            seal_gate_attempts: AtomicUsize::new(0),
         }
     }
 
@@ -65,15 +79,21 @@ impl DeferredGenerationHandoff {
     }
 
     pub(crate) fn seal(&self) -> DeferredGenerationSeal {
+        #[cfg(test)]
+        self.seal_gate_attempts.fetch_add(1, Ordering::Release);
         let mut state = self.write_gate.lock();
-        if state.shutdown_sealed {
+        let result = if state.shutdown_sealed {
             DeferredGenerationSeal::AlreadySealed
         } else {
             state.shutdown_sealed = true;
             state.legacy_acceptance_sealed = true;
+            state.clear_transition_candidates();
+            state.discard_abandoned_replays();
             state.prune_quiescent_targets();
             DeferredGenerationSeal::Sealed
-        }
+        };
+        self.transition_scan_ready.store(false, Ordering::Release);
+        result
     }
 
     #[must_use]
@@ -154,7 +174,11 @@ impl DeferredGenerationHandoff {
             DeferredGenerationCutoverStage::Open
         };
         state.cutover_transaction_active = true;
-        Ok(DeferredGenerationCutover { state, stage })
+        Ok(DeferredGenerationCutover {
+            state,
+            stage,
+            transition_scan_ready: &self.transition_scan_ready,
+        })
     }
 
     /// Runs one legacy-table operation with the coordinator write gate held.
@@ -172,8 +196,12 @@ impl DeferredGenerationHandoff {
     }
 
     /// Changes one drained target from Legacy to New and authorizes its replay.
-    /// The injected legacy-table probe runs under the write gate and must not
-    /// call back into this coordinator.
+    ///
+    /// The injected exact legacy-table probe runs outside the write gate after
+    /// acceptance has been sealed, so legacy occupancy can only decrease. The
+    /// coordinator counters are checked under the gate both before and after
+    /// that probe. This preserves the global admission -> coordinator -> table
+    /// lock order and prevents a Pop/PopLite admission lock inversion.
     pub(crate) fn try_transition_target_to_new<F>(
         &self,
         target: DeferredGenerationTarget,
@@ -265,6 +293,40 @@ impl DeferredGenerationHandoff {
             target,
             armed: true,
         })
+    }
+
+    /// Returns one fair, bounded transition batch after the cutover becomes
+    /// externally routable. The readiness load is the complete default-Legacy
+    /// tick path and does not acquire the coordinator gate.
+    pub(crate) fn take_transition_candidates(&self, limit: usize) -> Vec<DeferredGenerationTransitionCandidate> {
+        if limit == 0 || !self.transition_scan_ready.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        #[cfg(test)]
+        self.transition_candidate_scans.fetch_add(1, Ordering::Relaxed);
+        self.write_gate.lock().take_transition_candidates(limit)
+    }
+
+    pub(crate) fn requeue_transition_candidate(&self, target: &DeferredGenerationTarget) {
+        if !self.transition_scan_ready.load(Ordering::Acquire) {
+            return;
+        }
+        self.write_gate.lock().enqueue_transition_candidate(target);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transition_scan_ready_for_test(&self) -> bool {
+        self.transition_scan_ready.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transition_candidate_scans_for_test(&self) -> usize {
+        self.transition_candidate_scans.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seal_gate_attempts_for_test(&self) -> usize {
+        self.seal_gate_attempts.load(Ordering::Acquire)
     }
 
     #[must_use]

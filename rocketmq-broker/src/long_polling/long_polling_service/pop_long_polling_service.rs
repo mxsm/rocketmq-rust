@@ -1181,6 +1181,27 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         self.polling_map.get(key).map(|queue| queue.len() as i32).unwrap_or(0)
     }
 
+    pub(crate) fn legacy_target_occupied(&self, target: &DeferredGenerationTarget) -> bool {
+        let (topic, consumer_group, queue_id) = match target {
+            DeferredGenerationTarget::Pop {
+                topic,
+                consumer_group,
+                queue_id,
+            }
+            | DeferredGenerationTarget::Notification {
+                topic,
+                consumer_group,
+                queue_id,
+            } => (topic, consumer_group, *queue_id),
+            _ => return false,
+        };
+        let key = KeyBuilder::build_polling_key(topic, consumer_group, queue_id);
+        let _admission = self.polling_admission.lock();
+        self.polling_map
+            .get(key.as_str())
+            .is_some_and(|queue| !queue.is_empty())
+    }
+
     #[cfg(test)]
     pub(crate) fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
@@ -1701,6 +1722,12 @@ mod tests {
             _ => DeferredGenerationTarget::pop(topic.clone(), group.clone(), 0),
         };
         let key = CheetahString::from_string(KeyBuilder::build_polling_key(&topic, &group, 0));
+        assert!(service.legacy_target_occupied(&target));
+        assert!(!service.legacy_target_occupied(&DeferredGenerationTarget::pop(
+            CheetahString::from_static_str("unrelated-pop-topic"),
+            group.clone(),
+            0,
+        )));
         assert!(matches!(
             handoff.try_transition_target_to_new(target.clone(), |_| {
                 service.polling_map.get(&key).is_some_and(|queue| !queue.is_empty())
@@ -1709,6 +1736,7 @@ mod tests {
                 | Err(crate::deferred_generation_handoff::DeferredGenerationTargetTransitionError::LegacyTableOccupied)
         ));
         session.close();
+        assert!(!service.legacy_target_occupied(&target));
         let replay = handoff
             .try_transition_target_to_new(target, |_| {
                 service.polling_map.get(&key).is_some_and(|queue| !queue.is_empty())

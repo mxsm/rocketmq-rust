@@ -498,6 +498,15 @@ impl LiteEventDispatcher {
             .collect()
     }
 
+    pub(crate) fn replay_pending_event(&self, client_id: &CheetahString) -> bool {
+        self.scan(current_millis());
+        let pending = self.client_events.get(client_id).is_some_and(|entry| !entry.is_empty());
+        if pending {
+            self.notify_client(client_id);
+        }
+        pending
+    }
+
     pub(crate) fn take_pending_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
         let Some(reservation) = self.reserve_pending_events(client_id) else {
             return Vec::new();
@@ -788,6 +797,16 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(10), legacy_notify.notified())
             .await
             .expect("legacy generation receives the dispatcher signal");
+
+        let replayed = Arc::new(AtomicU64::new(0));
+        let replayed_observer = Arc::clone(&replayed);
+        dispatcher.set_deferred_event_observer(Arc::new(move |_| {
+            replayed_observer.fetch_add(1, Ordering::AcqRel);
+            true
+        }));
+        assert!(dispatcher.replay_pending_event(&legacy_client));
+        assert_eq!(replayed.load(Ordering::Acquire), 1);
+        assert_eq!(dispatcher.pending_events(&legacy_client).len(), 1);
     }
 
     #[test]

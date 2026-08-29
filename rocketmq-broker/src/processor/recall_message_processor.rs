@@ -213,6 +213,15 @@ where
     MS: BrokerWriteStore + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let remote_address = recall_remote_address(request.origin())?;
@@ -244,7 +253,7 @@ where
 {
     /// V2 leaf business contract; it uses only trusted origin metadata to construct the message birth address.
     async fn process_command(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
         remote_address: std::net::SocketAddr,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -280,12 +289,12 @@ where
         remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
+        let processor = self.clone();
         processor.process_command(request, remote_address).await
     }
 
     async fn process_recall_message(
-        &mut self,
+        &self,
         remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {

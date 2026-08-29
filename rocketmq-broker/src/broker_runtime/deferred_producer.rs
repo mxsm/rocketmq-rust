@@ -37,6 +37,10 @@ use tracing::warn;
 
 use crate::deferred_generation_handoff::DeferredGeneration;
 use crate::deferred_generation_handoff::DeferredGenerationHandoff;
+use crate::deferred_generation_handoff::DeferredGenerationTarget;
+use crate::deferred_generation_handoff::DeferredGenerationTargetTransitionError;
+use crate::deferred_generation_handoff::DeferredGenerationTransitionKind;
+use crate::deferred_generation_handoff::ReplayToken;
 use crate::deferred_generation_handoff::RoutePermit;
 use crate::lite::lite_event_dispatcher::DeferredEventObserver;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -66,6 +70,7 @@ use workers::submit_pop_lite_event;
 use workers::submit_pull;
 
 const PRODUCER_TICK: Duration = Duration::from_millis(20);
+const TRANSITION_BATCH_LIMIT: usize = 64;
 
 type PullMasterOnlineCallback = dyn Fn() + Send + Sync + 'static;
 type PopLagRefreshCallback =
@@ -284,8 +289,10 @@ where
                         {
                             break;
                         }
+                        producer.advance_generation_handoff();
                         producer.produce_pending_arrivals();
                         producer.produce_expired();
+                        producer.produce_pending_dispatcher_events();
                         producer.produce_pending_pop_lite_events();
                     }
                 })?,
@@ -325,11 +332,17 @@ where
     ) where
         F: FnOnce(),
     {
+        let default_generation = self.handoff.default_generation();
         let Ok(route) = self.handoff.acquire_pull_candidate(topic.clone(), queue_id) else {
             return;
         };
         if route.generation() == DeferredGeneration::Legacy {
             legacy();
+            if default_generation == DeferredGeneration::New {
+                if let Err(error) = self.pull.latch_offset(topic, queue_id, logic_offset) {
+                    warn!(?error, "failed to retain deferred Pull handoff replay");
+                }
+            }
             return;
         }
         match self.pull.latch_offset(topic, queue_id, logic_offset) {
@@ -542,6 +555,138 @@ where
     fn produce_pending_pop_lite_events(&self) {
         for client_id in self.pop_lite.take_pending_replays(NonZeroUsize::MIN) {
             let _ = self.notify_pop_lite_event(&client_id);
+        }
+    }
+
+    fn produce_pending_dispatcher_events(&self) {
+        for client_id in self.lite_dispatcher.pending_client_ids() {
+            let target = DeferredGenerationTarget::pop_lite(client_id.clone());
+            if self.handoff.generation_for(&target) == DeferredGeneration::New {
+                self.lite_dispatcher.replay_pending_event(&client_id);
+            }
+        }
+    }
+
+    fn advance_generation_handoff(self: &Arc<Self>) {
+        for candidate in self.handoff.take_transition_candidates(TRANSITION_BATCH_LIMIT) {
+            let target = candidate.target;
+            match candidate.kind {
+                DeferredGenerationTransitionKind::LegacyTarget => {
+                    match self.handoff.try_transition_target_to_new(target.clone(), |candidate| {
+                        self.legacy_target_occupied(candidate)
+                    }) {
+                        Ok(replay) => self.replay_transition(replay),
+                        Err(
+                            DeferredGenerationTargetTransitionError::Draining(_)
+                            | DeferredGenerationTargetTransitionError::LegacyTableOccupied,
+                        ) => self.handoff.requeue_transition_candidate(&target),
+                        Err(
+                            DeferredGenerationTargetTransitionError::ShutdownSealed
+                            | DeferredGenerationTargetTransitionError::CutoverNotPublished
+                            | DeferredGenerationTargetTransitionError::TargetAbsent
+                            | DeferredGenerationTargetTransitionError::TargetAlreadyNew,
+                        ) => {}
+                    }
+                }
+                DeferredGenerationTransitionKind::AbandonedReplay => {
+                    if let Ok(replay) = self.handoff.retry_abandoned_replay(target) {
+                        self.replay_transition(replay);
+                    }
+                }
+            }
+        }
+    }
+
+    fn legacy_target_occupied(&self, target: &DeferredGenerationTarget) -> bool {
+        match target {
+            DeferredGenerationTarget::Pull { .. } => self
+                .pull_request_hold_service
+                .upgrade()
+                .is_none_or(|service| service.legacy_target_occupied(target)),
+            DeferredGenerationTarget::Pop { .. } => self.pop_processor.upgrade().is_none_or(|processor| {
+                processor
+                    .pop_long_polling_service()
+                    .is_none_or(|service| service.legacy_target_occupied(target))
+            }),
+            DeferredGenerationTarget::Notification { .. } => self
+                .notification_processor
+                .upgrade()
+                .is_none_or(|processor| processor.pop_long_polling_service().legacy_target_occupied(target)),
+            DeferredGenerationTarget::PopLite { .. } => self
+                .pop_lite_processor
+                .upgrade()
+                .is_none_or(|processor| processor.pop_lite_long_polling_service().legacy_target_occupied(target)),
+        }
+    }
+
+    fn replay_transition(self: &Arc<Self>, replay: ReplayToken) {
+        let target = replay.target().clone();
+        let accepted = match &target {
+            DeferredGenerationTarget::Pull { topic, queue_id } => self.replay_pull_target(topic, *queue_id),
+            DeferredGenerationTarget::Pop { topic, queue_id, .. } => self.replay_pop_target(topic, *queue_id),
+            DeferredGenerationTarget::Notification { topic, queue_id, .. } => {
+                self.replay_notification_target(topic, *queue_id)
+            }
+            DeferredGenerationTarget::PopLite { client_id } => {
+                self.lite_dispatcher.replay_pending_event(client_id);
+                true
+            }
+        };
+        if accepted {
+            replay.complete_after_replay_accepted();
+        } else {
+            warn!(?target, "deferred handoff replay was retained for retry");
+        }
+    }
+
+    fn replay_pull_target(self: &Arc<Self>, topic: &CheetahString, queue_id: i32) -> bool {
+        let Some(store) = self.replay_message_store() else {
+            return false;
+        };
+        let max_offset = store.get_max_offset_in_queue(topic, queue_id);
+        match self.pull.latch_offset(topic, queue_id, max_offset) {
+            Ok(()) => {
+                self.produce_pending_pull_offsets();
+                true
+            }
+            Err(error) => {
+                warn!(?error, "failed to retain deferred Pull transition replay");
+                false
+            }
+        }
+    }
+
+    fn replay_pop_target(self: &Arc<Self>, topic: &CheetahString, queue_id: i32) -> bool {
+        let Some(store) = self.replay_message_store() else {
+            return false;
+        };
+        let max_offset = store.get_max_offset_in_queue(topic, queue_id);
+        match self.pop.latch_offset(topic, queue_id, max_offset) {
+            Ok(()) => {
+                self.produce_pending_pop_offsets();
+                true
+            }
+            Err(error) => {
+                warn!(?error, "failed to retain deferred POP transition replay");
+                false
+            }
+        }
+    }
+
+    fn replay_notification_target(self: &Arc<Self>, topic: &CheetahString, queue_id: i32) -> bool {
+        let Some(store) = self.replay_message_store() else {
+            return false;
+        };
+        let max_offset = store.get_max_offset_in_queue(topic, queue_id);
+        match self.notification.latch_offset(topic, queue_id, max_offset) {
+            Ok(()) => {
+                self.produce_pending_notification_offsets();
+                true
+            }
+            Err(error) => {
+                warn!(?error, "failed to retain deferred Notification transition replay");
+                false
+            }
         }
     }
 

@@ -97,6 +97,15 @@ where
     MS: BrokerStorePort + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl<MS: BrokerStorePort> ClientManageProcessor<MS> {
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let session_id = request.session().id();
         let remote_address = trusted_remote_address(request)?;
@@ -188,7 +197,7 @@ where
     MS: BrokerStorePort,
 {
     async fn process_session_command(
-        &mut self,
+        &self,
         session_id: SessionId,
         remote_address: String,
         request: &mut RemotingCommand,
@@ -318,7 +327,7 @@ where
     }
 
     async fn heart_beat(
-        &mut self,
+        &self,
         remote_address: String,
         heartbeat_data: HeartbeatData,
         client: RegisteredClient,
@@ -449,7 +458,7 @@ where
     }
 
     async fn heart_beat_v2(
-        &mut self,
+        &self,
         remote_address: &str,
         heartbeat_data: HeartbeatData,
         client: RegisteredClient,
@@ -1023,7 +1032,7 @@ mod tests {
     #[tokio::test]
     async fn heart_beat_v2_without_sub_registers_consumer_and_marks_sub_change() {
         let mut runtime = new_test_runtime("heartbeat-v2-without-sub", false).await;
-        let (consumer_manager, mut processor) = {
+        let (consumer_manager, processor) = {
             let inner = runtime.runtime_state_mut();
             (
                 inner.consumer_manager().clone_shared_state(),
@@ -1163,7 +1172,7 @@ mod tests {
     #[tokio::test]
     async fn session_command_core_uses_only_the_stable_session_identity_index() {
         let mut runtime = new_test_runtime("session-identity-index", false).await;
-        let (producer_manager, consumer_manager, mut processor) = {
+        let (producer_manager, consumer_manager, processor) = {
             let inner = runtime.runtime_state_mut();
             (
                 inner.producer_manager().clone_shared_state(),
@@ -1249,7 +1258,7 @@ mod tests {
     #[tokio::test]
     async fn session_reconnect_cleans_the_role_omitted_by_the_new_heartbeat() {
         let mut runtime = new_test_runtime("session-role-reconnect", false).await;
-        let (producer_manager, consumer_manager, mut processor) = {
+        let (producer_manager, consumer_manager, processor) = {
             let inner = runtime.runtime_state_mut();
             (
                 inner.producer_manager().clone_shared_state(),
@@ -1355,7 +1364,7 @@ mod tests {
     #[tokio::test]
     async fn session_identity_conflict_is_rejected_before_either_role_commits() {
         let mut runtime = new_test_runtime("session-cross-role-identity", false).await;
-        let (producer_manager, consumer_manager, mut processor) = {
+        let (producer_manager, consumer_manager, processor) = {
             let inner = runtime.runtime_state_mut();
             (
                 inner.producer_manager().clone_shared_state(),
@@ -1436,8 +1445,8 @@ mod tests {
         let second_session = session_id_for_test(9_872);
         let producer_group = CheetahString::from_static_str("cross-role-race-producer");
         let consumer_group = CheetahString::from_static_str("cross-role-race-consumer");
-        let mut first_processor = processor.clone();
-        let mut second_processor = processor;
+        let first_processor = processor.clone();
+        let second_processor = processor;
         let mut first_request = session_heartbeat_request(
             "cross-role-race-client",
             std::slice::from_ref(&consumer_group),

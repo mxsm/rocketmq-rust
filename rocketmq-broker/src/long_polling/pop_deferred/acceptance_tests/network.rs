@@ -442,6 +442,85 @@ async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
 }
 
 #[tokio::test]
+async fn legacy_route_rearms_a_real_waiter_for_the_next_tick_without_a_new_arrival() {
+    let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+    let service = service(controller.as_ref(), 2, 2, 2);
+    let barrier = Arc::new(ProcessorBarrier::default());
+    let (registration_tx, mut registrations) = mpsc::unbounded_channel();
+    let processor = DeferredTestProcessor {
+        service: Arc::clone(&service),
+        registrations: registration_tx,
+        barrier,
+        hold_before_outcome: false,
+        rollback_registration: false,
+    };
+    let (mut client, _address, running) = start_server(processor, controller).await;
+    client
+        .send_command(request_command("TopicA", "GroupA", 0, None, 98_290))
+        .await
+        .expect("send real deferred POP waiter");
+    let registered = registrations.recv().await.expect("observe real POP waiter");
+
+    let topic = CheetahString::from_static_str("TopicA");
+    service
+        .latch_arrival(&topic, 0, None, 0, None, None, service.fanout_cursor())
+        .expect("retain one arrival before the Legacy route is observed");
+    let mut first_tick = service
+        .pending_arrival_reservations()
+        .pop()
+        .expect("first producer tick reserves the arrival")
+        .claim()
+        .expect("first producer tick claims the arrival");
+    let first_batch = service.pending_consumer_group_batch(first_tick.value_mut());
+    assert!(first_batch.exhausted());
+    let first_group = first_batch
+        .into_consumer_groups()
+        .into_iter()
+        .next()
+        .expect("first tick scans the waiter's consumer group");
+    let first_candidate = service
+        .reserve_arrival_candidate(first_tick.value_mut().view(&first_group), PopSelectionOrder::Oldest)
+        .expect("first tick reaches the real waiter");
+    assert_eq!(first_candidate.id(), registered.id);
+    drop(first_candidate);
+
+    // This is the worker's Legacy branch: no new Store callback marks the
+    // latch dirty, so an explicit rewind is the only way to retain the event.
+    first_tick.rearm_from_start();
+    drop(first_tick);
+    assert_eq!(service.resource_snapshot().pending_arrivals, 1);
+
+    let mut next_tick = service
+        .pending_arrival_reservations()
+        .pop()
+        .expect("next producer tick retries without another arrival")
+        .claim()
+        .expect("next producer tick claims the same arrival");
+    let next_batch = service.pending_consumer_group_batch(next_tick.value_mut());
+    assert!(next_batch.exhausted());
+    let next_group = next_batch
+        .into_consumer_groups()
+        .into_iter()
+        .next()
+        .expect("rewound tick scans the same consumer group");
+    let next_candidate = service
+        .reserve_arrival_candidate(next_tick.value_mut().view(&next_group), PopSelectionOrder::Oldest)
+        .expect("rewound tick reaches the same real waiter");
+    assert_eq!(next_candidate.id(), registered.id);
+    assert!(next_tick.finish_if_clean());
+    let claimed = service
+        .claim_candidate(next_candidate, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("transitioned New route can claim the retained waiter");
+    drop(claimed);
+
+    drop(client);
+    let _ = service.shutdown();
+    running.finish().await;
+    assert_released(&service);
+}
+
+#[tokio::test]
 async fn provisional_oldest_claim_does_not_hide_active_second_waiter() {
     let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let service = service(controller.as_ref(), 4, 4, 4);

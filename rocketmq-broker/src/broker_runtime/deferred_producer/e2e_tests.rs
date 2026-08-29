@@ -219,7 +219,7 @@ fn notification_request() -> RemotingCommand {
     request
 }
 
-fn publish_test_targets(runtime: &BrokerRuntime) {
+fn publish_test_targets(runtime: &BrokerRuntime, producer: &Arc<super::BrokerDeferredProducer<BrokerMessageStore>>) {
     let deferred = runtime
         .composition
         .data_plane
@@ -253,13 +253,11 @@ fn publish_test_targets(runtime: &BrokerRuntime) {
     transaction.publish_default_new().expect("publish New default");
     drop(transaction);
     drop(permits);
+    producer.advance_generation_handoff();
     for target in [pull_target, pop_target, notification_target] {
-        handoff
-            .try_transition_target_to_new(target.clone(), |_| false)
-            .expect("transition drained test target")
-            .complete_after_replay_accepted();
         assert_eq!(handoff.generation_for(&target), DeferredGeneration::New);
     }
+    assert!(handoff.zero_report().is_zero());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -349,7 +347,7 @@ async fn store_replay_workers_resume_three_canonical_sessions_exactly_once_and_r
         controller,
     )
     .await;
-    publish_test_targets(&runtime);
+    publish_test_targets(&runtime, &producer);
 
     pull_client.send_command(pull_request()).await.expect("send Pull wait");
     pop_client.send_command(pop_request()).await.expect("send POP wait");

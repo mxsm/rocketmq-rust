@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use super::DeferredGeneration;
 use super::DeferredGenerationHandoffSnapshot;
 use super::DeferredGenerationRouteError;
 use super::DeferredGenerationTarget;
 use super::DeferredGenerationTargetSnapshot;
+use super::DeferredGenerationTransitionCandidate;
+use super::DeferredGenerationTransitionKind;
 
 #[derive(Debug)]
 pub(super) struct DeferredGenerationHandoffState {
@@ -28,6 +31,7 @@ pub(super) struct DeferredGenerationHandoffState {
     pub(super) v2_aggregate_published: bool,
     pub(super) cutover_transaction_active: bool,
     pub(super) targets: HashMap<DeferredGenerationTarget, DeferredGenerationTargetState>,
+    transition_queue: VecDeque<DeferredGenerationTarget>,
 }
 
 impl Default for DeferredGenerationHandoffState {
@@ -39,6 +43,7 @@ impl Default for DeferredGenerationHandoffState {
             v2_aggregate_published: false,
             cutover_transaction_active: false,
             targets: HashMap::new(),
+            transition_queue: VecDeque::new(),
         }
     }
 }
@@ -178,11 +183,88 @@ impl DeferredGenerationHandoffState {
     }
 
     pub(super) fn abandon_replay_token(&mut self, target: &DeferredGenerationTarget) {
+        let mut enqueue = false;
         if let Some(target_state) = self.targets.get_mut(target) {
             if target_state.replay_tokens > 0 {
                 target_state.replay_tokens -= 1;
-                target_state.abandoned_replays += 1;
+                if !self.shutdown_sealed {
+                    target_state.abandoned_replays += 1;
+                    enqueue = true;
+                }
             }
+        }
+        if enqueue {
+            self.enqueue_transition_candidate(target);
+        }
+        self.remove_if_quiescent_and_default(target);
+    }
+
+    pub(super) fn publish_default_new(&mut self) {
+        self.default_generation = DeferredGeneration::New;
+        let queued = self
+            .targets
+            .iter_mut()
+            .filter_map(|(target, state)| {
+                if state.generation == DeferredGeneration::Legacy && !state.transition_queued {
+                    state.transition_queued = true;
+                    Some(target.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.transition_queue.extend(queued);
+    }
+
+    pub(super) fn take_transition_candidates(&mut self, limit: usize) -> Vec<DeferredGenerationTransitionCandidate> {
+        let mut candidates = Vec::with_capacity(limit.min(self.transition_queue.len()));
+        while candidates.len() < limit {
+            let Some(target) = self.transition_queue.pop_front() else {
+                break;
+            };
+            let Some(state) = self.targets.get_mut(&target) else {
+                continue;
+            };
+            state.transition_queued = false;
+            let kind = if state.generation == DeferredGeneration::Legacy {
+                Some(DeferredGenerationTransitionKind::LegacyTarget)
+            } else if state.abandoned_replays > 0 {
+                Some(DeferredGenerationTransitionKind::AbandonedReplay)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                candidates.push(DeferredGenerationTransitionCandidate { target, kind });
+            }
+        }
+        candidates
+    }
+
+    pub(super) fn enqueue_transition_candidate(&mut self, target: &DeferredGenerationTarget) {
+        if self.shutdown_sealed {
+            return;
+        }
+        let Some(state) = self.targets.get_mut(target) else {
+            return;
+        };
+        let eligible = state.generation == DeferredGeneration::Legacy || state.abandoned_replays > 0;
+        if !eligible || state.transition_queued {
+            return;
+        }
+        state.transition_queued = true;
+        self.transition_queue.push_back(target.clone());
+    }
+
+    pub(super) fn clear_transition_candidates(&mut self) {
+        self.transition_queue.clear();
+        for state in self.targets.values_mut() {
+            state.transition_queued = false;
+        }
+    }
+
+    pub(super) fn discard_abandoned_replays(&mut self) {
+        for state in self.targets.values_mut() {
+            state.abandoned_replays = 0;
         }
     }
 
@@ -247,6 +329,7 @@ pub(super) struct DeferredGenerationTargetState {
     pub(super) replay_tokens: usize,
     pub(super) abandoned_replays: usize,
     pop_lite_wake_active: bool,
+    transition_queued: bool,
 }
 
 impl DeferredGenerationTargetState {
@@ -261,6 +344,7 @@ impl DeferredGenerationTargetState {
             replay_tokens: 0,
             abandoned_replays: 0,
             pop_lite_wake_active: false,
+            transition_queued: false,
         }
     }
 

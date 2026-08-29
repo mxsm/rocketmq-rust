@@ -63,7 +63,11 @@ where
                         let reason = pending.value_mut().reason();
                         let batch = producer.pull.reserve_pending_arrival_batch(pending.value_mut());
                         let exhausted = batch.exhausted();
-                        producer.resume_pull_candidates(batch.into_candidates(), reason).await;
+                        let retain_for_legacy = producer.resume_pull_candidates(batch.into_candidates(), reason).await;
+                        if retain_for_legacy {
+                            pending.rearm_from_start();
+                            return;
+                        }
                         if exhausted && pending.finish_if_clean() {
                             break;
                         }
@@ -79,13 +83,15 @@ where
         &self,
         candidates: Vec<crate::long_polling::pull_deferred::PullCandidateReservation>,
         reason: DeferredWakeReason,
-    ) {
+    ) -> bool {
+        let mut retain_for_legacy = false;
         for candidate in candidates {
             let key = candidate.key();
             let Ok(route) = self.handoff.acquire_pull_candidate(key.topic().clone(), key.queue_id()) else {
                 continue;
             };
             if route.generation() != DeferredGeneration::New {
+                retain_for_legacy = true;
                 continue;
             }
             let Ok(claimed) = self.pull.claim_candidate(candidate, reason).await else {
@@ -94,6 +100,7 @@ where
             let _route = route;
             submit_pull(Arc::clone(&self.pull), self.pull_processor.clone(), claimed);
         }
+        retain_for_legacy
     }
 
     pub(super) fn spawn_pull_pending_offset(self: &Arc<Self>, reservation: PullPendingOffsetReservation) {
@@ -130,7 +137,7 @@ where
                             continue;
                         };
                         if route.generation() != DeferredGeneration::New {
-                            continue;
+                            return;
                         }
                         let criteria = Arc::clone(candidate.criteria());
                         match store_range_matches(
@@ -186,6 +193,7 @@ where
                     return;
                 };
                 loop {
+                    let mut retain_for_legacy = false;
                     let batch = producer.pop.pending_consumer_group_batch(pending.value_mut());
                     let exhausted = batch.exhausted();
                     for consumer_group in batch.into_consumer_groups() {
@@ -205,6 +213,7 @@ where
                             continue;
                         };
                         if route.generation() != DeferredGeneration::New {
+                            retain_for_legacy = true;
                             continue;
                         }
                         let Ok(claimed) = producer
@@ -216,6 +225,10 @@ where
                         };
                         let _route = route;
                         submit_pop(Arc::clone(&producer.pop), producer.pop_processor.clone(), claimed);
+                    }
+                    if retain_for_legacy {
+                        pending.rearm_from_start();
+                        return;
                     }
                     if exhausted && pending.finish_if_clean() {
                         break;
@@ -244,6 +257,7 @@ where
         let mut covered = reservation.range();
         let mut ranges = VecDeque::from([covered]);
         loop {
+            let mut retain_for_legacy = false;
             while let Some(range) = ranges.pop_front() {
                 let Some(store) = self.replay_message_store() else {
                     return;
@@ -274,6 +288,7 @@ where
                                     continue;
                                 };
                                 if route.generation() != DeferredGeneration::New {
+                                    retain_for_legacy = true;
                                     skipped.push(candidate);
                                     continue;
                                 }
@@ -315,6 +330,9 @@ where
                     tokio::task::yield_now().await;
                 }
             }
+            if retain_for_legacy {
+                return;
+            }
             let Some(updated) = reservation.finish_or_updated() else {
                 break;
             };
@@ -338,7 +356,11 @@ where
                 loop {
                     let batch = producer.notification.reserve_pending_arrival_batch(pending.value_mut());
                     let exhausted = batch.exhausted();
-                    producer.resume_notification_candidates(batch.into_candidates()).await;
+                    let retain_for_legacy = producer.resume_notification_candidates(batch.into_candidates()).await;
+                    if retain_for_legacy {
+                        pending.rearm_from_start();
+                        return;
+                    }
                     if exhausted && pending.finish_if_clean() {
                         break;
                     }
@@ -370,6 +392,7 @@ where
         let mut covered = reservation.range();
         let mut ranges = VecDeque::from([covered]);
         loop {
+            let mut retain_for_legacy = false;
             while let Some(range) = ranges.pop_front() {
                 let Some(store) = self.replay_message_store() else {
                     return;
@@ -390,6 +413,7 @@ where
                             continue;
                         };
                         if route.generation() != DeferredGeneration::New {
+                            retain_for_legacy = true;
                             continue;
                         }
                         let filter = candidate.criteria().filter().cloned();
@@ -426,6 +450,9 @@ where
                     tokio::task::yield_now().await;
                 }
             }
+            if retain_for_legacy {
+                return;
+            }
             let Some(updated) = reservation.finish_or_updated() else {
                 break;
             };
@@ -438,7 +465,8 @@ where
     pub(super) async fn resume_notification_candidates(
         &self,
         candidates: Vec<crate::long_polling::notification_deferred::index::NotificationCandidateReservation>,
-    ) {
+    ) -> bool {
+        let mut retain_for_legacy = false;
         for candidate in candidates {
             let key = candidate.key();
             let Ok(route) = self.handoff.acquire_notification_candidate(
@@ -449,6 +477,7 @@ where
                 continue;
             };
             if route.generation() != DeferredGeneration::New {
+                retain_for_legacy = true;
                 continue;
             }
             let Ok(claimed) = self.notification.claim_arrival_candidate(candidate).await else {
@@ -461,6 +490,7 @@ where
                 claimed,
             );
         }
+        retain_for_legacy
     }
 }
 

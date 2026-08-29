@@ -249,6 +249,18 @@ impl FastFailureRunGuard {
             )
         })
     }
+
+    /// Completes a V2 run without transferring response ownership through the
+    /// legacy fast-failure response channel.
+    ///
+    /// The V2 handler outcome remains affine and is delivered only by the
+    /// canonical dispatcher. Fast failure owns scheduling/accounting here,
+    /// not the response plan.
+    pub(super) fn complete_v2(mut self) {
+        self.service.complete(self.queue_kind, &self.task, None);
+        self.response_rx.take();
+        self.settled = true;
+    }
 }
 
 impl Drop for FastFailureRunGuard {

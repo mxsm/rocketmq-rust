@@ -23,6 +23,10 @@ use parking_lot::Mutex;
 pub(crate) trait PendingArrivalValue {
     fn retained_bytes(&self) -> usize;
 
+    /// Rewinds a partially consumed replay so the next producer tick starts
+    /// from the first candidate without requiring another Store arrival.
+    fn rewind_from_start(&mut self);
+
     /// Coalesces another arrival for the same target into a conservative
     /// refresh. The refresh may inspect more waiters, but registry claim
     /// ownership still prevents duplicate canonical resumes.
@@ -302,6 +306,15 @@ where
 {
     pub(crate) fn value_mut(&mut self) -> &mut V {
         self.value.as_mut().expect("active pending claim retains its value")
+    }
+
+    /// Rearms this exact pending value after routing observes a Legacy target.
+    ///
+    /// Drop returns the value and its original admission ownership to the
+    /// latch; rewinding here prevents a cursor that already passed the Legacy
+    /// waiter from deleting the event on the next producer tick.
+    pub(crate) fn rearm_from_start(&mut self) {
+        self.value_mut().rewind_from_start();
     }
 
     /// Returns true only after atomically proving that no arrival was merged

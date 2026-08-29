@@ -78,6 +78,15 @@ pub struct QueryAssignmentProcessor {
 
 impl RequestProcessorV2 for QueryAssignmentProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        self.process_v2_shared(request).await
+    }
+}
+
+impl QueryAssignmentProcessor {
+    pub(crate) async fn process_v2_shared(
+        &self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
@@ -94,7 +103,7 @@ impl RequestProcessorV2 for QueryAssignmentProcessor {
 impl QueryAssignmentProcessor {
     /// V2 leaf business contract; the peer label is retained only for diagnostics.
     async fn process_command(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
         peer_label: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -195,7 +204,7 @@ impl QueryAssignmentProcessor {
         peer_label: String,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut processor = self.clone();
+        let processor = self.clone();
         processor.process_command(request, &peer_label).await
     }
 }
@@ -216,7 +225,7 @@ impl Clone for QueryAssignmentProcessor {
 
 impl QueryAssignmentProcessor {
     async fn process_command_inner(
-        &mut self,
+        &self,
         request_code: RequestCode,
         request: &mut RemotingCommand,
         peer_label: &str,
@@ -241,7 +250,7 @@ impl QueryAssignmentProcessor {
     ///
     /// A RemotingCommand response containing QueryAssignmentResponseBody with assigned queues
     async fn query_assignment(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
         peer_label: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -378,7 +387,7 @@ impl QueryAssignmentProcessor {
     /// An `Option<HashSet<MessageQueue>>` containing the allocated message queues, or `None` if no
     /// queues are allocated.
     async fn do_load_balance(
-        &mut self,
+        &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
         client_id: &CheetahString,
@@ -510,7 +519,7 @@ impl QueryAssignmentProcessor {
     }
 
     async fn set_message_request_mode(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
