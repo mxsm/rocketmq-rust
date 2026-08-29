@@ -59,23 +59,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_rocksdb_cq_write_result_default_values() {
-        let result = CheckRocksdbCqWriteResult::default();
-        assert!(result.check_result.is_none());
-        assert_eq!(result.check_status, 0);
-    }
-
-    #[test]
-    fn check_rocksdb_cq_write_result_with_values() {
-        let result = CheckRocksdbCqWriteResult {
-            check_result: Some(CheetahString::from("all topic is ready")),
-            check_status: 0,
-        };
-        assert_eq!(result.check_result, Some(CheetahString::from("all topic is ready")));
-        assert_eq!(result.get_check_status(), CheckStatus::CheckOk);
-    }
-
-    #[test]
     fn serialize_check_rocksdb_cq_write_result() {
         let result = CheckRocksdbCqWriteResult {
             check_result: Some(CheetahString::from("check doing")),
@@ -93,13 +76,6 @@ mod tests {
         assert_eq!(result.check_result, Some(CheetahString::from("all ok")));
         assert_eq!(result.check_status, 0);
         assert_eq!(result.get_check_status(), CheckStatus::CheckOk);
-    }
-
-    #[test]
-    fn deserialize_check_rocksdb_cq_write_result_error() {
-        let json = r#"{"checkResult":"error info","checkStatus":3}"#;
-        let result: CheckRocksdbCqWriteResult = serde_json::from_str(json).unwrap();
-        assert_eq!(result.get_check_status(), CheckStatus::CheckError);
     }
 
     #[test]

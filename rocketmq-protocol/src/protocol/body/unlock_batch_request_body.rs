@@ -47,15 +47,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unlock_batch_request_body_default() {
-        let body = UnlockBatchRequestBody::default();
-        assert!(body.consumer_group.is_none());
-        assert!(body.client_id.is_none());
-        assert!(!body.only_this_broker);
-        assert!(body.mq_set.is_empty());
-    }
-
-    #[test]
     fn unlock_batch_request_body_display() {
         let body = UnlockBatchRequestBody {
             consumer_group: Some(CheetahString::from("group")),

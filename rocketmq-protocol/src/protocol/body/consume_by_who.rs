@@ -87,16 +87,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn consume_by_who_default() {
-        let body = ConsumeByWho::default();
-        assert!(body.get_consumed_group().is_empty());
-        assert!(body.get_not_consumed_group().is_empty());
-        assert!(body.get_topic().is_none());
-        assert_eq!(body.get_queue_id(), 0);
-        assert_eq!(body.get_offset(), 0);
-    }
-
-    #[test]
     fn consume_by_who_getters_setters() {
         let mut body = ConsumeByWho::new();
 

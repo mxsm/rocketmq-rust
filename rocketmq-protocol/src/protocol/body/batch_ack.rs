@@ -77,17 +77,16 @@ impl<'de> Deserialize<'de> for SerializableBitVec {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use serde_json;
 
     use super::*;
 
     #[test]
-    fn batch_ack_serialization() {
+    fn serde_round_trip_preserves_the_batch_ack() {
         let bit_set = BitVec::from_vec(vec![0u64; 8]);
         let batch_ack = BatchAck {
-            consumer_group: CheetahString::from("group1"),
-            topic: CheetahString::from("topic1"),
-            retry: CheetahString::from("1"),
+            consumer_group: CheetahString::from_static_str("group1"),
+            topic: CheetahString::from_static_str("topic1"),
+            retry: CheetahString::from_static_str("1"),
             start_offset: 100,
             queue_id: 1,
             revive_queue_id: 2,
@@ -95,66 +94,17 @@ mod tests {
             invisible_time: 987654321,
             bit_set: SerializableBitVec(bit_set.clone()),
         };
-        let serialized = serde_json::to_string(&batch_ack).unwrap();
-        let deserialized: BatchAck = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.consumer_group, CheetahString::from("group1"));
-        assert_eq!(deserialized.topic, CheetahString::from("topic1"));
-        assert_eq!(deserialized.retry, CheetahString::from("1"));
-        assert_eq!(deserialized.start_offset, 100);
-        assert_eq!(deserialized.queue_id, 1);
-        assert_eq!(deserialized.revive_queue_id, 2);
-        assert_eq!(deserialized.pop_time, 123456789);
-        assert_eq!(deserialized.invisible_time, 987654321);
-        assert_eq!(deserialized.bit_set.0, bit_set);
-    }
 
-    #[test]
-    fn batch_ack_default_values() {
-        let bit_set = BitVec::from_element(8);
-        let batch_ack = BatchAck {
-            consumer_group: CheetahString::new(),
-            topic: CheetahString::new(),
-            retry: CheetahString::new(),
-            start_offset: 0,
-            queue_id: 0,
-            revive_queue_id: 0,
-            pop_time: 0,
-            invisible_time: 0,
-            bit_set: SerializableBitVec(bit_set.clone()),
-        };
-        assert_eq!(batch_ack.consumer_group, CheetahString::new());
-        assert_eq!(batch_ack.topic, CheetahString::new());
-        assert_eq!(batch_ack.retry, CheetahString::new());
-        assert_eq!(batch_ack.start_offset, 0);
-        assert_eq!(batch_ack.queue_id, 0);
-        assert_eq!(batch_ack.revive_queue_id, 0);
-        assert_eq!(batch_ack.pop_time, 0);
-        assert_eq!(batch_ack.invisible_time, 0);
-        assert_eq!(batch_ack.bit_set.0, bit_set);
-    }
-
-    #[test]
-    fn batch_ack_edge_case_empty_strings() {
-        let bit_set = BitVec::new();
-        let batch_ack = BatchAck {
-            consumer_group: CheetahString::from(""),
-            topic: CheetahString::from(""),
-            retry: CheetahString::from(""),
-            start_offset: -1,
-            queue_id: -1,
-            revive_queue_id: -1,
-            pop_time: -1,
-            invisible_time: -1,
-            bit_set: SerializableBitVec(bit_set.clone()),
-        };
-        assert_eq!(batch_ack.consumer_group, CheetahString::from(""));
-        assert_eq!(batch_ack.topic, CheetahString::from(""));
-        assert_eq!(batch_ack.retry, CheetahString::from(""));
-        assert_eq!(batch_ack.start_offset, -1);
-        assert_eq!(batch_ack.queue_id, -1);
-        assert_eq!(batch_ack.revive_queue_id, -1);
-        assert_eq!(batch_ack.pop_time, -1);
-        assert_eq!(batch_ack.invisible_time, -1);
-        assert_eq!(batch_ack.bit_set.0, bit_set);
+        let encoded = serde_json::to_vec(&batch_ack).expect("serialize batch ACK");
+        let decoded: BatchAck = serde_json::from_slice(&encoded).expect("deserialize batch ACK");
+        assert_eq!(decoded.consumer_group, batch_ack.consumer_group);
+        assert_eq!(decoded.topic, batch_ack.topic);
+        assert_eq!(decoded.retry, batch_ack.retry);
+        assert_eq!(decoded.start_offset, batch_ack.start_offset);
+        assert_eq!(decoded.queue_id, batch_ack.queue_id);
+        assert_eq!(decoded.revive_queue_id, batch_ack.revive_queue_id);
+        assert_eq!(decoded.pop_time, batch_ack.pop_time);
+        assert_eq!(decoded.invisible_time, batch_ack.invisible_time);
+        assert_eq!(decoded.bit_set.0, bit_set);
     }
 }

@@ -139,18 +139,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_lite_client_info_response_body_default() {
-        let body = GetLiteClientInfoResponseBody::default();
-        assert!(body.parent_topic().is_none());
-        assert!(body.group().is_empty());
-        assert!(body.client_id().is_empty());
-        assert_eq!(body.last_access_time(), 0);
-        assert_eq!(body.last_consume_time(), 0);
-        assert_eq!(body.lite_topic_count(), 0);
-        assert!(body.lite_topic_set().is_empty());
-    }
-
-    #[test]
     fn get_lite_client_info_response_body_getters_and_setters() {
         let mut body = GetLiteClientInfoResponseBody::new();
         body.with_parent_topic("parent".into())

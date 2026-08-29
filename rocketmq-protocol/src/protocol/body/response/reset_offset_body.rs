@@ -119,29 +119,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_reset_offset_body_new() {
-        let body = ResetOffsetBody::new();
-        assert!(body.offset_table.is_empty());
-    }
-
-    #[test]
-    fn test_reset_offset_body_encode_decode() {
-        let mut body = ResetOffsetBody::new();
-        let mq = MessageQueue::from_parts("test_topic", "broker-a", 1);
-        body.offset_table.insert(mq.clone(), 100);
-
-        let encoded = body.encode();
-        // Note: HashMap with complex key may not round-trip perfectly with serde_json
-        // The actual encoding is valid JSON, decoding may vary based on MessageQueue's
-        // Serialize/Deserialize implementation
-        assert!(!encoded.is_empty());
-
-        // Test that encoding produces valid JSON
-        let json_str = String::from_utf8(encoded).unwrap();
-        assert!(json_str.contains("offsetTable"));
-    }
-
-    #[test]
     fn reset_offset_body_encode_uses_java_object_keys() {
         let mut body = ResetOffsetBody::new();
         body.offset_table

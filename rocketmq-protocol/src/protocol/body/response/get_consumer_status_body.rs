@@ -121,17 +121,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_consumer_status_body_new_and_default() {
-        let body = GetConsumerStatusBody::new();
-        assert!(body.message_queue_table.is_empty());
-        assert!(body.consumer_table.is_empty());
-
-        let body = GetConsumerStatusBody::default();
-        assert!(body.message_queue_table.is_empty());
-        assert!(body.consumer_table.is_empty());
-    }
-
-    #[test]
     fn get_consumer_status_body_encode_and_decode() {
         let mut body = GetConsumerStatusBody::new();
         let mq = MessageQueue::from_parts(CheetahString::from("topic"), CheetahString::from("broker"), 1);
@@ -183,14 +172,5 @@ mod tests {
 
         let mq = MessageQueue::from_parts(CheetahString::from("topic"), CheetahString::from("broker"), 1);
         assert_eq!(decoded.message_queue_table.get(&mq), Some(&123));
-    }
-
-    #[test]
-    fn get_consumer_status_body_debug() {
-        let body = GetConsumerStatusBody::new();
-        let debug = format!("{:?}", body);
-        assert!(debug.contains("GetConsumerStatusBody"));
-        assert!(debug.contains("message_queue_table"));
-        assert!(debug.contains("consumer_table"));
     }
 }

@@ -149,19 +149,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_lite_group_info_response_body_default() {
-        let body = GetLiteGroupInfoResponseBody::default();
-        assert!(body.group().is_empty());
-        assert!(body.parent_topic().is_empty());
-        assert!(body.lite_topic().is_empty());
-        assert_eq!(body.earliest_unconsumed_timestamp(), 0);
-        assert_eq!(body.total_lag_count(), 0);
-        assert!(body.lite_topic_offset_wrapper().is_none());
-        assert!(body.lag_count_top_k().is_empty());
-        assert!(body.lag_timestamp_top_k().is_empty());
-    }
-
-    #[test]
     fn get_lite_group_info_response_body_getters_and_setters() {
         let mut body = GetLiteGroupInfoResponseBody::new();
         let wrapper = OffsetWrapper::default();

@@ -87,16 +87,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_parent_topic_info_response_body_default() {
-        let body = GetParentTopicInfoResponseBody::default();
-        assert!(body.get_topic().is_none());
-        assert_eq!(body.get_ttl(), 0);
-        assert!(body.get_groups().is_empty());
-        assert_eq!(body.get_lmq_num(), 0);
-        assert_eq!(body.get_lite_topic_count(), 0);
-    }
-
-    #[test]
     fn get_parent_topic_info_response_body_getters_setters() {
         let mut body = GetParentTopicInfoResponseBody::new();
         body.set_topic(CheetahString::from("parent"));

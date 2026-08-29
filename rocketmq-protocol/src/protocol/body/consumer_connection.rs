@@ -248,23 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn consumer_connection_default_and_new() {
-        let consumer_conn = ConsumerConnection::default();
-        assert!(consumer_conn.get_connection_set().is_empty());
-        assert!(consumer_conn.get_subscription_table().is_empty());
-        assert!(consumer_conn.get_consume_type().is_none());
-        assert!(consumer_conn.get_message_model().is_none());
-        assert!(consumer_conn.get_consume_from_where().is_none());
-
-        let consumer_conn = ConsumerConnection::new();
-        assert!(consumer_conn.get_connection_set().is_empty());
-        assert!(consumer_conn.get_subscription_table().is_empty());
-        assert!(consumer_conn.get_consume_type().is_none());
-        assert!(consumer_conn.get_message_model().is_none());
-        assert!(consumer_conn.get_consume_from_where().is_none());
-    }
-
-    #[test]
     fn consumer_connection_compute_min_version() {
         let consumer_conn = ConsumerConnection::new();
         assert_eq!(consumer_conn.compute_min_version(), i32::MAX);
@@ -346,29 +329,17 @@ mod tests {
     }
 
     #[test]
-    fn consumer_connection_consume_type_operations() {
+    fn consumer_connection_consumption_options() {
         let mut consumer_conn = ConsumerConnection::new();
         assert!(consumer_conn.get_consume_type().is_none());
-
-        consumer_conn.set_consume_type(ConsumeType::ConsumeActively);
-        assert_eq!(consumer_conn.get_consume_type(), Some(ConsumeType::ConsumeActively));
-    }
-
-    #[test]
-    fn consumer_connection_message_model_operations() {
-        let mut consumer_conn = ConsumerConnection::new();
         assert!(consumer_conn.get_message_model().is_none());
-
-        consumer_conn.set_message_model(MessageModel::Clustering);
-        assert_eq!(consumer_conn.get_message_model(), Some(MessageModel::Clustering));
-    }
-
-    #[test]
-    fn consumer_connection_consume_from_where_operations() {
-        let mut consumer_conn = ConsumerConnection::new();
         assert!(consumer_conn.get_consume_from_where().is_none());
 
+        consumer_conn.set_consume_type(ConsumeType::ConsumeActively);
+        consumer_conn.set_message_model(MessageModel::Clustering);
         consumer_conn.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
+        assert_eq!(consumer_conn.get_consume_type(), Some(ConsumeType::ConsumeActively));
+        assert_eq!(consumer_conn.get_message_model(), Some(MessageModel::Clustering));
         assert_eq!(
             consumer_conn.get_consume_from_where(),
             Some(ConsumeFromWhere::ConsumeFromLastOffset)

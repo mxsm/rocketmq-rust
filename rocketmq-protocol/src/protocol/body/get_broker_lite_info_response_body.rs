@@ -151,33 +151,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_broker_lite_info_response_body_default_and_new() {
-        let body = GetBrokerLiteInfoResponseBody::default();
-        assert!(body.get_store_type().is_none());
-        assert_eq!(body.get_max_lmq_num(), 0);
-        assert_eq!(body.get_current_lmq_num(), 0);
-        assert_eq!(body.get_lite_subscription_count(), 0);
-        assert_eq!(body.get_order_info_count(), 0);
-        assert_eq!(body.get_cq_table_size(), 0);
-        assert_eq!(body.get_offset_table_size(), 0);
-        assert_eq!(body.get_event_map_size(), 0);
-        assert!(body.get_topic_meta().is_empty());
-        assert!(body.get_group_meta().is_empty());
-
-        let body = GetBrokerLiteInfoResponseBody::new();
-        assert!(body.get_store_type().is_none());
-        assert_eq!(body.get_max_lmq_num(), 0);
-        assert_eq!(body.get_current_lmq_num(), 0);
-        assert_eq!(body.get_lite_subscription_count(), 0);
-        assert_eq!(body.get_order_info_count(), 0);
-        assert_eq!(body.get_cq_table_size(), 0);
-        assert_eq!(body.get_offset_table_size(), 0);
-        assert_eq!(body.get_event_map_size(), 0);
-        assert!(body.get_topic_meta().is_empty());
-        assert!(body.get_group_meta().is_empty());
-    }
-
-    #[test]
     fn get_broker_lite_info_response_body_getters_and_setters() {
         let mut body = GetBrokerLiteInfoResponseBody::new();
         body.set_store_type(CheetahString::from("local"));

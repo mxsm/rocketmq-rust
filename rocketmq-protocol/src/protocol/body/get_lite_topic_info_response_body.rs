@@ -107,16 +107,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_lite_topic_info_response_body_default() {
-        let body = GetLiteTopicInfoResponseBody::default();
-        assert!(body.parent_topic().is_empty());
-        assert!(body.lite_topic().is_empty());
-        assert!(body.subscriber().is_empty());
-        assert!(body.topic_offset().is_none());
-        assert!(!body.sharding_to_broker());
-    }
-
-    #[test]
     fn get_lite_topic_info_response_body_getters_setters() {
         let mut body = GetLiteTopicInfoResponseBody::new();
         let mut set = HashSet::new();

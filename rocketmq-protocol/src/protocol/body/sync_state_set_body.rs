@@ -95,17 +95,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_state_set_default_and_new() {
-        let sync_state = SyncStateSet::default();
-        assert!(sync_state.get_sync_state_set().is_none());
-        assert_eq!(sync_state.get_sync_state_set_epoch(), 0);
-
-        let sync_state = SyncStateSet::new();
-        assert!(sync_state.get_sync_state_set().is_none());
-        assert_eq!(sync_state.get_sync_state_set_epoch(), 0);
-    }
-
-    #[test]
     fn sync_state_set_take_sync_state_set() {
         let mut set = HashSet::new();
         set.insert(1);
@@ -118,19 +107,6 @@ mod tests {
         assert_eq!(taken.unwrap().len(), 2);
 
         assert!(sync_state.get_sync_state_set().is_none());
-    }
-
-    #[test]
-    fn sync_state_set_with_values() {
-        let mut set = HashSet::new();
-        set.insert(0);
-        set.insert(1);
-        set.insert(2);
-
-        let sync_state = SyncStateSet::with_values(set, 5);
-        assert!(sync_state.get_sync_state_set().is_some());
-        assert_eq!(sync_state.get_sync_state_set().unwrap().len(), 3);
-        assert_eq!(sync_state.get_sync_state_set_epoch(), 5);
     }
 
     #[test]

@@ -81,18 +81,11 @@ mod tests {
     }
 
     #[test]
-    fn test_default_values() {
-        let wrapper = TopicQueueMappingSerializeWrapper::default();
-
-        assert!(wrapper.topic_queue_mapping_info_map().is_none());
-        assert!(wrapper.data_version().is_none());
-    }
-
-    #[test]
     fn test_take_topic_queue_mapping_info_map() {
         let map = create_test_map();
         let mut wrapper = TopicQueueMappingSerializeWrapper::new(Some(map), None);
 
+        assert!(wrapper.data_version().is_none());
         let taken_map = wrapper.take_topic_queue_mapping_info_map();
 
         assert!(taken_map.is_some());

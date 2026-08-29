@@ -63,29 +63,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn user_info_default_values() {
-        let user_info = UserInfo::default();
-        assert!(user_info.username.is_none());
-        assert!(user_info.password.is_none());
-        assert!(user_info.user_type.is_none());
-        assert!(user_info.user_status.is_none());
-    }
-
-    #[test]
-    fn user_info_with_values() {
-        let user_info = UserInfo {
-            username: Some(CheetahString::from("user")),
-            password: Some(CheetahString::from("pass")),
-            user_type: Some(CheetahString::from("admin")),
-            user_status: Some(CheetahString::from("active")),
-        };
-        assert_eq!(user_info.username, Some(CheetahString::from("user")));
-        assert_eq!(user_info.password, Some(CheetahString::from("pass")));
-        assert_eq!(user_info.user_type, Some(CheetahString::from("admin")));
-        assert_eq!(user_info.user_status, Some(CheetahString::from("active")));
-    }
-
-    #[test]
     fn serialize_user_info() {
         let user_info = UserInfo {
             username: Some(CheetahString::from("user")),

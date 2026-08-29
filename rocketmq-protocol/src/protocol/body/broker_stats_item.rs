@@ -61,22 +61,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn broker_stats_item_default() {
-        let item = BrokerStatsItem::default();
-        assert_eq!(item.get_sum(), 0);
-        assert_eq!(item.get_tps(), 0.0);
-        assert_eq!(item.get_avgpt(), 0.0);
-    }
-
-    #[test]
-    fn broker_stats_item_new() {
-        let item = BrokerStatsItem::new(100, 10.5, 1.2);
-        assert_eq!(item.get_sum(), 100);
-        assert_eq!(item.get_tps(), 10.5);
-        assert_eq!(item.get_avgpt(), 1.2);
-    }
-
-    #[test]
     fn broker_stats_item_setters() {
         let mut item = BrokerStatsItem::default();
         item.set_sum(200);

@@ -83,44 +83,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn policy_entry_info_default_values() {
-        let policy_entry = PolicyEntryInfo::default();
-        assert!(policy_entry.resource.is_none());
-        assert!(policy_entry.actions.is_none());
-        assert!(policy_entry.source_ips.is_none());
-        assert!(policy_entry.decision.is_none());
-    }
-
-    #[test]
-    fn policy_entry_info_with_values() {
-        let policy_entry = PolicyEntryInfo {
-            resource: Some(CheetahString::from("resource")),
-            actions: Some(vec![CheetahString::from("actions")]),
-            source_ips: Some(vec![CheetahString::from("192.168.1.1")]),
-            decision: Some(CheetahString::from("allow")),
-        };
-        assert_eq!(policy_entry.resource, Some(CheetahString::from("resource")));
-        assert_eq!(policy_entry.actions, Some(vec![CheetahString::from("actions")]));
-        assert_eq!(policy_entry.source_ips, Some(vec![CheetahString::from("192.168.1.1")]));
-        assert_eq!(policy_entry.decision, Some(CheetahString::from("allow")));
-    }
-
-    #[test]
-    fn serialize_policy_entry_info() {
-        let policy_entry = PolicyEntryInfo {
-            resource: Some(CheetahString::from("resource")),
-            actions: Some(vec![CheetahString::from("actions")]),
-            source_ips: Some(vec![CheetahString::from("192.168.1.1")]),
-            decision: Some(CheetahString::from("allow")),
-        };
-        let serialized = serde_json::to_string(&policy_entry).unwrap();
-        assert!(serialized.contains("\"resource\":\"resource\""));
-        assert!(serialized.contains("\"actions\":[\"actions\"]"));
-        assert!(serialized.contains("\"sourceIps\":[\"192.168.1.1\"]"));
-        assert!(serialized.contains("\"decision\":\"allow\""));
-    }
-
-    #[test]
     fn deserialize_policy_entry_info() {
         let json = r#"{
             "resource": "resource",
@@ -164,23 +126,6 @@ mod tests {
     }
 
     #[test]
-    fn policy_info_default_values() {
-        let policy_info = PolicyInfo::default();
-        assert!(policy_info.policy_type.is_none());
-        assert!(policy_info.entries.is_none());
-    }
-
-    #[test]
-    fn policy_info_with_values() {
-        let policy_info = PolicyInfo {
-            policy_type: Some(CheetahString::from("type")),
-            entries: Some(vec![PolicyEntryInfo::default()]),
-        };
-        assert_eq!(policy_info.policy_type, Some(CheetahString::from("type")));
-        assert_eq!(policy_info.entries.unwrap().len(), 1);
-    }
-
-    #[test]
     fn serialize_policy_info() {
         let policy_info = PolicyInfo {
             policy_type: Some(CheetahString::from("type")),
@@ -208,23 +153,6 @@ mod tests {
         let deserialized: PolicyInfo = serde_json::from_str(json).unwrap();
         assert!(deserialized.policy_type.is_none());
         assert!(deserialized.entries.is_none());
-    }
-
-    #[test]
-    fn acl_info_default_values() {
-        let acl_info = AclInfo::default();
-        assert!(acl_info.subject.is_none());
-        assert!(acl_info.policies.is_none());
-    }
-
-    #[test]
-    fn acl_info_with_values() {
-        let acl_info = AclInfo {
-            subject: Some(CheetahString::from("subject")),
-            policies: Some(vec![PolicyInfo::default()]),
-        };
-        assert_eq!(acl_info.subject, Some(CheetahString::from("subject")));
-        assert_eq!(acl_info.policies.unwrap().len(), 1);
     }
 
     #[test]

@@ -147,37 +147,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_creates_instance_of_epoch_entry_cache() {
-        let epoch_entry_cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry::new(1, 0)], 1);
-        assert_eq!(epoch_entry_cache.get_cluster_name(), &CheetahString::from("cluster1"));
-        assert_eq!(epoch_entry_cache.get_broker_id(), 1);
-        assert_eq!(epoch_entry_cache.get_broker_name(), &CheetahString::from("broker1"));
-    }
-    #[test]
-    fn set_broker_name_updates_broker_name() {
-        let mut epoch_entry_cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry::new(1, 0)], 1);
-        epoch_entry_cache.set_broker_name("broker2");
-        assert_eq!(epoch_entry_cache.get_broker_name(), &CheetahString::from("broker2"));
-    }
+    fn epoch_entry_and_cache_accessors_update_all_fields() {
+        let mut entry = EpochEntry::new(1, 0);
+        assert_eq!(entry.get_end_offset(), i64::MAX);
+        entry.set_epoch(2);
+        entry.set_start_offset(100);
+        entry.set_end_offset(200);
+        assert_eq!(entry.get_epoch(), 2);
+        assert_eq!(entry.get_start_offset(), 100);
+        assert_eq!(entry.get_end_offset(), 200);
 
-    #[test]
-    fn set_cluster_name_updates_cluster_name() {
-        let mut epoch_entry_cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry::new(1, 0)], 1);
-        epoch_entry_cache.set_cluster_name("cluster2");
-        assert_eq!(epoch_entry_cache.get_cluster_name(), &CheetahString::from("cluster2"));
+        let mut cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![entry], 500);
+        assert_eq!(cache.get_cluster_name(), &CheetahString::from("cluster1"));
+        assert_eq!(cache.get_broker_name(), &CheetahString::from("broker1"));
+        assert_eq!(cache.get_broker_id(), 1);
+        assert_eq!(cache.get_epoch_list().len(), 1);
+        assert_eq!(cache.get_max_offset(), 500);
+
+        cache.set_cluster_name("cluster2");
+        cache.set_broker_name("broker2");
+        cache.set_max_offset(600);
+        cache.get_epoch_list_mut().push(EpochEntry::new(3, 200));
+        assert_eq!(cache.get_cluster_name(), &CheetahString::from("cluster2"));
+        assert_eq!(cache.get_broker_name(), &CheetahString::from("broker2"));
+        assert_eq!(cache.get_max_offset(), 600);
+        assert_eq!(cache.get_epoch_list().len(), 2);
     }
 
     #[test]
     fn epoch_entry_display() {
         let entry = EpochEntry::with_end_offset(1, 100, 200);
         assert_eq!(entry.to_string(), "EpochEntry{epoch=1, startOffset=100, endOffset=200}");
-    }
-
-    #[test]
-    fn epoch_entry_cache_getters() {
-        let entries = vec![EpochEntry::new(1, 0), EpochEntry::new(2, 100)];
-        let cache = EpochEntryCache::new("cluster1", "broker1", 1, entries, 500);
-        assert_eq!(cache.get_epoch_list().len(), 2);
-        assert_eq!(cache.get_max_offset(), 500);
     }
 }

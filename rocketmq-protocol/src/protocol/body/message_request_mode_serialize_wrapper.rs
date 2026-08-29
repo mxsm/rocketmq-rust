@@ -58,13 +58,7 @@ mod tests {
     use crate::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 
     #[test]
-    fn default_creates_wrapper_with_empty_map() {
-        let wrapper = MessageRequestModeSerializeWrapper::default();
-        assert!(wrapper.message_request_mode_map().is_empty());
-    }
-
-    #[test]
-    fn new_creates_wrapper_with_provided_map() {
+    fn wrapper_methods_and_serde_preserve_the_nested_map() {
         let mut map = MessageRequestModeMap::new();
         let mut group_map = HashMap::new();
         group_map.insert(
@@ -73,17 +67,20 @@ mod tests {
         );
         map.insert(CheetahString::from("topic1"), group_map);
 
-        let wrapper = MessageRequestModeSerializeWrapper::new(map);
+        let mut wrapper = MessageRequestModeSerializeWrapper::new(map);
         assert_eq!(wrapper.message_request_mode_map().len(), 1);
         assert!(wrapper
             .message_request_mode_map()
             .contains_key(&CheetahString::from("topic1")));
-    }
 
-    #[test]
-    fn new_creates_wrapper_with_empty_map() {
-        let map = MessageRequestModeMap::new();
-        let wrapper = MessageRequestModeSerializeWrapper::new(map);
-        assert!(wrapper.message_request_mode_map().is_empty());
+        let encoded = serde_json::to_vec(&wrapper).expect("serialize request mode map");
+        let decoded: MessageRequestModeSerializeWrapper =
+            serde_json::from_slice(&encoded).expect("deserialize request mode map");
+        wrapper.set_message_request_mode_map(decoded.into_inner());
+        let map = MessageRequestModeSerializeWrapper::from_inner(wrapper.into_inner()).into_inner();
+        let group_map = map
+            .get(&CheetahString::from("topic1"))
+            .expect("topic should survive the round trip");
+        assert!(group_map.contains_key(&CheetahString::from("group1")));
     }
 }

@@ -109,50 +109,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn queue_span_init() {
-        let body: QueueTimeSpan = Default::default();
-        assert_eq!(body.consume_time_stamp, 0);
-        assert_eq!(body.delay_time, 0);
-        assert_eq!(body.max_time_stamp, 0);
-        assert_eq!(body.min_time_stamp, 0);
-        assert_eq!(body.message_queue, None);
-    }
-    #[test]
-    fn queue_span_clone() {
-        let body: QueueTimeSpan = QueueTimeSpan {
-            message_queue: Some(MessageQueue::new()),
-            min_time_stamp: 1,
-            max_time_stamp: 2,
-            consume_time_stamp: 3,
-            delay_time: 4,
-        };
-        let body_clone = body.clone();
-        assert_eq!(body_clone.consume_time_stamp, 3);
-        assert_eq!(body_clone.delay_time, 4);
-        assert_eq!(body_clone.max_time_stamp, 2);
-        assert_eq!(body_clone.min_time_stamp, 1);
-        assert_eq!(body_clone.message_queue, Some(MessageQueue::new()),);
-    }
-    #[test]
-    fn queue_span_deserialise() {
-        let body: QueueTimeSpan = QueueTimeSpan {
-            message_queue: Some(MessageQueue::new()),
-            min_time_stamp: 1,
-            max_time_stamp: 2,
-            consume_time_stamp: 3,
-            delay_time: 4,
-        };
-
-        let json = serde_json::to_string(&body).unwrap();
-        let deserialized: QueueTimeSpan = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.consume_time_stamp, 3);
-        assert_eq!(deserialized.delay_time, 4);
-        assert_eq!(deserialized.max_time_stamp, 2);
-        assert_eq!(deserialized.min_time_stamp, 1);
-        assert_eq!(deserialized.message_queue, Some(MessageQueue::new()),);
-    }
-    #[test]
-    fn queue_span_serialise() {
+    fn queue_span_serde_round_trip() {
         let body: QueueTimeSpan = QueueTimeSpan {
             message_queue: Some(MessageQueue::new()),
             min_time_stamp: 1,
@@ -167,6 +124,12 @@ mod tests {
             "{\"message_queue\":{\"topic\":\"\",\"brokerName\":\"\",\"queueId\":0},\"min_time_stamp\":1,\"\
              max_time_stamp\":2,\"consume_time_stamp\":3,\"delay_time\":4}"
         );
+        let deserialized: QueueTimeSpan = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.consume_time_stamp, 3);
+        assert_eq!(deserialized.delay_time, 4);
+        assert_eq!(deserialized.max_time_stamp, 2);
+        assert_eq!(deserialized.min_time_stamp, 1);
+        assert_eq!(deserialized.message_queue, Some(MessageQueue::new()),);
     }
     #[test]
     fn queue_span_setters() {
@@ -176,22 +139,6 @@ mod tests {
         body.set_max_time_stamp(2);
         body.set_consume_time_stamp(3);
         body.set_delay_time(4);
-
-        assert_eq!(body.consume_time_stamp, 3);
-        assert_eq!(body.delay_time, 4);
-        assert_eq!(body.max_time_stamp, 2);
-        assert_eq!(body.min_time_stamp, 1);
-        assert_eq!(body.message_queue, Some(MessageQueue::new()),);
-    }
-    #[test]
-    fn queue_span_getters() {
-        let body: QueueTimeSpan = QueueTimeSpan {
-            message_queue: Some(MessageQueue::new()),
-            min_time_stamp: 1,
-            max_time_stamp: 2,
-            consume_time_stamp: 3,
-            delay_time: 4,
-        };
 
         assert_eq!(body.get_consume_time_stamp(), 3);
         assert_eq!(body.get_delay_time(), 4);
