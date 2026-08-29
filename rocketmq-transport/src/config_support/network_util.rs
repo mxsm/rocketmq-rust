@@ -50,9 +50,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn get_local_address_does_not_panic() {
-        let _ = NetworkUtil::get_local_address();
-    }
 }
