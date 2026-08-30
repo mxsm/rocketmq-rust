@@ -276,37 +276,7 @@ mod tests {
     use crate::protocol::route::route_data_view::BrokerData;
 
     #[test]
-    fn topic_route_data_default_values() {
-        let topic_route_data = TopicRouteData::default();
-        assert!(topic_route_data.order_topic_conf.is_none());
-        assert!(topic_route_data.queue_datas.is_empty());
-        assert!(topic_route_data.broker_datas.is_empty());
-        assert!(topic_route_data.filter_server_table.is_empty());
-        assert!(topic_route_data.topic_queue_mapping_by_broker.is_none());
-    }
-
-    #[test]
-    fn topic_route_data_with_values() {
-        let mut filter_server_table = HashMap::new();
-        filter_server_table.insert(CheetahString::from("key"), vec![CheetahString::from("value")]);
-        let mut topic_queue_mapping_by_broker = HashMap::new();
-        topic_queue_mapping_by_broker.insert(CheetahString::from("broker"), TopicQueueMappingInfo::default());
-        let topic_route_data = TopicRouteData {
-            order_topic_conf: Some(CheetahString::from("conf")),
-            queue_datas: vec![QueueData::default()],
-            broker_datas: vec![BrokerData::default()],
-            filter_server_table,
-            topic_queue_mapping_by_broker: Some(topic_queue_mapping_by_broker),
-        };
-        assert_eq!(topic_route_data.order_topic_conf, Some(CheetahString::from("conf")));
-        assert_eq!(topic_route_data.queue_datas.len(), 1);
-        assert_eq!(topic_route_data.broker_datas.len(), 1);
-        assert_eq!(topic_route_data.filter_server_table.len(), 1);
-        assert!(topic_route_data.topic_queue_mapping_by_broker.is_some());
-    }
-
-    #[test]
-    fn serialize_topic_route_data() {
+    fn serde_preserves_topic_route_data() {
         let mut filter_server_table = HashMap::new();
         filter_server_table.insert(CheetahString::from("key"), vec![CheetahString::from("value")]);
         let mut topic_queue_mapping_by_broker = HashMap::new();
@@ -324,6 +294,9 @@ mod tests {
         assert!(serialized.contains("\"brokerDatas\":["));
         assert!(serialized.contains("\"filterServerTable\":{\"key\":[\"value\"]}"));
         assert!(serialized.contains("\"topicQueueMappingInfo\":{\"broker\":{"));
+
+        let decoded = TopicRouteData::decode(serialized.as_bytes()).unwrap();
+        assert_eq!(decoded, topic_route_data);
     }
 
     #[test]
@@ -402,25 +375,25 @@ mod tests {
     }
 
     #[test]
-    fn topic_route_data_changed_with_none_old_data() {
-        let topic_route_data = TopicRouteData::default();
-        assert!(topic_route_data.topic_route_data_changed(None));
-    }
-
-    #[test]
-    fn topic_route_data_changed_with_different_data() {
-        let topic_route_data = TopicRouteData::default();
-        let old_data = TopicRouteData {
-            order_topic_conf: Some(CheetahString::from("conf")),
+    fn topic_route_data_changed_ignores_broker_and_queue_order() {
+        let queue = |name: &str, count| QueueData::new(name.into(), count, count, 6, 0);
+        let broker = |name: &str| BrokerData::new("cluster".into(), name.into(), HashMap::new(), None);
+        let route_data = TopicRouteData {
+            queue_datas: vec![queue("broker-b", 8), queue("broker-a", 4)],
+            broker_datas: vec![broker("broker-b"), broker("broker-a")],
             ..Default::default()
         };
-        assert!(topic_route_data.topic_route_data_changed(Some(&old_data)));
-    }
 
-    #[test]
-    fn topic_route_data_changed_with_same_data() {
-        let topic_route_data = TopicRouteData::default();
-        let old_data = TopicRouteData::default();
-        assert!(!topic_route_data.topic_route_data_changed(Some(&old_data)));
+        assert!(route_data.topic_route_data_changed(None));
+        assert!(!route_data.topic_route_data_changed(Some(&route_data)));
+
+        let mut reordered = TopicRouteData::from_existing(&route_data);
+        reordered.queue_datas.reverse();
+        reordered.broker_datas.reverse();
+        assert!(!route_data.topic_route_data_changed(Some(&reordered)));
+
+        let mut changed = TopicRouteData::from_existing(&route_data);
+        changed.order_topic_conf = Some(CheetahString::from("changed"));
+        assert!(route_data.topic_route_data_changed(Some(&changed)));
     }
 }

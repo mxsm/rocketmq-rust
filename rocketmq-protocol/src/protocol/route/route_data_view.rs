@@ -208,106 +208,108 @@ mod tests {
     use super::*;
 
     #[test]
-    fn broker_data_new_initializes_correctly() {
-        let cluster = CheetahString::from("test_cluster");
-        let broker_name = CheetahString::from("test_broker");
-        let broker_addrs = HashMap::new();
-        let zone_name = CheetahString::from("test_zone");
-
-        let broker_data = BrokerData::new(
-            cluster.clone(),
-            broker_name.clone(),
-            broker_addrs.clone(),
-            Some(zone_name.clone()),
-        );
-
-        assert_eq!(broker_data.cluster, cluster);
-        assert_eq!(broker_data.broker_name, broker_name);
-        assert_eq!(broker_data.broker_addrs, broker_addrs);
-        if let Some(zone) = &broker_data.zone_name {
-            assert_eq!(zone, &zone_name);
-        }
-        assert!(!broker_data.enable_acting_master);
-    }
-
-    #[test]
-    fn broker_data_setters_work_correctly() {
+    fn broker_data_methods_preserve_route_fields() {
         let mut broker_data = BrokerData::new(
             CheetahString::from("cluster1"),
             CheetahString::from("broker1"),
             HashMap::new(),
             None,
         );
+        assert_eq!(broker_data.cluster(), "cluster1");
+        assert_eq!(broker_data.broker_name(), "broker1");
+        assert!(broker_data.broker_addrs().is_empty());
+        assert_eq!(broker_data.zone_name(), None);
+        assert!(!broker_data.enable_acting_master());
 
         broker_data.set_cluster(CheetahString::from("cluster2"));
         broker_data.set_broker_name(CheetahString::from("broker2"));
         broker_data.set_broker_addrs(HashMap::from([(1, CheetahString::from("127.0.0.1"))]));
+        broker_data
+            .broker_addrs_mut()
+            .insert(2, CheetahString::from("127.0.0.2"));
         broker_data.set_zone_name(Some(CheetahString::from("zone1")));
         broker_data.set_enable_acting_master(true);
 
-        assert_eq!(broker_data.cluster, CheetahString::from("cluster2"));
-        assert_eq!(broker_data.broker_name, CheetahString::from("broker2"));
+        assert_eq!(broker_data.cluster(), "cluster2");
+        assert_eq!(broker_data.broker_name(), "broker2");
         assert_eq!(
-            broker_data.broker_addrs.get(&1).unwrap(),
-            &CheetahString::from("127.0.0.1")
+            broker_data.broker_addrs(),
+            &HashMap::from([
+                (1, CheetahString::from("127.0.0.1")),
+                (2, CheetahString::from("127.0.0.2")),
+            ])
         );
-        if let Some(zone_name) = &broker_data.zone_name {
-            assert_eq!(zone_name, &CheetahString::from("zone1"));
-        }
-        assert!(broker_data.enable_acting_master);
+        assert_eq!(broker_data.zone_name(), Some(&CheetahString::from("zone1")));
+        assert!(broker_data.enable_acting_master());
     }
 
     #[test]
-    fn broker_data_remove_broker_by_addr_works_correctly() {
+    fn remove_broker_by_addr_keeps_the_current_id_only() {
         let mut broker_data = BrokerData::new(
             CheetahString::from("cluster1"),
             CheetahString::from("broker1"),
             HashMap::from([
                 (1, CheetahString::from("127.0.0.1")),
-                (2, CheetahString::from("127.0.0.2")),
+                (2, CheetahString::from("127.0.0.1")),
+                (3, CheetahString::from("127.0.0.3")),
             ]),
             None,
         );
 
         broker_data.remove_broker_by_addr(1, &"127.0.0.1".into());
-        //assert!(broker_data.broker_addrs.get(&1).is_none());
-        assert!(broker_data.broker_addrs.contains_key(&2));
+        assert_eq!(
+            broker_data.broker_addrs(),
+            &HashMap::from([
+                (1, CheetahString::from("127.0.0.1")),
+                (3, CheetahString::from("127.0.0.3")),
+            ])
+        );
     }
 
     #[test]
-    fn broker_data_select_broker_addr_returns_master_if_exists() {
-        let broker_data = BrokerData::new(
+    fn select_broker_addr_prefers_master_and_indexes_slaves() {
+        let mut broker_data = BrokerData::new(
             CheetahString::from("cluster1"),
             CheetahString::from("broker1"),
-            HashMap::from([(MASTER_ID, CheetahString::from("127.0.0.1"))]),
+            HashMap::new(),
             None,
         );
+        assert_eq!(broker_data.select_broker_addr_with_index(0), None);
 
-        let selected_addr = broker_data.select_broker_addr_with_index(0);
-        assert_eq!(selected_addr.unwrap(), CheetahString::from("127.0.0.1"));
+        broker_data.set_broker_addrs(HashMap::from([
+            (4, CheetahString::from("127.0.0.4")),
+            (2, CheetahString::from("127.0.0.2")),
+        ]));
+        assert_eq!(
+            broker_data.select_broker_addr_with_index(0),
+            Some(CheetahString::from("127.0.0.2"))
+        );
+        assert_eq!(
+            broker_data.select_broker_addr_with_index(1),
+            Some(CheetahString::from("127.0.0.4"))
+        );
+        assert_eq!(
+            broker_data.select_broker_addr_with_index(2),
+            Some(CheetahString::from("127.0.0.2"))
+        );
+
+        broker_data
+            .broker_addrs_mut()
+            .insert(MASTER_ID, CheetahString::from("127.0.0.1"));
+        assert_eq!(
+            broker_data.select_broker_addr_with_index(1),
+            Some(CheetahString::from("127.0.0.1"))
+        );
     }
 
     #[test]
-    fn broker_data_select_broker_addr_returns_random_if_no_master() {
-        let broker_data = BrokerData::new(
-            CheetahString::from("cluster1"),
-            CheetahString::from("broker1"),
-            HashMap::from([(2, CheetahString::from("127.0.0.2"))]),
-            None,
-        );
-
-        let selected_addr = broker_data.select_broker_addr_with_index(0);
-        assert_eq!(selected_addr.unwrap(), CheetahString::from("127.0.0.2"));
-    }
-
-    #[test]
-    fn queue_data_new_initializes_correctly() {
+    fn queue_data_methods_preserve_route_fields() {
         let queue_data = QueueData::new(CheetahString::from("broker1"), 4, 4, 6, 0);
 
-        assert_eq!(queue_data.broker_name, CheetahString::from("broker1"));
-        assert_eq!(queue_data.read_queue_nums, 4);
-        assert_eq!(queue_data.write_queue_nums, 4);
-        assert_eq!(queue_data.perm, 6);
-        assert_eq!(queue_data.topic_sys_flag, 0);
+        assert_eq!(queue_data.broker_name(), "broker1");
+        assert_eq!(queue_data.read_queue_nums(), 4);
+        assert_eq!(queue_data.write_queue_nums(), 4);
+        assert_eq!(queue_data.perm(), 6);
+        assert_eq!(queue_data.topic_sys_flag(), 0);
     }
 }
