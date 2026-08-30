@@ -23,6 +23,12 @@ RUNTIME_AUDIT = ROOT / "scripts" / "runtime-audit.ps1"
 
 
 class RuntimeAuditSreContractTest(unittest.TestCase):
+    def test_mcp_new_layout_preserves_tooling_runtime_dispositions(self) -> None:
+        script = RUNTIME_AUDIT.read_text(encoding="utf-8-sig")
+
+        tooling_path_pattern = "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)"
+        self.assertGreaterEqual(script.count(tooling_path_pattern), 7)
+
     def test_source_test_modules_are_never_classified_as_production(self) -> None:
         script = RUNTIME_AUDIT.read_text(encoding="utf-8-sig")
 
@@ -35,13 +41,13 @@ class RuntimeAuditSreContractTest(unittest.TestCase):
         script = RUNTIME_AUDIT.read_text(encoding="utf-8-sig")
 
         self.assertIn(
-            '$path -eq "rocketmq-sre/crates/rocketmq-sre-executor/src/verifier.rs"',
+            '$path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/src/verifier.rs"',
             script,
         )
         self.assertIn('Disposition = "sre-bounded-verification-poll"', script)
         self.assertIn("descriptor maximum wait and hard observation limit", script)
 
-        broad_allowlist = '$path -match "^rocketmq-sre/crates/rocketmq-sre-executor/'
+        broad_allowlist = '$path -match "^rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/'
         self.assertNotIn(broad_allowlist, script)
 
 

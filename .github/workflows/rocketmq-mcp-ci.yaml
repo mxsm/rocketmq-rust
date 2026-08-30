@@ -3,7 +3,7 @@ name: RocketMQ MCP CI
 on:
   push:
     paths:
-      - "rocketmq-tools/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
       - "rocketmq-auth/**"
       - "rocketmq-client/**"
@@ -21,7 +21,7 @@ on:
       - ".github/workflows/rocketmq-mcp-ci.yaml"
   pull_request:
     paths:
-      - "rocketmq-tools/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
       - "rocketmq-auth/**"
       - "rocketmq-client/**"
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rocketmq-tools/rocketmq-mcp
+        working-directory: rocketmq-ai/rocketmq-mcp
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
@@ -54,7 +54,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rocketmq-tools/rocketmq-mcp
+          workspaces: rocketmq-ai/rocketmq-mcp
       - run: cargo fmt --all -- --check
       - run: cargo check --locked
       - run: python scripts/check_read_only_boundary.py
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rocketmq-tools/rocketmq-mcp
+        working-directory: rocketmq-ai/rocketmq-mcp
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0

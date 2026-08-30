@@ -1,0 +1,656 @@
+name: rocketmq-rust-ai-sre-phase00
+
+x-otel-environment: &otel-environment
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  RUST_LOG: info
+
+x-rocketmq-environment: &rocketmq-environment
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  RUST_LOG: info
+  ROCKETMQ_SECURITY_PROFILE: secure-enforced
+  ROCKETMQ_SECURITY_TRUST_ANCHOR: /etc/rocketmq/tls/ca-cert.pem
+  ROCKETMQ_SECURITY_TLS_CERT: /etc/rocketmq/tls/server-cert.pem
+  ROCKETMQ_SECURITY_TLS_KEY: /etc/rocketmq/tls/server-key.pem
+  ROCKETMQ_SECURITY_SECRET_PROVIDER: mounted-files
+  ROCKETMQ_SECURITY_ADMIN_IDENTITY: /etc/rocketmq/security/admin.identity
+  ROCKETMQ_SECURITY_REQUEST_POLICY: /etc/rocketmq/security/request-policy.json
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_BIND_ADDR: 0.0.0.0:8087
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_TOKEN_FILE: /etc/rocketmq/security/runtime-diagnostics-token
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS: "10"
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP: "true"
+
+x-dev-issuer-url: &dev-issuer-url https://dev-issuer-tls:8443
+
+x-rocketmq-build-args: &rocketmq-build-args
+  SOURCE_REVISION: ${SOURCE_REVISION:-0000000000000000000000000000000000000000}
+
+services:
+  namesrv:
+    build:
+      context: ../../../..
+      dockerfile: docker/Dockerfile.base
+      target: namesrv
+      args: *rocketmq-build-args
+    command: ["--configFile", "/etc/rocketmq/namesrv.toml"]
+    environment:
+      <<: *rocketmq-environment
+      OTEL_SERVICE_NAME: rocketmq-namesrv
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:8088
+    volumes:
+      - ./config/namesrv.toml:/etc/rocketmq/namesrv.toml:ro
+      - ../../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../../target/phase00-certs/server-cert.pem:/etc/rocketmq/tls/server-cert.pem:ro
+      - ../../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
+      - ../../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
+      - ../../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
+      - namesrv-data:/var/lib/rocketmq/namesrv
+    ports:
+      - "9876:9876"
+      - "18088:8088"
+    networks: [rocketmq-sre]
+
+  controller:
+    build:
+      context: ../../../..
+      dockerfile: docker/Dockerfile.base
+      target: controller
+      args: *rocketmq-build-args
+    command: ["--config-file", "/etc/rocketmq/controller.toml"]
+    environment:
+      <<: *rocketmq-environment
+      OTEL_SERVICE_NAME: rocketmq-controller
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:8088
+    volumes:
+      - ./config/controller.toml:/etc/rocketmq/controller.toml:ro
+      - ../../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../../target/phase00-certs/server-cert.pem:/etc/rocketmq/tls/server-cert.pem:ro
+      - ../../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
+      - ../../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
+      - ../../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
+      - controller-data:/var/lib/rocketmq/controller
+    ports:
+      - "60109:60109"
+      - "60110:60110"
+      - "18089:8088"
+    networks: [rocketmq-sre]
+
+  broker:
+    build:
+      context: ../../../..
+      dockerfile: docker/Dockerfile.base
+      target: broker
+      args: *rocketmq-build-args
+    command: ["--configFile", "/etc/rocketmq/broker.toml"]
+    depends_on:
+      - namesrv
+      - controller
+    environment:
+      <<: *rocketmq-environment
+      OTEL_SERVICE_NAME: rocketmq-broker
+      RUST_LOG: info,rocketmq_broker::processor::send_message_processor=debug
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:8088
+    volumes:
+      - ./config/broker.toml:/etc/rocketmq/broker.toml:ro
+      - ../../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../../target/phase00-certs/server-cert.pem:/etc/rocketmq/tls/server-cert.pem:ro
+      - ../../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
+      - ../../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
+      - ../../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
+      - ../../../../target/phase00-certs/broker-acl.yml:/etc/rocketmq/security/broker-acl.yml:ro
+      - broker-data:/var/lib/rocketmq/broker
+    ports:
+      - "10911:10911"
+      - "10912:10912"
+      - "18090:8088"
+    networks: [rocketmq-sre]
+
+  proxy:
+    build:
+      context: ../../../..
+      dockerfile: docker/Dockerfile.base
+      target: proxy
+      args: *rocketmq-build-args
+    command: ["--config", "/etc/rocketmq/proxy.toml"]
+    depends_on:
+      - namesrv
+      - broker
+    environment:
+      <<: *rocketmq-environment
+      OTEL_SERVICE_NAME: rocketmq-proxy
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:8088
+    volumes:
+      - ./config/proxy.toml:/etc/rocketmq/proxy.toml:ro
+      - ../../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../../target/phase00-certs/server-cert.pem:/etc/rocketmq/tls/server-cert.pem:ro
+      - ../../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
+      - ../../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
+      - ../../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+      - "18091:8088"
+    networks: [rocketmq-sre]
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rocketmq_sre
+      POSTGRES_PASSWORD: rocketmq_sre
+      POSTGRES_DB: rocketmq_sre
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rocketmq_sre"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks: [rocketmq-sre, control-plane-backend]
+
+  sre-model-mock:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: model-mock
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_SRE_MODEL_MOCK_BIND_ADDR: 0.0.0.0:8094
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8094/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [model-backend]
+
+  sre-control-plane:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: control-plane
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sre-model-mock:
+        condition: service_healthy
+    environment:
+      <<: *otel-environment
+      OTEL_SERVICE_NAME: rocketmq-sre-control-plane
+      ROCKETMQ_SRE_BIND_ADDR: 0.0.0.0:8090
+      ROCKETMQ_SRE_CONNECTOR_BIND_ADDR: 127.0.0.1:8093
+      ROCKETMQ_SRE_CONFIG_DIR: /opt/rocketmq-sre/config
+      ROCKETMQ_SRE_MIGRATIONS_DIR: /opt/rocketmq-sre/migrations
+      ROCKETMQ_SRE_INTERNAL_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_GRANT_SIGNING_KEY: phase00-development-grant-signing-key-000001
+      ROCKETMQ_SRE_AGENT_ACK_KEY: phase03-development-agent-ack-key-00000001
+      ROCKETMQ_SRE_EXECUTOR_URL: http://sre-executor:8094
+      ROCKETMQ_SRE_EXECUTOR_TIMEOUT_SECONDS: "240"
+      ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTOR_ALLOW_INSECURE_HTTP: "true"
+      ROCKETMQ_SRE_DEV_AUTH: "true"
+      ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH: /var/lib/rocketmq-sre/evidence
+      ROCKETMQ_SRE_MODEL_ENABLED: "true"
+      ROCKETMQ_SRE_MODEL_LOCAL_ENDPOINT: http://sre-model-mock:8094/v1
+      ROCKETMQ_SRE_MODEL_LOCAL_NAME: phase01-read-only-fixture
+      ROCKETMQ_SRE_MODEL_SECRET_PROVIDER: none
+      ROCKETMQ_SRE_MODEL_ALLOW_INSECURE_HTTP: "true"
+      DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@postgres:5432/rocketmq_sre
+    volumes:
+      - evidence-objects:/var/lib/rocketmq-sre/evidence
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8090/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "8090:8090"
+      - "127.0.0.1:8444:8444"
+    networks: [rocketmq-sre, control-plane-backend, model-backend, execution-control]
+
+  sre-execution-agent:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: execution-agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sre-control-plane:
+        condition: service_healthy
+      namesrv:
+        condition: service_started
+      broker:
+        condition: service_started
+    environment:
+      RUST_LOG: info
+      DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@postgres:5432/rocketmq_sre
+      ROCKETMQ_SRE_AGENT_BIND_ADDR: 0.0.0.0:8095
+      ROCKETMQ_SRE_LEASE_AUTHORITY_URL: http://sre-control-plane:8090
+      ROCKETMQ_SRE_AGENT_AUTHORITY_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTOR_AGENT_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_AGENT_SUBJECT: rocketmq-sre-execution-agent
+      ROCKETMQ_SRE_AGENT_ACK_KEY: phase03-development-agent-ack-key-00000001
+      ROCKETMQ_SRE_AGENT_DRIVER_TIMEOUT_SECONDS: "150"
+      ROCKETMQ_SRE_AGENT_DEV_INSECURE_HTTP: "true"
+      ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG: "true"
+      ROCKETMQ_SRE_AGENT_ENABLE_TOPIC_CONFIG: "true"
+      ROCKETMQ_SRE_AGENT_ENABLE_SUBSCRIPTION_GROUP_CONFIG: "true"
+      ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL: "true"
+      ROCKETMQ_SRE_AGENT_NAMESRV_ADDR: namesrv:9876
+      ROCKETMQ_SRE_AGENT_BROKER_ADMIN_USE_TLS: "false"
+    env_file:
+      - ../../../../target/phase00-certs/agent-broker.env
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8095/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:8095:8095"
+    networks: [rocketmq-sre, control-plane-backend, executor-agent]
+
+  sre-executor:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: executor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sre-control-plane:
+        condition: service_healthy
+      sre-execution-agent:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@postgres:5432/rocketmq_sre
+      ROCKETMQ_SRE_EXECUTOR_BIND_ADDR: 0.0.0.0:8094
+      ROCKETMQ_SRE_LEASE_AUTHORITY_URL: http://sre-control-plane:8090
+      ROCKETMQ_SRE_EXECUTOR_AUTHORITY_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTION_AGENT_URL: http://sre-execution-agent:8095
+      ROCKETMQ_SRE_EXECUTOR_AGENT_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTOR_SUBJECT: rocketmq-sre-executor
+      ROCKETMQ_SRE_EXECUTOR_VERIFICATION_POLL_SECONDS: "5"
+      ROCKETMQ_SRE_EXECUTOR_REQUEST_TIMEOUT_SECONDS: "180"
+      ROCKETMQ_SRE_EXECUTOR_DEV_INSECURE_HTTP: "true"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8094/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:8094:8094"
+    networks: [control-plane-backend, execution-control, executor-agent]
+
+  sre-control-plane-mtls:
+    image: nginx:1.29-alpine
+    network_mode: "service:sre-control-plane"
+    depends_on:
+      sre-control-plane:
+        condition: service_healthy
+    entrypoint: ["nginx"]
+    command: ["-g", "daemon off;", "-c", "/etc/nginx/nginx.conf"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./control-plane-mtls-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../../../target/phase00-certs/control-plane-server-cert.pem:/etc/rocketmq/sre-channel/control-plane-server-cert.pem:ro
+      - ../../../../target/phase00-certs/control-plane-server-key.pem:/etc/rocketmq/sre-channel/control-plane-server-key.pem:ro
+      - ../../../../target/phase00-certs/connector-client-ca-cert.pem:/etc/rocketmq/sre-channel/connector-client-ca-cert.pem:ro
+    healthcheck:
+      test: ["CMD", "nginx", "-t", "-c", "/etc/nginx/nginx.conf"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  sre-onboarding-bootstrap:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: control-plane
+    depends_on:
+      sre-control-plane:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        curl --fail --silent --show-error \
+          --header 'Authorization: Bearer phase00-internal-token' \
+          --header 'x-rocketmq-tenant: 00000000-0000-4000-8000-000000000002' \
+          --header 'x-rocketmq-clusters: 00000000-0000-4000-8000-000000000001' \
+          --header 'x-rocketmq-subject: phase00-compose-bootstrap' \
+          --header 'Content-Type: application/json' \
+          --data '{"cluster_id":"00000000-0000-4000-8000-000000000001","tenant_id":"00000000-0000-4000-8000-000000000002","external_cluster_key":"sre-dev","environment":"development","region":"local","rocketmq_version":"1.0.0-dev","deployment_mode":"controller","owner":"rocketmq-sre-dev","actor_subject":"phase00-compose-bootstrap"}' \
+          http://sre-control-plane:8090/v1/clusters/onboard
+    restart: "no"
+    networks: [control-plane-backend]
+
+  dev-issuer:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: dev-issuer
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_SRE_DEV_ISSUER_BIND_ADDR: 0.0.0.0:8092
+      ROCKETMQ_SRE_DEV_ISSUER_URL: *dev-issuer-url
+      ROCKETMQ_SRE_DEV_ISSUER_AUDIENCE: rocketmq-mcp
+      ROCKETMQ_SRE_DEV_ISSUER_CLIENT_ID: rocketmq-sre-connector
+      ROCKETMQ_SRE_DEV_ISSUER_CLIENT_SECRET: phase00-client-secret
+      ROCKETMQ_SRE_DEV_ISSUER_ADMIN_TOKEN: phase00-issuer-admin
+      ROCKETMQ_SRE_DEV_ISSUER_TENANT: 00000000-0000-4000-8000-000000000002
+      ROCKETMQ_SRE_DEV_ISSUER_CLUSTER: sre-dev
+      ROCKETMQ_SRE_DEV_ISSUER_PRIVATE_KEY_PATH: /run/rocketmq-sre-dev/oauth-private-key.pem
+      ROCKETMQ_SRE_DEV_ISSUER_ROTATED_PRIVATE_KEY_PATH: /run/rocketmq-sre-dev/oauth-rotated-private-key.pem
+    volumes:
+      - ./fixtures/oauth-private-key.pem:/run/rocketmq-sre-dev/oauth-private-key.pem:ro
+      - ./fixtures/oauth-rotated-private-key.pem:/run/rocketmq-sre-dev/oauth-rotated-private-key.pem:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8092/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [rocketmq-sre]
+
+  dev-issuer-tls:
+    image: nginx:1.29-alpine
+    depends_on:
+      dev-issuer:
+        condition: service_healthy
+    volumes:
+      - ./dev-issuer-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../../../../target/phase00-certs/server-cert.pem:/etc/rocketmq/tls/server-cert.pem:ro
+      - ../../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-check-certificate --quiet --output-document=- https://127.0.0.1:8443/readyz >/dev/null",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "8443:8443"
+    networks: [rocketmq-sre]
+
+  mcp:
+    build:
+      context: ../../../..
+      dockerfile: docker/Dockerfile.base
+      target: mcp
+      args: *rocketmq-build-args
+    command:
+      [
+        "--config",
+        "/etc/rocketmq/mcp/mcp.toml",
+        "--transport",
+        "streamable-http",
+      ]
+    depends_on:
+      namesrv:
+        condition: service_started
+      broker:
+        condition: service_started
+      dev-issuer-tls:
+        condition: service_healthy
+    environment:
+      <<: *rocketmq-environment
+      OTEL_SERVICE_NAME: rocketmq-mcp
+      ROCKETMQ_MCP_TRACE_SAMPLE_RATIO: "1.0"
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:8088
+    volumes:
+      - ./config/mcp.toml:/etc/rocketmq/mcp/mcp.toml:ro
+      - ./config/permissions.toml:/etc/rocketmq/mcp/permissions.toml:ro
+      - ../../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../../target/phase00-certs/server-cert.pem:/etc/rocketmq/tls/server-cert.pem:ro
+      - ../../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
+      - ../../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
+      - ../../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../../target/phase00-certs/mcp-rmq-credentials.yml:/var/run/secrets/rocketmq/mcp-rmq-credentials.yml:ro
+      - mcp-data:/var/lib/rocketmq/mcp
+    ports:
+      - "8089:8089"
+      - "8091:8091"
+      - "18092:8088"
+    networks: [rocketmq-sre]
+
+  sre-connector:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: connector
+    network_mode: "service:mcp"
+    depends_on:
+      sre-onboarding-bootstrap:
+        condition: service_completed_successfully
+      sre-control-plane-mtls:
+        condition: service_healthy
+      mcp:
+        condition: service_started
+    environment:
+      <<: *otel-environment
+      OTEL_SERVICE_NAME: rocketmq-sre-connector
+      ROCKETMQ_SRE_CONNECTOR_BIND_ADDR: 0.0.0.0:8091
+      ROCKETMQ_SRE_CONTROL_PLANE_URL: https://sre-control-plane:8444
+      ROCKETMQ_SRE_CONTROL_PLANE_CA_PATH: /etc/rocketmq/sre-channel/control-plane-server-ca-cert.pem
+      ROCKETMQ_SRE_CONTROL_PLANE_CLIENT_IDENTITY_PATH: /etc/rocketmq/sre-channel/connector-client-identity.pem
+      ROCKETMQ_SRE_CONNECTOR_SUBJECT: "CN=rocketmq-sre-connector"
+      ROCKETMQ_SRE_CONNECTOR_ISSUER: "CN=RocketMQ SRE Connector Development CA"
+      ROCKETMQ_SRE_MCP_URL: https://127.0.0.1:8089/mcp
+      ROCKETMQ_SRE_MCP_CA_PATH: /etc/rocketmq/tls/ca-cert.pem
+      ROCKETMQ_SRE_OAUTH_TOKEN_ENDPOINT: https://dev-issuer-tls:8443/oauth/token
+      ROCKETMQ_SRE_OAUTH_CLIENT_ID: rocketmq-sre-connector
+      ROCKETMQ_SRE_OAUTH_CLIENT_SECRET_ENV: ROCKETMQ_SRE_OAUTH_CLIENT_SECRET
+      ROCKETMQ_SRE_OAUTH_CLIENT_SECRET: phase00-client-secret
+      ROCKETMQ_SRE_OAUTH_AUDIENCE: rocketmq-mcp
+      ROCKETMQ_SRE_OAUTH_SCOPE: "rocketmq:read rocketmq:diagnose"
+      ROCKETMQ_SRE_INTERNAL_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_CLUSTER_ID: 00000000-0000-4000-8000-000000000001
+      ROCKETMQ_SRE_CLUSTER_ALLOWLIST: sre-dev
+      ROCKETMQ_SRE_TENANT_ID: 00000000-0000-4000-8000-000000000002
+      ROCKETMQ_SRE_PROMETHEUS_URL: http://prometheus:9090
+      ROCKETMQ_SRE_LOKI_URL: http://loki:3100
+      ROCKETMQ_SRE_TEMPO_URL: http://tempo:3200
+      ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ENDPOINTS: "broker=http://broker:8087/internal/v1/runtime/diagnostics;name_server=http://namesrv:8087/internal/v1/runtime/diagnostics;controller=http://controller:8087/internal/v1/runtime/diagnostics;proxy=http://proxy:8087/internal/v1/runtime/diagnostics"
+      ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP: "true"
+      ROCKETMQ_SRE_ADMIN_NAMESRV_ADDR: namesrv:9876
+      ROCKETMQ_SRE_ADMIN_USE_TLS: "false"
+      ROCKETMQ_SRE_ADMIN_ACCESS_KEY_ENV: ROCKETMQ_SRE_ADMIN_ACCESS_KEY
+      ROCKETMQ_SRE_ADMIN_SECRET_KEY_ENV: ROCKETMQ_SRE_ADMIN_SECRET_KEY
+    env_file:
+      - ../../../../target/phase00-certs/admin-read.env
+    volumes:
+      - ../../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../../target/phase00-certs/control-plane-server-ca-cert.pem:/etc/rocketmq/sre-channel/control-plane-server-ca-cert.pem:ro
+      - ../../../../target/phase00-certs/connector-client-identity.pem:/etc/rocketmq/sre-channel/connector-client-identity.pem:ro
+
+  sre-probe:
+    profiles: ["smoke"]
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile
+      target: probe
+    depends_on:
+      - namesrv
+      - broker
+    environment:
+      ROCKETMQ_NAMESRV_ADDR: namesrv:9876
+      ROCKETMQ_SRE_PROBE_CLUSTER_ID: 00000000-0000-4000-8000-000000000001
+      ROCKETMQ_SRE_PROBE_RUN_ID: 00000000-0000-0000-0000-000000000000
+      ROCKETMQ_SRE_PROBE_MAX_MESSAGES: 10
+      ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND: 5
+      ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES: 64
+      ROCKETMQ_SRE_PROBE_DURATION_SECONDS: 60
+    env_file:
+      - ../../../../target/phase00-certs/probe.env
+    volumes:
+      - ../../../../target/phase00-certs/probe-secret-key:/var/run/secrets/rocketmq/probe-secret-key:ro
+    networks: [rocketmq-sre]
+
+  probe-topic-bootstrap:
+    profiles: ["smoke"]
+    build:
+      context: ../../../..
+      dockerfile: docker/Dockerfile.base
+      target: fault-driver
+    depends_on:
+      - namesrv
+      - broker
+    env_file:
+      - ../../../../target/phase00-certs/bootstrap.env
+    command:
+      [
+        "topic",
+        "updateTopic",
+        "--yes",
+        "-n",
+        "namesrv:9876",
+        "-c",
+        "SreDev",
+        "-t",
+        "SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000",
+        "-r",
+        "4",
+        "-w",
+        "4",
+        "-p",
+        "6",
+      ]
+    restart: "no"
+    networks: [rocketmq-sre]
+
+  sre-ui:
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-ai/rocketmq-sre/deploy/docker/ui.Dockerfile
+      args:
+        VITE_SRE_AUTH_MODE: development
+        VITE_SRE_DEV_SUBJECT: phase00-compose-ui
+        VITE_SRE_DEV_DISPLAY_NAME: RocketMQ SRE Dev Operator
+        VITE_SRE_DEV_TENANT: 00000000-0000-4000-8000-000000000002
+        VITE_SRE_DEV_CLUSTERS: 00000000-0000-4000-8000-000000000001
+        VITE_SRE_DEV_ROLES: "rocketmq:read rocketmq:diagnose operator approver"
+        VITE_SRE_DEV_TOKEN: phase00-internal-token
+    depends_on:
+      sre-control-plane:
+        condition: service_healthy
+    ports:
+      - "3004:3004"
+    networks: [rocketmq-sre, control-plane-backend]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.130.1
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "9464:9464"
+    depends_on:
+      - loki
+      - tempo
+    networks: [rocketmq-sre, control-plane-backend]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["observability"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [rocketmq-sre]
+
+  loki:
+    image: grafana/loki:3.5.2
+    profiles: ["observability"]
+    user: "0:0"
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/var/loki
+    ports:
+      - "3100:3100"
+    networks: [rocketmq-sre]
+
+  tempo:
+    image: grafana/tempo:2.8.2
+    profiles: ["observability"]
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+    networks: [rocketmq-sre]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: ["observability"]
+    command: ["--config.file=/etc/alertmanager/alertmanager.yaml"]
+    volumes:
+      - ./alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+    ports:
+      - "9093:9093"
+    networks: [rocketmq-sre]
+
+networks:
+  rocketmq-sre:
+    name: rocketmq-sre-phase00
+  control-plane-backend:
+    name: rocketmq-sre-phase00-control-plane
+    internal: true
+  model-backend:
+    name: rocketmq-sre-phase01-model
+    internal: true
+  execution-control:
+    name: rocketmq-sre-phase03-control-executor
+    internal: true
+  executor-agent:
+    name: rocketmq-sre-phase03-executor-agent
+    internal: true
+
+volumes:
+  namesrv-data:
+  controller-data:
+  broker-data:
+  mcp-data:
+  postgres-data:
+  evidence-objects:
+  prometheus-data:
+  loki-data:
+  tempo-data:

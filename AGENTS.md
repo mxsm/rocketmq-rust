@@ -17,10 +17,10 @@
 | `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member and shared dashboard crate | This file |
 | `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
 | `rocketmq-macros/tests/fixtures/renamed-consumer/` | Standalone compile fixture for renamed codec dependencies | Its local `AGENTS.md` |
-| `rocketmq-tools/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
-| `rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
-| `rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
-| `rocketmq-sre/sdk/typescript/` | Standalone read-only AI SRE TypeScript SDK | Its local `AGENTS.md` |
+| `rocketmq-ai/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
+| `rocketmq-ai/rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
+| `rocketmq-ai/rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
+| `rocketmq-ai/rocketmq-sre/sdk/typescript/` | Standalone read-only AI SRE TypeScript SDK | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Standalone Cargo project | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` | Standalone Node/Vite/Tauri frontend | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Standalone Rust backend | Its local `AGENTS.md` |
@@ -142,9 +142,9 @@ cargo clippy --all-targets --all-features -- -D warnings
 |---|---|---|---|
 | Root workspace Rust crates and `rocketmq-dashboard/rocketmq-dashboard-common/` | Repository root | Root workspace Rust profile plus applicable focused tests for behavior changes | Apply every matching specialized gate below |
 | `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially client, model, protocol, transport, runtime, error, observability, or admin-core |
-| `rocketmq-sre/` | Its standalone workspace root | Follow `rocketmq-sre/AGENTS.md` | Include every SRE Cargo member and the execution dependency boundary |
-| `rocketmq-sre/ui/` | Its project root | Follow its local `AGENTS.md` | Include OpenAPI, routes, shared UI, and package metadata changes |
-| `rocketmq-sre/sdk/typescript/` | Its project root | Follow its local `AGENTS.md` | Preserve the fixed read-only SDK and local-only draft boundary |
+| `rocketmq-ai/rocketmq-sre/` | Its standalone workspace root | Follow `rocketmq-ai/rocketmq-sre/AGENTS.md` | Include every SRE Cargo member and the execution dependency boundary |
+| `rocketmq-ai/rocketmq-sre/ui/` | Its project root | Follow its local `AGENTS.md` | Include OpenAPI, routes, shared UI, and package metadata changes |
+| `rocketmq-ai/rocketmq-sre/sdk/typescript/` | Its project root | Follow its local `AGENTS.md` | Preserve the fixed read-only SDK and local-only draft boundary |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Its project root | Follow its `AGENTS.md` | Revalidate for `rocketmq-dashboard-common/` or shared dashboard behavior changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md` | Include shared frontend config, shell behavior, and package metadata changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Its Cargo root | Follow its `AGENTS.md` | Revalidate when a root path dependency used by the backend changes |
@@ -206,8 +206,8 @@ cargo test -p rocketmq-broker --features rocksdb_store pop_consumer
 
 ### RocketMQ MCP
 
-If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes,
-run the mandatory profile in `rocketmq-tools/rocketmq-mcp/AGENTS.md` from the MCP project root.
+If changes touch `rocketmq-ai/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes,
+run the mandatory profile in `rocketmq-ai/rocketmq-mcp/AGENTS.md` from the MCP project root.
 
 Preserve the MCP deny-by-default boundary: default tools remain read-only/diagnostic; `dangerous-tools` requires
 compile-time and runtime opt-in, confirmation, and audit; Streamable HTTP remains authenticated by default;

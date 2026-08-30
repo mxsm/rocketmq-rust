@@ -141,7 +141,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 60,
       "item": "trait AdminSession",
       "owner": "mcp",
@@ -149,7 +149,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 81,
       "item": "trait AdminSessionFactory",
       "owner": "mcp",
@@ -157,7 +157,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 108,
       "item": "impl AdminSessionFactory",
       "owner": "mcp",
@@ -165,7 +165,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 138,
       "item": "impl AdminSession",
       "owner": "mcp",
@@ -173,7 +173,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 77,
       "item": "trait ReadOnlyQuery",
       "owner": "mcp",
@@ -181,7 +181,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 577,
       "item": "impl AdminSessionFactory",
       "owner": "mcp",
@@ -189,7 +189,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit.rs",
       "line": 538,
       "item": "trait AuditSink",
       "owner": "mcp",
@@ -197,7 +197,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit.rs",
       "line": 549,
       "item": "impl AuditSink",
       "owner": "mcp",
@@ -205,7 +205,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit.rs",
       "line": 573,
       "item": "impl AuditSink",
       "owner": "mcp",
@@ -213,7 +213,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit.rs",
       "line": 598,
       "item": "impl AuditSink",
       "owner": "mcp",
@@ -221,7 +221,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit/tests.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit/tests.rs",
       "line": 46,
       "item": "impl AuditSink",
       "owner": "mcp",
@@ -229,7 +229,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/jwks.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/jwks.rs",
       "line": 31,
       "item": "trait JwksSource",
       "owner": "mcp",
@@ -237,7 +237,7 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/jwks.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/jwks.rs",
       "line": 57,
       "item": "impl JwksSource",
       "owner": "mcp",
@@ -4765,7 +4765,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 62,
       "item": "trait AdminSession::broker_rows",
       "owner": "mcp",
@@ -4773,7 +4773,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 64,
       "item": "trait AdminSession::topic_entries",
       "owner": "mcp",
@@ -4781,7 +4781,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 66,
       "item": "trait AdminSession::topic_route",
       "owner": "mcp",
@@ -4789,7 +4789,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 68,
       "item": "trait AdminSession::consumer_groups",
       "owner": "mcp",
@@ -4797,7 +4797,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 70,
       "item": "trait AdminSession::consumer_lag",
       "owner": "mcp",
@@ -4805,7 +4805,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 76,
       "item": "trait AdminSession::probe_broker_runtime",
       "owner": "mcp",
@@ -4813,7 +4813,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 78,
       "item": "trait AdminSession::shutdown",
       "owner": "mcp",
@@ -4821,7 +4821,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/admin_session.rs",
       "line": 85,
       "item": "trait AdminSessionFactory::start",
       "owner": "mcp",
@@ -4829,7 +4829,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 79,
       "item": "trait ReadOnlyQuery::cluster_overview",
       "owner": "mcp",
@@ -4837,7 +4837,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 84,
       "item": "trait ReadOnlyQuery::list_topics",
       "owner": "mcp",
@@ -4845,7 +4845,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 86,
       "item": "trait ReadOnlyQuery::describe_topic",
       "owner": "mcp",
@@ -4853,7 +4853,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 91,
       "item": "trait ReadOnlyQuery::query_topic_route",
       "owner": "mcp",
@@ -4861,7 +4861,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 96,
       "item": "trait ReadOnlyQuery::list_consumer_groups",
       "owner": "mcp",
@@ -4869,7 +4869,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 101,
       "item": "trait ReadOnlyQuery::query_consumer_lag",
       "owner": "mcp",
@@ -4877,7 +4877,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 106,
       "item": "trait ReadOnlyQuery::describe_broker",
       "owner": "mcp",
@@ -4885,7 +4885,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/adapter/query_facade.rs",
       "line": 111,
       "item": "trait ReadOnlyQuery::diagnose_consumer_lag",
       "owner": "mcp",
@@ -4893,7 +4893,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit.rs",
       "line": 540,
       "item": "trait AuditSink::write",
       "owner": "mcp",
@@ -4901,7 +4901,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/audit.rs",
       "line": 541,
       "item": "trait AuditSink::flush",
       "owner": "mcp",
@@ -4909,7 +4909,7 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/jwks.rs",
+      "path": "rocketmq-ai/rocketmq-mcp/src/guard/jwks.rs",
       "line": 33,
       "item": "trait JwksSource::fetch",
       "owner": "mcp",

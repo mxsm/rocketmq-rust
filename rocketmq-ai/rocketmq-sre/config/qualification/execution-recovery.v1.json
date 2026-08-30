@@ -1,0 +1,344 @@
+{
+  "schema_version": "rocketmq-sre.execution-recovery-qualification.v1",
+  "operating_mode": "rules_only",
+  "model_provider_network_calls": false,
+  "qualification_levels": [
+    "implemented",
+    "contract_tested",
+    "disposable_cluster_smoke_passed",
+    "production_certified"
+  ],
+  "common_execution_safety_evidence": {
+    "successful_verification": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/execution_flow.rs",
+      "test": "successful_verification_reaches_succeeded_and_releases_lock"
+    },
+    "duplicate_request": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/postgres_recovery.rs",
+      "test": "migrations_journal_locks_fences_and_restart_recovery_are_durable"
+    },
+    "unknown_result": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/execution_flow.rs",
+      "test": "interrupted_compensation_recovers_only_after_effect_is_proven_absent"
+    },
+    "verification_failure": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/execution_flow.rs",
+      "test": "failed_verification_runs_compensation_and_verifies_rollback"
+    },
+    "rollback_or_safe_stop": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/execution_flow.rs",
+      "test": "failed_verification_runs_compensation_and_verifies_rollback"
+    },
+    "stale_epoch_and_non_terminal_effect": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/postgres_recovery.rs",
+      "test": "migrations_journal_locks_fences_and_restart_recovery_are_durable"
+    },
+    "rollback_failure_quarantine": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/postgres_recovery.rs",
+      "test": "rollback_failure_atomically_escalates_quarantines_and_notifies"
+    }
+  },
+  "asymmetric_partition_live_qualification": {
+    "manifest": "rocketmq-ai/rocketmq-sre/config/qualification/asymmetric-executor-partition.v1.json",
+    "script": "rocketmq-ai/rocketmq-sre/scripts/asymmetric-executor-partition-qualification.ps1",
+    "checker": "rocketmq-ai/rocketmq-sre/scripts/check_asymmetric_executor_partition_qualification.py",
+    "test_path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/tests/asymmetric_partition.rs",
+    "test": "old_executor_cannot_write_after_asymmetric_authority_partition_and_epoch_takeover",
+    "stale_effect_rows": 0,
+    "stale_target_writes": 0,
+    "fresh_target_writes": 1,
+    "model_provider_network_calls": false,
+    "production_certified": false
+  },
+  "r1_live_qualification": {
+    "manifest": "rocketmq-ai/rocketmq-sre/config/qualification/r1-actions.v1.json",
+    "script": "rocketmq-ai/rocketmq-sre/scripts/r1-action-live-qualification.ps1",
+    "checker": "rocketmq-ai/rocketmq-sre/scripts/check_r1_action_qualification.py",
+    "actions": 4,
+    "required_outcomes_per_action": 10,
+    "model_provider_network_calls": false,
+    "production_certified": false
+  },
+  "r2_live_qualification": {
+    "manifest": "rocketmq-ai/rocketmq-sre/config/qualification/r2-actions.v1.json",
+    "script": "rocketmq-ai/rocketmq-sre/scripts/r2-action-live-qualification.ps1",
+    "checker": "rocketmq-ai/rocketmq-sre/scripts/check_r2_action_qualification.py",
+    "actions": 5,
+    "required_outcomes_per_action": 12,
+    "model_provider_network_calls": false,
+    "unattended_execution": false,
+    "production_certified": false
+  },
+  "autonomy_live_qualification": {
+    "manifest": "rocketmq-ai/rocketmq-sre/config/qualification/autonomy-actions.v1.json",
+    "script": "rocketmq-ai/rocketmq-sre/scripts/autonomy-action-live-qualification.ps1",
+    "checker": "rocketmq-ai/rocketmq-sre/scripts/check_autonomy_action_qualification.py",
+    "actions": 4,
+    "required_outcomes_per_action": 16,
+    "live_mode_ceiling": "supervised",
+    "unattended_autonomous_execution": false,
+    "model_provider_network_calls": false,
+    "production_certified": false
+  },
+  "controlled_actions": [
+    {
+      "id": "observability.logger_level_ttl.v1",
+      "risk": "r1",
+      "owners": {
+        "component": "messaging-observability",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/observability.logger_level_ttl.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/logger_level_ttl_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-logger-ttl-smoke.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "proxy.scale_out_one.v1",
+      "risk": "r1",
+      "owners": {
+        "component": "messaging-platform",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/proxy.scale_out_one.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_scale_out_one_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-proxy-scale-smoke.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "proxy.restart_one.v1",
+      "risk": "r1",
+      "owners": {
+        "component": "messaging-platform",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/proxy.restart_one.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_restart_one_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-proxy-restart-e2e.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "telemetry.collector.restart_one.v1",
+      "risk": "r1",
+      "owners": {
+        "component": "messaging-observability",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/telemetry.collector.restart_one.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/telemetry_collector_restart_one_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase04-collector-restart-e2e.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "broker.config.patch_allowlisted.v1",
+      "risk": "r2",
+      "owners": {
+        "component": "messaging-platform",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/broker.config.patch_allowlisted.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/broker_config_patch_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-broker-cas-smoke.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "topic.config.patch_allowlisted.v1",
+      "risk": "r2",
+      "owners": {
+        "component": "messaging-platform",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_TOPIC_CONFIG",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/topic.config.patch_allowlisted.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/topic_config_patch_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-topic-cas-smoke.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "subscription_group.patch_allowlisted.v1",
+      "risk": "r2",
+      "owners": {
+        "component": "messaging-platform",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_SUBSCRIPTION_GROUP_CONFIG",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/subscription_group.patch_allowlisted.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/subscription_group_patch_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-subscription-group-cas-smoke.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "proxy.rollout_image_canary.v1",
+      "risk": "r2",
+      "owners": {
+        "component": "messaging-platform",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_PROXY_IMAGE_CANARY",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/proxy.rollout_image_canary.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_image_canary_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-proxy-image-canary-smoke.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "security.credential_rotate_overlap.v1",
+      "risk": "r2",
+      "owners": {
+        "component": "messaging-security",
+        "sre": "rocketmq-sre",
+        "security": "messaging-security"
+      },
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_CREDENTIAL_ROTATION",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/security.credential_rotate_overlap.v1.yaml",
+      "precheck_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/credential_rotation_tests.rs",
+      "disposable_cluster_smoke": "rocketmq-ai/rocketmq-sre/scripts/phase03-credential-supervised-e2e.ps1",
+      "qualification": "disposable_cluster_smoke_passed"
+    }
+  ],
+  "r2_authorization": {
+    "heterogeneous_critic_required": true,
+    "human_approval_required": true,
+    "short_lived_grant_required": true,
+    "separation_of_duties_required": true,
+    "evidence": [
+      {
+        "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/supervised_execution/critic_tests.rs",
+        "test": "postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval"
+      },
+      {
+        "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/supervised_execution/service_tests.rs",
+        "test": "postgres_plan_policy_approval_audit_and_quarantine_are_fail_closed"
+      }
+    ]
+  },
+  "autonomous_actions": [
+    {
+      "id": "observability.logger_level_ttl.v1",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/observability.logger_level_ttl.v1.yaml",
+      "smoke": "rocketmq-ai/rocketmq-sre/scripts/phase04-logger-autonomy-smoke.ps1"
+    },
+    {
+      "id": "proxy.scale_out_one.v1",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/proxy.scale_out_one.v1.yaml",
+      "smoke": "rocketmq-ai/rocketmq-sre/scripts/phase04-proxy-scale-autonomy-smoke.ps1"
+    },
+    {
+      "id": "proxy.restart_one.v1",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/proxy.restart_one.v1.yaml",
+      "smoke": "rocketmq-ai/rocketmq-sre/scripts/phase04-proxy-restart-autonomy-smoke.ps1"
+    },
+    {
+      "id": "telemetry.collector.restart_one.v1",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/telemetry.collector.restart_one.v1.yaml",
+      "smoke": "rocketmq-ai/rocketmq-sre/scripts/phase04-collector-autonomy-smoke.ps1"
+    }
+  ],
+  "dynamic_controls": {
+    "default_mode": "disabled",
+    "freeze_scopes": [
+      "organization",
+      "tenant",
+      "cluster",
+      "action"
+    ],
+    "action_kill_switch": true,
+    "verification_and_compensation_bypass_stop_controls": true,
+    "evidence": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/repository_tests.rs"
+  },
+  "hard_denials": [
+    "r2_without_approval",
+    "r3_action",
+    "unknown_action",
+    "raw_request",
+    "shell_command",
+    "arbitrary_kubernetes_patch"
+  ],
+  "compatibility": {
+    "artifact_mode": "native_versioned_binary",
+    "components": [
+      "control_plane",
+      "connector",
+      "mcp",
+      "execution_agent"
+    ],
+    "matrices": [
+      {
+        "control_plane": "current",
+        "connector": "n_minus_one",
+        "mcp": "n_minus_one",
+        "execution_agent": "n_minus_one"
+      },
+      {
+        "control_plane": "n_minus_one",
+        "connector": "current",
+        "mcp": "current",
+        "execution_agent": "current"
+      }
+    ],
+    "protocol_cases": [
+      "additive_optional_field",
+      "unknown_major",
+      "missing_required_feature",
+      "schema_digest_drift",
+      "tool_surface_drift"
+    ],
+    "incompatible_outcomes": [
+      "read_only_degraded",
+      "rejected"
+    ],
+    "qualification_script": "rocketmq-ai/rocketmq-sre/scripts/binary-compatibility-qualification.ps1"
+  },
+  "regional_isolation": {
+    "minimum_independent_regions": 2,
+    "required_components_per_region": [
+      "connector",
+      "execution_agent"
+    ],
+    "cross_region_writes": "forbidden",
+    "disconnected_region": "read_only_degraded",
+    "healthy_region_remains_available": true,
+    "recovery_requires_rehandshake": true,
+    "bounded_backlog_required": true,
+    "qualification_script": "rocketmq-ai/rocketmq-sre/scripts/two-region-isolation-qualification.ps1"
+  },
+  "disaster_recovery": {
+    "approval_audit_step_intent_rpo": 0,
+    "exercises": [
+      "postgresql_failover",
+      "kubernetes_node_loss",
+      "broker_commitlog_replication",
+      "controller_quorum_recovery",
+      "object_metadata_content_restore",
+      "control_plane_backup_restore"
+    ],
+    "qualification_script": "rocketmq-ai/rocketmq-sre/scripts/disaster-recovery-qualification.ps1"
+  },
+  "evidence_policy": {
+    "machine_local_output_roots": [
+      "D:\\rocketmq-sre-evidence",
+      "F:\\rocketmq-sre-evidence"
+    ],
+    "required_metadata": [
+      "revision",
+      "environment",
+      "started_at",
+      "finished_at",
+      "status"
+    ],
+    "secrets_recorded": false,
+    "message_bodies_recorded": false
+  }
+}

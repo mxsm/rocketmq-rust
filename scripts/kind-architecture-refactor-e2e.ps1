@@ -1310,7 +1310,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
             "--from-literal=ROCKETMQ_MCP_HTTP_TOKEN=$mcpToken"
         ) | Out-Null
         Invoke-Native kubectl @(
-            'apply', '-f', (Join-Path $Root 'rocketmq-sre/deploy/kind/mcp-readiness-config.yaml')
+            'apply', '-f', (Join-Path $Root 'rocketmq-ai/rocketmq-sre/deploy/kind/mcp-readiness-config.yaml')
         ) | Out-Null
         Invoke-Native kubectl @(
             '-n', $Namespace, 'set', 'env', 'deployment/rocketmq-mcp',

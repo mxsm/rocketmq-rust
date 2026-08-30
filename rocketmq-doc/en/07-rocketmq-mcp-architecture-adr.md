@@ -72,7 +72,7 @@ must not apply a change. A later Apply capability requires a separate public
 contract and authorization decision.
 
 The refactor uses Rust 2021 or later and, after P1, uses one source file per
-module under `rocketmq-tools/rocketmq-mcp/src` without `mod.rs`. No legacy
+module under `rocketmq-ai/rocketmq-mcp/src` without `mod.rs`. No legacy
 Tool, URI, schema, configuration, or feature alias is allowed.
 
 ## Module Direction
@@ -96,7 +96,7 @@ public MCP wire capability and routes fixed `EvidenceOperation` values through
 a crate-private `ReadGateway`. Direct Admin fallback is compiled only with
 `rocketmq-admin-core/read-client-adapter`; it is not a second Control Plane
 path and cannot expose mutation capabilities. The detailed Connector contract
-is maintained in `rocketmq-sre/docs/read-gateway-contract.md`.
+is maintained in `rocketmq-ai/rocketmq-sre/docs/read-gateway-contract.md`.
 
 The cache stores normalized query results, not protocol envelopes. This keeps
 request identifiers and output policy request-specific while allowing Tools

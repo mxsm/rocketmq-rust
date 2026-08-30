@@ -7,7 +7,7 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "rocketmq-sre/**"
+      - "rocketmq-ai/rocketmq-sre/**"
       - "rocketmq-auth/**"
       - "rocketmq-runtime/**"
       - "rocketmq-observability/**"
@@ -19,7 +19,7 @@ on:
       - "rocketmq-security-api/**"
       - "rocketmq-transport/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
-      - "rocketmq-tools/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp/**"
       - "scripts/generate_sre_capability_catalog.py"
       - "scripts/standalone_workspace_trigger_guard.py"
       - "scripts/generate_telemetry_semantic_registry.py"
@@ -34,7 +34,7 @@ on:
   pull_request:
     branches: ["main"]
     paths:
-      - "rocketmq-sre/**"
+      - "rocketmq-ai/rocketmq-sre/**"
       - "rocketmq-auth/**"
       - "rocketmq-runtime/**"
       - "rocketmq-observability/**"
@@ -46,7 +46,7 @@ on:
       - "rocketmq-security-api/**"
       - "rocketmq-transport/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
-      - "rocketmq-tools/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp/**"
       - "scripts/generate_sre_capability_catalog.py"
       - "scripts/standalone_workspace_trigger_guard.py"
       - "scripts/generate_telemetry_semantic_registry.py"
@@ -91,7 +91,7 @@ jobs:
 
       - name: Validate Phase 01 Kind read-only E2E contract
         shell: pwsh
-        run: ./rocketmq-sre/scripts/phase01-kind-smoke.ps1 -ValidateOnly
+        run: ./rocketmq-ai/rocketmq-sre/scripts/phase01-kind-smoke.ps1 -ValidateOnly
 
       - name: Set up Rust 1.95
         uses: dtolnay/rust-toolchain@1.95.0
@@ -101,26 +101,26 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rocketmq-sre -> target
+          workspaces: rocketmq-ai/rocketmq-sre -> target
 
       - name: Check metadata
-        run: cargo metadata --manifest-path rocketmq-sre/Cargo.toml --locked --no-deps
+        run: cargo metadata --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --no-deps
 
       - name: Check workspace
-        run: cargo check --manifest-path rocketmq-sre/Cargo.toml --locked --workspace
+        run: cargo check --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace
 
       - name: Check Rust 2024 source layout
-        run: python rocketmq-sre/scripts/check_source_layout.py
+        run: python rocketmq-ai/rocketmq-sre/scripts/check_source_layout.py
 
       - name: Check Executor and Agent dependency boundary
-        run: python rocketmq-sre/scripts/check_execution_dependency_boundary.py
+        run: python rocketmq-ai/rocketmq-sre/scripts/check_execution_dependency_boundary.py
 
       - name: Check execution and recovery qualification catalog
-        run: python rocketmq-sre/scripts/check_execution_recovery_qualification.py
+        run: python rocketmq-ai/rocketmq-sre/scripts/check_execution_recovery_qualification.py
 
       - name: Check formatting
         run: |
-          cargo fmt --manifest-path rocketmq-sre/Cargo.toml \
+          cargo fmt --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml \
             -p rocketmq-sre-contracts \
             -p rocketmq-sre-core \
             -p rocketmq-sre-model-gateway \
@@ -135,29 +135,29 @@ jobs:
             -- --check
 
       - name: Test
-        run: cargo test --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-features
+        run: cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace --all-features
 
       - name: Test PostgreSQL repositories
-        run: cargo test --manifest-path rocketmq-sre/Cargo.toml --locked -p rocketmq-sre-control-plane -- --include-ignored
+        run: cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked -p rocketmq-sre-control-plane -- --include-ignored
 
       - name: Test fenced execution recovery
         run: |
-          cargo test --manifest-path rocketmq-sre/Cargo.toml --locked \
+          cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked \
             -p rocketmq-sre-executor --test postgres_recovery \
             -- --ignored --test-threads=1
-          cargo test --manifest-path rocketmq-sre/Cargo.toml --locked \
+          cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked \
             -p rocketmq-sre-executor --test fencing_interleavings \
             -- --ignored --test-threads=1
 
       - name: Test and validate Compose and Kind deployment contracts
         shell: pwsh
-        run: ./rocketmq-sre/scripts/test-mtls-deployment-fixture-lifecycle.ps1
+        run: ./rocketmq-ai/rocketmq-sre/scripts/test-mtls-deployment-fixture-lifecycle.ps1
 
       - name: Clippy
-        run: cargo clippy --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Rustdoc
-        run: cargo doc --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --no-deps
+        run: cargo doc --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace --no-deps
 
       - name: Check capability catalog
         run: python scripts/generate_sre_capability_catalog.py --check
@@ -181,14 +181,14 @@ jobs:
         uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Check workspace
-        run: cargo check --manifest-path rocketmq-sre/Cargo.toml --locked --workspace
+        run: cargo check --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace
 
   ui:
     name: Read-only UI
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rocketmq-sre/ui
+        working-directory: rocketmq-ai/rocketmq-sre/ui
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -198,7 +198,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: rocketmq-sre/ui/package-lock.json
+          cache-dependency-path: rocketmq-ai/rocketmq-sre/ui/package-lock.json
 
       - name: Install
         run: npm ci

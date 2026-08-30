@@ -46,12 +46,12 @@ class WorkspaceSpec:
 WORKSPACES = (
     WorkspaceSpec(
         name="rocketmq-sre",
-        manifest="rocketmq-sre/Cargo.toml",
+        manifest="rocketmq-ai/rocketmq-sre/Cargo.toml",
         workflow=".github/workflows/rocketmq-sre-ci.yml",
     ),
     WorkspaceSpec(
         name="rocketmq-mcp",
-        manifest="rocketmq-tools/rocketmq-mcp/Cargo.toml",
+        manifest="rocketmq-ai/rocketmq-mcp/Cargo.toml",
         workflow=".github/workflows/rocketmq-mcp-ci.yaml",
     ),
 )

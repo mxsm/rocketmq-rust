@@ -7,8 +7,8 @@ Accepted
 The RocketMQ Rust repository is broader than the root Cargo workspace. The root `Cargo.toml` owns the main workspace members, while several projects are intentionally standalone:
 
 - `rocketmq-example/`
-- `rocketmq-tools/rocketmq-mcp/`
-- `rocketmq-sre/`
+- `rocketmq-ai/rocketmq-mcp/`
+- `rocketmq-ai/rocketmq-sre/`
 - `rocketmq-dashboard/rocketmq-dashboard-gpui/`
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/`
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`

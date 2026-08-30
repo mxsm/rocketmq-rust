@@ -38,8 +38,8 @@ EXCLUDED_PREFIXES = (
     ".git/",
     ".worktrees/",
     "rocketmq-dashboard/",
-    "rocketmq-sre/",
-    "rocketmq-tools/rocketmq-mcp/",
+    "rocketmq-ai/rocketmq-sre/",
+    "rocketmq-ai/rocketmq-mcp/",
     "rocketmq-website/",
     "target/",
 )

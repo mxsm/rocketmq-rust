@@ -1,0 +1,119 @@
+{
+  "schema_version": "rocketmq-sre.autonomy-action-qualification.v1",
+  "operating_mode": "rules_only",
+  "environment": "disposable_kind",
+  "live_mode_ceiling": "supervised",
+  "unattended_autonomous_execution": false,
+  "model_provider_network_calls": false,
+  "production_certified": false,
+  "required_outcomes": [
+    "disabled_by_default",
+    "shadow_cohort_persisted",
+    "insufficient_shadow_denied",
+    "shadow_window_qualified",
+    "supervised_transition_persisted",
+    "heterogeneous_critic_bound",
+    "same_family_critic_denied",
+    "insufficient_supervised_denied",
+    "supervised_successes_persisted",
+    "stale_or_partial_evidence_denied",
+    "freeze_or_budget_denied",
+    "kill_switch_denied",
+    "execution_failure_paused",
+    "expected_deny_not_paused",
+    "live_supervised_action_verified",
+    "recovery_and_cleanup"
+  ],
+  "shared_boundary_evidence": {
+    "lifecycle_matrix": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/logger_ttl_lifecycle_tests.rs",
+      "test": "all_r1_actions_persist_shadow_and_supervised_qualification_matrix"
+    },
+    "same_family_critic_denied": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/logger_ttl_lifecycle_tests.rs",
+      "test": "all_r1_actions_persist_shadow_and_supervised_qualification_matrix"
+    },
+    "stale_or_partial_evidence_denied": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-core/src/eligibility.rs",
+      "test": "base_eligibility_fails_closed_for_stale_or_partial_evidence"
+    },
+    "freeze_or_budget_denied": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-core/src/eligibility.rs",
+      "test": "dynamic_safety_fails_closed_for_each_authoritative_control"
+    },
+    "kill_switch_denied": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/repository_tests.rs",
+      "test": "postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent"
+    },
+    "failure_pause_reconciled": {
+      "path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/repository_tests.rs",
+      "test": "postgres_pause_reconciler_repairs_a_dropped_failure_event_once"
+    }
+  },
+  "actions": [
+    {
+      "id": "observability.logger_level_ttl.v1",
+      "risk": "r1",
+      "owner": "messaging-observability",
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/observability.logger_level_ttl.v1.yaml",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/observability.logger_level_ttl.v1.yaml",
+      "shadow_samples": 20,
+      "supervised_successes": 5,
+      "observation_window_days": 7,
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "proxy.scale_out_one.v1",
+      "risk": "r1",
+      "owner": "messaging-platform",
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/proxy.scale_out_one.v1.yaml",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/proxy.scale_out_one.v1.yaml",
+      "shadow_samples": 20,
+      "supervised_successes": 5,
+      "observation_window_days": 7,
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "proxy.restart_one.v1",
+      "risk": "r1",
+      "owner": "messaging-platform",
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/proxy.restart_one.v1.yaml",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/proxy.restart_one.v1.yaml",
+      "shadow_samples": 20,
+      "supervised_successes": 5,
+      "observation_window_days": 7,
+      "qualification": "disposable_cluster_smoke_passed"
+    },
+    {
+      "id": "telemetry.collector.restart_one.v1",
+      "risk": "r1",
+      "owner": "messaging-observability",
+      "enable_switch": "ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART",
+      "descriptor": "rocketmq-ai/rocketmq-sre/config/actions/telemetry.collector.restart_one.v1.yaml",
+      "policy": "rocketmq-ai/rocketmq-sre/config/autonomy/actions/telemetry.collector.restart_one.v1.yaml",
+      "shadow_samples": 20,
+      "supervised_successes": 5,
+      "observation_window_days": 7,
+      "qualification": "disposable_cluster_smoke_passed"
+    }
+  ],
+  "offline_critic_fixture": {
+    "transport": "offline_scripted",
+    "primary_model_family": "qualification-primary",
+    "critic_model_family": "qualification-critic",
+    "heterogeneous_required": true
+  },
+  "live_report": {
+    "schema_version": "rocketmq-sre.autonomy-action-qualification-report.v1",
+    "machine_local_only": true,
+    "allowed_roots": [
+      "D:\\rocketmq-sre-evidence",
+      "F:\\rocketmq-sre-evidence"
+    ],
+    "secrets_recorded": false,
+    "message_bodies_recorded": false
+  }
+}

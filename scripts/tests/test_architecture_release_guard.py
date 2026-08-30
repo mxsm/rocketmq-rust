@@ -73,7 +73,7 @@ class ArchitectureReleaseGuardTests(unittest.TestCase):
         inventory = guard.discover_release_inventory(ROOT, findings)
 
         self.assertEqual([], findings)
-        self.assertIn("rocketmq-tools/rocketmq-mcp/Cargo.toml", inventory.standalone_projects)
+        self.assertIn("rocketmq-ai/rocketmq-mcp/Cargo.toml", inventory.standalone_projects)
         self.assertIn("rocketmq-mcp", inventory.governance_targets)
         self.assertNotIn("rocketmq-mcp", inventory.root_members)
 

@@ -82,13 +82,13 @@ assert_same_directory_agents() {
 }
 
 ROOT_AGENTS_TEXT="$(read_repository_text "AGENTS.md")"
-MCP_AGENTS_TEXT="$(read_repository_text "rocketmq-tools/rocketmq-mcp/AGENTS.md")"
+MCP_AGENTS_TEXT="$(read_repository_text "rocketmq-ai/rocketmq-mcp/AGENTS.md")"
 
 REQUIRED_ROUTE_PATHS=(
   "fuzz/"
   "rocketmq-example/"
-  "rocketmq-tools/rocketmq-mcp/"
-  "rocketmq-sre/"
+  "rocketmq-ai/rocketmq-mcp/"
+  "rocketmq-ai/rocketmq-sre/"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/"
@@ -124,7 +124,7 @@ REQUIRED_ROOT_TERMS=(
   "rocksdb_store"
   "otlp-metrics"
   "Validation routes are cumulative"
-  "rocketmq-tools/rocketmq-mcp/"
+  "rocketmq-ai/rocketmq-mcp/"
   "rocketmq-doc/en/agents-routing-validation-adr.md"
 )
 
@@ -156,8 +156,8 @@ done
 EXPECTED_PROJECT_AGENTS=(
   "fuzz/AGENTS.md"
   "rocketmq-example/AGENTS.md"
-  "rocketmq-tools/rocketmq-mcp/AGENTS.md"
-  "rocketmq-sre/AGENTS.md"
+  "rocketmq-ai/rocketmq-mcp/AGENTS.md"
+  "rocketmq-ai/rocketmq-sre/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/AGENTS.md"
@@ -202,8 +202,8 @@ WORKFLOW_PATHS=(
   ".github/workflows/rocketmq-rust-ci.yaml|Root workspace validation"
   ".github/workflows/fuzz-ci.yml|fuzz/"
   ".github/workflows/rocketmq-example-ci.yaml|rocketmq-example/"
-  ".github/workflows/rocketmq-mcp-ci.yaml|rocketmq-tools/rocketmq-mcp/"
-  ".github/workflows/rocketmq-sre-ci.yml|rocketmq-sre/"
+  ".github/workflows/rocketmq-mcp-ci.yaml|rocketmq-ai/rocketmq-mcp/"
+  ".github/workflows/rocketmq-sre-ci.yml|rocketmq-ai/rocketmq-sre/"
   ".github/workflows/dashboard-web-ci.yml|rocketmq-dashboard/rocketmq-dashboard-web/"
   ".github/workflows/dashboard-tauri-ci.yml|rocketmq-dashboard/rocketmq-dashboard-tauri/"
   ".github/workflows/website-check.yml|rocketmq-website/"
@@ -250,7 +250,7 @@ if [[ -f "$SRE_WORKFLOW_PATH" ]]; then
   SRE_WORKFLOW_TEXT="$(cat "$SRE_WORKFLOW_PATH")"
   for trigger_path in \
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**" \
-    "rocketmq-tools/rocketmq-mcp/**" \
+    "rocketmq-ai/rocketmq-mcp/**" \
     "rocketmq-auth/**" \
     "rocketmq-client/**" \
     "rocketmq-error/**" \

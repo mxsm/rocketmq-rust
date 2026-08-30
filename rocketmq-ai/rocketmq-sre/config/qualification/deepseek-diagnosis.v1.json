@@ -1,0 +1,52 @@
+{
+  "schema_version": "rocketmq-sre.deepseek-diagnosis-qualification.v1",
+  "environment": "docker_postgresql_deepseek_responses",
+  "operating_mode": "supervised_read_only",
+  "provider": "deepseek",
+  "protocol": "responses_api",
+  "model": "deepseek-v4-flash",
+  "model_provider_network_calls": true,
+  "production_certified": false,
+  "unattended_autonomous_execution": false,
+  "required_assertions": {
+    "model_assisted_diagnosis": true,
+    "authorized_evidence_citations": true,
+    "input_tokens_present": true,
+    "output_tokens_present": true,
+    "invocation_persisted": true,
+    "maximum_schema_repairs": 1,
+    "maximum_model_network_calls": 7,
+    "maximum_diagnosis_attempts": 2,
+    "maximum_rules_only_fallbacks": 1,
+    "stream_sessions": 2,
+    "completed_semantic_streams": 1,
+    "stream_terminal_verified": true,
+    "stream_cancellation_verified": true,
+    "read_only_tool_selections": 1,
+    "tool_selection_protocol": "openai_chat_completions",
+    "tool_execution_calls": 0,
+    "mutation_calls": 0,
+    "execution_eligible": false
+  },
+  "repository_evidence": {
+    "adapter": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/src/adapters.rs",
+    "contract_fixture": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/fixtures/providers/deepseek-responses.contract.json",
+    "contract_test": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/provider_contracts.rs",
+    "live_test_path": "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_deepseek.rs",
+    "live_test": "deepseek_responses_produces_persisted_read_only_sre_diagnosis",
+    "runner": "rocketmq-ai/rocketmq-sre/scripts/deepseek-diagnosis-qualification.ps1",
+    "checker": "rocketmq-ai/rocketmq-sre/scripts/check_deepseek_diagnosis_qualification.py"
+  },
+  "live_report": {
+    "schema_version": "rocketmq-sre.deepseek-diagnosis-qualification-report.v1",
+    "machine_local_only": true,
+    "allowed_roots": [
+      "D:\\rocketmq-sre-evidence",
+      "F:\\rocketmq-sre-evidence"
+    ],
+    "secrets_recorded": false,
+    "prompts_recorded": false,
+    "responses_recorded": false,
+    "message_bodies_recorded": false
+  }
+}

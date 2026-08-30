@@ -163,22 +163,22 @@
   "repository_exclusions": [
     {
       "name": "rocketmq-mcp",
-      "path": "rocketmq-tools/rocketmq-mcp",
+      "path": "rocketmq-ai/rocketmq-mcp",
       "reason": "excluded-mcp"
     },
     {
       "name": "rocketmq-sre",
-      "path": "rocketmq-sre",
+      "path": "rocketmq-ai/rocketmq-sre",
       "reason": "excluded-sre"
     },
     {
       "name": "rocketmq-sre-ui",
-      "path": "rocketmq-sre/ui",
+      "path": "rocketmq-ai/rocketmq-sre/ui",
       "reason": "excluded-sre"
     },
     {
       "name": "rocketmq-sre-typescript-sdk",
-      "path": "rocketmq-sre/sdk/typescript",
+      "path": "rocketmq-ai/rocketmq-sre/sdk/typescript",
       "reason": "excluded-sre"
     },
     {

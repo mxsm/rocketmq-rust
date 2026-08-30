@@ -45,7 +45,7 @@ const WORKSPACE_CRATE_DIRS: &[&str] = &[
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
     "rocketmq-tools/rocketmq-store-inspect",
-    "rocketmq-tools/rocketmq-mcp",
+    "rocketmq-ai/rocketmq-mcp",
     "rocketmq-dashboard/rocketmq-dashboard-gpui",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend",
 ];
@@ -55,7 +55,7 @@ const GOVERNED_ENTRYPOINTS: &[&str] = &[
     "rocketmq-controller/src/bin/controller_bootstrap.rs",
     "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
     "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
-    "rocketmq-tools/rocketmq-mcp/src/app.rs",
+    "rocketmq-ai/rocketmq-mcp/src/app.rs",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/src/main.rs",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs",
 ];
@@ -72,7 +72,7 @@ const TELEMETRY_ENV_GOVERNED_CRATE_DIRS: &[&str] = &[
     "rocketmq-namesrv",
     "rocketmq-controller",
     "rocketmq-proxy",
-    "rocketmq-tools/rocketmq-mcp",
+    "rocketmq-ai/rocketmq-mcp",
     "rocketmq-observability",
 ];
 
@@ -114,8 +114,8 @@ const RUNTIME_CONFIGURATION_AND_DOCUMENTATION_PATHS: &[&str] = &[
     "distribution/helm/rocketmq-rust/templates",
     "distribution/kubernetes/base",
     "docker/smoke-config",
-    "rocketmq-sre/deploy/dev/config",
-    "rocketmq-sre/scripts",
+    "rocketmq-ai/rocketmq-sre/deploy/dev/config",
+    "rocketmq-ai/rocketmq-sre/scripts",
     "rocketmq-broker/README.md",
     "rocketmq-broker/README-zh_cn.md",
     "rocketmq-controller/README.md",
@@ -656,7 +656,7 @@ fn runtime_configuration_and_user_documentation_exclude_removed_flat_telemetry_k
         }
 
         for file in files {
-            if file.starts_with(workspace_root.join("rocketmq-sre/scripts"))
+            if file.starts_with(workspace_root.join("rocketmq-ai/rocketmq-sre/scripts"))
                 && !file.file_name().is_some_and(|name| {
                     name.to_string_lossy().starts_with("phase") && name.to_string_lossy().ends_with("-smoke.ps1")
                 })
@@ -760,7 +760,7 @@ fn website_documents_each_services_actual_observability_features() {
         ),
         (
             "MCP",
-            "rocketmq-tools/rocketmq-mcp/Cargo.toml",
+            "rocketmq-ai/rocketmq-mcp/Cargo.toml",
             &["observability", "otlp"][..],
         ),
     ];

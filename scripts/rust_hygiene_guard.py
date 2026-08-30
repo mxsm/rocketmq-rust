@@ -148,7 +148,7 @@ REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
         "resource_budget_invariant",
         "a successful budget rebind retains the validated root reservation",
     ),
-    ("rocketmq-sre/crates/rocketmq-sre-control-plane/src/openapi.rs", "<module>"): (
+    ("rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/src/openapi.rs", "<module>"): (
         "checked_artifact_invariant",
         "the checked-in OpenAPI document is validated by repository tests before release",
     ),
@@ -161,7 +161,7 @@ REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
         "Store runtime child budgets are derived from a validated parent budget configuration",
     ),
     (
-        "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/projection.rs",
+        "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/src/sources/projection.rs",
         "apply",
     ): (
         "validated_dispatch_invariant",
@@ -181,7 +181,7 @@ REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
         "documented_state_invariant",
         "MutationAdminGuard documents that access after the guard is consumed is a programmer error",
     ),
-    ("rocketmq-tools/rocketmq-mcp/src/guard/sanitizer.rs", "<module>"): (
+    ("rocketmq-ai/rocketmq-mcp/src/guard/sanitizer.rs", "<module>"): (
         "static_definition_invariant",
         "literal sanitizer regular expressions are compiled once and covered by sanitizer tests",
     ),

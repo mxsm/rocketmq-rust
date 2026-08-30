@@ -362,7 +362,7 @@ class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
         metrics = guard.scan_tree(root, scope="core-release")
 
         self.assertTrue(metrics)
-        self.assertFalse(any(item.path.startswith("rocketmq-sre/") for item in metrics))
+        self.assertFalse(any(item.path.startswith("rocketmq-ai/rocketmq-sre/") for item in metrics))
         self.assertFalse(any("rocketmq-mcp" in item.path for item in metrics))
         self.assertFalse(any(item.path.startswith("rocketmq-dashboard/") for item in metrics))
 

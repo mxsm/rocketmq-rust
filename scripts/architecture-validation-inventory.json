@@ -77,8 +77,8 @@
     {
       "id": "rocketmq-mcp",
       "owner": "RocketMQ MCP maintainers",
-      "manifest": "rocketmq-tools/rocketmq-mcp/Cargo.toml",
-      "instructions": "rocketmq-tools/rocketmq-mcp/AGENTS.md",
+      "manifest": "rocketmq-ai/rocketmq-mcp/Cargo.toml",
+      "instructions": "rocketmq-ai/rocketmq-mcp/AGENTS.md",
       "workflow": ".github/workflows/rocketmq-mcp-ci.yaml",
       "toolchain": "1.95.0",
       "commands": [
@@ -94,8 +94,8 @@
     {
       "id": "rocketmq-sre",
       "owner": "RocketMQ AI SRE maintainers",
-      "manifest": "rocketmq-sre/Cargo.toml",
-      "instructions": "rocketmq-sre/AGENTS.md",
+      "manifest": "rocketmq-ai/rocketmq-sre/Cargo.toml",
+      "instructions": "rocketmq-ai/rocketmq-sre/AGENTS.md",
       "workflow": ".github/workflows/rocketmq-sre-ci.yml",
       "toolchain": "1.95.0",
       "commands": [
@@ -172,7 +172,7 @@
   ],
   "tokio_full_allowed": [
     "rocketmq-example/Cargo.toml",
-    "rocketmq-tools/rocketmq-mcp/Cargo.toml",
+    "rocketmq-ai/rocketmq-mcp/Cargo.toml",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
   ],
@@ -264,7 +264,7 @@
       {"path": "scripts/tests/test_critical_architecture_freeze_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-runtime/**", "rocketmq-client/**", "rocketmq-broker/**", "rocketmq-transport/**"], "command": "python -m unittest scripts.tests.test_critical_architecture_freeze_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_environment_write_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/*.rs"], "command": "python -m unittest scripts.tests.test_environment_write_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_generate_metric_catalog.py", "owner": "observability", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-observability/**"], "command": "python -m unittest scripts.tests.test_generate_metric_catalog -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
-      {"path": "scripts/tests/test_generate_sre_capability_catalog.py", "owner": "sre", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-sre/**", "rocketmq-tools/rocketmq-admin/**"], "command": "python -m unittest scripts.tests.test_generate_sre_capability_catalog -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
+      {"path": "scripts/tests/test_generate_sre_capability_catalog.py", "owner": "sre", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-ai/rocketmq-sre/**", "rocketmq-tools/rocketmq-admin/**"], "command": "python -m unittest scripts.tests.test_generate_sre_capability_catalog -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_m04_protocol_boundary.py", "owner": "protocol", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-protocol/**", "rocketmq-transport/**"], "command": "python -m unittest scripts.tests.test_m04_protocol_boundary -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m04_schema_ownership.py", "owner": "protocol", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-protocol/**"], "command": "python -m unittest scripts.tests.test_m04_schema_ownership -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m06_consume_queue_local_contract.py", "owner": "store", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-store*/**"], "command": "python -m unittest scripts.tests.test_m06_consume_queue_local_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
@@ -283,7 +283,7 @@
       {"path": "scripts/tests/test_m07_client_edge_closeout_contract.py", "owner": "client", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-client/**"], "command": "python -m unittest scripts.tests.test_m07_client_edge_closeout_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m07_dashboard_client_edge_contract.py", "owner": "dashboard", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-dashboard/**"], "command": "python -m unittest scripts.tests.test_m07_dashboard_client_edge_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m07_legacy_runtime_drain_contract.py", "owner": "runtime", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-runtime/**"], "command": "python -m unittest scripts.tests.test_m07_legacy_runtime_drain_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
-      {"path": "scripts/tests/test_m07_mcp_client_edge_contract.py", "owner": "mcp", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-tools/rocketmq-mcp/**"], "command": "python -m unittest scripts.tests.test_m07_mcp_client_edge_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
+      {"path": "scripts/tests/test_m07_mcp_client_edge_contract.py", "owner": "mcp", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-ai/rocketmq-mcp/**"], "command": "python -m unittest scripts.tests.test_m07_mcp_client_edge_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m07_namesrv_route_lookup_contract.py", "owner": "namesrv", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-namesrv/**"], "command": "python -m unittest scripts.tests.test_m07_namesrv_route_lookup_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m08_proxy_core_contract.py", "owner": "proxy", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-proxy*/**"], "command": "python -m unittest scripts.tests.test_m08_proxy_core_contract -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
       {"path": "scripts/tests/test_m08_proxy_feature_closure.py", "owner": "proxy", "tier": "milestone_contract", "trigger_paths": ["scripts/**", "rocketmq-proxy*/**"], "command": "python -m unittest scripts.tests.test_m08_proxy_feature_closure -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "none"},
@@ -302,7 +302,7 @@
       {"path": "scripts/tests/test_p3_production_release_state.py", "owner": "release-engineering", "tier": "phase_contract", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_p3_production_release_state -v", "estimated_seconds": 60, "platform": "powershell", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_p3_release_rollback.py", "owner": "release-engineering", "tier": "phase_contract", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_p3_release_rollback -v", "estimated_seconds": 60, "platform": "powershell", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_runtime_task_capability.py", "owner": "runtime", "tier": "phase_contract", "trigger_paths": ["scripts/**", "rocketmq-runtime/**", "**/*.rs"], "command": "python -m unittest scripts.tests.test_runtime_task_capability -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "none"},
-      {"path": "scripts/tests/test_runtime_audit_sre_contract.py", "owner": "runtime", "tier": "pr_static", "trigger_paths": ["scripts/runtime-audit.ps1", "rocketmq-sre/**"], "command": "python -m unittest scripts.tests.test_runtime_audit_sre_contract -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "repository-fixtures"},
+      {"path": "scripts/tests/test_runtime_audit_sre_contract.py", "owner": "runtime", "tier": "pr_static", "trigger_paths": ["scripts/runtime-audit.ps1", "rocketmq-ai/rocketmq-sre/**"], "command": "python -m unittest scripts.tests.test_runtime_audit_sre_contract -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_rust_hygiene_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/*.rs"], "command": "python -m unittest scripts.tests.test_rust_hygiene_guard -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_rust_lint_debt_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/*.rs", ".clippy.toml"], "command": "python -m unittest scripts.tests.test_rust_lint_debt_guard -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_service_image_publication_verifier.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/verify_service_image_publication.py", ".github/workflows/service-image-publish.yml", ".github/workflows/architecture-slo-evidence.yml", ".github/workflows/kubernetes-fault-matrix.yml"], "command": "python -m unittest scripts.tests.test_service_image_publication_verifier -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
