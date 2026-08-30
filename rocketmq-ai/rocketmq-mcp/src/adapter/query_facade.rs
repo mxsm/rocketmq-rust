@@ -193,7 +193,7 @@ where
                     self.run_workflow(cluster, |session, cluster| {
                         Box::pin(async move {
                             let brokers = session.broker_rows().await?;
-                            let topics = session.topic_entries().await?;
+                            let topics = sorted_unique_topic_names(session.topic_inventory().await?);
                             let consumer_groups = session.consumer_groups().await?;
                             Ok(ClusterOverviewOutput {
                                 cluster: cluster.name.clone(),
@@ -231,8 +231,14 @@ where
                 || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
-                            let mut topics = session.topic_entries().await?;
-                            topics.sort_by(|left, right| left.topic.cmp(&right.topic));
+                            let mut topics = sorted_unique_topic_names(session.topic_inventory().await?)
+                                .into_iter()
+                                .map(|topic| crate::tools::topic_tools::TopicListEntry {
+                                    topic,
+                                    cluster: Some(cluster.rocketmq_cluster_name.clone()),
+                                    consumer_group: None,
+                                })
+                                .collect::<Vec<_>>();
                             if let Some(filter) = normalized_filter(args.filter.as_deref()) {
                                 topics.retain(|entry| entry.topic.to_ascii_lowercase().contains(&filter));
                             }
@@ -752,6 +758,12 @@ fn normalized_filter(filter: Option<&str>) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
+fn sorted_unique_topic_names(mut topics: Vec<String>) -> Vec<String> {
+    topics.sort();
+    topics.dedup();
+    topics
+}
+
 fn normalized_identifier(field: &str, value: &str) -> Result<String, ToolExecutionError> {
     let value = value.trim();
     if value.is_empty() {
@@ -795,7 +807,6 @@ mod tests {
     use crate::tools::consumer_tools::ConsumerGroupSummary;
     use crate::tools::consumer_tools::QueueLag;
     use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
-    use crate::tools::topic_tools::TopicListEntry;
     use crate::tools::topic_tools::TopicRouteBroker;
     use crate::tools::topic_tools::TopicRouteQueue;
 
@@ -806,7 +817,7 @@ mod tests {
         starts: AtomicUsize,
         shutdowns: AtomicUsize,
         broker_queries: AtomicUsize,
-        topic_queries: AtomicUsize,
+        topic_inventory_queries: AtomicUsize,
         consumer_group_queries: AtomicUsize,
         route_queries: AtomicUsize,
         consumer_lag_queries: AtomicUsize,
@@ -818,9 +829,9 @@ mod tests {
         counters: Arc<LifecycleCounters>,
         selected_broker_missing: bool,
         hang_broker_query: bool,
-        hang_topic_query: bool,
-        delay_topic_query: bool,
-        fail_topic_query: bool,
+        hang_topic_inventory: bool,
+        delay_topic_inventory: bool,
+        fail_topic_inventory: bool,
     }
 
     impl AdminSessionFactory for FakeSessionFactory {
@@ -833,9 +844,9 @@ mod tests {
                 counters: self.counters.clone(),
                 selected_broker_missing: self.selected_broker_missing,
                 hang_broker_query: self.hang_broker_query,
-                hang_topic_query: self.hang_topic_query,
-                delay_topic_query: self.delay_topic_query,
-                fail_topic_query: self.fail_topic_query,
+                hang_topic_inventory: self.hang_topic_inventory,
+                delay_topic_inventory: self.delay_topic_inventory,
+                fail_topic_inventory: self.fail_topic_inventory,
             })
         }
     }
@@ -845,9 +856,9 @@ mod tests {
         counters: Arc<LifecycleCounters>,
         selected_broker_missing: bool,
         hang_broker_query: bool,
-        hang_topic_query: bool,
-        delay_topic_query: bool,
-        fail_topic_query: bool,
+        hang_topic_inventory: bool,
+        delay_topic_inventory: bool,
+        fail_topic_inventory: bool,
     }
 
     impl AdminSession for FakeSession {
@@ -864,18 +875,18 @@ mod tests {
             Ok(vec![broker_summary(&self.cluster.name, broker_name)])
         }
 
-        async fn topic_entries(&mut self) -> Result<Vec<TopicListEntry>, ToolExecutionError> {
-            self.counters.topic_queries.fetch_add(1, Ordering::SeqCst);
-            if self.hang_topic_query {
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+            self.counters.topic_inventory_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_topic_inventory {
                 std::future::pending::<()>().await;
             }
-            if self.delay_topic_query {
+            if self.delay_topic_inventory {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            if self.fail_topic_query {
+            if self.fail_topic_inventory {
                 return Err(ToolExecutionError::backend("topic query failed"));
             }
-            Ok(vec![topic_entry("orders"), topic_entry("payments")])
+            Ok(vec!["payments".to_string(), "orders".to_string(), "orders".to_string()])
         }
 
         async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
@@ -979,10 +990,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_facade_cluster_overview_starts_and_shuts_down_one_admin_session() {
+    async fn query_facade_cluster_overview_counts_unique_inventory_with_one_source_call() {
         let factory = FakeSessionFactory::default();
         let counters = factory.counters.clone();
-        let facade = QueryFacade::with_factory(example_config(), factory);
+        let facade = QueryFacade::with_factory(example_config_with_physical_cluster(), factory);
 
         let result = facade
             .cluster_overview(ClusterOverviewArgs {
@@ -996,8 +1007,48 @@ mod tests {
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.topic_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.route_queries.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn query_facade_list_topics_sorts_deduplicates_and_preserves_null_consumer_group() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config_with_physical_cluster(), factory);
+
+        let result = facade
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result
+                .page
+                .items
+                .iter()
+                .map(|entry| entry.topic.as_str())
+                .collect::<Vec<_>>(),
+            ["orders", "payments"]
+        );
+        assert!(result
+            .page
+            .items
+            .iter()
+            .all(|entry| entry.cluster.as_deref() == Some("DefaultCluster")));
+        assert!(result.page.items.iter().all(|entry| entry.consumer_group.is_none()));
+        assert_eq!(
+            serde_json::to_value(&result.page.items[0]).unwrap()["consumer_group"],
+            serde_json::Value::Null
+        );
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.route_queries.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.consumer_group_queries.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -1103,7 +1154,7 @@ mod tests {
     #[tokio::test]
     async fn query_facade_backend_failure_shuts_down_the_started_session_once() {
         let factory = FakeSessionFactory {
-            fail_topic_query: true,
+            fail_topic_inventory: true,
             ..Default::default()
         };
         let counters = factory.counters.clone();
@@ -1121,7 +1172,7 @@ mod tests {
         assert!(matches!(error, ToolExecutionError::Backend(_)));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.topic_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1163,7 +1214,7 @@ mod tests {
         assert_eq!(payload["topics"]["total_count"], 2);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.topic_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1192,7 +1243,7 @@ mod tests {
         assert_eq!(payload["cache_status"], "hit");
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.topic_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(
             facade.cache_metrics(),
             CacheMetricsSnapshot {
@@ -1206,7 +1257,7 @@ mod tests {
     #[tokio::test]
     async fn query_facade_singleflight_coalesces_concurrent_identical_misses() {
         let factory = FakeSessionFactory {
-            delay_topic_query: true,
+            delay_topic_inventory: true,
             ..Default::default()
         };
         let counters = factory.counters.clone();
@@ -1239,14 +1290,14 @@ mod tests {
         assert_eq!(statuses.iter().filter(|status| **status == CacheStatus::Hit).count(), 7);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.topic_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(facade.cache_metrics().coalesced_waiters, 7);
     }
 
     #[tokio::test]
     async fn query_facade_singleflight_waiter_observes_its_cancellation() {
         let factory = FakeSessionFactory {
-            hang_topic_query: true,
+            hang_topic_inventory: true,
             ..Default::default()
         };
         let counters = factory.counters.clone();
@@ -1260,7 +1311,7 @@ mod tests {
         };
         let leader_facade = facade.clone();
         let leader = tokio::spawn(async move { leader_facade.list_topics(request()).await });
-        while counters.topic_queries.load(Ordering::SeqCst) == 0 {
+        while counters.topic_inventory_queries.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
         }
 
@@ -1302,7 +1353,7 @@ mod tests {
         assert_eq!(second.cache_status, CacheStatus::Miss);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
-        assert_eq!(counters.topic_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -1335,6 +1386,12 @@ mod tests {
         .unwrap()
     }
 
+    fn example_config_with_physical_cluster() -> McpConfig {
+        let mut config = example_config();
+        config.clusters[0].rocketmq_cluster_name = Some("DefaultCluster".to_string());
+        config
+    }
+
     fn diagnosis_request() -> DiagnoseConsumerLagArgs {
         DiagnoseConsumerLagArgs {
             cluster: "local-dev".to_string(),
@@ -1357,14 +1414,6 @@ mod tests {
             hour: "0".to_string(),
             space: "1%".to_string(),
             broker_active: true,
-        }
-    }
-
-    fn topic_entry(topic: &str) -> TopicListEntry {
-        TopicListEntry {
-            topic: topic.to_string(),
-            cluster: Some("local-dev".to_string()),
-            consumer_group: None,
         }
     }
 

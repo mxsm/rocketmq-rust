@@ -53,6 +53,29 @@ pub struct ListTopicsResult {
     pub topics: Vec<TopicSummary>,
 }
 
+/// Narrow request for Topic names without route or consumer relationships.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicInventoryRequest {
+    pub cluster: Option<String>,
+}
+
+impl TopicInventoryRequest {
+    pub fn new(cluster: Option<String>) -> Self {
+        Self {
+            cluster: cluster.and_then(|value| {
+                let value = value.trim().to_string();
+                (!value.is_empty()).then_some(value)
+            }),
+        }
+    }
+}
+
+/// Sorted, deduplicated Topic names returned by one inventory source call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicInventoryResult {
+    pub topics: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTopicRouteRequest {
     pub topic: String,
@@ -922,6 +945,17 @@ pub trait TopicQueryAdmin: Send {
     fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers>;
 }
 
+/// Additive low-cost Topic inventory capability for read-only callers.
+///
+/// This trait remains separate from [`TopicQueryAdmin`] so existing rich-list
+/// implementations keep their compatibility surface and behavior.
+pub trait TopicInventoryAdmin: Send {
+    fn get_topic_inventory<'a>(
+        &'a mut self,
+        request: &'a TopicInventoryRequest,
+    ) -> AdminFuture<'a, TopicInventoryResult>;
+}
+
 /// Exact parameters for advancing one consumer group's Topic offsets to the
 /// latest available position.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1143,6 +1177,9 @@ mod tests {
     use super::TopicConsumerGroups;
     use super::TopicConsumers;
     use super::TopicCurrentStats;
+    use super::TopicInventoryAdmin;
+    use super::TopicInventoryRequest;
+    use super::TopicInventoryResult;
     use super::TopicMutationOutcome;
     use super::TopicRoute;
     use super::TopicSendRequest;
@@ -1216,6 +1253,24 @@ mod tests {
         let _ = uses_batch_extension::<BatchOnlyFake>;
     }
 
+    #[test]
+    fn topic_inventory_request_normalizes_optional_cluster() {
+        assert_eq!(
+            TopicInventoryRequest::new(Some(" cluster-a ".to_string())).cluster,
+            Some("cluster-a".to_string())
+        );
+        assert_eq!(TopicInventoryRequest::new(Some("   ".to_string())).cluster, None);
+    }
+
+    #[test]
+    fn topic_inventory_is_additive_to_the_legacy_topic_admin_contract() {
+        fn uses_topic_admin<T: TopicAdmin>() {}
+        fn uses_topic_inventory<T: TopicInventoryAdmin>() {}
+
+        uses_topic_admin::<ExistingTopicAdminFake>();
+        uses_topic_inventory::<InventoryOnlyFake>();
+    }
+
     struct ExistingTopicAdminFake;
 
     impl TopicAdmin for ExistingTopicAdminFake {
@@ -1285,6 +1340,17 @@ mod tests {
             &'a mut self,
             _: &'a TopicBatchUpsertRequest,
         ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+    }
+
+    struct InventoryOnlyFake;
+
+    impl TopicInventoryAdmin for InventoryOnlyFake {
+        fn get_topic_inventory<'a>(
+            &'a mut self,
+            _: &'a TopicInventoryRequest,
+        ) -> AdminFuture<'a, TopicInventoryResult> {
             Box::pin(async { Err(AdminError::SessionClosed) })
         }
     }
