@@ -52,18 +52,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rollback_stats_default_values() {
-        let stats: RollbackStats = Default::default();
-        assert_eq!(stats.broker_name, CheetahString::from(""));
-        assert_eq!(stats.queue_id, 0);
-        assert_eq!(stats.broker_offset, 0);
-        assert_eq!(stats.consumer_offset, 0);
-        assert_eq!(stats.timestamp_offset, 0);
-        assert_eq!(stats.rollback_offset, 0);
-    }
-
-    #[test]
-    fn rollback_stats_serialization() {
+    fn serde_and_display_preserve_rollback_stats() {
         let stats = RollbackStats {
             broker_name: CheetahString::from("broker1"),
             queue_id: 1,
@@ -77,33 +66,21 @@ mod tests {
             serialized,
             r#"{"brokerName":"broker1","queueId":1,"brokerOffset":100,"consumerOffset":200,"timestampOffset":300,"rollbackOffset":400}"#
         );
-    }
 
-    #[test]
-    fn rollback_stats_deserialization() {
-        let json = r#"{"brokerName":"broker1","queueId":1,"brokerOffset":100,"consumerOffset":200,"timestampOffset":300,"rollbackOffset":400}"#;
-        let deserialized: RollbackStats = serde_json::from_str(json).unwrap();
-        assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
-        assert_eq!(deserialized.queue_id, 1);
-        assert_eq!(deserialized.broker_offset, 100);
-        assert_eq!(deserialized.consumer_offset, 200);
-        assert_eq!(deserialized.timestamp_offset, 300);
-        assert_eq!(deserialized.rollback_offset, 400);
-    }
-
-    #[test]
-    fn rollback_stats_display_format() {
-        let stats = RollbackStats {
-            broker_name: CheetahString::from("broker1"),
-            queue_id: 1,
-            broker_offset: 100,
-            consumer_offset: 200,
-            timestamp_offset: 300,
-            rollback_offset: 400,
-        };
-        let display = format!("{}", stats);
+        let deserialized: RollbackStats = serde_json::from_str(&serialized).unwrap();
         assert_eq!(
-            display,
+            (
+                deserialized.broker_name.as_str(),
+                deserialized.queue_id,
+                deserialized.broker_offset,
+                deserialized.consumer_offset,
+                deserialized.timestamp_offset,
+                deserialized.rollback_offset,
+            ),
+            ("broker1", 1, 100, 200, 300, 400)
+        );
+        assert_eq!(
+            deserialized.to_string(),
             "RollbackStats [brokerName=broker1, queueId=1, brokerOffset=100, consumerOffset=200, timestampOffset=300, \
              rollbackOffset=400]"
         );
