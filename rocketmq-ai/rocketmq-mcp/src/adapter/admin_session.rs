@@ -24,7 +24,8 @@ use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
-use rocketmq_admin_core::core::topic::ListTopicsRequest;
+use rocketmq_admin_core::core::topic::TopicInventoryAdmin;
+use rocketmq_admin_core::core::topic::TopicInventoryRequest;
 use rocketmq_admin_core::core::topic::TopicQueryAdmin;
 use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
@@ -35,7 +36,6 @@ use crate::tools::cluster_tools::BrokerSummary;
 use crate::tools::consumer_tools::ConsumerGroupSummary;
 use crate::tools::consumer_tools::QueueLag;
 use crate::tools::executor::ToolExecutionError;
-use crate::tools::topic_tools::TopicListEntry;
 use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
 
@@ -64,7 +64,7 @@ pub(crate) struct SessionConsumerLag {
 pub(crate) trait AdminSession: Send {
     fn broker_rows(&mut self) -> impl Future<Output = Result<Vec<BrokerSummary>, ToolExecutionError>> + Send;
 
-    fn topic_entries(&mut self) -> impl Future<Output = Result<Vec<TopicListEntry>, ToolExecutionError>> + Send;
+    fn topic_inventory(&mut self) -> impl Future<Output = Result<Vec<String>, ToolExecutionError>> + Send;
 
     fn topic_route(
         &mut self,
@@ -153,22 +153,14 @@ impl AdminSession for AdminCoreSession {
         Ok(result.brokers.iter().map(map_broker_summary).collect())
     }
 
-    async fn topic_entries(&mut self) -> Result<Vec<TopicListEntry>, ToolExecutionError> {
-        let request = ListTopicsRequest::new(Some(self.cluster.rocketmq_cluster_name.clone()));
+    async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        let request = TopicInventoryRequest::new(Some(self.cluster.rocketmq_cluster_name.clone()));
         let result = self
             .admin_mut()?
-            .list_topics(&request)
+            .get_topic_inventory(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
-        Ok(result
-            .topics
-            .iter()
-            .map(|item| TopicListEntry {
-                topic: item.topic.to_string(),
-                cluster: item.cluster.as_ref().map(ToString::to_string),
-                consumer_group: item.consumer_group.as_ref().map(ToString::to_string),
-            })
-            .collect())
+        Ok(result.topics)
     }
 
     async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {

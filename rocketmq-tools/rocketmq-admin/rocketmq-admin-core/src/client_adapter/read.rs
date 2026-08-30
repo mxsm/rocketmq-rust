@@ -25,6 +25,7 @@ use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::MQAdminMessageReadExt;
 use rocketmq_client_rust::MQAdminReadExt;
+use rocketmq_client_rust::MQAdminTopicInventoryReadExt;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
 use rocketmq_error::RocketMQError;
@@ -73,6 +74,9 @@ use crate::core::topic::ListTopicsResult;
 use crate::core::topic::QueryTopicConfigCasRequest;
 use crate::core::topic::TopicBroker;
 use crate::core::topic::TopicConfigCasState;
+use crate::core::topic::TopicInventoryAdmin;
+use crate::core::topic::TopicInventoryRequest;
+use crate::core::topic::TopicInventoryResult;
 use crate::core::topic::TopicQueryAdmin;
 use crate::core::topic::TopicQueue;
 use crate::core::topic::TopicRoute;
@@ -820,6 +824,42 @@ impl TopicQueryAdmin for ReadAdminSession {
     }
 }
 
+impl TopicInventoryAdmin for ReadAdminSession {
+    fn get_topic_inventory<'a>(
+        &'a mut self,
+        request: &'a TopicInventoryRequest,
+    ) -> AdminFuture<'a, TopicInventoryResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let topic_list = MQAdminTopicInventoryReadExt::fetch_topic_inventory(
+                &self.inner,
+                request.cluster.as_deref().map(CheetahString::from),
+            )
+            .await
+            .map_err(|error| backend_error("fetch_topic_inventory", error))?;
+            Ok(normalize_topic_inventory(
+                topic_list.topic_list,
+                request.cluster.is_some(),
+            ))
+        })
+    }
+}
+
+fn normalize_topic_inventory(topics: Vec<CheetahString>, cluster_scoped: bool) -> TopicInventoryResult {
+    TopicInventoryResult {
+        topics: topics
+            .into_iter()
+            .filter(|topic| {
+                !cluster_scoped
+                    || !(topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX))
+            })
+            .map(|topic| topic.to_string())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    }
+}
+
 impl ConsumerQueryAdmin for ReadAdminSession {
     fn query_config_cas_state<'a>(
         &'a mut self,
@@ -1274,6 +1314,39 @@ mod tests {
     use rocketmq_protocol::protocol::LanguageCode;
 
     use super::*;
+
+    #[test]
+    fn cluster_topic_inventory_filters_retry_and_dlq_then_sorts_and_deduplicates() {
+        let result = normalize_topic_inventory(
+            vec![
+                CheetahString::from("topic-b"),
+                CheetahString::from(format!("{RETRY_GROUP_TOPIC_PREFIX}group-a")),
+                CheetahString::from("topic-a"),
+                CheetahString::from(format!("{DLQ_GROUP_TOPIC_PREFIX}group-a")),
+                CheetahString::from("topic-b"),
+            ],
+            true,
+        );
+
+        assert_eq!(result.topics, ["topic-a", "topic-b"]);
+    }
+
+    #[test]
+    fn global_topic_inventory_preserves_retry_and_dlq_names() {
+        let retry_topic = format!("{RETRY_GROUP_TOPIC_PREFIX}group-a");
+        let dlq_topic = format!("{DLQ_GROUP_TOPIC_PREFIX}group-a");
+        let result = normalize_topic_inventory(
+            vec![
+                CheetahString::from("topic-a"),
+                CheetahString::from(retry_topic.clone()),
+                CheetahString::from(dlq_topic.clone()),
+                CheetahString::from("topic-a"),
+            ],
+            false,
+        );
+
+        assert_eq!(result.topics, [dlq_topic, retry_topic, "topic-a".to_string()]);
+    }
 
     #[test]
     fn producer_rows_are_deterministic_and_filter_exact_groups() {

@@ -62,6 +62,8 @@ pub use mq_admin_read_ext::MQAdminMessageReadExt;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::MQAdminReadExt;
 #[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::MQAdminTopicInventoryReadExt;
+#[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::MessageMetadataRead;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::SubscriptionGroupConfigVersioned;

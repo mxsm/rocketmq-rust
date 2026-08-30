@@ -18,6 +18,8 @@
 //! integrations. Mutation methods remain unavailable unless the separate
 //! `admin-mutation` capability is enabled.
 
+use std::future::Future;
+
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
 use rocketmq_model::common::config::TopicConfig;
@@ -184,6 +186,17 @@ pub trait MQAdminReadExt: Send {
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo>;
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList>;
+}
+
+/// Additive read-only capability for a NameServer Topic inventory.
+///
+/// This capability deliberately exposes only the cluster/global inventory
+/// requests. It does not grant route, consumer, or mutation access.
+#[allow(async_fn_in_trait)]
+pub trait MQAdminTopicInventoryReadExt: Send {
+    /// Fetches one cluster inventory when `cluster` is present, or the global
+    /// NameServer inventory otherwise.
+    async fn fetch_topic_inventory(&self, cluster: Option<CheetahString>) -> rocketmq_error::RocketMQResult<TopicList>;
 }
 
 /// Additive read-only capability for fixed, body-free message metadata.
@@ -517,6 +530,19 @@ impl MQAdminReadExt for DefaultMQAdminExt {
     }
 }
 
+impl MQAdminTopicInventoryReadExt for DefaultMQAdminExt {
+    async fn fetch_topic_inventory(&self, cluster: Option<CheetahString>) -> rocketmq_error::RocketMQResult<TopicList> {
+        let client_api = self.inner().mq_client_api()?;
+        let timeout_millis = self.inner().remoting_timeout_millis()?;
+        fetch_topic_inventory_from(
+            cluster,
+            |cluster| client_api.get_topics_by_cluster(cluster, timeout_millis),
+            || client_api.get_all_topic_list_from_name_server(timeout_millis),
+        )
+        .await
+    }
+}
+
 impl MQAdminMessageReadExt for DefaultMQAdminExt {
     async fn query_message_metadata(
         &self,
@@ -562,6 +588,23 @@ impl MQAdminMessageReadExt for DefaultMQAdminExt {
     }
 }
 
+async fn fetch_topic_inventory_from<ClusterFetch, ClusterFuture, GlobalFetch, GlobalFuture>(
+    cluster: Option<CheetahString>,
+    fetch_cluster: ClusterFetch,
+    fetch_global: GlobalFetch,
+) -> rocketmq_error::RocketMQResult<TopicList>
+where
+    ClusterFetch: FnOnce(CheetahString) -> ClusterFuture,
+    ClusterFuture: Future<Output = rocketmq_error::RocketMQResult<TopicList>>,
+    GlobalFetch: FnOnce() -> GlobalFuture,
+    GlobalFuture: Future<Output = rocketmq_error::RocketMQResult<TopicList>>,
+{
+    match cluster {
+        Some(cluster) => fetch_cluster(cluster).await,
+        None => fetch_global().await,
+    }
+}
+
 fn parse_allowlisted_value<T>(
     properties: &std::collections::HashMap<CheetahString, CheetahString>,
     key: &str,
@@ -585,10 +628,74 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     use cheetah_string::CheetahString;
+    use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 
+    use super::fetch_topic_inventory_from;
     use super::parse_allowlisted_value;
+
+    #[tokio::test]
+    async fn cluster_topic_inventory_selects_exactly_one_cluster_source_call() {
+        let cluster_calls = Arc::new(AtomicUsize::new(0));
+        let global_calls = Arc::new(AtomicUsize::new(0));
+        let result = fetch_topic_inventory_from(
+            Some(CheetahString::from("cluster-a")),
+            {
+                let cluster_calls = Arc::clone(&cluster_calls);
+                move |cluster| async move {
+                    cluster_calls.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(cluster, CheetahString::from("cluster-a"));
+                    Ok(TopicList::default())
+                }
+            },
+            {
+                let global_calls = Arc::clone(&global_calls);
+                move || async move {
+                    global_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(TopicList::default())
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(result.topic_list.is_empty());
+        assert_eq!(cluster_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(global_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn global_topic_inventory_selects_exactly_one_global_source_call() {
+        let cluster_calls = Arc::new(AtomicUsize::new(0));
+        let global_calls = Arc::new(AtomicUsize::new(0));
+        let result = fetch_topic_inventory_from(
+            None,
+            {
+                let cluster_calls = Arc::clone(&cluster_calls);
+                move |_| async move {
+                    cluster_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(TopicList::default())
+                }
+            },
+            {
+                let global_calls = Arc::clone(&global_calls);
+                move || async move {
+                    global_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(TopicList::default())
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(result.topic_list.is_empty());
+        assert_eq!(cluster_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(global_calls.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn parses_only_the_requested_allowlisted_value() {

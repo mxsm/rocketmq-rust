@@ -33,6 +33,8 @@ pub use crate::admin::MQAdminMutationExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminReadExt;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminTopicInventoryReadExt;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MessageMetadataRead;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::OffsetAdmin;
