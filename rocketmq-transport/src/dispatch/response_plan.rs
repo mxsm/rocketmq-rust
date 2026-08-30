@@ -406,6 +406,19 @@ pub enum ResponseBodyKind {
     FileRegions,
 }
 
+impl ResponseBodyKind {
+    /// Returns the stable low-cardinality response-plan label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Bytes => "bytes",
+            Self::Segments => "segments",
+            Self::FileRegions => "file_regions",
+        }
+    }
+}
+
 /// Internal storage owned by a [`ResponsePlan`].
 ///
 /// This type remains crate-private so V2 processors can choose an explicit

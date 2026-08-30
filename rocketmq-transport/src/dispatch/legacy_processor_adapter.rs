@@ -32,11 +32,13 @@ use super::OriginalRequestIdentity;
 use super::RemotingRequest;
 use super::RequestOrigin;
 use super::ResponseBodyKind;
+use super::ResponseDisposition;
 use super::ResponseError;
 use super::ResponsePlan;
 use super::ResponsePlanError;
 use super::ResponseReceipt;
 use super::ResponseSink;
+use super::ResponseTerminalState;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::hook_registry::HookSnapshot;
@@ -55,6 +57,9 @@ use crate::runtime::processor::ResponseWriteObservation;
 use crate::runtime::processor::ResponseWriteOutcome;
 use crate::runtime::processor_v2::RejectRequestDecision;
 use crate::runtime::processor_v2::RequestProcessorV2;
+use crate::runtime::processor_v2::ResponseMetadataV2;
+use crate::runtime::processor_v2::ResponseObservationModeV2;
+use crate::runtime::processor_v2::ResponseObservationOutcomeV2;
 use crate::runtime::processor_v2::ResponseWriteObservationV2;
 use crate::runtime::processor_v2::ResponseWritePath;
 use crate::server::SessionHandle;
@@ -216,7 +221,7 @@ impl LegacyRequestBridge {
     ) -> Result<(), LegacyProcessorAdapterError> {
         if self.canonical_session_id != SessionId::from_session_owner(session.session_id())
             || self.channel.canonical_session_id() != Some(self.canonical_session_id)
-            || self.context.channel().canonical_session_id() != Some(self.canonical_session_id)
+            || self.context.legacy_channel().canonical_session_id() != Some(self.canonical_session_id)
         {
             return Err(LegacyProcessorAdapterError::SessionMismatch);
         }
@@ -229,13 +234,13 @@ impl LegacyRequestBridge {
         if !response.is_network_owner(session) {
             return Err(LegacyProcessorAdapterError::CompletionOwnerMismatch);
         }
-        if !self.channel.shares_inner(self.context.channel()) {
+        if !self.channel.shares_inner(self.context.legacy_channel()) {
             return Err(LegacyProcessorAdapterError::ChannelContextMismatch);
         }
-        debug_assert!(self.channel.shares_inner(self.context.channel()));
+        debug_assert!(self.channel.shares_inner(self.context.legacy_channel()));
         debug_assert_eq!(self.channel.canonical_session_id(), Some(self.canonical_session_id));
         debug_assert_eq!(
-            self.context.channel().canonical_session_id(),
+            self.context.legacy_channel().canonical_session_id(),
             Some(self.canonical_session_id)
         );
         debug_assert!(self.channel.is_network_transport());
@@ -252,7 +257,7 @@ impl LegacyRequestBridge {
         let session_view = session.view();
         if self.canonical_session_id != session_view.id()
             || self.channel.canonical_session_id() != Some(self.canonical_session_id)
-            || self.context.channel().canonical_session_id() != Some(self.canonical_session_id)
+            || self.context.legacy_channel().canonical_session_id() != Some(self.canonical_session_id)
         {
             return Err(LegacyProcessorAdapterError::SessionMismatch);
         }
@@ -270,13 +275,13 @@ impl LegacyRequestBridge {
         ) {
             return Err(LegacyProcessorAdapterError::CompletionOwnerMismatch);
         }
-        if !self.channel.shares_inner(self.context.channel()) {
+        if !self.channel.shares_inner(self.context.legacy_channel()) {
             return Err(LegacyProcessorAdapterError::ChannelContextMismatch);
         }
-        debug_assert!(self.channel.shares_inner(self.context.channel()));
+        debug_assert!(self.channel.shares_inner(self.context.legacy_channel()));
         debug_assert_eq!(self.channel.canonical_session_id(), Some(self.canonical_session_id));
         debug_assert_eq!(
-            self.context.channel().canonical_session_id(),
+            self.context.legacy_channel().canonical_session_id(),
             Some(self.canonical_session_id)
         );
         debug_assert!(!self.channel.is_network_transport());
@@ -402,6 +407,7 @@ where
 pub(crate) struct ExplicitV2Processor<P> {
     processor: P,
     response_table: PendingRequestTable,
+    telemetry: TransportTelemetry,
 }
 
 impl<P> ExplicitV2Processor<P> {
@@ -409,10 +415,19 @@ impl<P> ExplicitV2Processor<P> {
         Self::with_response_table(processor, PendingRequestTable::new())
     }
 
-    pub(crate) const fn with_response_table(processor: P, response_table: PendingRequestTable) -> Self {
+    pub(crate) fn with_response_table(processor: P, response_table: PendingRequestTable) -> Self {
+        Self::with_response_table_and_telemetry(processor, response_table, TransportTelemetry::noop())
+    }
+
+    pub(crate) const fn with_response_table_and_telemetry(
+        processor: P,
+        response_table: PendingRequestTable,
+        telemetry: TransportTelemetry,
+    ) -> Self {
         Self {
             processor,
             response_table,
+            telemetry,
         }
     }
 }
@@ -429,6 +444,7 @@ where
         Self {
             processor: self.processor.clone(),
             response_table: self.response_table.clone(),
+            telemetry: self.telemetry.clone(),
         }
     }
 }
@@ -560,41 +576,176 @@ pub(crate) enum DispatchProcessorError {
 
 #[allow(dead_code, reason = "legacy metrics remain dormant until DSP-06 coexistence routing")]
 pub(crate) enum DispatchMetricsGuard {
-    ExplicitV2,
-    Legacy(TransportRequestMetricsGuard),
+    ExplicitV2 {
+        observation: crate::telemetry::V2RequestObservation,
+    },
+    Legacy {
+        metrics: TransportRequestMetricsGuard,
+        span: tracing::Span,
+        telemetry: Box<TransportTelemetry>,
+        original: OriginalRequestIdentity,
+        response_observed: bool,
+    },
 }
 
 impl DispatchMetricsGuard {
     pub(crate) fn complete_response(&mut self, response_code: i32) {
-        if let Self::Legacy(guard) = self {
-            guard.complete_response(response_code);
+        match self {
+            Self::ExplicitV2 { .. } => {}
+            Self::Legacy { metrics, .. } => metrics.complete_response(response_code),
         }
     }
 
     pub(crate) fn complete_oneway(&mut self) {
-        if let Self::Legacy(guard) = self {
-            guard.complete_oneway();
+        match self {
+            Self::ExplicitV2 { observation } => {
+                observation.complete_no_response(ResponseObservationOutcomeV2::Oneway);
+            }
+            Self::Legacy { metrics, .. } => {
+                metrics.complete_oneway();
+                self.record_legacy_response(
+                    None,
+                    None,
+                    ResponseObservationModeV2::NoResponse,
+                    ResponseObservationOutcomeV2::Oneway,
+                );
+            }
         }
     }
 
-    pub(crate) fn complete_legacy_ambiguous_none(&mut self) {
-        if let Self::Legacy(guard) = self {
-            guard.complete_legacy_ambiguous_none();
+    pub(crate) fn complete_protocol_no_response(&mut self) {
+        if let Self::ExplicitV2 { observation } = self {
+            observation.complete_no_response(ResponseObservationOutcomeV2::ProtocolNoResponse);
         }
+    }
+
+    pub(crate) fn arm_deferred_metrics(&mut self, retained_bytes: usize) {
+        if let Self::ExplicitV2 { observation } = self {
+            observation.arm_deferred_metrics(retained_bytes);
+        }
+    }
+
+    pub(crate) fn record_deferred_registered(&mut self) {
+        if let Self::ExplicitV2 { observation } = self {
+            observation.record_deferred_registered();
+        }
+    }
+
+    pub(crate) fn v2_observation(&self) -> Option<&crate::telemetry::V2RequestObservation> {
+        match self {
+            Self::ExplicitV2 { observation, .. } => Some(observation),
+            Self::Legacy { .. } => None,
+        }
+    }
+
+    pub(crate) fn span(&self) -> tracing::Span {
+        match self {
+            Self::ExplicitV2 { observation } => observation.span(),
+            Self::Legacy { span, .. } => span.clone(),
+        }
+    }
+
+    pub(crate) fn complete_legacy_ambiguous_none(&mut self, response: &ResponseSink) {
+        if let Self::Legacy { metrics, .. } = self {
+            metrics.complete_legacy_ambiguous_none();
+        }
+        let (mode, outcome) = match response.terminal_state() {
+            Some(ResponseTerminalState::Completed) => (
+                ResponseObservationModeV2::Inline,
+                ResponseObservationOutcomeV2::Written(ResponseReceipt::new(
+                    match self {
+                        Self::Legacy { original, .. } => original.request_id(),
+                        Self::ExplicitV2 { .. } => return,
+                    },
+                    if response.is_local() {
+                        ResponseDisposition::InProcessAccepted
+                    } else {
+                        ResponseDisposition::TransportWritten
+                    },
+                )),
+            ),
+            Some(ResponseTerminalState::Failed { progress }) => (
+                ResponseObservationModeV2::Inline,
+                ResponseObservationOutcomeV2::Failed {
+                    kind: None,
+                    progress: Some(progress),
+                },
+            ),
+            Some(ResponseTerminalState::Cancelled | ResponseTerminalState::Closed) => (
+                ResponseObservationModeV2::Inline,
+                ResponseObservationOutcomeV2::Failed {
+                    kind: None,
+                    progress: Some(crate::dispatch::WriteProgress::NotStarted),
+                },
+            ),
+            None => (
+                ResponseObservationModeV2::NoResponse,
+                ResponseObservationOutcomeV2::ProtocolNoResponse,
+            ),
+        };
+        self.record_legacy_response(None, None, mode, outcome);
+    }
+
+    pub(crate) fn record_legacy_reply(
+        &mut self,
+        response_code: i32,
+        body_kind: ResponseBodyKind,
+        outcome: ResponseObservationOutcomeV2,
+    ) {
+        self.record_legacy_response(
+            Some(response_code),
+            Some(body_kind),
+            ResponseObservationModeV2::Inline,
+            outcome,
+        );
+    }
+
+    fn record_legacy_response(
+        &mut self,
+        response_code: Option<i32>,
+        plan_kind: Option<ResponseBodyKind>,
+        mode: ResponseObservationModeV2,
+        outcome: ResponseObservationOutcomeV2,
+    ) {
+        let Self::Legacy {
+            telemetry,
+            original,
+            response_observed,
+            ..
+        } = self
+        else {
+            return;
+        };
+        if *response_observed {
+            return;
+        }
+        *response_observed = true;
+        telemetry.record_v2_response(ResponseMetadataV2::new(
+            original.request_id(),
+            original.original_code(),
+            response_code,
+            plan_kind,
+            mode,
+            outcome,
+        ));
     }
 
     pub(crate) fn complete_process_request_failed(&mut self, response_code: i32) {
-        if let Self::Legacy(guard) = self {
-            let _ = response_code;
-            guard.complete_process_request_failed(
-                rocketmq_protocol::code::response_code::ResponseCode::SystemError.to_i32(),
-            );
+        match self {
+            Self::ExplicitV2 { observation } => observation.complete_request_failed(response_code),
+            Self::Legacy { metrics, .. } => {
+                let _ = response_code;
+                metrics.complete_process_request_failed(
+                    rocketmq_protocol::code::response_code::ResponseCode::SystemError.to_i32(),
+                );
+            }
         }
     }
 
     pub(crate) fn complete_write_channel_failed(&mut self, response_code: i32) {
-        if let Self::Legacy(guard) = self {
-            guard.complete_write_channel_failed(response_code);
+        match self {
+            Self::ExplicitV2 { observation } => observation.complete_write_failed(response_code),
+            Self::Legacy { metrics, .. } => metrics.complete_write_channel_failed(response_code),
         }
     }
 }
@@ -611,7 +762,20 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
 
     fn request_ordering(&self, builder: &RemotingRequestBuilder) -> RequestOrdering;
 
-    fn begin_admitted(&self, original: OriginalRequestIdentity, request_bytes: u64) -> DispatchMetricsGuard;
+    fn begin_boundary_observation(
+        &self,
+        builder: &RemotingRequestBuilder,
+        request_bytes: u64,
+    ) -> Option<crate::telemetry::V2RequestObservation>;
+
+    fn begin_admitted(
+        &self,
+        builder: &RemotingRequestBuilder,
+        request_bytes: u64,
+        observation: Option<crate::telemetry::V2RequestObservation>,
+    ) -> DispatchMetricsGuard;
+
+    fn bind_response_observer(self, observation: Option<crate::telemetry::V2RequestObservation>);
 
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError>;
 
@@ -627,6 +791,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         resume_executor: crate::session_executor::DeferredResumeExecutor,
         retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
+        observation: Option<crate::telemetry::V2RequestObservation>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError>;
 
     fn process(
@@ -654,6 +819,45 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         end_to_end_elapsed: Duration,
         result: Result<ResponseReceipt, ResponseError>,
     );
+}
+
+pub(crate) struct AdmittedProcessorObserver<D>
+where
+    D: DispatchProcessor,
+{
+    processor: Option<D>,
+    observation: Option<crate::telemetry::V2RequestObservation>,
+}
+
+impl<D> AdmittedProcessorObserver<D>
+where
+    D: DispatchProcessor,
+{
+    pub(crate) fn new(processor: D, observation: Option<crate::telemetry::V2RequestObservation>) -> Self {
+        Self {
+            processor: Some(processor),
+            observation,
+        }
+    }
+
+    pub(crate) fn processor_mut(&mut self) -> Option<&mut D> {
+        self.processor.as_mut()
+    }
+
+    pub(crate) fn bind(&mut self) {
+        if let Some(processor) = self.processor.take() {
+            processor.bind_response_observer(self.observation.take());
+        }
+    }
+}
+
+impl<D> Drop for AdmittedProcessorObserver<D>
+where
+    D: DispatchProcessor,
+{
+    fn drop(&mut self) {
+        self.bind();
+    }
 }
 
 impl<P> sealed::Sealed for ExplicitV2Processor<P> {}
@@ -697,8 +901,46 @@ where
         self.processor.request_ordering(builder.ingress_view())
     }
 
-    fn begin_admitted(&self, _original: OriginalRequestIdentity, _request_bytes: u64) -> DispatchMetricsGuard {
-        DispatchMetricsGuard::ExplicitV2
+    fn begin_boundary_observation(
+        &self,
+        builder: &RemotingRequestBuilder,
+        request_bytes: u64,
+    ) -> Option<crate::telemetry::V2RequestObservation> {
+        let original = builder.ingress_view().original_identity();
+        Some(self.telemetry.begin_v2_observation(
+            original,
+            builder.received_at(),
+            builder.origin(),
+            builder.authentication(),
+            builder.deadline(),
+            request_bytes,
+        ))
+    }
+
+    fn begin_admitted(
+        &self,
+        builder: &RemotingRequestBuilder,
+        request_bytes: u64,
+        observation: Option<crate::telemetry::V2RequestObservation>,
+    ) -> DispatchMetricsGuard {
+        let observation = observation.unwrap_or_else(|| {
+            self.telemetry.begin_v2_observation(
+                builder.ingress_view().original_identity(),
+                builder.received_at(),
+                builder.origin(),
+                builder.authentication(),
+                builder.deadline(),
+                request_bytes,
+            )
+        });
+        DispatchMetricsGuard::ExplicitV2 { observation }
+    }
+
+    fn bind_response_observer(self, observation: Option<crate::telemetry::V2RequestObservation>) {
+        if let Some(observation) = observation {
+            let processor = self.processor;
+            observation.bind_response_observer(move |observation| processor.observe_response(observation));
+        }
     }
 
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError> {
@@ -727,12 +969,16 @@ where
         resume_executor: crate::session_executor::DeferredResumeExecutor,
         _retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
+        observation: Option<crate::telemetry::V2RequestObservation>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
         let mut seed = response
             .network_deferred_seed_with_resume(session, ordering, class, resume_executor)
             .ok_or(super::remoting_request::RemotingRequestBuildError::DeferredResponseOwnerMismatch)?;
         if let Some(session_cleanup) = session_cleanup {
             seed = seed.with_session_cleanup(session_cleanup);
+        }
+        if let Some(observation) = observation {
+            seed = seed.with_observation(observation);
         }
         Ok(builder.with_deferred_response_seed(seed))
     }
@@ -843,15 +1089,37 @@ where
         self.processor.request_ordering(builder.command())
     }
 
-    fn begin_admitted(&self, original: OriginalRequestIdentity, request_bytes: u64) -> DispatchMetricsGuard {
+    fn begin_boundary_observation(
+        &self,
+        _builder: &RemotingRequestBuilder,
+        _request_bytes: u64,
+    ) -> Option<crate::telemetry::V2RequestObservation> {
+        None
+    }
+
+    fn begin_admitted(
+        &self,
+        builder: &RemotingRequestBuilder,
+        request_bytes: u64,
+        _observation: Option<crate::telemetry::V2RequestObservation>,
+    ) -> DispatchMetricsGuard {
+        let original = builder.ingress_view().original_identity();
         self.telemetry
             .record_legacy_processor_request(self.processor_name, original.original_code());
-        DispatchMetricsGuard::Legacy(self.telemetry.request_guard(
-            original.original_code(),
-            request_bytes,
-            is_long_polling_request(original.original_code()),
-        ))
+        DispatchMetricsGuard::Legacy {
+            metrics: self.telemetry.request_guard(
+                original.original_code(),
+                request_bytes,
+                is_long_polling_request(original.original_code()),
+            ),
+            span: self.telemetry.request_span(original),
+            telemetry: Box::new(self.telemetry.clone()),
+            original,
+            response_observed: false,
+        }
     }
+
+    fn bind_response_observer(self, _observation: Option<crate::telemetry::V2RequestObservation>) {}
 
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError> {
         Ok(
@@ -881,6 +1149,7 @@ where
         resume_executor: crate::session_executor::DeferredResumeExecutor,
         retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
+        _observation: Option<crate::telemetry::V2RequestObservation>,
     ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
         Ok(match session_cleanup {
             Some(session_cleanup) => {

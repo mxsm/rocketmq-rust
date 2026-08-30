@@ -18,6 +18,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use tracing::Instrument;
+
 use super::deferred_response::DeferredSystemCancellationReason;
 use super::deferred_response::DeferredSystemCloseReason;
 use super::deferred_response::DeferredTerminalReason;
@@ -264,6 +266,7 @@ pub(crate) struct DeferredResponseSeed {
     control: RequestControlView,
     resume: Option<DeferredResumeContext>,
     session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
+    observation: Option<crate::telemetry::V2RequestObservation>,
 }
 
 #[derive(Clone)]
@@ -287,6 +290,7 @@ impl DeferredResponseSeed {
             control,
             resume: None,
             session_cleanup: None,
+            observation: None,
         }
     }
 
@@ -309,6 +313,11 @@ impl DeferredResponseSeed {
         self
     }
 
+    pub(crate) fn with_observation(mut self, observation: crate::telemetry::V2RequestObservation) -> Self {
+        self.observation = Some(observation);
+        self
+    }
+
     pub(crate) fn into_responder(self, original: OriginalRequestIdentity) -> DeferredResponder {
         #[cfg(test)]
         {
@@ -324,6 +333,7 @@ impl DeferredResponseSeed {
             control: self.control,
             resume: self.resume,
             session_cleanup: self.session_cleanup,
+            observation: self.observation,
             active: true,
         }
     }
@@ -351,6 +361,7 @@ pub struct DeferredResponder {
     control: RequestControlView,
     resume: Option<DeferredResumeContext>,
     session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
+    observation: Option<crate::telemetry::V2RequestObservation>,
     active: bool,
 }
 
@@ -396,6 +407,12 @@ impl DeferredResponder {
         &self.state
     }
 
+    pub(crate) fn request_span(&self) -> tracing::Span {
+        self.observation
+            .as_ref()
+            .map_or_else(tracing::Span::none, crate::telemetry::V2RequestObservation::span)
+    }
+
     pub(crate) fn take_session_cleanup(&mut self) -> Option<super::DeferredSessionCleanupRegistration> {
         self.session_cleanup.take()
     }
@@ -413,6 +430,11 @@ impl DeferredResponder {
             .close_with_reason(reason)
             .map_err(DeferredResponseError::from_state);
         self.active = false;
+        if result.is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(reason.terminal_reason());
+            }
+        }
         result
     }
 
@@ -425,6 +447,11 @@ impl DeferredResponder {
             .cancel_with_reason(reason)
             .map_err(DeferredResponseError::from_state);
         self.active = false;
+        if result.is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(reason.terminal_reason());
+            }
+        }
         result
     }
 
@@ -438,6 +465,11 @@ impl DeferredResponder {
             .close_with_reason(reason)
             .map_err(DeferredResponseError::from_state);
         self.active = false;
+        if result.is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(reason.terminal_reason());
+            }
+        }
         result
     }
 
@@ -450,6 +482,11 @@ impl DeferredResponder {
             .cancel_with_reason(reason)
             .map_err(DeferredResponseError::from_state);
         self.active = false;
+        if result.is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(reason.terminal_reason());
+            }
+        }
         result
     }
 
@@ -459,7 +496,15 @@ impl DeferredResponder {
     ///
     /// Returns a typed, redacted error for lifecycle, immutable binding,
     /// encoding, queue, cancellation, deadline, session, or transport failure.
-    pub async fn respond(mut self, plan: ResponsePlan) -> Result<ResponseReceipt, DeferredResponseError> {
+    pub async fn respond(self, plan: ResponsePlan) -> Result<ResponseReceipt, DeferredResponseError> {
+        let span = self.request_span();
+        self.respond_in_request_span(plan).instrument(span).await
+    }
+
+    async fn respond_in_request_span(mut self, plan: ResponsePlan) -> Result<ResponseReceipt, DeferredResponseError> {
+        let response_code = plan.response_code();
+        let plan_kind = plan.body_kind();
+        let write_started = std::time::Instant::now();
         let mut claim = self.state.begin_sending().map_err(DeferredResponseError::from_state)?;
         self.active = false;
         let bound = match plan.bind(self.original) {
@@ -468,6 +513,14 @@ impl DeferredResponder {
                 claim
                     .fail(WriteProgress::NotStarted)
                     .map_err(DeferredResponseError::from_state)?;
+                if let Some(observation) = &self.observation {
+                    observation.complete_failure_without_kind(
+                        crate::runtime::processor_v2::ResponseObservationModeV2::Deferred,
+                        Some(response_code),
+                        Some(plan_kind),
+                        Some(WriteProgress::NotStarted),
+                    );
+                }
                 return Err(DeferredResponseError::from_binding(source));
             }
         };
@@ -481,11 +534,30 @@ impl DeferredResponder {
         match result {
             Ok(receipt) => {
                 claim.complete().map_err(DeferredResponseError::from_state)?;
+                if let Some(observation) = &self.observation {
+                    observation.complete_reply(
+                        crate::runtime::processor_v2::ResponseObservationModeV2::Deferred,
+                        response_code,
+                        plan_kind,
+                        write_started.elapsed(),
+                        Ok(receipt),
+                    );
+                }
                 Ok(receipt)
             }
             Err(error) => {
                 let progress = error.write_progress().unwrap_or(WriteProgress::NotStarted);
+                let kind = error.kind();
                 claim.fail(progress).map_err(DeferredResponseError::from_state)?;
+                if let Some(observation) = &self.observation {
+                    observation.complete_reply(
+                        crate::runtime::processor_v2::ResponseObservationModeV2::Deferred,
+                        response_code,
+                        plan_kind,
+                        write_started.elapsed(),
+                        Err((kind, Some(progress))),
+                    );
+                }
                 Err(DeferredResponseError::from_response(error))
             }
         }
@@ -500,6 +572,11 @@ impl DeferredResponder {
     pub fn cancel(mut self) -> Result<(), DeferredResponseError> {
         let result = self.state.cancel().map_err(DeferredResponseError::from_state);
         self.active = false;
+        if result.is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(DeferredTerminalReason::Explicit);
+            }
+        }
         result
     }
 
@@ -517,6 +594,11 @@ impl DeferredResponder {
         }
         .map_err(DeferredResponseError::from_state);
         self.active = false;
+        if result.is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(DeferredTerminalReason::ReceiverDropped);
+            }
+        }
         result
     }
 }
@@ -532,8 +614,10 @@ impl fmt::Debug for DeferredResponder {
 
 impl Drop for DeferredResponder {
     fn drop(&mut self) {
-        if self.active {
-            let _ = self.state.cancel_abandoned();
+        if self.active && self.state.cancel_abandoned().is_ok() {
+            if let Some(observation) = &self.observation {
+                observation.complete_cancelled(DeferredTerminalReason::Abandoned);
+            }
         }
         self.active = false;
     }

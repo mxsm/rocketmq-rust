@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::harness::*;
+use crate::telemetry::TransportTelemetry;
 #[tokio::test]
-async fn pre_admission_deadline_and_admission_rejection_never_clone_or_observe_processor() {
+async fn pre_admission_deadline_and_admission_rejection_record_one_terminal_span_without_processor_clone() {
     let limits = AdmissionLimits {
         queued: crate::admission::ResourceLimit { count: 2, bytes: 1024 },
         control_reserve: crate::admission::ResourceLimit { count: 1, bytes: 0 },
@@ -22,7 +23,12 @@ async fn pre_admission_deadline_and_admission_rejection_never_clone_or_observe_p
     };
     let mut harness = DispatchHarness::new_with_limits("dispatch-v2-pre-admission", limits).await;
     let (processor, state) = TestProcessor::new(Behavior::Reply);
-    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(processor, Vec::new()));
+    let (telemetry, boundary_metrics) = TransportTelemetry::with_v2_boundary_metric_capture();
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new_with_telemetry(
+        processor,
+        Vec::new(),
+        telemetry,
+    ));
     let command = request(false);
     let (session, _) = harness.request_session(&command);
 
@@ -42,6 +48,11 @@ async fn pre_admission_deadline_and_admission_rejection_never_clone_or_observe_p
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
     assert!(state.observations.lock().expect("observation lock").is_empty());
+    assert_eq!(boundary_metrics.snapshot(), (1, 1, 1, 1));
+    assert_eq!(
+        boundary_metrics.rejections(),
+        vec![("deadline_expired", "failed", "rejected", "inline", "transport_written",)]
+    );
 
     let queued = harness
         .admission_scope
@@ -59,19 +70,35 @@ async fn pre_admission_deadline_and_admission_rejection_never_clone_or_observe_p
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
     assert!(state.observations.lock().expect("observation lock").is_empty());
+    assert_eq!(boundary_metrics.snapshot(), (2, 2, 2, 2));
+    assert_eq!(
+        boundary_metrics.rejections(),
+        vec![
+            ("deadline_expired", "failed", "rejected", "inline", "transport_written",),
+            (
+                "admission_rejected",
+                "failed",
+                "rejected",
+                "inline",
+                "transport_written",
+            ),
+        ]
+    );
     drop(queued);
     harness.shutdown().await;
 }
 
 #[tokio::test]
-async fn authorization_denial_runs_after_ordering_without_clone_hook_process_or_observation() {
+async fn authorization_denial_records_one_terminal_span_without_clone_hook_or_processor_observation() {
     let security = Arc::new(TransportSecurity::secure_enforced(None, None));
     let mut harness = DispatchHarness::new_with_security("dispatch-v2-auth-denial", security).await;
     let (processor, state) = TestProcessor::new(Behavior::Reply);
     let hook_events = Arc::new(Mutex::new(Vec::new()));
-    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+    let (telemetry, boundary_metrics) = TransportTelemetry::with_v2_boundary_metric_capture();
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new_with_telemetry(
         processor,
         vec![Arc::new(hook(false, false, Arc::clone(&hook_events)))],
+        telemetry,
     ));
     let command = request(false);
     let (session, _) = harness.request_session(&command);
@@ -90,6 +117,48 @@ async fn authorization_denial_runs_after_ordering_without_clone_hook_process_or_
     assert_eq!(state.events.lock().expect("event lock").as_slice(), ["ordering"]);
     assert!(state.observations.lock().expect("observation lock").is_empty());
     assert!(hook_events.lock().expect("hook events").is_empty());
+    assert_eq!(boundary_metrics.snapshot(), (1, 1, 1, 1));
+    assert_eq!(
+        boundary_metrics.rejections(),
+        vec![("security_denied", "failed", "rejected", "inline", "transport_written",)]
+    );
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn one_way_boundary_rejection_is_failed_without_a_response_write() {
+    let mut harness = DispatchHarness::new("dispatch-v2-oneway-deadline-rejection").await;
+    let (processor, state) = TestProcessor::new(Behavior::Reply);
+    let (telemetry, boundary_metrics) = TransportTelemetry::with_v2_boundary_metric_capture();
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new_with_telemetry(
+        processor,
+        Vec::new(),
+        telemetry,
+    ));
+    let command = request(true);
+    let (session, _) = harness.request_session(&command);
+
+    let outcome = dispatcher
+        .dispatch(
+            &harness.authorized,
+            session,
+            harness.context(Some(RequestDeadline::after(Duration::ZERO))),
+            command,
+            256,
+            None,
+        )
+        .await
+        .expect("expired one-way request is rejected without a response write");
+
+    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(state.clones.load(Ordering::SeqCst), 0);
+    assert_eq!(state.processes.load(Ordering::SeqCst), 0);
+    harness.assert_no_response().await;
+    assert_eq!(boundary_metrics.snapshot(), (1, 1, 1, 1));
+    assert_eq!(
+        boundary_metrics.rejections(),
+        vec![("deadline_expired", "failed", "rejected", "no_response", "failed",)]
+    );
     harness.shutdown().await;
 }
 

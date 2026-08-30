@@ -98,6 +98,13 @@ pub mod metrics {
     pub const ROCKSDB_TIMES_READ: &str = "rocketmq_rocksdb_times_read";
     pub const TRANSPORT_REQUESTS_TOTAL: &str = "rocketmq_transport_requests_total";
     pub const TRANSPORT_REQUEST_LATENCY: &str = "rocketmq_transport_request_latency";
+    pub const TRANSPORT_REQUEST_DURATION_SECONDS: &str = "rocketmq_transport_request_duration_seconds";
+    pub const TRANSPORT_RESPONSE_TOTAL: &str = "rocketmq_transport_response_total";
+    pub const TRANSPORT_DEFERRED_INFLIGHT: &str = "rocketmq_transport_deferred_inflight";
+    pub const TRANSPORT_DEFERRED_RETAINED_BYTES: &str = "rocketmq_transport_deferred_retained_bytes";
+    pub const TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS: &str = "rocketmq_transport_response_queue_wait_seconds";
+    pub const TRANSPORT_RESPONSE_DUPLICATE_TOTAL: &str = "rocketmq_transport_response_duplicate_total";
+    pub const TRANSPORT_RESPONSE_ABANDONED_TOTAL: &str = "rocketmq_transport_response_abandoned_total";
     pub const TRANSPORT_OUTBOUND_ATTEMPTED_PLAINTEXT_BYTES: &str =
         "rocketmq_transport_outbound_attempted_plaintext_bytes";
     pub const TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES: &str =
@@ -260,6 +267,9 @@ pub mod labels {
     pub const PROTOCOL_TYPE: &str = "protocol_type";
     pub const REQUEST_CODE: &str = "request_code";
     pub const REQUEST_CODE_BUCKET: &str = "request_code_bucket";
+    pub const CODE: &str = "code";
+    pub const OUTCOME: &str = "outcome";
+    pub const MODE: &str = "mode";
     pub const RESPONSE_CODE: &str = "response_code";
     pub const IS_LONG_POLLING: &str = "is_long_polling";
     pub const EVENT: &str = "event";

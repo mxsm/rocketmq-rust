@@ -23,6 +23,7 @@ use rocketmq_security_api::Action;
 use rocketmq_security_api::Decision;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
+use tracing::Instrument;
 
 use super::admission_response;
 use super::deadline_response;
@@ -33,6 +34,7 @@ use crate::admission::AdmissionError;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::dispatch::legacy_processor_adapter::AdmittedProcessorObserver;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
 use crate::dispatch::remoting_request::RemotingRequestBuilder;
 use crate::dispatch::remoting_request::RequestLifecycleProvenance;
@@ -61,6 +63,7 @@ use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::server::SessionHandle;
 use crate::session_executor::SessionDispatchError;
+use crate::telemetry::V2BoundaryRejectionReason;
 
 /// Stable private failure from scheduling or executing one V2 dispatch.
 #[derive(Debug, thiserror::Error)]
@@ -155,6 +158,21 @@ where
         Self::from_dispatch_processor(ExplicitV2Processor::new(processor), rpc_hooks)
     }
 
+    pub(crate) fn new_with_telemetry(
+        processor: P,
+        rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        telemetry: crate::telemetry::TransportTelemetry,
+    ) -> Self {
+        Self::from_dispatch_processor(
+            ExplicitV2Processor::with_response_table_and_telemetry(processor, PendingRequestTable::new(), telemetry),
+            rpc_hooks,
+        )
+    }
+
+    #[allow(
+        dead_code,
+        reason = "test and compatibility constructors may omit telemetry explicitly"
+    )]
     pub(crate) fn new_with_pending_requests(
         processor: P,
         rpc_hooks: Vec<Arc<dyn RPCHook>>,
@@ -162,6 +180,18 @@ where
     ) -> Self {
         Self::from_dispatch_processor(
             ExplicitV2Processor::with_response_table(processor, response_table),
+            rpc_hooks,
+        )
+    }
+
+    pub(crate) fn new_with_pending_requests_and_telemetry(
+        processor: P,
+        rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        response_table: PendingRequestTable,
+        telemetry: crate::telemetry::TransportTelemetry,
+    ) -> Self {
+        Self::from_dispatch_processor(
+            ExplicitV2Processor::with_response_table_and_telemetry(processor, response_table, telemetry),
             rpc_hooks,
         )
     }
@@ -262,92 +292,142 @@ where
         let class = AdmissionClass::for_request_code(original.original_code());
         let lifecycle = RequestLifecycleProvenance::from_network_session(&session);
         let builder = RemotingRequestBuilder::new(original, request_started, context, lifecycle, command);
-        let ordering = self.processor.request_ordering(&builder);
-        let resume_executor = authorized_session.executor.deferred_resume_executor();
+        let request_bytes = builder.command().body().map_or(0, |body| body.len() as u64);
+        let observation = self.processor.begin_boundary_observation(&builder, request_bytes);
+        let span = observation
+            .as_ref()
+            .map_or_else(tracing::Span::none, crate::telemetry::V2RequestObservation::span);
 
-        if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
-            send_boundary_response(&session, original, deadline_response(original.original_opaque())).await?;
-            return Ok(DispatchOutcome::Rejected);
-        }
-        if let Decision::Deny { reason } = authorized_session.boundary.security.authorize_for_dispatch(
-            builder.command(),
-            builder.peer(),
-            builder.principal(),
-            Resource::new(ResourceKind::Other, original.original_code().to_string()),
-            Action::Manage,
-        ) {
-            let response = RemotingCommand::create_response_command_with_code_remark(
-                rocketmq_protocol::code::response_code::ResponseCode::NoPermission,
-                reason.to_string(),
-            );
-            send_boundary_response(&session, original, response).await?;
-            return Ok(DispatchOutcome::Rejected);
-        }
+        async {
+            let ordering = self.processor.request_ordering(&builder);
+            let resume_executor = authorized_session.executor.deferred_resume_executor();
 
-        let admitted_dispatcher = Arc::clone(self);
-        let admitted_session = session.clone();
-        let remote_address = session.remote_addr();
-        let rejected_session = session.clone();
-        let rejected_original = original;
-        match authorized_session.executor.try_execute(
-            retained_bytes,
-            class,
-            partial_frame_permit,
-            ordering,
-            move |_operation| async move {
-                let processor = admitted_dispatcher.processor.clone();
-                if let Err(error) = admitted_dispatcher
-                    .execute_admitted_network(
-                        processor,
-                        admitted_session,
-                        network_session,
-                        class,
-                        original,
-                        remote_address,
+            if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
+                send_boundary_response(
+                    &session,
+                    original,
+                    request_started,
+                    builder.control().clone(),
+                    V2BoundaryRejectionReason::DeadlineExpired,
+                    deadline_response(original.original_opaque()),
+                    observation.clone(),
+                )
+                .await?;
+                return Ok(DispatchOutcome::Rejected);
+            }
+            if let Decision::Deny { reason } = authorized_session.boundary.security.authorize_for_dispatch(
+                builder.command(),
+                builder.peer(),
+                builder.principal(),
+                Resource::new(ResourceKind::Other, original.original_code().to_string()),
+                Action::Manage,
+            ) {
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    rocketmq_protocol::code::response_code::ResponseCode::NoPermission,
+                    reason.to_string(),
+                );
+                send_boundary_response(
+                    &session,
+                    original,
+                    request_started,
+                    builder.control().clone(),
+                    V2BoundaryRejectionReason::SecurityDenied,
+                    response,
+                    observation.clone(),
+                )
+                .await?;
+                return Ok(DispatchOutcome::Rejected);
+            }
+
+            let admitted_dispatcher = Arc::clone(self);
+            let admitted_session = session.clone();
+            let admitted_observation = observation.clone();
+            let remote_address = session.remote_addr();
+            let rejected_session = session.clone();
+            let rejected_original = original;
+            let rejected_control = builder.control().clone();
+            let rejected_observation = observation.clone();
+            let boundary_control = builder.control().clone();
+            match authorized_session.executor.try_execute(
+                retained_bytes,
+                class,
+                partial_frame_permit,
+                ordering,
+                move |_operation| async move {
+                    let processor = admitted_dispatcher.processor.clone();
+                    if let Err(error) = admitted_dispatcher
+                        .execute_admitted_network(
+                            processor,
+                            admitted_session,
+                            network_session,
+                            class,
+                            original,
+                            remote_address,
+                            request_started,
+                            builder,
+                            ordering,
+                            resume_executor,
+                            retained_bytes,
+                            session_cleanup,
+                            admitted_observation,
+                        )
+                        .await
+                    {
+                        admitted_dispatcher.report_admitted_failure(&error);
+                    }
+                },
+                move |_operation, error| async move {
+                    let response = admission_response(rejected_original.original_opaque(), &error);
+                    if send_boundary_response(
+                        &rejected_session,
+                        rejected_original,
                         request_started,
-                        builder,
-                        ordering,
-                        resume_executor,
-                        retained_bytes,
-                        session_cleanup,
+                        rejected_control,
+                        V2BoundaryRejectionReason::AdmissionRejected,
+                        response,
+                        rejected_observation,
                     )
                     .await
-                {
-                    admitted_dispatcher.report_admitted_failure(&error);
-                }
-            },
-            move |_operation, error| async move {
-                let response = admission_response(rejected_original.original_opaque(), &error);
-                if send_boundary_response(&rejected_session, rejected_original, response)
-                    .await
                     .is_err()
-                {
-                    tracing::warn!(
-                        failure = "admission_boundary_response",
-                        "V2 admission rejection response could not be written"
-                    );
+                    {
+                        tracing::warn!(
+                            failure = "admission_boundary_response",
+                            "V2 admission rejection response could not be written"
+                        );
+                    }
+                },
+            ) {
+                Ok(task_id) => Ok(DispatchOutcome::Accepted(task_id)),
+                Err(SessionDispatchError::Admission {
+                    error,
+                    retained_partial,
+                }) if error.policy() == FullPolicy::Reject => {
+                    drop(retained_partial);
+                    let response = admission_response(original.original_opaque(), &error);
+                    send_boundary_response(
+                        &session,
+                        original,
+                        request_started,
+                        boundary_control,
+                        V2BoundaryRejectionReason::AdmissionRejected,
+                        response,
+                        observation.clone(),
+                    )
+                    .await?;
+                    Ok(DispatchOutcome::Rejected)
                 }
-            },
-        ) {
-            Ok(task_id) => Ok(DispatchOutcome::Accepted(task_id)),
-            Err(SessionDispatchError::Admission {
-                error,
-                retained_partial,
-            }) if error.policy() == FullPolicy::Reject => {
-                drop(retained_partial);
-                let response = admission_response(original.original_opaque(), &error);
-                send_boundary_response(&session, original, response).await?;
-                Ok(DispatchOutcome::Rejected)
+                Err(SessionDispatchError::Admission {
+                    error,
+                    retained_partial,
+                }) => {
+                    drop(retained_partial);
+                    Err(AuthorizedDispatchV2Error::Admission(error))
+                }
+                Err(SessionDispatchError::Closing(error)) => Err(AuthorizedDispatchV2Error::Closing(error.to_string())),
             }
-            Err(SessionDispatchError::Admission {
-                error,
-                retained_partial,
-            }) => {
-                drop(retained_partial);
-                Err(AuthorizedDispatchV2Error::Admission(error))
-            }
-            Err(SessionDispatchError::Closing(error)) => Err(AuthorizedDispatchV2Error::Closing(error.to_string())),
         }
+        .instrument(span)
+        .await
     }
 
     #[allow(
@@ -360,7 +440,7 @@ where
     )]
     async fn execute_admitted_network(
         &self,
-        mut processor: D,
+        processor: D,
         session: SessionHandle,
         network_session: D::NetworkSession,
         class: AdmissionClass,
@@ -372,70 +452,103 @@ where
         resume_executor: crate::session_executor::DeferredResumeExecutor,
         retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
+        observation: Option<crate::telemetry::V2RequestObservation>,
     ) -> Result<(), AuthorizedDispatchV2Error> {
         let request_bytes = builder.command().body().map_or(0, |body| body.len() as u64);
-        let mut metrics = processor.begin_admitted(original, request_bytes);
-        let response = ResponseSink::network_plan(session.clone(), class, builder.control().clone());
-
-        if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
-            let plan = ResponsePlan::command(deadline_response(original.original_opaque()))?;
-            let candidate = processor.deadline_candidate(plan);
-            return self
-                .finish_candidate(&processor, response, original, request_started, candidate, &mut metrics)
-                .await;
-        }
-
-        if let Some(candidate) = processor.reject_request(original.original_code())? {
-            return self
-                .finish_candidate(&processor, response, original, request_started, candidate, &mut metrics)
-                .await;
-        }
-
-        let builder = if original.is_one_way() {
-            builder
-        } else {
-            processor.install_deferred_response(
-                builder,
-                &response,
-                &session,
-                ordering,
-                class,
-                resume_executor,
-                retained_bytes,
-                session_cleanup,
-            )?
+        let mut metrics = processor.begin_admitted(&builder, request_bytes, observation);
+        let span = metrics.span();
+        let observation = metrics.v2_observation().cloned();
+        let mut observer_owner = AdmittedProcessorObserver::new(processor, observation);
+        let Some(processor) = observer_owner.processor_mut() else {
+            return Err(AuthorizedDispatchV2Error::Closing(
+                "admitted response observer owner is unavailable".to_owned(),
+            ));
         };
-        let mut request = builder.build()?;
-        let hook_snapshot = self.rpc_hooks.snapshot();
-        let candidate = processor
-            .process(
-                &mut request,
-                hook_snapshot.as_deref(),
-                remote_address,
-                &session,
-                &network_session,
-                &response,
-            )
-            .await?;
-        let InternalProcessorCandidate {
-            outcome,
-            failure,
-            observe_write,
-        } = candidate;
-        let outcome = processor.resolve_outcome(&mut request, outcome)?;
-        self.finish_candidate(
-            &processor,
-            response,
-            original,
-            request_started,
-            InternalProcessorCandidate {
+        let result = async {
+            let response = ResponseSink::network_plan(session.clone(), class, builder.control().clone());
+
+            if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
+                let plan = ResponsePlan::command(deadline_response(original.original_opaque()))?;
+                let candidate = processor.deadline_candidate(plan);
+                return self
+                    .finish_candidate(
+                        processor,
+                        response,
+                        original,
+                        request_started,
+                        candidate,
+                        retained_bytes,
+                        &mut metrics,
+                    )
+                    .await;
+            }
+
+            if let Some(candidate) = processor.reject_request(original.original_code())? {
+                return self
+                    .finish_candidate(
+                        processor,
+                        response,
+                        original,
+                        request_started,
+                        candidate,
+                        retained_bytes,
+                        &mut metrics,
+                    )
+                    .await;
+            }
+
+            let builder = if original.is_one_way() {
+                builder
+            } else {
+                processor.install_deferred_response(
+                    builder,
+                    &response,
+                    &session,
+                    ordering,
+                    class,
+                    resume_executor,
+                    retained_bytes,
+                    session_cleanup,
+                    metrics.v2_observation().cloned(),
+                )?
+            };
+            let mut request = builder.build()?;
+            let hook_snapshot = self.rpc_hooks.snapshot();
+            let candidate = processor
+                .process(
+                    &mut request,
+                    hook_snapshot.as_deref(),
+                    remote_address,
+                    &session,
+                    &network_session,
+                    &response,
+                )
+                .await?;
+            let InternalProcessorCandidate {
                 outcome,
                 failure,
                 observe_write,
-            },
-            &mut metrics,
-        )
-        .await
+            } = candidate;
+            let outcome = processor.resolve_outcome(&mut request, outcome)?;
+            self.finish_candidate(
+                processor,
+                response,
+                original,
+                request_started,
+                InternalProcessorCandidate {
+                    outcome,
+                    failure,
+                    observe_write,
+                },
+                retained_bytes,
+                &mut metrics,
+            )
+            .await
+        }
+        .instrument(span)
+        .await;
+        observer_owner.bind();
+        result
     }
 
     async fn finish_candidate(
@@ -445,6 +558,7 @@ where
         original: OriginalRequestIdentity,
         request_started: Instant,
         candidate: InternalProcessorCandidate,
+        retained_bytes: usize,
         metrics: &mut crate::dispatch::DispatchMetricsGuard,
     ) -> Result<(), AuthorizedDispatchV2Error> {
         let InternalProcessorCandidate {
@@ -517,7 +631,9 @@ where
                     drop(registration);
                     return Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "deferred" });
                 }
+                metrics.arm_deferred_metrics(retained_bytes);
                 registration.commit()?;
+                metrics.record_deferred_registered();
                 Ok(())
             }
             InternalProcessorOutcome::V2(crate::dispatch::HandlerOutcome::NoReply(marker)) => {
@@ -526,13 +642,14 @@ where
                     return Err(AuthorizedDispatchV2Error::OneWayOutcome { outcome: "no_reply" });
                 }
                 drop(marker);
+                metrics.complete_protocol_no_response();
                 Ok(())
             }
             InternalProcessorOutcome::LegacyAmbiguousNone => {
                 if original.is_one_way() {
                     metrics.complete_oneway();
                 } else {
-                    metrics.complete_legacy_ambiguous_none();
+                    metrics.complete_legacy_ambiguous_none(&response);
                 }
                 Ok(())
             }
@@ -574,6 +691,7 @@ where
             crate::request_ordering::RequestOrdering::Concurrent,
             crate::session_executor::DeferredResumeExecutor::retired(),
             0,
+            None,
             None,
         )
         .await
@@ -670,6 +788,13 @@ where
         .as_ref()
         .err()
         .map(|error| (error.kind(), error.write_progress()));
+    let legacy_outcome = match result.as_ref() {
+        Ok(receipt) => crate::runtime::processor_v2::ResponseObservationOutcomeV2::Written(*receipt),
+        Err(error) => crate::runtime::processor_v2::ResponseObservationOutcomeV2::Failed {
+            kind: Some(error.kind()),
+            progress: error.write_progress(),
+        },
+    };
     if !failure_recorded {
         if failure.is_some() {
             metrics.complete_write_channel_failed(response_code);
@@ -677,7 +802,18 @@ where
             metrics.complete_response(response_code);
         }
     }
-    if observe_write {
+    if let Some(observation) = metrics.v2_observation() {
+        observation.complete_reply(
+            crate::runtime::processor_v2::ResponseObservationModeV2::Inline,
+            response_code,
+            body_kind,
+            write_elapsed,
+            match result.as_ref() {
+                Ok(receipt) => Ok(*receipt),
+                Err(error) => Err((error.kind(), error.write_progress())),
+            },
+        );
+    } else if observe_write {
         processor.observe_response_write(
             original,
             response_code,
@@ -687,6 +823,7 @@ where
             result,
         );
     }
+    metrics.record_legacy_reply(response_code, body_kind, legacy_outcome);
     match failure {
         Some((kind, progress)) => Err(AuthorizedDispatchV2Error::Response { kind, progress }),
         None => Ok(()),
@@ -700,10 +837,57 @@ where
 async fn send_boundary_response(
     session: &SessionHandle,
     original: OriginalRequestIdentity,
+    _request_started: Instant,
+    control: crate::dispatch::RequestControlView,
+    reason: V2BoundaryRejectionReason,
     response: RemotingCommand,
+    observation: Option<crate::telemetry::V2RequestObservation>,
 ) -> Result<(), AuthorizedDispatchV2Error> {
     if original.is_one_way() {
+        if let Some(observation) = observation {
+            observation.complete_boundary_rejection(
+                reason,
+                None,
+                None,
+                None,
+                crate::runtime::processor_v2::ResponseObservationOutcomeV2::Failed {
+                    kind: None,
+                    progress: Some(WriteProgress::NotStarted),
+                },
+            );
+        }
         return Ok(());
+    }
+    if let Some(observation) = observation {
+        let plan = ResponsePlan::command(response)?;
+        let response_code = plan.response_code();
+        let body_kind = plan.body_kind();
+        let bound = plan.bind(original)?;
+        let response = ResponseSink::network_plan(
+            session.clone(),
+            AdmissionClass::Control,
+            control.boundary_response_control(),
+        );
+        let write_started = Instant::now();
+        let result = response.send_plan(bound).await;
+        let write_elapsed = write_started.elapsed();
+        observation.complete_boundary_rejection(
+            reason,
+            Some(response_code),
+            Some(body_kind),
+            Some(write_elapsed),
+            match result.as_ref() {
+                Ok(receipt) => crate::runtime::processor_v2::ResponseObservationOutcomeV2::Written(*receipt),
+                Err(error) => crate::runtime::processor_v2::ResponseObservationOutcomeV2::Failed {
+                    kind: Some(error.kind()),
+                    progress: error.write_progress(),
+                },
+            },
+        );
+        return result.map(|_| ()).map_err(|error| AuthorizedDispatchV2Error::Response {
+            kind: error.kind(),
+            progress: error.write_progress(),
+        });
     }
     session
         .clone()

@@ -25,9 +25,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedRocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingCommandType;
 use rocketmq_runtime::BlockingExecutor;
@@ -65,6 +67,7 @@ use crate::connection::SessionWriterSnapshot;
 use crate::dispatch::reserve_session_owner;
 use crate::dispatch::AuthorizedDispatchBoundary;
 use crate::dispatch::AuthorizedDispatchSession;
+use crate::dispatch::DeferredSessionCleanupReport;
 use crate::dispatch::NetworkResponsePlanContext;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
@@ -77,6 +80,7 @@ use crate::proxy_protocol::ProxyProtocolConfig;
 use crate::proxy_protocol::ProxyProtocolMetadata;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
+use crate::session_executor::SessionExecutorDrainReport;
 use crate::session_view::SessionView;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::NegotiatedConnection;
@@ -87,6 +91,315 @@ use crate::writer_runtime::WriterLanes;
 use crate::writer_runtime::WriterQueueConfig;
 
 const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionWriterCompletionHealth {
+    Completed,
+    Failed,
+}
+
+#[derive(Debug)]
+struct SessionWriterCompletionReport {
+    health: SessionWriterCompletionHealth,
+    snapshot: SessionWriterSnapshot,
+    failure: Option<SharedRocketMQError>,
+}
+
+impl SessionWriterCompletionReport {
+    fn new(result: RocketMQResult<()>, snapshot: SessionWriterSnapshot) -> Self {
+        let failure = result.err().map(SharedRocketMQError::new);
+        Self {
+            health: if failure.is_some() {
+                SessionWriterCompletionHealth::Failed
+            } else {
+                SessionWriterCompletionHealth::Completed
+            },
+            snapshot,
+            failure,
+        }
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.health == SessionWriterCompletionHealth::Completed
+            && self.snapshot.queued_items == 0
+            && self.snapshot.queued_bytes == 0
+            && self.snapshot.control_queued_items == 0
+            && self.snapshot.control_queued_bytes == 0
+            && self.snapshot.data_queued_items == 0
+            && self.snapshot.data_queued_bytes == 0
+    }
+}
+
+#[derive(Debug)]
+struct SessionCloseReport {
+    executor: SessionExecutorDrainReport,
+    deferred_cleanup: DeferredSessionCleanupReport,
+    remaining_wait_permits: usize,
+    remaining_server_outbound_leases: usize,
+    disconnected_panicked: bool,
+    writer: SessionWriterCompletionReport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SessionCloseCompletionSnapshot {
+    pub(crate) healthy: bool,
+    pub(crate) active_inline_tasks: usize,
+    pub(crate) active_resume_tasks: usize,
+    pub(crate) remaining_inline_tasks: usize,
+    pub(crate) remaining_resume_tasks: usize,
+    pub(crate) removed_waiters: usize,
+    pub(crate) cleanup_panicked_targets: usize,
+    pub(crate) remaining_wait_permits: usize,
+    pub(crate) remaining_server_outbound_leases: usize,
+    pub(crate) disconnected_panicked: bool,
+    pub(crate) writer_healthy: bool,
+    pub(crate) writer_queued_items: usize,
+    pub(crate) writer_queued_bytes: usize,
+}
+
+#[derive(Clone)]
+struct SessionCloseCompletion {
+    snapshot: SessionCloseCompletionSnapshot,
+    error: Option<SharedRocketMQError>,
+}
+
+struct SessionCloseCoordinator {
+    completion: tokio::sync::watch::Sender<Option<Arc<SessionCloseCompletion>>>,
+}
+
+struct SessionCloseCompletionGuard {
+    session: SessionHandle,
+    armed: bool,
+}
+
+struct ServerOutboundAdmission {
+    accepting: AtomicBool,
+    active: AtomicUsize,
+}
+
+pub(crate) struct ServerOutboundLease {
+    admission: Arc<ServerOutboundAdmission>,
+}
+
+impl ServerOutboundAdmission {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            accepting: AtomicBool::new(true),
+            active: AtomicUsize::new(0),
+        })
+    }
+
+    fn acquire(self: &Arc<Self>) -> Option<ServerOutboundLease> {
+        if !self.accepting.load(Ordering::Acquire) {
+            return None;
+        }
+        self.active.fetch_add(1, Ordering::AcqRel);
+        if self.accepting.load(Ordering::Acquire) {
+            Some(ServerOutboundLease {
+                admission: Arc::clone(self),
+            })
+        } else {
+            self.active.fetch_sub(1, Ordering::AcqRel);
+            None
+        }
+    }
+
+    fn close(&self) {
+        self.accepting.store(false, Ordering::Release);
+    }
+
+    fn active(&self) -> usize {
+        self.active.load(Ordering::Acquire)
+    }
+
+    fn is_closed(&self) -> bool {
+        !self.accepting.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for ServerOutboundLease {
+    fn drop(&mut self) {
+        self.admission.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl SessionCloseCompletionGuard {
+    fn new(session: SessionHandle) -> Self {
+        Self { session, armed: true }
+    }
+
+    fn complete(&mut self, report: &SessionCloseReport) {
+        self.session.complete_close(report);
+        self.armed = false;
+    }
+}
+
+impl Drop for SessionCloseCompletionGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.session.abort();
+        let writer = self.session.writer_snapshot();
+        let error = SharedRocketMQError::new(RocketMQError::network_connection_failed(
+            "transport-session-close",
+            "session finalizer exited before ordered close completion",
+        ));
+        self.session.send.close_coordinator.complete(SessionCloseCompletion {
+            snapshot: SessionCloseCompletionSnapshot {
+                healthy: false,
+                active_inline_tasks: 0,
+                active_resume_tasks: 0,
+                remaining_inline_tasks: self.session.request_operation.active_task_count(),
+                remaining_resume_tasks: 0,
+                removed_waiters: 0,
+                cleanup_panicked_targets: 0,
+                remaining_wait_permits: 0,
+                remaining_server_outbound_leases: self.session.send.server_outbound.active(),
+                disconnected_panicked: false,
+                writer_healthy: false,
+                writer_queued_items: writer.queued_items,
+                writer_queued_bytes: writer.queued_bytes,
+            },
+            error: Some(error),
+        });
+    }
+}
+
+impl SessionCloseCoordinator {
+    fn new() -> Self {
+        let (completion, _) = tokio::sync::watch::channel(None);
+        Self { completion }
+    }
+
+    fn complete(&self, completion: SessionCloseCompletion) {
+        self.completion.send_replace(Some(Arc::new(completion)));
+    }
+
+    async fn completed(&self) -> RocketMQResult<Arc<SessionCloseCompletion>> {
+        let mut completion = self.completion.subscribe();
+        loop {
+            if let Some(completed) = completion.borrow().clone() {
+                tracing::debug!(
+                    healthy = completed.snapshot.healthy,
+                    active_inline_tasks = completed.snapshot.active_inline_tasks,
+                    active_resume_tasks = completed.snapshot.active_resume_tasks,
+                    remaining_inline_tasks = completed.snapshot.remaining_inline_tasks,
+                    remaining_resume_tasks = completed.snapshot.remaining_resume_tasks,
+                    removed_waiters = completed.snapshot.removed_waiters,
+                    cleanup_panicked_targets = completed.snapshot.cleanup_panicked_targets,
+                    remaining_wait_permits = completed.snapshot.remaining_wait_permits,
+                    remaining_server_outbound_leases = completed.snapshot.remaining_server_outbound_leases,
+                    disconnected_panicked = completed.snapshot.disconnected_panicked,
+                    writer_healthy = completed.snapshot.writer_healthy,
+                    writer_queued_items = completed.snapshot.writer_queued_items,
+                    writer_queued_bytes = completed.snapshot.writer_queued_bytes,
+                    "transport session close waiter observed completion"
+                );
+                return Ok(completed);
+            }
+            completion.changed().await.map_err(|_| {
+                RocketMQError::network_connection_failed(
+                    "transport-session-close",
+                    "session close coordinator retired before completion",
+                )
+            })?;
+        }
+    }
+
+    async fn wait(&self) -> RocketMQResult<SessionCloseCompletionSnapshot> {
+        let completed = self.completed().await?;
+        match &completed.error {
+            Some(error) => Err(error.clone().into_error()),
+            None => Ok(completed.snapshot),
+        }
+    }
+}
+
+impl SessionCloseReport {
+    fn is_healthy(&self) -> bool {
+        self.executor.is_healthy()
+            && self.deferred_cleanup.is_healthy()
+            && self.remaining_wait_permits == 0
+            && self.remaining_server_outbound_leases == 0
+            && !self.disconnected_panicked
+            && self.writer.is_healthy()
+    }
+
+    fn log(&self, session_id: u64) {
+        if self.is_healthy() {
+            tracing::debug!(
+                session_id,
+                active_inline_tasks = self.executor.active_inline_tasks,
+                active_resume_tasks = self.executor.active_resume_tasks,
+                remaining_inline_tasks = self.executor.remaining_inline_tasks,
+                remaining_resume_tasks = self.executor.remaining_resume_tasks,
+                cleanup_outcome = ?self.deferred_cleanup.outcome,
+                registered_waiters = self.deferred_cleanup.registered_waiters,
+                removed_waiters = self.deferred_cleanup.removed_waiters,
+                cleanup_panicked_targets = self.deferred_cleanup.panicked_targets,
+                cleanup_remaining_wait_permits = self.deferred_cleanup.remaining_wait_permits,
+                remaining_wait_permits = self.remaining_wait_permits,
+                remaining_server_outbound_leases = self.remaining_server_outbound_leases,
+                disconnected_panicked = self.disconnected_panicked,
+                writer_completion_healthy = true,
+                writer_queued_items = self.writer.snapshot.queued_items,
+                writer_queued_bytes = self.writer.snapshot.queued_bytes,
+                writer_failed_writes = self.writer.snapshot.failed,
+                "transport session shutdown report completed"
+            );
+        } else {
+            self.executor.shutdown.log_if_unhealthy();
+            tracing::warn!(
+                session_id,
+                active_inline_tasks = self.executor.active_inline_tasks,
+                active_resume_tasks = self.executor.active_resume_tasks,
+                remaining_inline_tasks = self.executor.remaining_inline_tasks,
+                remaining_resume_tasks = self.executor.remaining_resume_tasks,
+                cleanup_outcome = ?self.deferred_cleanup.outcome,
+                registered_waiters = self.deferred_cleanup.registered_waiters,
+                removed_waiters = self.deferred_cleanup.removed_waiters,
+                cleanup_panicked_targets = self.deferred_cleanup.panicked_targets,
+                cleanup_remaining_wait_permits = self.deferred_cleanup.remaining_wait_permits,
+                remaining_wait_permits = self.remaining_wait_permits,
+                remaining_server_outbound_leases = self.remaining_server_outbound_leases,
+                disconnected_panicked = self.disconnected_panicked,
+                writer_completion_healthy = self.writer.is_healthy(),
+                writer_queued_items = self.writer.snapshot.queued_items,
+                writer_queued_bytes = self.writer.snapshot.queued_bytes,
+                writer_failed_writes = self.writer.snapshot.failed,
+                "transport session shutdown report is unhealthy"
+            );
+        }
+    }
+
+    fn completion(&self) -> SessionCloseCompletion {
+        let snapshot = SessionCloseCompletionSnapshot {
+            healthy: self.is_healthy(),
+            active_inline_tasks: self.executor.active_inline_tasks,
+            active_resume_tasks: self.executor.active_resume_tasks,
+            remaining_inline_tasks: self.executor.remaining_inline_tasks,
+            remaining_resume_tasks: self.executor.remaining_resume_tasks,
+            removed_waiters: self.deferred_cleanup.removed_waiters,
+            cleanup_panicked_targets: self.deferred_cleanup.panicked_targets,
+            remaining_wait_permits: self.remaining_wait_permits,
+            remaining_server_outbound_leases: self.remaining_server_outbound_leases,
+            disconnected_panicked: self.disconnected_panicked,
+            writer_healthy: self.writer.is_healthy(),
+            writer_queued_items: self.writer.snapshot.queued_items,
+            writer_queued_bytes: self.writer.snapshot.queued_bytes,
+        };
+        let error = self.writer.failure.clone().or_else(|| {
+            (!snapshot.healthy).then(|| {
+                SharedRocketMQError::new(RocketMQError::network_connection_failed(
+                    "transport-session-close",
+                    "session close report is unhealthy",
+                ))
+            })
+        });
+        SessionCloseCompletion { snapshot, error }
+    }
+}
 
 /// Bounded I/O budgets applied to every transport session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +465,8 @@ struct SessionSendHandle {
     session_view: SessionView,
     task_group: TaskGroup,
     reader_cancellation: CancellationToken,
+    server_outbound: Arc<ServerOutboundAdmission>,
+    close_coordinator: SessionCloseCoordinator,
     writer_operation: OperationContext,
     lifecycle: Arc<SessionLifecycle>,
     writer_task_id: TaskId,
@@ -288,7 +603,12 @@ impl SessionHandle {
         self.original_request_identity
     }
 
+    pub(crate) fn is_same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.send, &other.send)
+    }
+
     pub(crate) fn abort(&self) {
+        self.send.server_outbound.close();
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -300,6 +620,7 @@ impl SessionHandle {
     /// Cancels both socket halves and waits for the owned writer task to exit.
     /// A stuck writer is force-aborted after the normal retirement deadline.
     pub(crate) async fn terminate(&self) {
+        self.send.server_outbound.close();
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -347,14 +668,51 @@ impl SessionHandle {
         self.response_plan_context.as_ref()
     }
 
-    /// Closes the session writer after all sends that already entered the lifecycle gate finish.
-    /// Retirement has a five-second absolute deadline and aborts a writer blocked past it.
+    /// Requests the server-owned ordered session close and waits for its full completion.
+    ///
+    /// The reader owner performs deferred cleanup, executor drain, disconnect notification, and
+    /// the sole writer retirement before this method completes. Concurrent or repeated calls wait
+    /// for the same completion.
     ///
     /// # Errors
     ///
-    /// Returns an error if the writer queue or close completion channel has already terminated, if
-    /// closing the framed socket fails, or if the absolute retirement deadline expires.
+    /// Returns an error if any stage of the server-owned close report is unhealthy or if the close
+    /// coordinator terminates without publishing completion.
     pub async fn retire(&self) -> rocketmq_error::RocketMQResult<()> {
+        self.request_close();
+        self.wait_for_close_completion().await.map(|_| ())
+    }
+
+    pub(crate) fn request_close(&self) {
+        self.send.server_outbound.close();
+        let _ = self.send.session_closed_tx.send(true);
+        self.send.reader_cancellation.cancel();
+    }
+
+    pub(crate) fn acquire_server_outbound(&self, target: &'static str) -> RocketMQResult<ServerOutboundLease> {
+        self.send.server_outbound.acquire().ok_or_else(|| {
+            RocketMQError::network_connection_failed(target, "server-originated outbound admission is closed")
+        })
+    }
+
+    pub(crate) fn close_requested(&self) -> bool {
+        self.send.server_outbound.is_closed()
+    }
+
+    pub(crate) async fn wait_for_close_completion(&self) -> RocketMQResult<SessionCloseCompletionSnapshot> {
+        self.send.close_coordinator.wait().await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn close_completion_snapshot(&self) -> RocketMQResult<SessionCloseCompletionSnapshot> {
+        Ok(self.send.close_coordinator.completed().await?.snapshot)
+    }
+
+    fn complete_close(&self, report: &SessionCloseReport) {
+        self.send.close_coordinator.complete(report.completion());
+    }
+
+    async fn retire_writer_owned(&self) -> rocketmq_error::RocketMQResult<()> {
         self.retire_with_timeout_inner(SESSION_RETIREMENT_TIMEOUT, None).await
     }
 
@@ -491,9 +849,9 @@ pub(crate) trait AuthorizedFrameRoute: Send + Sync + 'static {
         partial_frame_permit: Option<PartialFramePermit>,
     ) -> impl Future<Output = bool> + Send;
 
-    fn close_pending(&self, state: &Self::SessionState, session: SessionHandle);
+    fn close_pending(&self, state: &Self::SessionState, session: SessionHandle) -> DeferredSessionCleanupReport;
 
-    fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> impl Future<Output = ()> + Send;
+    fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> impl Future<Output = usize> + Send;
 }
 
 struct CompatibilityFrameRoute<H> {
@@ -553,10 +911,13 @@ where
             .is_ok()
     }
 
-    fn close_pending(&self, _state: &Self::SessionState, _session: SessionHandle) {}
+    fn close_pending(&self, _state: &Self::SessionState, _session: SessionHandle) -> DeferredSessionCleanupReport {
+        DeferredSessionCleanupReport::empty_completed()
+    }
 
-    async fn disconnected(&self, _state: Self::SessionState, session: SessionHandle) {
+    async fn disconnected(&self, _state: Self::SessionState, session: SessionHandle) -> usize {
         self.handler.disconnected(session).await;
+        0
     }
 }
 
@@ -1134,6 +1495,8 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
             session_view,
             task_group: task_group.clone(),
             reader_cancellation: reader_cancellation.clone(),
+            server_outbound: ServerOutboundAdmission::new(),
+            close_coordinator: SessionCloseCoordinator::new(),
             writer_operation,
             lifecycle,
             writer_task_id,
@@ -1144,10 +1507,24 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
         original_request_identity: None,
         response_plan_context: None,
     };
+    let mut close_completion = SessionCloseCompletionGuard::new(session.clone());
 
     let Some(route_state) = route.connected(session.clone()).await else {
-        let _ = session.send.session_closed_tx.send(true);
-        let _ = session.retire().await;
+        session.request_close();
+        executor.begin_close();
+        let request_deadline = task_group
+            .shutdown_deadline()
+            .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
+        let report = SessionCloseReport {
+            executor: executor.drain_report_until(request_deadline).await,
+            deferred_cleanup: DeferredSessionCleanupReport::empty_completed(),
+            remaining_wait_permits: 0,
+            remaining_server_outbound_leases: session.send.server_outbound.active(),
+            disconnected_panicked: false,
+            writer: SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot()),
+        };
+        report.log(session.session_id());
+        close_completion.complete(&report);
         return;
     };
     let cancellation = task_group.cancellation_token();
@@ -1222,15 +1599,32 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     // Request dispatchers may still be draining accepted work, but the reader
     // no longer accepts frames. Publish the session-close transition now so
     // read-only views observe shutdown without closing the response writer.
-    let _ = session.send.session_closed_tx.send(true);
+    session.request_close();
     executor.begin_close();
-    route.close_pending(&route_state, session.clone());
+    let deferred_cleanup = route.close_pending(&route_state, session.clone());
     let request_deadline = task_group
         .shutdown_deadline()
         .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
-    executor.drain_until(request_deadline).await.log_if_unhealthy();
-    route.disconnected(route_state, session.clone()).await;
-    let _ = session.retire().await;
+    let executor_drain = executor.drain_report_until(request_deadline).await;
+    let disconnected = std::panic::AssertUnwindSafe(route.disconnected(route_state, session.clone()))
+        .catch_unwind()
+        .await;
+    let (remaining_wait_permits, disconnected_panicked) = match disconnected {
+        Ok(remaining_wait_permits) => (remaining_wait_permits, false),
+        Err(_) => (0, true),
+    };
+    let writer_completion =
+        SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot());
+    let report = SessionCloseReport {
+        executor: executor_drain,
+        deferred_cleanup,
+        remaining_wait_permits,
+        remaining_server_outbound_leases: session.send.server_outbound.active(),
+        disconnected_panicked,
+        writer: writer_completion,
+    };
+    report.log(session.session_id());
+    close_completion.complete(&report);
 }
 
 /// Runs an already-connected client or compatibility socket through the canonical framed session
@@ -1810,7 +2204,9 @@ mod retirement_tests {
     use tokio::sync::Notify;
 
     use super::ConnectionHandler;
+    use super::SessionCloseReport;
     use super::SessionHandle;
+    use super::SessionWriterCompletionReport;
     use super::TransportListener;
     use crate::admission::AdmissionController;
     use crate::admission::AdmissionLimits;
@@ -1818,12 +2214,50 @@ mod retirement_tests {
     #[cfg(feature = "tls")]
     use crate::config::TlsMode;
     use crate::connection::Connection;
+    use crate::connection::SessionWriterSnapshot;
     use crate::deadline::RequestDeadline;
     use crate::proxy_protocol::ProxyProtocolConfig;
     use crate::security::TransportSecurity;
+    use crate::session_executor::SessionExecutorDrainReport;
     use crate::session_view::SessionId;
     use crate::session_view::SessionView;
     use crate::tls::TlsServerRuntime;
+
+    #[test]
+    fn composite_close_report_requires_drained_tasks_waiters_and_writer() {
+        let healthy = SessionCloseReport {
+            executor: SessionExecutorDrainReport {
+                shutdown: rocketmq_runtime::ShutdownReport::new("test.session", Duration::ZERO),
+                active_inline_tasks: 1,
+                active_resume_tasks: 1,
+                remaining_inline_tasks: 0,
+                remaining_resume_tasks: 0,
+            },
+            deferred_cleanup: crate::dispatch::DeferredSessionCleanupReport::empty_completed(),
+            remaining_wait_permits: 0,
+            remaining_server_outbound_leases: 0,
+            disconnected_panicked: false,
+            writer: SessionWriterCompletionReport::new(Ok(()), SessionWriterSnapshot::default()),
+        };
+        assert!(healthy.is_healthy());
+
+        let failed_writer = SessionWriterCompletionReport::new(
+            Err(RocketMQError::network_connection_failed(
+                "test-session-writer",
+                "writer completion failed",
+            )),
+            SessionWriterSnapshot::default(),
+        );
+        assert!(!failed_writer.is_healthy());
+        let queued_writer = SessionWriterCompletionReport::new(
+            Ok(()),
+            SessionWriterSnapshot {
+                queued_items: 1,
+                ..SessionWriterSnapshot::default()
+            },
+        );
+        assert!(!queued_writer.is_healthy());
+    }
 
     struct CaptureSession {
         sender: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,

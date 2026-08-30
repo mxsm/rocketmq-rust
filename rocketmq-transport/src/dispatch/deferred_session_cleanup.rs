@@ -37,7 +37,7 @@ mod sealed {
 pub(crate) trait DeferredSessionCleanupTarget: sealed::Sealed + Send + Sync + 'static {
     fn key(&self) -> usize;
 
-    fn remove_session(&self, session_id: SessionId);
+    fn remove_session(&self, session_id: SessionId) -> usize;
 }
 
 #[derive(Clone)]
@@ -155,13 +155,17 @@ impl DeferredSessionCleanupTarget for LegacyCallbackCleanupTarget {
         self.key
     }
 
-    fn remove_session(&self, _session_id: SessionId) {
+    fn remove_session(&self, _session_id: SessionId) -> usize {
         if !self.completed.swap(true, Ordering::AcqRel) {
             (self.cleanup)();
+            1
+        } else {
+            0
         }
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct DeferredSessionCleanupOwner {
     registration: DeferredSessionCleanupRegistration,
 }
@@ -180,8 +184,12 @@ impl DeferredSessionCleanupOwner {
         self.registration.clone()
     }
 
-    pub(crate) fn close(&self) -> DeferredSessionCleanupCloseOutcome {
+    pub(crate) fn close(&self) -> DeferredSessionCleanupReport {
         self.registration.coordinator.close(self.registration.session_id)
+    }
+
+    pub(crate) fn remaining_wait_permits(&self) -> usize {
+        self.registration.coordinator.live_enrollment_count()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -209,6 +217,43 @@ pub(crate) enum DeferredSessionCleanupCloseOutcome {
     Completed,
     InProgress,
     AlreadyClosed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DeferredSessionCleanupReport {
+    pub(crate) outcome: DeferredSessionCleanupCloseOutcome,
+    pub(crate) registered_waiters: usize,
+    pub(crate) removed_waiters: usize,
+    pub(crate) remaining_wait_permits: usize,
+    pub(crate) panicked_targets: usize,
+}
+
+impl PartialEq<DeferredSessionCleanupCloseOutcome> for DeferredSessionCleanupReport {
+    fn eq(&self, other: &DeferredSessionCleanupCloseOutcome) -> bool {
+        self.outcome == *other
+    }
+}
+
+impl PartialEq<DeferredSessionCleanupReport> for DeferredSessionCleanupCloseOutcome {
+    fn eq(&self, other: &DeferredSessionCleanupReport) -> bool {
+        *self == other.outcome
+    }
+}
+
+impl DeferredSessionCleanupReport {
+    pub(crate) const fn empty_completed() -> Self {
+        Self {
+            outcome: DeferredSessionCleanupCloseOutcome::Completed,
+            registered_waiters: 0,
+            removed_waiters: 0,
+            remaining_wait_permits: 0,
+            panicked_targets: 0,
+        }
+    }
+
+    pub(crate) const fn is_healthy(self) -> bool {
+        matches!(self.outcome, DeferredSessionCleanupCloseOutcome::Completed) && self.panicked_targets == 0
+    }
 }
 
 pub(crate) struct CleanupEnrollment {
@@ -357,8 +402,8 @@ impl CleanupCoordinator {
         }
     }
 
-    fn close(&self, session_id: SessionId) -> DeferredSessionCleanupCloseOutcome {
-        let mut targets = {
+    fn close(&self, session_id: SessionId) -> DeferredSessionCleanupReport {
+        let (mut targets, registered_waiters) = {
             let mut state = self.state.lock();
             #[cfg(test)]
             if let Some(checkpoint) = self.close_acquired_checkpoint.lock().clone() {
@@ -366,32 +411,47 @@ impl CleanupCoordinator {
             }
             match state.lifecycle {
                 CleanupLifecycle::Open => state.lifecycle = CleanupLifecycle::Closing,
-                CleanupLifecycle::Closing => return DeferredSessionCleanupCloseOutcome::InProgress,
-                CleanupLifecycle::Closed => return DeferredSessionCleanupCloseOutcome::AlreadyClosed,
+                CleanupLifecycle::Closing => {
+                    return cleanup_report(DeferredSessionCleanupCloseOutcome::InProgress, &state, 0);
+                }
+                CleanupLifecycle::Closed => {
+                    return cleanup_report(DeferredSessionCleanupCloseOutcome::AlreadyClosed, &state, 0);
+                }
             }
-            state
-                .targets
-                .values()
-                .filter_map(|record| record.target.upgrade())
-                .collect::<Vec<_>>()
+            (
+                state
+                    .targets
+                    .values()
+                    .filter_map(|record| record.target.upgrade())
+                    .collect::<Vec<_>>(),
+                live_enrollment_count(&state),
+            )
         };
         targets.sort_unstable_by_key(|target| target.key());
         let completion = CleanupCloseCompletion::new(self);
-        let mut first_panic = None;
+        let mut removed_waiters = 0usize;
+        let mut panicked_targets = 0usize;
 
         for target in targets {
-            if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| target.remove_session(session_id))) {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                }
+            match std::panic::catch_unwind(AssertUnwindSafe(|| target.remove_session(session_id))) {
+                Ok(removed) => removed_waiters = removed_waiters.saturating_add(removed),
+                Err(_) => panicked_targets = panicked_targets.saturating_add(1),
             }
         }
 
         completion.complete();
-        if let Some(payload) = first_panic {
-            std::panic::resume_unwind(payload);
+        let remaining_wait_permits = self.live_enrollment_count();
+        DeferredSessionCleanupReport {
+            outcome: DeferredSessionCleanupCloseOutcome::Completed,
+            registered_waiters,
+            removed_waiters,
+            remaining_wait_permits,
+            panicked_targets,
         }
-        DeferredSessionCleanupCloseOutcome::Completed
+    }
+
+    fn live_enrollment_count(&self) -> usize {
+        live_enrollment_count(&self.state.lock())
     }
 }
 
@@ -464,6 +524,28 @@ fn release_enrollment(state: &mut CleanupState, key: usize) {
     }
 }
 
+fn live_enrollment_count(state: &CleanupState) -> usize {
+    state
+        .targets
+        .values()
+        .fold(0usize, |total, record| total.saturating_add(record.live_enrollments))
+}
+
+fn cleanup_report(
+    outcome: DeferredSessionCleanupCloseOutcome,
+    state: &CleanupState,
+    removed_waiters: usize,
+) -> DeferredSessionCleanupReport {
+    let remaining_wait_permits = live_enrollment_count(state);
+    DeferredSessionCleanupReport {
+        outcome,
+        registered_waiters: remaining_wait_permits,
+        removed_waiters,
+        remaining_wait_permits,
+        panicked_targets: 0,
+    }
+}
+
 pub(crate) struct RegistryCleanupTarget<R>
 where
     R: Send + 'static,
@@ -499,9 +581,11 @@ where
         self.key
     }
 
-    fn remove_session(&self, session_id: SessionId) {
+    fn remove_session(&self, session_id: SessionId) -> usize {
         if let Some(registry) = self.registry.upgrade() {
-            registry.remove_session(session_id);
+            registry.remove_session(session_id)
+        } else {
+            0
         }
     }
 }
@@ -528,8 +612,9 @@ mod tests {
             self.key
         }
 
-        fn remove_session(&self, _session_id: SessionId) {
+        fn remove_session(&self, _session_id: SessionId) -> usize {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            0
         }
     }
 
@@ -570,12 +655,17 @@ mod tests {
 
         assert_eq!(factory_calls.load(Ordering::SeqCst), 1);
         assert_eq!(owner.target_counts(), (1, 2));
-        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        let report = owner.close();
+        assert_eq!(report.outcome, DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(report.registered_waiters, 2);
+        assert_eq!(report.removed_waiters, 0);
+        assert_eq!(report.remaining_wait_permits, 2);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         drop(first);
         assert_eq!(owner.target_counts(), (1, 1));
         drop(second);
         assert_eq!(owner.target_counts(), (0, 0));
+        assert_eq!(owner.remaining_wait_permits(), 0);
         assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::AlreadyClosed);
     }
 
@@ -746,8 +836,8 @@ mod tests {
             self.key
         }
 
-        fn remove_session(&self, session_id: SessionId) {
-            let observed = match self.registration.coordinator.close(session_id) {
+        fn remove_session(&self, session_id: SessionId) -> usize {
+            let observed = match self.registration.coordinator.close(session_id).outcome {
                 DeferredSessionCleanupCloseOutcome::InProgress => 1,
                 DeferredSessionCleanupCloseOutcome::Completed | DeferredSessionCleanupCloseOutcome::AlreadyClosed => 2,
             };
@@ -833,8 +923,10 @@ mod tests {
         assert_eq!(registry.test_index_counts(), (1, 1, 1));
         assert_eq!(admission.snapshot().waiting_count(), 1);
 
-        let panic = std::panic::catch_unwind(AssertUnwindSafe(|| owner.close()));
-        assert!(panic.is_err());
+        let report = owner.close();
+        assert_eq!(report.outcome, DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(report.panicked_targets, 1);
+        assert!(!report.is_healthy());
         assert_eq!(observed.load(Ordering::SeqCst), 1);
         assert_eq!(registry.test_index_counts(), (0, 0, 0));
         assert_eq!(

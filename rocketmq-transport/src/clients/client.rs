@@ -361,12 +361,21 @@ where
             .is_ok()
     }
 
-    fn close_pending(&self, state: &Self::SessionState, _session: SessionHandle) {
+    fn close_pending(
+        &self,
+        state: &Self::SessionState,
+        _session: SessionHandle,
+    ) -> crate::dispatch::DeferredSessionCleanupReport {
+        let report = state.deferred_cleanup.close();
         self.dispatcher.close_network_session(&state.network_endpoint);
-        let _ = state.deferred_cleanup.close();
+        report
     }
 
-    async fn disconnected(&self, _state: Self::SessionState, _session: SessionHandle) {}
+    async fn disconnected(&self, state: Self::SessionState, _session: SessionHandle) -> usize {
+        let cleanup = state.deferred_cleanup.clone();
+        drop(state);
+        cleanup.remaining_wait_permits()
+    }
 }
 
 #[derive(Clone)]
@@ -753,6 +762,13 @@ impl<PR> TransportSession<PR> {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// the invocation fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when request signing or deadline validation fails, the
+    /// pending-response owner rejects the correlation, the writer cannot send
+    /// the command, the response owner closes, or the deadline expires before a
+    /// response arrives.
     pub async fn send_read(
         &mut self,
         mut request: RemotingCommand,
@@ -811,11 +827,22 @@ impl<PR> TransportSession<PR> {
     }
 
     /// Sends a request using the caller's existing immutable deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when request signing or deadline validation fails, or
+    /// when the session writer rejects or fails the command.
     pub async fn send_until(&mut self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
         self.send_transport(request, deadline).await
     }
 
     /// Sends a request under an existing deadline and process reservation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when request signing or deadline validation fails, or
+    /// when the session writer rejects or fails the command. The supplied
+    /// permit is consumed by the attempted send.
     pub async fn send_until_with_permit(
         &mut self,
         request: RemotingCommand,
@@ -905,14 +932,25 @@ impl<PR> TransportSession<PR> {
 
     /// Gracefully stop this client connection and return the task shutdown report.
     pub async fn close_with_report(&self, timeout: Duration) -> rocketmq_runtime::ShutdownReport {
+        let deadline_expired = timeout.is_zero();
+        let deadline = tokio::time::Instant::now() + timeout;
         self.accepting_requests.store(false, Ordering::Release);
         let _ = self.notify_shutdown.send(());
-        let _ = self.session.retire().await;
         let active_before = self.task_lifecycle.operation.active_task_count();
+        self.session.request_close();
+        let (session_close_finished, session_close_failed) =
+            match tokio::time::timeout_at(deadline, self.session.wait_for_close_completion()).await {
+                Ok(Ok(_)) => (true, false),
+                Ok(Err(_)) => (true, true),
+                Err(_) => (false, false),
+            };
         let joined = self
             .task_lifecycle
             .operation
-            .cancel_and_wait(&self.task_lifecycle.task_group, timeout)
+            .cancel_and_wait(
+                &self.task_lifecycle.task_group,
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+            )
             .await
             .unwrap_or(false);
         let mut report = rocketmq_runtime::ShutdownReport::new("rocketmq.transport.client.connection", Duration::ZERO);
@@ -921,6 +959,15 @@ impl<PR> TransportSession<PR> {
         } else {
             report.aborted = active_before;
             report.timed_out = usize::from(active_before > 0);
+        }
+        if deadline_expired || !session_close_finished {
+            report.timed_out = report.timed_out.max(1);
+        }
+        if session_close_failed {
+            report.failed = 1;
+            report.annotations.push(rocketmq_runtime::ShutdownAnnotation::new(
+                "transport session close completed with an unhealthy lifecycle report",
+            ));
         }
         self.pending_requests.close_owner(&self.pending_request_owner, || {
             RocketMQError::network_connection_failed("client", "connection closed")
@@ -1198,9 +1245,18 @@ mod lifecycle_tests {
             )
             .await
             .is_err());
+        let active_before_close = operation.active_task_count();
         let report = client.close_with_report(Duration::from_secs(1)).await;
 
-        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(!report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.failed, 1, "{}", report.to_json());
+        assert_eq!(report.completed, active_before_close, "{}", report.to_json());
+        assert_eq!(report.aborted, 0, "{}", report.to_json());
+        assert_eq!(report.timed_out, 0, "{}", report.to_json());
+        assert!(report
+            .annotations
+            .iter()
+            .any(|annotation| annotation.message.contains("unhealthy lifecycle report")));
         assert_eq!(operation.active_task_count(), 0);
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         server.abort();

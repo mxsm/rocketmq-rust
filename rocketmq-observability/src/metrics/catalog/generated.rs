@@ -256,127 +256,141 @@ const METRIC_LABELS_35: &[&str] = &[
 ];
 
 const METRIC_LABELS_36: &[&str] = &[
-    labels::EVENT,
-    labels::RESULT,
+    labels::CODE,
+    labels::OUTCOME,
 ];
 
 const METRIC_LABELS_37: &[&str] = &[
     labels::EVENT,
-];
-
-const METRIC_LABELS_38: &[&str] = &[
     labels::RESULT,
 ];
 
+const METRIC_LABELS_38: &[&str] = &[
+    labels::EVENT,
+];
+
 const METRIC_LABELS_39: &[&str] = &[
-    labels::SOURCE_KIND,
     labels::RESULT,
 ];
 
 const METRIC_LABELS_40: &[&str] = &[
     labels::SOURCE_KIND,
-    labels::ADDRESS_FAMILY,
+    labels::RESULT,
 ];
 
 const METRIC_LABELS_41: &[&str] = &[
     labels::SOURCE_KIND,
-    labels::FRESHNESS,
+    labels::ADDRESS_FAMILY,
 ];
 
 const METRIC_LABELS_42: &[&str] = &[
-    labels::REASON,
+    labels::SOURCE_KIND,
+    labels::FRESHNESS,
 ];
 
 const METRIC_LABELS_43: &[&str] = &[
-    labels::STAGE,
+    labels::REASON,
 ];
 
 const METRIC_LABELS_44: &[&str] = &[
-    labels::REQUEST_TYPE,
-    labels::RESULT,
+    labels::STAGE,
 ];
 
 const METRIC_LABELS_45: &[&str] = &[
     labels::REQUEST_TYPE,
+    labels::RESULT,
 ];
 
 const METRIC_LABELS_46: &[&str] = &[
-    labels::STATE,
+    labels::REQUEST_TYPE,
 ];
 
 const METRIC_LABELS_47: &[&str] = &[
+    labels::STATE,
+];
+
+const METRIC_LABELS_48: &[&str] = &[
     labels::OPERATION,
     labels::RESULT,
 ];
 
-const METRIC_LABELS_48: &[&str] = &[
+const METRIC_LABELS_49: &[&str] = &[
     labels::SERVICE,
     labels::RELEASE_COMMIT,
     labels::RELEASE_NONCE,
 ];
 
-const METRIC_LABELS_49: &[&str] = &[
+const METRIC_LABELS_50: &[&str] = &[
     labels::OPERATION_KIND,
     labels::OPERATION,
     labels::RESULT,
 ];
 
-const METRIC_LABELS_50: &[&str] = &[
+const METRIC_LABELS_51: &[&str] = &[
     labels::OPERATION_KIND,
     labels::OPERATION,
 ];
 
-const METRIC_LABELS_51: &[&str] = &[
+const METRIC_LABELS_52: &[&str] = &[
     labels::COMPONENT,
     labels::TASK_TYPE,
 ];
 
-const METRIC_LABELS_52: &[&str] = &[
+const METRIC_LABELS_53: &[&str] = &[
     labels::COMPONENT,
 ];
 
-const METRIC_LABELS_53: &[&str] = &[
+const METRIC_LABELS_54: &[&str] = &[
     labels::COMPONENT,
     labels::BLOCKING_LANE,
 ];
 
-const METRIC_LABELS_54: &[&str] = &[
+const METRIC_LABELS_55: &[&str] = &[
     labels::COMPONENT,
     labels::STATE,
     labels::RESULT,
     labels::REASON,
 ];
 
-const METRIC_LABELS_55: &[&str] = &[
+const METRIC_LABELS_56: &[&str] = &[
     labels::COMPONENT,
     labels::BUDGET,
     labels::LANE,
 ];
 
-const METRIC_LABELS_56: &[&str] = &[
+const METRIC_LABELS_57: &[&str] = &[
     labels::BACKEND,
     labels::OPERATION,
     labels::RESULT,
 ];
 
-const METRIC_LABELS_57: &[&str] = &[
+const METRIC_LABELS_58: &[&str] = &[
     labels::BACKEND,
     labels::OPERATION,
     labels::ERROR_KIND,
 ];
 
-const METRIC_LABELS_58: &[&str] = &[
+const METRIC_LABELS_59: &[&str] = &[
     labels::BACKEND,
 ];
 
-const METRIC_LABELS_59: &[&str] = &[
+const METRIC_LABELS_60: &[&str] = &[
     labels::BACKEND,
     labels::STATE,
 ];
 
-const METRIC_LABELS_60: &[&str] = &[
+const METRIC_LABELS_61: &[&str] = &[
     labels::PROCESSOR,
     labels::REQUEST_CODE,
+];
+
+const METRIC_LABELS_62: &[&str] = &[
+    labels::MODE,
+    labels::RESULT,
+];
+
+const METRIC_LABELS_63: &[&str] = &[
+    labels::CODE,
 ];
 
 pub const JAVA_METRICS: &[MetricDescriptor] = &[
@@ -1087,7 +1101,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::TRANSPORT_REQUESTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
-        labels: METRIC_LABELS_14,
+        labels: METRIC_LABELS_36,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
@@ -1129,14 +1143,14 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_36,
+        labels: METRIC_LABELS_37,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
         name: metrics::TRANSPORT_LIFECYCLE_LISTENER_LATENCY,
         kind: MetricKind::Histogram,
         unit: "ms",
-        labels: METRIC_LABELS_37,
+        labels: METRIC_LABELS_38,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
@@ -1206,42 +1220,42 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::Client,
     },
     MetricDescriptor {
         name: metrics::CLIENT_NAMESRV_DISCOVERY_REFRESH_TOTAL,
         kind: MetricKind::Counter,
         unit: "{refresh}",
-        labels: METRIC_LABELS_39,
+        labels: METRIC_LABELS_40,
         source: MetricSource::Client,
     },
     MetricDescriptor {
         name: metrics::CLIENT_NAMESRV_DISCOVERY_ENDPOINT_COUNT,
         kind: MetricKind::Gauge,
         unit: "{endpoint}",
-        labels: METRIC_LABELS_40,
+        labels: METRIC_LABELS_41,
         source: MetricSource::Client,
     },
     MetricDescriptor {
         name: metrics::CLIENT_NAMESRV_DISCOVERY_FRESHNESS,
         kind: MetricKind::Gauge,
         unit: "1",
-        labels: METRIC_LABELS_41,
+        labels: METRIC_LABELS_42,
         source: MetricSource::Client,
     },
     MetricDescriptor {
         name: metrics::CLIENT_NAMESRV_DISCOVERY_SNAPSHOT_AGE,
         kind: MetricKind::Gauge,
         unit: "s",
-        labels: METRIC_LABELS_41,
+        labels: METRIC_LABELS_42,
         source: MetricSource::Client,
     },
     MetricDescriptor {
         name: metrics::CLIENT_NAMESRV_FAILOVER_TOTAL,
         kind: MetricKind::Counter,
         unit: "{failover}",
-        labels: METRIC_LABELS_42,
+        labels: METRIC_LABELS_43,
         source: MetricSource::Client,
     },
     MetricDescriptor {
@@ -1276,7 +1290,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_ROUTE_ERRORS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{error}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1297,7 +1311,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_ROUTE_STAGE_LATENCY,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_43,
+        labels: METRIC_LABELS_44,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1311,7 +1325,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_ROUTE_CACHE_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1325,35 +1339,35 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_44,
+        labels: METRIC_LABELS_45,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_WORKLOAD_ADMISSION_INFLIGHT,
         kind: MetricKind::ObservableGauge,
         unit: "{request}",
-        labels: METRIC_LABELS_45,
+        labels: METRIC_LABELS_46,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_WORKLOAD_ADMISSION_WAITING,
         kind: MetricKind::ObservableGauge,
         unit: "{request}",
-        labels: METRIC_LABELS_45,
+        labels: METRIC_LABELS_46,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_ROUTE_END_TO_END_LATENCY,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1367,7 +1381,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_REGISTRATION_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1381,7 +1395,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_UNREGISTRATION_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1402,42 +1416,42 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_EXPIRY_SCAN_BROKERS,
         kind: MetricKind::Histogram,
         unit: "{broker}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_EXPIRY_SCAN_DURATION,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_REQUESTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
-        labels: METRIC_LABELS_44,
+        labels: METRIC_LABELS_45,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_REQUEST_HANDLER_LATENCY,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_44,
+        labels: METRIC_LABELS_45,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_RESPONSE_BYTES,
         kind: MetricKind::Histogram,
         unit: "By",
-        labels: METRIC_LABELS_45,
+        labels: METRIC_LABELS_46,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_REGISTRATION_BODY_BYTES,
         kind: MetricKind::Histogram,
         unit: "By",
-        labels: METRIC_LABELS_43,
+        labels: METRIC_LABELS_44,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1451,21 +1465,21 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_MUTATION_LATENCY,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_43,
+        labels: METRIC_LABELS_44,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_SNAPSHOT_REBUILDS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{snapshot}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_EXPIRY_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1479,7 +1493,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_KV_GENERATION,
         kind: MetricKind::ObservableGauge,
         unit: "{generation}",
-        labels: METRIC_LABELS_46,
+        labels: METRIC_LABELS_47,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1500,7 +1514,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_KV_PERSIST_LATENCY,
         kind: MetricKind::Histogram,
         unit: "us",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1514,21 +1528,21 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::NAMESRV_KV_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_SECURITY_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_47,
+        labels: METRIC_LABELS_48,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
         name: metrics::NAMESRV_CONNECTION_EVENTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{event}",
-        labels: METRIC_LABELS_37,
+        labels: METRIC_LABELS_38,
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
@@ -1619,7 +1633,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::PROXY_GRPC_ERRORS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{error}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::Proxy,
     },
     MetricDescriptor {
@@ -1668,42 +1682,42 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::RELEASE_INFO,
         kind: MetricKind::Gauge,
         unit: "1",
-        labels: METRIC_LABELS_48,
+        labels: METRIC_LABELS_49,
         source: MetricSource::Observability,
     },
     MetricDescriptor {
         name: metrics::MCP_REQUESTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
-        labels: METRIC_LABELS_49,
+        labels: METRIC_LABELS_50,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
         name: metrics::MCP_REQUEST_LATENCY,
         kind: MetricKind::Histogram,
         unit: "ms",
-        labels: METRIC_LABELS_50,
+        labels: METRIC_LABELS_51,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
         name: metrics::MCP_ERRORS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{error}",
-        labels: METRIC_LABELS_49,
+        labels: METRIC_LABELS_50,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
         name: metrics::MCP_CACHE_OPERATIONS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{operation}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
         name: metrics::MCP_RATE_LIMIT_TOTAL,
         kind: MetricKind::Counter,
         unit: "{decision}",
-        labels: METRIC_LABELS_38,
+        labels: METRIC_LABELS_39,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
@@ -1717,182 +1731,231 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::MCP_AUDIT_DROPPED_TOTAL,
         kind: MetricKind::Counter,
         unit: "{record}",
-        labels: METRIC_LABELS_42,
+        labels: METRIC_LABELS_43,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
         name: metrics::MCP_AUDIT_FAILURES_TOTAL,
         kind: MetricKind::Counter,
         unit: "{failure}",
-        labels: METRIC_LABELS_42,
+        labels: METRIC_LABELS_43,
         source: MetricSource::Mcp,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_TASKS,
         kind: MetricKind::Gauge,
         unit: "{task}",
-        labels: METRIC_LABELS_51,
+        labels: METRIC_LABELS_52,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_TASK_GROUPS,
         kind: MetricKind::Gauge,
         unit: "{group}",
-        labels: METRIC_LABELS_52,
+        labels: METRIC_LABELS_53,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_LONG_RUNNING_TASKS,
         kind: MetricKind::Gauge,
         unit: "{task}",
-        labels: METRIC_LABELS_51,
+        labels: METRIC_LABELS_52,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_BLOCKING_QUEUED,
         kind: MetricKind::Gauge,
         unit: "{task}",
-        labels: METRIC_LABELS_53,
+        labels: METRIC_LABELS_54,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_BLOCKING_RUNNING,
         kind: MetricKind::Gauge,
         unit: "{task}",
-        labels: METRIC_LABELS_53,
+        labels: METRIC_LABELS_54,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_BLOCKING_TIMEOUTS,
         kind: MetricKind::Gauge,
         unit: "{task}",
-        labels: METRIC_LABELS_53,
+        labels: METRIC_LABELS_54,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{transition}",
-        labels: METRIC_LABELS_54,
+        labels: METRIC_LABELS_55,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_ITEMS,
         kind: MetricKind::ObservableGauge,
         unit: "{item}",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_BYTES,
         kind: MetricKind::ObservableGauge,
         unit: "By",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_OLDEST_AGE_MILLIS,
         kind: MetricKind::ObservableGauge,
         unit: "ms",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_CAPACITY_ITEMS,
         kind: MetricKind::ObservableGauge,
         unit: "{item}",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_CAPACITY_BYTES,
         kind: MetricKind::ObservableGauge,
         unit: "By",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_ACTIVE,
         kind: MetricKind::ObservableGauge,
         unit: "{operation}",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_QUEUE_REJECTED_TOTAL,
         kind: MetricKind::Counter,
         unit: "{rejection}",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_CACHE_USAGE_BYTES,
         kind: MetricKind::ObservableGauge,
         unit: "By",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RESOURCE_CACHE_BUDGET_BYTES,
         kind: MetricKind::ObservableGauge,
         unit: "By",
-        labels: METRIC_LABELS_55,
+        labels: METRIC_LABELS_56,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RECEIPT_RENEWAL_DUE_LAG_MICROS,
         kind: MetricKind::ObservableGauge,
         unit: "us",
-        labels: METRIC_LABELS_52,
+        labels: METRIC_LABELS_53,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::RECEIPT_RENEWAL_EXPIRED_TOTAL,
         kind: MetricKind::Counter,
         unit: "{receipt}",
-        labels: METRIC_LABELS_52,
+        labels: METRIC_LABELS_53,
         source: MetricSource::Runtime,
     },
     MetricDescriptor {
         name: metrics::DASHBOARD_STORAGE_OPERATIONS_TOTAL,
         kind: MetricKind::Counter,
         unit: "",
-        labels: METRIC_LABELS_56,
+        labels: METRIC_LABELS_57,
         source: MetricSource::Observability,
     },
     MetricDescriptor {
         name: metrics::DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS,
         kind: MetricKind::Histogram,
         unit: "ms",
-        labels: METRIC_LABELS_56,
+        labels: METRIC_LABELS_57,
         source: MetricSource::Observability,
     },
     MetricDescriptor {
         name: metrics::DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL,
         kind: MetricKind::Counter,
         unit: "",
-        labels: METRIC_LABELS_57,
+        labels: METRIC_LABELS_58,
         source: MetricSource::Observability,
     },
     MetricDescriptor {
         name: metrics::DASHBOARD_STORAGE_CAPACITY_BYTES,
         kind: MetricKind::Gauge,
         unit: "By",
-        labels: METRIC_LABELS_58,
+        labels: METRIC_LABELS_59,
         source: MetricSource::Observability,
     },
     MetricDescriptor {
         name: metrics::DASHBOARD_STORAGE_POOL_CONNECTIONS,
         kind: MetricKind::Gauge,
         unit: "",
-        labels: METRIC_LABELS_59,
+        labels: METRIC_LABELS_60,
         source: MetricSource::Observability,
     },
     MetricDescriptor {
         name: metrics::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
-        labels: METRIC_LABELS_60,
+        labels: METRIC_LABELS_61,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_REQUEST_DURATION_SECONDS,
+        kind: MetricKind::Histogram,
+        unit: "s",
+        labels: METRIC_LABELS_36,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_RESPONSE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{response}",
+        labels: METRIC_LABELS_62,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_DEFERRED_INFLIGHT,
+        kind: MetricKind::UpDownCounter,
+        unit: "{request}",
+        labels: METRIC_LABELS_63,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_DEFERRED_RETAINED_BYTES,
+        kind: MetricKind::UpDownCounter,
+        unit: "By",
+        labels: METRIC_LABELS_63,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS,
+        kind: MetricKind::Histogram,
+        unit: "s",
+        labels: METRIC_LABELS_14,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_RESPONSE_DUPLICATE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{response}",
+        labels: METRIC_LABELS_63,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_RESPONSE_ABANDONED_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{response}",
+        labels: METRIC_LABELS_43,
         source: MetricSource::Remoting,
     },
 ];

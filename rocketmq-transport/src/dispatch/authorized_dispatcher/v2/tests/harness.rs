@@ -86,6 +86,7 @@ pub(super) struct ProcessorState {
     pub(super) request_body_pointer: Mutex<Option<usize>>,
     pub(super) events: Mutex<Vec<&'static str>>,
     pub(super) observations: Mutex<Vec<ResponseWriteObservationV2>>,
+    pub(super) terminal_observations: Mutex<Vec<crate::runtime::processor_v2::ResponseObservationV2>>,
     pub(super) observed: tokio::sync::Notify,
     pub(super) entered: tokio::sync::Notify,
     pub(super) resume: tokio::sync::Notify,
@@ -208,6 +209,18 @@ impl RequestProcessorV2 for TestProcessor {
             .observations
             .lock()
             .expect("observation lock")
+            .push(observation);
+        self.state.observed.notify_one();
+    }
+
+    fn observe_response(&self, observation: crate::runtime::processor_v2::ResponseObservationV2) {
+        if let Some(write) = observation.write_projection() {
+            self.observe_response_write(write);
+        }
+        self.state
+            .terminal_observations
+            .lock()
+            .expect("terminal observation lock")
             .push(observation);
         self.state.observed.notify_one();
     }

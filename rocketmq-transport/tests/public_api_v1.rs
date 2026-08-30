@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(
+    deprecated,
+    reason = "this integration test intentionally freezes the deprecated V1 public compatibility surface"
+)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -127,6 +132,10 @@ fn assert_v1_request_context_method_signatures(context: &RequestContext) {
     let _ = context;
 }
 
+#[allow(
+    deprecated,
+    reason = "the V1 public API contract intentionally freezes deprecated compatibility signatures"
+)]
 fn assert_v1_response_context_method_signatures(context: &ConnectionHandlerContext) {
     let command = rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(1);
     let write = context.try_write_response(command);

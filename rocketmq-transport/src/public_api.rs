@@ -65,6 +65,7 @@ pub use crate::discovery::http_tiny_client::HttpResult;
 pub use crate::discovery::http_tiny_client::HttpTinyClient;
 pub use crate::discovery::name_server_update_callback::NameServerUpdateCallback;
 pub use crate::discovery::top_addressing::TopAddressing;
+#[deprecated(since = "1.0.0", note = "Use `api::v2::AuthorizedCommandDispatcherV2` instead")]
 pub use crate::dispatch::AuthorizedCommandDispatcher;
 pub use crate::dispatch::AuthorizedDispatchBoundary;
 pub use crate::dispatch::DispatchError;
@@ -115,14 +116,18 @@ pub use crate::runtime::config::client_config::ConnectConfig;
 pub use crate::runtime::config::client_config::GoAwayPolicy;
 pub use crate::runtime::config::client_config::MaintenanceConfig;
 pub use crate::runtime::config::client_config::TransportClientConfig;
+#[deprecated(since = "1.0.0", note = "Use `api::v2::RemotingRequest` instead")]
 pub use crate::runtime::connection_handler_context::ConnectionHandlerContext;
+#[deprecated(since = "1.0.0", note = "Use `api::v2::RemotingRequest` instead")]
 pub use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 pub use crate::runtime::connection_handler_context::LegacySessionCleanupEnrollment;
 pub use crate::runtime::connection_handler_context::LegacySessionCleanupInstallError;
 pub use crate::runtime::connection_handler_context::LegacySessionExecutionEnrollment;
 pub use crate::runtime::connection_handler_context::LegacySessionExecutionSubmitError;
+#[deprecated(since = "1.0.0", note = "Use `api::v2::LocalRequestProcessorV2` instead")]
 pub use crate::runtime::processor::LocalRequestProcessor;
 pub use crate::runtime::processor::RejectRequestResponse;
+#[deprecated(since = "1.0.0", note = "Use `api::v2::RequestProcessorV2` instead")]
 pub use crate::runtime::processor::RequestProcessor;
 pub use crate::runtime::processor::ResponseWriteObservation;
 pub use crate::runtime::processor::ResponseWriteOutcome;

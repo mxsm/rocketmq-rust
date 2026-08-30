@@ -22,6 +22,9 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseSink;
+use crate::runtime::processor_v2::ResponseObservationModeV2;
+use crate::runtime::processor_v2::ResponseObservationOutcomeV2;
+use crate::runtime::processor_v2::ResponseObservationV2;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -35,6 +38,8 @@ struct RegistryDeferredProcessor {
     registry: DeferredRegistry<String>,
     admission: DeferredAdmission,
     registered_id: Arc<Mutex<Option<DeferredId>>>,
+    observations: Arc<Mutex<Vec<ResponseObservationV2>>>,
+    commit_checkpoint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
 
 #[derive(Clone)]
@@ -121,15 +126,25 @@ impl RequestProcessorV2 for RegistryDeferredProcessor {
             .admission
             .try_reserve(retained)
             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
+        let mut registration = self
             .registry
             .register(DeferredRequest::new(
                 "dispatcher-owned deferred resume".to_owned(),
                 DeferredParts::new(responder, permit),
             ))
             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        if let Some(checkpoint) = self.commit_checkpoint.clone() {
+            registration.set_commit_checkpoint(move || checkpoint());
+        }
         *self.registered_id.lock().expect("registered deferred id lock") = Some(registration.deferred_id());
         Ok(HandlerOutcome::Deferred(registration))
+    }
+
+    fn observe_response(&self, observation: ResponseObservationV2) {
+        self.observations
+            .lock()
+            .expect("deferred observation lock")
+            .push(observation);
     }
 }
 
@@ -195,11 +210,14 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
     .expect("configure deferred registry admission");
     let registry = DeferredRegistry::<String>::new();
     let registered_id = Arc::new(Mutex::new(None));
+    let observations = Arc::new(Mutex::new(Vec::new()));
     let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
         RegistryDeferredProcessor {
             registry: registry.clone(),
             admission: admission.clone(),
             registered_id: Arc::clone(&registered_id),
+            observations: Arc::clone(&observations),
+            commit_checkpoint: None,
         },
         Vec::new(),
     ));
@@ -226,6 +244,10 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
     assert_eq!(registry.test_claim_marker_count(), 0);
     assert_eq!(admission.snapshot().waiting_count(), 1);
     assert!(admission.snapshot().retained_bytes() > 0);
+    assert!(
+        observations.lock().expect("deferred observation lock").is_empty(),
+        "durable registration is not a terminal response observation"
+    );
     let claimed = registry
         .claim(id, crate::dispatch::DeferredWakeReason::MessageArrived)
         .await
@@ -264,6 +286,15 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         .expect("resume should use the same session executor and writer");
     assert_eq!(receipt.request_id(), original.request_id());
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    {
+        let observed = observations.lock().expect("deferred observation lock");
+        assert_eq!(observed.len(), 1, "deferred completion is observed exactly once");
+        assert_eq!(observed[0].metadata().mode(), ResponseObservationModeV2::Deferred);
+        assert!(matches!(
+            observed[0].metadata().outcome(),
+            ResponseObservationOutcomeV2::Written(observed_receipt) if observed_receipt == receipt
+        ));
+    }
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
     assert_eq!(registry.test_claim_marker_count(), 0);
     assert_eq!(admission.snapshot().waiting_count(), 0);
@@ -289,6 +320,65 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
     harness.shutdown().await;
 }
 
+#[tokio::test]
+async fn deferred_commit_session_close_balances_armed_metrics_without_recording_registration() {
+    let harness = DispatchHarness::new("dispatch-v2-deferred-commit-session-close").await;
+    let admission = DeferredAdmission::try_configure(
+        harness.admission_controller.as_ref(),
+        DeferredWaitLimits::new(4, 1024 * 1024),
+    )
+    .expect("configure deferred registry admission");
+    let registry = DeferredRegistry::<String>::new();
+    let registered_id = Arc::new(Mutex::new(None));
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let (telemetry, metric_adjustments, registered_events) = TransportTelemetry::with_v2_deferred_metric_capture();
+    let commit_session = harness.session.clone();
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new_with_telemetry(
+        RegistryDeferredProcessor {
+            registry: registry.clone(),
+            admission: admission.clone(),
+            registered_id: Arc::clone(&registered_id),
+            observations: Arc::clone(&observations),
+            commit_checkpoint: Some(Arc::new(move || commit_session.abort())),
+        },
+        Vec::new(),
+        telemetry,
+    ));
+    let command = request(false);
+    let (session, _original) = harness.request_session(&command);
+
+    let outcome = dispatcher
+        .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
+        .await
+        .expect("request admission succeeds before deferred commit");
+    assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+    dispatcher.wait_for_failure_report().await;
+    harness.drain_requests().await;
+
+    assert_eq!(dispatcher.reported_failure_categories(), ["session_closed"]);
+    assert_eq!(registered_events.load(Ordering::SeqCst), 0);
+    {
+        let adjustments = metric_adjustments.lock();
+        assert_eq!(adjustments.as_slice(), &[(1, 256), (-1, -256)]);
+        assert_eq!(adjustments.iter().map(|(inflight, _)| inflight).sum::<i64>(), 0);
+        assert_eq!(adjustments.iter().map(|(_, bytes)| bytes).sum::<i64>(), 0);
+    }
+    {
+        let observed = observations.lock().expect("deferred observation lock");
+        assert_eq!(observed.len(), 1, "commit failure publishes one terminal observation");
+        assert!(matches!(
+            observed[0].metadata().outcome(),
+            ResponseObservationOutcomeV2::Cancelled(crate::dispatch::DeferredTerminalReason::SessionClosed)
+        ));
+    }
+    assert_eq!(registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(admission.snapshot().retained_bytes(), 0);
+    drop(dispatcher);
+    drop(registry);
+    harness.shutdown().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_response() {
     let mut harness = DispatchHarness::new("dispatch-v2-deferred-resume-deadline").await;
@@ -299,11 +389,14 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
     .expect("configure deferred registry admission");
     let registry = DeferredRegistry::<String>::new();
     let registered_id = Arc::new(Mutex::new(None));
+    let observations = Arc::new(Mutex::new(Vec::new()));
     let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
         RegistryDeferredProcessor {
             registry: registry.clone(),
             admission: admission.clone(),
             registered_id: Arc::clone(&registered_id),
+            observations: Arc::clone(&observations),
+            commit_checkpoint: None,
         },
         Vec::new(),
     ));
@@ -552,6 +645,77 @@ async fn queued_deadline_expiry_suppresses_original_oneway_before_binding_or_wri
     assert_eq!(state.clones.load(Ordering::SeqCst), 2);
     assert_eq!(state.processes.load(Ordering::SeqCst), 1);
     assert_eq!(state.observations.lock().expect("observation lock").len(), 1);
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancellation_during_processor_wait_binds_one_terminal_observer_without_an_extra_clone() {
+    let mut harness = DispatchHarness::new("dispatch-v2-cancel-in-process-observation").await;
+    let (processor, state) = TestProcessor::new(Behavior::WaitReply);
+    let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        TestProcessor::new(Behavior::Reply).0,
+        Vec::new(),
+    ));
+    let command = request(false);
+    let (session, original) = harness.request_session(&command);
+    let builder = RemotingRequestBuilder::new(
+        original,
+        Instant::now(),
+        harness.context(None),
+        RequestLifecycleProvenance::from_network_session(&session),
+        command,
+    );
+    let per_request_processor = processor.clone();
+    let remote_address = session.remote_addr();
+    let execution = tokio::spawn(async move {
+        dispatcher
+            .execute_admitted(
+                ExplicitV2Processor::new(per_request_processor),
+                session,
+                AdmissionClass::Data,
+                original,
+                remote_address,
+                Instant::now(),
+                builder,
+            )
+            .await
+    });
+    state.entered.notified().await;
+    execution.abort();
+    assert!(execution.await.expect_err("cancel admitted task").is_cancelled());
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let notified = state.observed.notified();
+            if state
+                .terminal_observations
+                .lock()
+                .expect("terminal observation lock")
+                .len()
+                == 1
+            {
+                break;
+            }
+            notified.await;
+        }
+    })
+    .await
+    .expect("cancelled terminal observation");
+
+    {
+        let observations = state.terminal_observations.lock().expect("terminal observation lock");
+        assert_eq!(observations.len(), 1);
+        assert!(matches!(
+            observations[0].metadata().outcome(),
+            ResponseObservationOutcomeV2::Failed {
+                kind: None,
+                progress: Some(WriteProgress::NotStarted),
+            }
+        ));
+    }
+    assert_eq!(state.clones.load(Ordering::SeqCst), 1);
+    assert_eq!(state.processes.load(Ordering::SeqCst), 1);
+
+    harness.assert_no_response().await;
     harness.shutdown().await;
 }
 

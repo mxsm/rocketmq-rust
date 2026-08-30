@@ -550,13 +550,13 @@ where
         Some(entry)
     }
 
-    pub(in crate::dispatch) fn remove_session(&self, session_id: SessionId) {
+    pub(in crate::dispatch) fn remove_session(&self, session_id: SessionId) -> usize {
         #[cfg(test)]
         self.session_cleanup_calls.fetch_add(1, Ordering::SeqCst);
         let batch = {
             let mut state = self.state.lock();
             let Some(ids) = state.session_index.remove(&session_id) else {
-                return;
+                return 0;
             };
             let mut batch = DetachedBatch::default();
             for id in ids {
@@ -574,7 +574,9 @@ where
             }
             batch
         };
+        let removed_waiters = batch.waiter_count();
         let _ = batch.finish();
+        removed_waiters
     }
 
     pub(super) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
@@ -964,6 +966,10 @@ impl<R> DetachedBatch<R>
 where
     R: Send + 'static,
 {
+    fn waiter_count(&self) -> usize {
+        self.entries.len().saturating_add(self.markers.len())
+    }
+
     pub(super) fn push_entry(&mut self, entry: Entry<R>, fallback: CleanupCause) {
         let cause = match fallback {
             CleanupCause::SessionClosed if entry.control.parent_is_cancelled() => CleanupCause::ParentCancelled,

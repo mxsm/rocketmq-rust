@@ -204,6 +204,10 @@ impl RemotingRequestBuilder {
         self.meta.deadline()
     }
 
+    pub(crate) const fn received_at(&self) -> Instant {
+        self.meta.received_at()
+    }
+
     pub(crate) const fn command(&self) -> &RemotingCommand {
         &self.command
     }
@@ -217,6 +221,14 @@ impl RemotingRequestBuilder {
 
     pub(crate) const fn principal(&self) -> Option<&rocketmq_security_api::Principal> {
         self.authentication.principal()
+    }
+
+    pub(crate) const fn origin(&self) -> &crate::dispatch::RequestOrigin {
+        &self.origin
+    }
+
+    pub(crate) const fn authentication(&self) -> &crate::dispatch::AuthenticationState {
+        &self.authentication
     }
 
     pub(crate) fn build(self) -> Result<RemotingRequest, RemotingRequestBuildError> {

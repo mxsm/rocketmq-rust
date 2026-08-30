@@ -37,6 +37,8 @@ pub struct ShutdownReport {
     pub cancelled: usize,
     /// The aborted value.
     pub aborted: usize,
+    /// Lifecycle components that completed with an explicit failure.
+    pub failed: usize,
     /// The panicked value.
     pub panicked: usize,
     /// The timed out value.
@@ -66,6 +68,7 @@ impl ShutdownReport {
             completed: 0,
             cancelled: 0,
             aborted: 0,
+            failed: 0,
             panicked: 0,
             timed_out: 0,
             leaked: 0,
@@ -81,6 +84,7 @@ impl ShutdownReport {
     /// Returns whether healthy.
     pub fn is_healthy(&self) -> bool {
         self.leaked == 0
+            && self.failed == 0
             && self.panicked == 0
             && self.timed_out == 0
             && self.blocking_still_running == 0
@@ -171,5 +175,19 @@ mod duration_millis {
         S: Serializer,
     {
         serializer.serialize_u64(duration.as_millis() as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_component_failure_makes_the_report_unhealthy() {
+        let mut report = ShutdownReport::new("failed-component", Duration::ZERO);
+        report.failed = 1;
+
+        assert!(!report.is_healthy());
+        assert!(report.to_json().contains("\"failed\": 1"));
     }
 }

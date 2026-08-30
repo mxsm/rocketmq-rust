@@ -66,8 +66,8 @@ fn combined_catalog_contains_every_semantic_metric_once() {
         .collect::<HashSet<_>>();
 
     assert_eq!(JAVA_METRICS.len(), 94);
-    assert_eq!(RUST_METRICS.len(), 122);
-    assert_eq!(combined.len(), 216, "duplicate metric names across catalogs");
+    assert_eq!(RUST_METRICS.len(), 129);
+    assert_eq!(combined.len(), 223, "duplicate metric names across catalogs");
 }
 
 #[test]

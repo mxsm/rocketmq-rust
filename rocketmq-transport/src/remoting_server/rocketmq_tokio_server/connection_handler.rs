@@ -87,6 +87,8 @@ pub(crate) struct V2NetworkRouteState {
     _shutdown_complete: mpsc::Sender<()>,
     endpoint: V2NetworkSession,
     deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner,
+    #[cfg(test)]
+    _panicking_cleanup: Option<crate::dispatch::LegacySessionCleanupEnrollment>,
 }
 
 impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
@@ -113,7 +115,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
             endpoint: endpoint.clone(),
             _shutdown_complete: self.shutdown_complete_tx.clone(),
         };
-        let event_channel = context.channel().clone();
+        let event_channel = context.legacy_channel().clone();
         self.sessions.insert(session.session_id(), remoting_session);
         if let Some(publisher) = &self.event_publisher {
             let outcome = publisher
@@ -151,7 +153,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
             if command_interceptor.intercept(
                 command.code(),
                 command.opaque(),
-                state.context.channel().clone(),
+                state.context.legacy_channel().clone(),
                 session.task_group().clone(),
             ) {
                 return true;
@@ -182,7 +184,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
         debug_assert!(remoting_session.endpoint.owner().same_owner(state.endpoint.owner()));
         let channel_report = remoting_session
             .context
-            .channel()
+            .legacy_channel()
             .close_with_report(Duration::from_secs(3))
             .await;
         channel_report.log_if_unhealthy();
@@ -194,7 +196,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                 .publish(TokioEvent::new(
                     ConnectionNetEvent::DISCONNECTED,
                     session.remote_addr(),
-                    remoting_session.context.channel().clone(),
+                    remoting_session.context.legacy_channel().clone(),
                 ))
                 .await;
             if !outcome.is_queued() {
@@ -250,13 +252,20 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for Con
         .await
     }
 
-    fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
-        let _ = state.deferred_cleanup.close();
+    fn close_pending(
+        &self,
+        state: &Self::SessionState,
+        _session: crate::server::SessionHandle,
+    ) -> crate::dispatch::DeferredSessionCleanupReport {
+        let report = state.deferred_cleanup.close();
         self.dispatcher.close_network_session(&state.endpoint);
+        report
     }
 
-    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) {
+    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) -> usize {
+        let cleanup = state.deferred_cleanup.clone();
         self.disconnected_state(state, session).await;
+        cleanup.remaining_wait_permits()
     }
 }
 
@@ -268,13 +277,39 @@ where
 
     async fn connected(&self, session: crate::server::SessionHandle) -> Option<Self::SessionState> {
         let endpoint = self.dispatcher.open_network_session();
+        let deferred_cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id());
+        #[cfg(test)]
+        let panicking_cleanup = if self
+            .session_registry
+            .as_ref()
+            .is_some_and(|registry| registry.take_cleanup_panic_for_test())
+        {
+            let capability = crate::dispatch::LegacySessionCleanupCapability::new(deferred_cleanup.registration());
+            let mut enrollment = None;
+            capability
+                .install(
+                    || panic!("test legacy session cleanup panic"),
+                    |cleanup| {
+                        enrollment = Some(cleanup);
+                        Ok::<_, ((), crate::dispatch::LegacySessionCleanupEnrollment)>(())
+                    },
+                )
+                .expect("test cleanup panic enrollment");
+            enrollment
+        } else {
+            None
+        };
         if let Some(registry) = &self.session_registry {
-            registry.register(&session, endpoint.response_table().clone(), endpoint.owner().clone());
+            if !registry.register(&session, endpoint.response_table().clone(), endpoint.owner().clone()) {
+                return None;
+            }
         }
         Some(V2NetworkRouteState {
             _shutdown_complete: self.shutdown_complete_tx.clone(),
             endpoint,
-            deferred_cleanup: crate::dispatch::DeferredSessionCleanupOwner::new(session.session_view().id()),
+            deferred_cleanup,
+            #[cfg(test)]
+            _panicking_cleanup: panicking_cleanup,
         })
     }
 
@@ -314,18 +349,26 @@ where
             .is_ok()
     }
 
-    fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
+    fn close_pending(
+        &self,
+        state: &Self::SessionState,
+        _session: crate::server::SessionHandle,
+    ) -> crate::dispatch::DeferredSessionCleanupReport {
+        let report = state.deferred_cleanup.close();
         self.dispatcher.close_network_session(&state.endpoint);
-        let _ = state.deferred_cleanup.close();
+        report
     }
 
-    async fn disconnected(&self, _state: Self::SessionState, session: crate::server::SessionHandle) {
+    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) -> usize {
+        let cleanup = state.deferred_cleanup.clone();
+        drop(state);
         if let Some(registry) = &self.session_registry {
             registry.unregister(&session);
         }
         if let Some(notify) = &self.conn_disconnect_notify {
             let _ = notify.send(session.remote_addr());
         }
+        cleanup.remaining_wait_permits()
     }
 }
 
@@ -374,12 +417,19 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> AuthorizedFrameRoute for Int
             .await
     }
 
-    fn close_pending(&self, state: &Self::SessionState, _session: crate::server::SessionHandle) {
-        let _ = state.deferred_cleanup.close();
+    fn close_pending(
+        &self,
+        state: &Self::SessionState,
+        _session: crate::server::SessionHandle,
+    ) -> crate::dispatch::DeferredSessionCleanupReport {
+        let report = state.deferred_cleanup.close();
         self.inner.dispatcher.close_network_session(&state.endpoint);
+        report
     }
 
-    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) {
+    async fn disconnected(&self, state: Self::SessionState, session: crate::server::SessionHandle) -> usize {
+        let cleanup = state.deferred_cleanup.clone();
         self.inner.disconnected_state(state, session).await;
+        cleanup.remaining_wait_permits()
     }
 }

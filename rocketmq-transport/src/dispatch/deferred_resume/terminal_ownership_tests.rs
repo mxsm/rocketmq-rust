@@ -27,14 +27,24 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskKind;
+use rocketmq_security_api::PeerInfo;
 use tokio::sync::Notify;
+use tracing::span::Attributes;
+use tracing::span::Id;
+use tracing::span::Record;
+use tracing::Event;
+use tracing::Metadata;
+use tracing::Subscriber;
 
 use super::execute_work;
+use super::DeferredResumeWork;
 use super::ResumeStopView;
+use super::ResumeWorkImpl;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::admission::AdmissionScope;
+use crate::dispatch::AuthenticationState;
 use crate::dispatch::ClaimedDeferred;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredParts;
@@ -47,6 +57,7 @@ use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
+use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseSink;
 use crate::request_ordering::RequestOrdering;
@@ -54,6 +65,32 @@ use crate::session_executor::DeferredResumeExecutor;
 use crate::session_executor::SessionExecutor;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
+
+struct FixedSpanSubscriber {
+    entered: Arc<AtomicUsize>,
+}
+
+impl Subscriber for FixedSpanSubscriber {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _attributes: &Attributes<'_>) -> Id {
+        Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &Id) {
+        self.entered.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn exit(&self, _span: &Id) {}
+}
 
 async fn claimed_for_terminal_test(
     sink: ResponseSink,
@@ -97,6 +134,78 @@ fn response_plan() -> RocketMQResult<ResponsePlan> {
         ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
             .expect("terminal ownership response plan"),
     )
+}
+
+#[tokio::test]
+async fn claimed_resume_handler_reenters_the_original_request_span() {
+    let runtime =
+        RuntimeOwner::new(RuntimeConfig::server_default("deferred-resume-request-span")).expect("request span runtime");
+    let parent = runtime.root_context().component("request-span").task_group().clone();
+    let session = EmbeddedSessionRecord::new(98_332);
+    let control = RequestControlView::from_meta(
+        &RequestMeta::new(Instant::now(), None),
+        session.view().state().clone(),
+        &parent,
+    );
+    let original = OriginalRequestIdentity::capture(
+        98_332,
+        &AtomicU64::new(1),
+        &RemotingCommand::create_remoting_command(39).set_opaque(835),
+    )
+    .expect("request span identity");
+    let entered = Arc::new(AtomicUsize::new(0));
+    let dispatch = tracing::Dispatch::new(FixedSpanSubscriber {
+        entered: Arc::clone(&entered),
+    });
+    let span = tracing::dispatcher::with_default(&dispatch, || tracing::info_span!("test-v2-request"));
+    assert_eq!(span.id().expect("test request span id").into_u64(), 1);
+    let observation = TransportTelemetry::noop()
+        .begin_v2_observation(
+            original,
+            Instant::now(),
+            &RequestOrigin::Network {
+                peer: PeerInfo::new("127.0.0.1:10911".parse().expect("test peer"), false),
+            },
+            &AuthenticationState::Anonymous,
+            None,
+            0,
+        )
+        .with_span_for_test(span);
+    observation.bind_response_observer(|_| {});
+    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let responder = sink
+        .deferred_seed_for_test(TransportTelemetry::noop(), session.view().id(), control)
+        .with_observation(observation)
+        .into_responder(original);
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = DeferredAdmission::try_configure(&controller, DeferredWaitLimits::new(1, 4096))
+        .expect("request span admission");
+    let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
+        .expect("request span retained size");
+    let permit = admission.try_reserve(retained).expect("request span wait permit");
+    let registry = DeferredRegistry::new();
+    let registration = registry
+        .register(DeferredRequest::new((), DeferredParts::new(responder, permit)))
+        .expect("request span registration");
+    let id = registration.deferred_id();
+    registration.commit().expect("publish request span registration");
+    let claim = registry
+        .claim(id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("claim request span registration");
+    let parts = claim.into_execution_parts();
+    let stop_view = ResumeStopView::from_execution_parts(&parts);
+    let work: Box<dyn DeferredResumeWork> = Box::new(ResumeWorkImpl {
+        parts: Some(parts),
+        handler: Some(move |(), _reason| async move { response_plan() }),
+        stop_view,
+    });
+
+    work.execute().await.expect("claimed resume response");
+    assert!(
+        entered.load(Ordering::Acquire) > 0,
+        "claimed resume work must enter the observation's original request span"
+    );
 }
 
 struct ReadyRetainedFuture {

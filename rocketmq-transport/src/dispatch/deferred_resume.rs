@@ -26,6 +26,7 @@ use parking_lot::Mutex;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::OperationContext;
 use tokio::sync::Notify;
+use tracing::Instrument;
 
 use super::authorized_dispatcher::admission_response;
 use super::deferred_registry::ClaimExecutionParts;
@@ -524,11 +525,18 @@ where
     }
 
     fn execute(mut self: Box<Self>) -> WorkFuture {
-        Box::pin(async move {
-            let parts = self.parts.take().expect("resume work owns claimed parts");
-            let handler = self.handler.take().expect("resume work owns its handler");
-            execute_work(parts, handler, self.stop_view.clone()).await
-        })
+        let span = self
+            .parts
+            .as_ref()
+            .map_or_else(tracing::Span::none, |parts| parts.responder.request_span());
+        Box::pin(
+            async move {
+                let parts = self.parts.take().expect("resume work owns claimed parts");
+                let handler = self.handler.take().expect("resume work owns its handler");
+                execute_work(parts, handler, self.stop_view.clone()).await
+            }
+            .instrument(span),
+        )
     }
 
     fn reject(mut self: Box<Self>, error: AdmissionError) -> WorkFuture {
@@ -1339,14 +1347,25 @@ mod tests {
         assert!(submitted.is_ok(), "resume task must be accepted");
         drop(cell);
         first_poll_entered.notified().await;
-        let report = executor.drain_until(ShutdownDeadline::after(Duration::ZERO)).await;
-        assert_eq!(report.aborted, 1);
+        let report = executor
+            .drain_report_until(ShutdownDeadline::after(Duration::ZERO))
+            .await;
+        assert_eq!(report.active_inline_tasks, 0);
+        assert_eq!(report.active_resume_tasks, 1);
+        assert_eq!(report.remaining_inline_tasks, 0);
+        assert_eq!(report.remaining_resume_tasks, 1);
+        assert_eq!(report.shutdown.aborted, 1);
         let error = completion.wait().await.expect_err("aborted owner terminalizes the job");
         assert_eq!(error.kind(), DeferredResumeErrorKind::ExecutorClosing);
         assert_eq!(
             error.prior_terminal_reason(),
             Some(DeferredTerminalReason::ServiceStopping)
         );
+        let settled = executor
+            .drain_report_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        assert_eq!(settled.remaining_inline_tasks, 0);
+        assert_eq!(settled.remaining_resume_tasks, 0);
     }
 
     #[tokio::test]
@@ -1368,6 +1387,69 @@ mod tests {
             .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
             .await;
         assert_eq!(report.aborted, 0);
+    }
+
+    #[tokio::test]
+    async fn drain_report_separates_inline_and_resume_tasks_and_joins_both() {
+        let (_runtime, controller, executor) =
+            executor_with_limits("session-drain-composite-counts", AdmissionLimits::default());
+        let inline_entered = Arc::new(Notify::new());
+        let inline_release = Arc::new(Notify::new());
+        let task_inline_entered = Arc::clone(&inline_entered);
+        let task_inline_release = Arc::clone(&inline_release);
+        executor
+            .try_execute(
+                128,
+                AdmissionClass::Data,
+                None,
+                RequestOrdering::Concurrent,
+                move |_operation| async move {
+                    task_inline_entered.notify_one();
+                    task_inline_release.notified().await;
+                },
+                move |_operation, _error| async {},
+            )
+            .expect("inline request accepted");
+        inline_entered.notified().await;
+
+        let resume_release = Arc::new(Notify::new());
+        let (job, completion, _wait_released, resume_entered, _executions) =
+            probe_job(128, RequestOrdering::Concurrent, Some(Arc::clone(&resume_release)));
+        let cell = Arc::new(ResumeJobCell::new(job));
+        cell.release_wait_permit();
+        assert!(
+            executor
+                .deferred_resume_executor()
+                .try_execute_resume(Arc::clone(&cell))
+                .is_ok(),
+            "resume accepted"
+        );
+        drop(cell);
+        resume_entered.notified().await;
+
+        let release = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            inline_release.notify_one();
+            resume_release.notify_one();
+        });
+        let report = executor
+            .drain_report_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        release.await.expect("release task");
+        assert_eq!(report.active_inline_tasks, 1);
+        assert_eq!(report.active_resume_tasks, 1);
+        assert_eq!(report.remaining_inline_tasks, 0);
+        assert_eq!(report.remaining_resume_tasks, 0);
+        assert_eq!(report.shutdown.completed, 2);
+        assert!(report.is_healthy());
+        assert_eq!(
+            completion.wait().await.expect_err("probe response").kind(),
+            DeferredResumeErrorKind::Response
+        );
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.queued.current_count, 0);
+        assert_eq!(snapshot.inflight.current_count, 0);
+        assert_eq!(snapshot.processors.current_count, 0);
     }
 
     #[tokio::test]

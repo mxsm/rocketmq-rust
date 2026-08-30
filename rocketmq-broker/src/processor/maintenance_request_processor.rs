@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::RemotingAuthContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -49,8 +50,10 @@ use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_remark;
+use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::HandlerOutcome;
 use rocketmq_transport::api::v2::RemotingRequest;
+use rocketmq_transport::api::v2::RequestOrigin;
 use rocketmq_transport::api::v2::RequestProcessorV2;
 
 use crate::config::broker_config::BrokerConfig;
@@ -123,7 +126,7 @@ impl MaintenanceRequestProcessor {
         Ok(response.set_opaque(request.opaque()))
     }
 
-    fn authorize_v2(
+    async fn authorize_v2(
         &self,
         request: &RemotingRequest,
         original_code: i32,
@@ -133,13 +136,29 @@ impl MaintenanceRequestProcessor {
                 "Broker maintenance API is disabled",
             ));
         }
-        let principal = request
-            .authentication()
-            .principal()
-            .ok_or_else(|| RocketMQError::authentication_failed("maintenance request is anonymous"))?;
         let mut authoritative_command = request.command().clone();
         authoritative_command.set_code_mut(original_code);
-        self.authorize_principal(principal.id(), &authoritative_command)
+        let principal = match request.origin() {
+            RequestOrigin::Network { .. } => {
+                let auth_context = RemotingAuthContext::from_request(request)?;
+                self.auth_runtime
+                    .authenticate_maintenance_principal(&authoritative_command, auth_context.channel_id())
+                    .await?
+            }
+            RequestOrigin::Embedded {
+                caller: EmbeddedCaller::BrokerProxy,
+            } => request
+                .authentication()
+                .principal()
+                .map(|principal| principal.id().into())
+                .ok_or_else(|| RocketMQError::authentication_failed("maintenance request is anonymous"))?,
+            _ => {
+                return Err(RocketMQError::authentication_failed(
+                    "maintenance request origin is not authorized",
+                ));
+            }
+        };
+        self.authorize_principal(principal.as_str(), &authoritative_command)
     }
 
     fn authorize_principal(
@@ -272,7 +291,7 @@ impl MaintenanceRequestProcessor {
     pub(crate) async fn process_v2_shared(&self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let original_code = request.original_identity().original_code();
-        let result = match self.authorize_v2(request, original_code) {
+        let result = match self.authorize_v2(request, original_code).await {
             Ok(grant) => self
                 .process_authorized(&grant, RequestCode::from(original_code), request.command_mut())
                 .await
@@ -439,13 +458,17 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::Weak;
+    use std::time::Duration;
 
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use rocketmq_auth::cal_signature;
     use rocketmq_auth::AuthConfig;
     use rocketmq_auth::AuthRuntimeBuilder;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
     use rocketmq_security_api::AuthenticatedRequestContext;
     use rocketmq_security_api::Decision;
     use rocketmq_security_api::MaintenancePolicy;
@@ -463,10 +486,15 @@ mod tests {
     use rocketmq_transport::api::v1::AdmissionController;
     use rocketmq_transport::api::v1::AdmissionLimits;
     use rocketmq_transport::api::v1::RPCHook;
+    use rocketmq_transport::api::v1::ServerConfig;
     use rocketmq_transport::api::v1::TransportSecurity;
     use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
     use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::test_support::Connection;
     use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use tokio::net::TcpStream;
+    use tokio::sync::oneshot;
 
     use super::*;
 
@@ -521,10 +549,19 @@ mod tests {
         }
     }
 
+    fn maintenance_auth_config() -> AuthConfig {
+        AuthConfig {
+            authentication_enabled: true,
+            authorization_enabled: true,
+            init_authentication_user: CheetahString::from_static_str("release-operator:secret"),
+            ..AuthConfig::default()
+        }
+    }
+
     async fn maintenance_processor_for_test() -> MaintenanceRequestProcessor {
         let service_context = crate::test_service_context("maintenance-v2");
         let auth_runtime = Arc::new(
-            AuthRuntimeBuilder::new(AuthConfig::default(), service_context.component("auth"))
+            AuthRuntimeBuilder::new(maintenance_auth_config(), service_context.component("auth"))
                 .build()
                 .await
                 .expect("build maintenance auth runtime"),
@@ -554,7 +591,7 @@ mod tests {
     ) -> (MaintenanceRequestProcessor, Arc<StorePorts>, tempfile::TempDir) {
         let service_context = crate::test_service_context("maintenance-v2-original-code");
         let auth_runtime = Arc::new(
-            AuthRuntimeBuilder::new(AuthConfig::default(), service_context.component("auth"))
+            AuthRuntimeBuilder::new(maintenance_auth_config(), service_context.component("auth"))
                 .build()
                 .await
                 .expect("build maintenance auth runtime"),
@@ -688,6 +725,30 @@ mod tests {
         .set_opaque(opaque)
     }
 
+    fn sign_maintenance_request(mut command: RemotingCommand, access_key: &str, secret: &str) -> RemotingCommand {
+        command.make_custom_header_to_net();
+        command.ensure_ext_fields_initialized();
+        command.add_ext_field("AccessKey", access_key);
+        let mut fields = command
+            .ext_fields()
+            .cloned()
+            .expect("maintenance request fields")
+            .into_iter()
+            .filter(|(key, _)| key.as_str() != "Signature")
+            .collect::<Vec<_>>();
+        fields.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut content = Vec::new();
+        for (_, value) in fields {
+            content.extend_from_slice(value.as_bytes());
+        }
+        if let Some(body) = command.body() {
+            content.extend_from_slice(body);
+        }
+        let signature = cal_signature(content.as_slice(), secret).expect("maintenance signature");
+        command.add_ext_field("Signature", signature);
+        command
+    }
+
     #[tokio::test]
     async fn maintenance_v2_uses_authenticated_principal_for_authorization() {
         let processor = maintenance_processor_for_test().await;
@@ -710,6 +771,99 @@ mod tests {
         };
         assert_eq!(ResponseCode::from(denied.response_code()), ResponseCode::NoPermission);
         assert_eq!(denied.body_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn network_maintenance_uses_verified_credentials_not_bootstrap_authentication_state() {
+        const AUTHENTICATED_OPAQUE: i32 = 5_508;
+        const FORGED_OPAQUE: i32 = 5_509;
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("maintenance-v2-network-auth"))
+            .expect("maintenance network test runtime");
+        let server_context = owner.root_context().component("maintenance-v2-network-auth.server");
+        let runner_context = owner.root_context().component("maintenance-v2-network-auth.runner");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            maintenance_processor_for_test().await,
+            Vec::new(),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        ));
+        let server = TransportServerV2::new_with_authorized_dispatcher(
+            Arc::new(ServerConfig {
+                bind_address: "127.0.0.1".to_owned(),
+                listen_port: 0,
+                ..ServerConfig::default()
+            }),
+            server_context,
+            dispatcher,
+        );
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        let (startup_sender, startup_receiver) = oneshot::channel();
+        let (result_sender, result_receiver) = oneshot::channel();
+        runner_context
+            .spawn_service("maintenance-v2-network-server", async move {
+                let result = server
+                    .try_run_with_shutdown_report_and_startup(
+                        async move {
+                            let _ = shutdown_receiver.await;
+                        },
+                        startup_sender,
+                    )
+                    .await;
+                let _ = result_sender.send(result);
+            })
+            .expect("spawn maintenance V2 network server");
+
+        let address = startup_receiver
+            .await
+            .expect("maintenance V2 startup channel")
+            .expect("maintenance V2 server startup");
+        let mut client = Connection::new(
+            TcpStream::connect(address)
+                .await
+                .expect("connect maintenance V2 client"),
+        );
+
+        client
+            .send_command(sign_maintenance_request(
+                verify_request(AUTHENTICATED_OPAQUE),
+                "release-operator",
+                "secret",
+            ))
+            .await
+            .expect("send authenticated maintenance request");
+        let authenticated = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+            .await
+            .expect("authenticated maintenance response deadline")
+            .expect("authenticated maintenance connection remains open")
+            .expect("authenticated maintenance response frame");
+        assert_eq!(authenticated.opaque(), AUTHENTICATED_OPAQUE);
+        assert_eq!(ResponseCode::from(authenticated.code()), ResponseCode::Success);
+
+        let mut forged = verify_request(FORGED_OPAQUE);
+        forged.ensure_ext_fields_initialized();
+        forged.add_ext_field("principal", "release-operator");
+        let forged = sign_maintenance_request(forged, "release-operator", "wrong-secret");
+        client
+            .send_command(forged)
+            .await
+            .expect("send forged maintenance principal");
+        let denied = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+            .await
+            .expect("forged maintenance response deadline")
+            .expect("forged maintenance connection remains open")
+            .expect("forged maintenance response frame");
+        assert_eq!(denied.opaque(), FORGED_OPAQUE);
+        assert_eq!(ResponseCode::from(denied.code()), ResponseCode::NoPermission);
+
+        client.shutdown().await.expect("shutdown maintenance V2 client");
+        let _ = shutdown_sender.send(());
+        let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
+            .await
+            .expect("maintenance V2 shutdown deadline")
+            .expect("maintenance V2 shutdown result channel")
+            .expect("maintenance V2 shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(owner.shutdown_tasks().await.is_healthy());
     }
 
     #[tokio::test]

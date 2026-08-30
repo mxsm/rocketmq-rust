@@ -17,6 +17,11 @@
 pub use crate::api::v1::OneShotTransportClient;
 pub use crate::api::v1::RemotingClient;
 pub use crate::api::v1::RequestDeadline;
+#[allow(
+    deprecated,
+    reason = "the legacy prelude remains source-compatible until the V1 processor removal"
+)]
+#[deprecated(since = "1.0.0", note = "Import `api::v2::RequestProcessorV2` explicitly instead")]
 pub use crate::api::v1::RequestProcessor;
 pub use crate::api::v1::ServerConfig;
 pub use crate::api::v1::TransportClient;

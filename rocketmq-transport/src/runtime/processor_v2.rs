@@ -16,6 +16,7 @@
 
 use std::time::Duration;
 
+use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::HandlerOutcome;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::RemotingRequest;
@@ -61,6 +62,175 @@ pub enum ResponseWritePath {
     Inline,
     /// A deferred registration completed the response later.
     Deferred,
+}
+
+/// Lifecycle mode for a body-free V2 response observation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ResponseObservationModeV2 {
+    /// The request completed during inline dispatch.
+    Inline,
+    /// The request transferred response ownership and completed later.
+    Deferred,
+    /// The request intentionally produced no response frame.
+    NoResponse,
+}
+
+/// One typed V2 response lifecycle event.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ResponseObservationOutcomeV2 {
+    /// The canonical response owner reached its transport disposition.
+    Written(ResponseReceipt),
+    /// The immutable ingress request was one-way.
+    Oneway,
+    /// Protocol policy explicitly permits no response.
+    ProtocolNoResponse,
+    /// A deferred response ended without attempting a response plan.
+    Cancelled(DeferredTerminalReason),
+    /// Response processing or delivery failed with redacted metadata.
+    Failed {
+        /// Stable response failure category, when a response attempt existed.
+        kind: Option<ResponseErrorKind>,
+        /// Socket-write progress, when known.
+        progress: Option<WriteProgress>,
+    },
+}
+
+/// Body-free metadata for one V2 response lifecycle observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResponseMetadataV2 {
+    request_id: RequestId,
+    original_code: i32,
+    response_code: Option<i32>,
+    plan_kind: Option<ResponseBodyKind>,
+    mode: ResponseObservationModeV2,
+    outcome: ResponseObservationOutcomeV2,
+}
+
+impl ResponseMetadataV2 {
+    pub(crate) const fn new(
+        request_id: RequestId,
+        original_code: i32,
+        response_code: Option<i32>,
+        plan_kind: Option<ResponseBodyKind>,
+        mode: ResponseObservationModeV2,
+        outcome: ResponseObservationOutcomeV2,
+    ) -> Self {
+        Self {
+            request_id,
+            original_code,
+            response_code,
+            plan_kind,
+            mode,
+            outcome,
+        }
+    }
+
+    /// Returns the immutable process-local request identity.
+    #[must_use]
+    pub const fn request_id(self) -> RequestId {
+        self.request_id
+    }
+
+    /// Returns the original raw request code captured at ingress.
+    #[must_use]
+    pub const fn original_code(self) -> i32 {
+        self.original_code
+    }
+
+    /// Returns the response code without exposing a response command.
+    #[must_use]
+    pub const fn response_code(self) -> Option<i32> {
+        self.response_code
+    }
+
+    /// Returns the response plan's storage category without exposing its body.
+    #[must_use]
+    pub const fn plan_kind(self) -> Option<ResponseBodyKind> {
+        self.plan_kind
+    }
+
+    /// Returns the response lifecycle mode.
+    #[must_use]
+    pub const fn mode(self) -> ResponseObservationModeV2 {
+        self.mode
+    }
+
+    /// Returns the typed response lifecycle outcome.
+    #[must_use]
+    pub const fn outcome(self) -> ResponseObservationOutcomeV2 {
+        self.outcome
+    }
+}
+
+/// Body-free V2 response observation correlated to one request span.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResponseObservationV2 {
+    metadata: ResponseMetadataV2,
+    write_elapsed: Option<Duration>,
+    end_to_end_elapsed: Duration,
+}
+
+impl ResponseObservationV2 {
+    pub(crate) const fn new(
+        metadata: ResponseMetadataV2,
+        write_elapsed: Option<Duration>,
+        end_to_end_elapsed: Duration,
+    ) -> Self {
+        Self {
+            metadata,
+            write_elapsed,
+            end_to_end_elapsed,
+        }
+    }
+
+    /// Returns body-free response metadata.
+    #[must_use]
+    pub const fn metadata(self) -> ResponseMetadataV2 {
+        self.metadata
+    }
+
+    /// Returns canonical delivery time when a write was attempted.
+    #[must_use]
+    pub const fn write_elapsed(self) -> Option<Duration> {
+        self.write_elapsed
+    }
+
+    /// Returns elapsed time from trusted ingress to this observation.
+    #[must_use]
+    pub const fn end_to_end_elapsed(self) -> Duration {
+        self.end_to_end_elapsed
+    }
+
+    pub(crate) fn write_projection(self) -> Option<ResponseWriteObservationV2> {
+        let response_code = self.metadata.response_code?;
+        let body_kind = self.metadata.plan_kind?;
+        let path = match self.metadata.mode {
+            ResponseObservationModeV2::Inline => ResponseWritePath::Inline,
+            ResponseObservationModeV2::Deferred => ResponseWritePath::Deferred,
+            ResponseObservationModeV2::NoResponse => return None,
+        };
+        let outcome = match self.metadata.outcome {
+            ResponseObservationOutcomeV2::Written(receipt) => ResponseWriteOutcomeV2::Written(receipt),
+            ResponseObservationOutcomeV2::Failed {
+                kind: Some(kind),
+                progress,
+            } => ResponseWriteOutcomeV2::Failed { kind, progress },
+            ResponseObservationOutcomeV2::Oneway
+            | ResponseObservationOutcomeV2::ProtocolNoResponse
+            | ResponseObservationOutcomeV2::Cancelled(_)
+            | ResponseObservationOutcomeV2::Failed { kind: None, .. } => return None,
+        };
+        Some(ResponseWriteObservationV2 {
+            request_id: self.metadata.request_id,
+            original_code: self.metadata.original_code,
+            response_code,
+            body_kind,
+            path,
+            write_elapsed: self.write_elapsed.unwrap_or(Duration::ZERO),
+            end_to_end_elapsed: self.end_to_end_elapsed,
+            outcome,
+        })
+    }
 }
 
 /// Typed result recorded at the canonical response-write boundary.
@@ -295,6 +465,17 @@ pub trait LocalRequestProcessorV2 {
     /// contains no request body.
     fn request_ordering(&self, _ingress: IngressRequestView<'_>) -> RequestOrdering {
         default_request_ordering()
+    }
+
+    /// Observes V2 response lifecycle metadata without access to request or response bodies.
+    ///
+    /// The default preserves the existing write-observation callback for write
+    /// outcomes while allowing new implementations to observe deferred and
+    /// no-response terminal states exactly once.
+    fn observe_response(&self, observation: ResponseObservationV2) {
+        if let Some(write) = observation.write_projection() {
+            self.observe_response_write(write);
+        }
     }
 
     /// Observes one completed response write without retaining its payload.

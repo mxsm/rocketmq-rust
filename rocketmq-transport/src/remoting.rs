@@ -165,7 +165,7 @@ pub(crate) mod inner {
             if let Some(response) = legacy_rejection_response(request_processor.reject_request(request_code)) {
                 let response_code = response.code();
                 let write_started = Instant::now();
-                let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
+                let result = ctx.legacy_channel().send_command(response.set_opaque(opaque)).await;
                 request_processor.observe_response_write(ResponseWriteObservation {
                     request_code,
                     response_code,
@@ -194,7 +194,7 @@ pub(crate) mod inner {
             let exception = self
                 .do_before_rpc_hooks_with_snapshot(
                     hook_snapshot.as_deref(),
-                    ctx.channel().remote_address(),
+                    ctx.legacy_channel().remote_address(),
                     Some(&mut cmd),
                 )
                 .err();
@@ -208,7 +208,7 @@ pub(crate) mod inner {
             }
 
             let mut response = {
-                let channel = ctx.channel().clone();
+                let channel = ctx.legacy_channel().clone();
                 let ctx = ctx.clone();
                 match request_processor.process_request(channel, ctx, &mut cmd).await {
                     Ok(result) => result,
@@ -222,7 +222,7 @@ pub(crate) mod inner {
             let exception = self
                 .do_after_rpc_hooks_with_snapshot(
                     hook_snapshot.as_deref(),
-                    ctx.channel().remote_address(),
+                    ctx.legacy_channel().remote_address(),
                     &cmd,
                     response.as_mut(),
                 )
@@ -245,7 +245,7 @@ pub(crate) mod inner {
             };
             let response_code = response.code();
             let write_started = Instant::now();
-            let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
+            let result = ctx.legacy_channel().send_command(response.set_opaque(opaque)).await;
             request_processor.observe_response_write(ResponseWriteObservation {
                 request_code,
                 response_code,
@@ -279,15 +279,15 @@ pub(crate) mod inner {
         fn process_response_command(&self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
             let opaque = cmd.opaque();
             let code = cmd.code();
-            let completed = match ctx.channel().pending_request_owner() {
+            let completed = match ctx.legacy_channel().pending_request_owner() {
                 Some(owner) => self.response_table.complete_response_for_owner(owner, opaque, cmd),
                 None => self.response_table.complete_response(opaque, cmd),
             };
             if !completed {
                 warn!(
                     code,
-                    address = %ctx.channel().remote_address(),
-                    channel_id = %ctx.channel().channel_id(),
+                    address = %ctx.legacy_channel().remote_address(),
+                    channel_id = %ctx.legacy_channel().channel_id(),
                     "received response without a matching pending request",
                 );
             }
@@ -354,7 +354,7 @@ pub(crate) mod inner {
             if !oneway_rpc {
                 let response = crate::error_response::command_from_error(&exception_inner);
                 tokio::select! {
-                    result =ctx.channel().send_command(response.set_opaque(opaque)) => match result{
+                    result =ctx.legacy_channel().send_command(response.set_opaque(opaque)) => match result{
                         Ok(_) =>{},
                         Err(err) => {
                             match err {

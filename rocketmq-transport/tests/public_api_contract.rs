@@ -986,6 +986,22 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseMetadataV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseObservationModeV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseObservationOutcomeV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::runtime::processor_v2::ResponseObservationV2".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::runtime::processor_v2::ResponseWriteObservationV2".to_owned(),
         },
         PublicUse {

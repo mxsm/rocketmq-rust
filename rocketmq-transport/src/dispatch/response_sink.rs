@@ -382,7 +382,6 @@ impl ResponseSink {
         DeferredResponseSeed::new(self.clone(), telemetry, session_id, control)
     }
 
-    #[cfg(test)]
     pub(crate) fn terminal_state(&self) -> Option<ResponseTerminalState> {
         match self {
             Self::Network(session) => session.response_plan_context()?.terminal_state(),

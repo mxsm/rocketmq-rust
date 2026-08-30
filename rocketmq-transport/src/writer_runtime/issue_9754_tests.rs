@@ -60,6 +60,7 @@ use crate::write_result::WriterFailure;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
+use crate::write_strategy::ResponseQueueWaitObservation;
 
 struct DropLease {
     file: std::fs::File,
@@ -500,6 +501,68 @@ async fn successful_file_write_releases_its_lease_once_after_completion() {
     );
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(controller.snapshot().queued.current_count, 0);
+}
+
+#[tokio::test]
+async fn response_queue_wait_metric_excludes_non_response_writes() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let connection = Connection::new_with_plaintext_stream(SuccessfulTransport {
+        attempts: Arc::clone(&attempts),
+    });
+    let (frame_writer, _reader) = connection.into_session_io(admission.clone());
+    let mut config = queue_config();
+    config.batch.max_items = NonZeroUsize::new(2).expect("non-zero");
+    let (lanes, receivers) = writer_lanes(config);
+    let (generic, generic_completion) = queued_write_with_completion(
+        &admission,
+        "generic-request-write",
+        16,
+        Arc::new(QueuedWriteProgress::waiting()),
+    );
+    let (response, response_completion) = queued_write_with_completion(
+        &admission,
+        "response-write",
+        16,
+        Arc::new(QueuedWriteProgress::waiting()),
+    );
+    lanes
+        .try_send(AdmissionClass::Data, generic)
+        .expect("generic write queued");
+    lanes
+        .try_send(
+            AdmissionClass::Data,
+            response.with_response_queue_wait_observation(ResponseQueueWaitObservation::Response),
+        )
+        .expect("response write queued");
+    drop(lanes);
+    let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
+    let (state, _) = watch::channel(ConnectionState::Healthy);
+    let (telemetry, capture) = TransportTelemetry::with_v2_boundary_metric_capture();
+
+    run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state,
+        CancellationToken::new(),
+        telemetry,
+    )
+    .await;
+
+    generic_completion
+        .await
+        .expect("generic completion")
+        .expect("generic write succeeds");
+    response_completion
+        .await
+        .expect("response completion")
+        .expect("response write succeeds");
+    assert_eq!(capture.response_queue_waits(), 1);
+    assert!(attempts.load(Ordering::Acquire) >= 1);
 }
 
 #[tokio::test]

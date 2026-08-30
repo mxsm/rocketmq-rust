@@ -392,6 +392,17 @@ pub enum ResponseDisposition {
     InProcessAccepted,
 }
 
+impl ResponseDisposition {
+    /// Returns the stable low-cardinality delivery label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TransportWritten => "transport_written",
+            Self::InProcessAccepted => "in_process_accepted",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
