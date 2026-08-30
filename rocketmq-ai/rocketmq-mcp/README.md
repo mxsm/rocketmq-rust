@@ -2,9 +2,12 @@
 
 `rocketmq-mcp` is the Model Context Protocol server for RocketMQ-Rust AI SRE and diagnostics workflows. It exposes read-only RocketMQ context, diagnostic tools, and runbook prompts to MCP clients such as Claude Desktop, Cursor, Codex, and MCP Inspector.
 
-The frozen MCP 2025-11-25 contract is documented in `rocketmq-doc/en/07-rocketmq-mcp-contract-v2.md`.
-Production release gates, external-cluster expectations, and rollback guidance are documented in
-`docs/production-validation.md`.
+The frozen MCP 2025-11-25 contract is documented in the
+[MCP contract](../../rocketmq-doc/en/07-rocketmq-mcp-contract-v2.md).
+Production release gates, external-cluster expectations, and rollback guidance are documented in the
+[production validation guide](docs/production-validation.md).
+The checked-in surface and validation baseline are listed in the
+[implementation baseline](docs/implementation-baseline.md).
 
 ## What It Is
 
@@ -54,24 +57,27 @@ Both surfaces pass through the same authorization, audit, redaction, row-bound, 
 
 ## Build
 
-Run commands from the repository root.
+`rocketmq-mcp` is a standalone Cargo package. Unless a command says otherwise, run the commands below from the
+MCP crate root, `rocketmq-ai/rocketmq-mcp`, after changing to it from the repository root.
 
 ```bash
 cd rocketmq-ai/rocketmq-mcp
+cargo fmt --all -- --check
 cargo check --locked
 python scripts/check_read_only_boundary.py
 cargo test --locked
-cargo clippy --locked --all-targets --features streamable-http,otlp -- -D warnings
+cargo test --locked --all-features
+cargo clippy --locked --all-targets --features streamable-http -- -D warnings
 cargo doc --locked --no-deps
 ```
 
-Build the default stdio binary:
+From that same MCP crate root, build the default stdio binary:
 
 ```bash
 cargo build --locked --release
 ```
 
-Build with Streamable HTTP support:
+From that same MCP crate root, build with Streamable HTTP support:
 
 ```bash
 cargo build --locked --release --features streamable-http,otlp
@@ -82,7 +88,7 @@ cargo build --locked --release --features streamable-http,otlp
 Start from the checked-in example:
 
 ```bash
-rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml
+conf/mcp.example.toml
 ```
 
 Important fields:
@@ -147,8 +153,9 @@ ten-second compatibility wrapper and logs unhealthy reports.
 Command-line overrides:
 
 ```bash
-rocketmq-mcp --config rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml --transport stdio
-rocketmq-mcp --config rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml --transport streamable-http --bind 127.0.0.1:8089 --endpoint /mcp
+# Run from rocketmq-ai/rocketmq-mcp, or use an absolute path to your copied config.
+rocketmq-mcp --config conf/mcp.example.toml --transport stdio
+rocketmq-mcp --config conf/mcp.example.toml --transport streamable-http --bind 127.0.0.1:8089 --endpoint /mcp
 ```
 
 The configuration path is mandatory through `--config` or `ROCKETMQ_MCP_CONFIG`. Relative permission, TLS, JWKS CA, and audit paths are resolved from the configuration file's directory, so startup does not depend on the caller's current working directory.
@@ -171,7 +178,7 @@ For a release binary:
 
 ```bash
 target/release/rocketmq-mcp \
-  --config rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml \
+  --config conf/mcp.example.toml \
   --transport stdio
 ```
 
@@ -235,10 +242,10 @@ Windows example:
 {
   "mcpServers": {
     "rocketmq": {
-      "command": "C:\\path\\to\\rocketmq-rust\\target\\release\\rocketmq-mcp.exe",
+      "command": "<repository-root>/rocketmq-ai/rocketmq-mcp/target/release/rocketmq-mcp.exe",
       "args": [
         "--config",
-        "C:\\path\\to\\rocketmq-rust\\rocketmq-tools\\rocketmq-mcp\\conf\\mcp.example.toml",
+        "<repository-root>/rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml",
         "--transport",
         "stdio"
       ]
@@ -253,10 +260,10 @@ macOS or Linux example:
 {
   "mcpServers": {
     "rocketmq": {
-      "command": "/path/to/rocketmq-rust/target/release/rocketmq-mcp",
+      "command": "<repository-root>/rocketmq-ai/rocketmq-mcp/target/release/rocketmq-mcp",
       "args": [
         "--config",
-        "/path/to/rocketmq-rust/rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml",
+        "<repository-root>/rocketmq-ai/rocketmq-mcp/conf/mcp.example.toml",
         "--transport",
         "stdio"
       ]
