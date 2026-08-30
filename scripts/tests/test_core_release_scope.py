@@ -132,7 +132,7 @@ assert scope.package_for_path('rocketmq-client/src/lib.rs', loaded) == 'rocketmq
 assert scope.package_for_path('rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/lib.rs', loaded) == 'rocketmq-admin-core'
 assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'core-release', loaded)
 assert not scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-common/src/lib.rs', 'core-release', loaded)
-assert not scope.path_in_scope('rocketmq-tools/rocketmq-mcp/src/main.rs', 'core-release', loaded)
+assert not scope.path_in_scope('rocketmq-ai/rocketmq-mcp/src/main.rs', 'core-release', loaded)
 assert scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-common/src/lib.rs', 'repo-global', loaded)
 assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'all', loaded)
 """
@@ -177,8 +177,8 @@ assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'all', loaded)
     def test_dashboard_mcp_and_sre_cannot_be_core_packages(self) -> None:
         for forbidden_name, forbidden_path in (
             ("rocketmq-dashboard-common", "rocketmq-dashboard/rocketmq-dashboard-common"),
-            ("rocketmq-mcp", "rocketmq-tools/rocketmq-mcp"),
-            ("rocketmq-sre", "rocketmq-sre"),
+            ("rocketmq-mcp", "rocketmq-ai/rocketmq-mcp"),
+            ("rocketmq-sre", "rocketmq-ai/rocketmq-sre"),
         ):
             with self.subTest(package=forbidden_name):
                 scope = self.load_live_scope()

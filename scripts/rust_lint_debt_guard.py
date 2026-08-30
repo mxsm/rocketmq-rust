@@ -60,7 +60,7 @@ REQUIRED_FIELDS = {
 def owner_for(relative: str) -> str:
     if relative.startswith("rocketmq-tools/rocketmq-admin/"):
         return "admin"
-    if relative.startswith("rocketmq-tools/rocketmq-mcp/"):
+    if relative.startswith("rocketmq-ai/rocketmq-mcp/"):
         return "mcp"
     if relative.startswith("rocketmq-dashboard/"):
         return "dashboard"

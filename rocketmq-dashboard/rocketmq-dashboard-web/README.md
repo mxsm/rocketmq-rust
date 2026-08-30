@@ -189,10 +189,10 @@ deploys them to the `rocketmq-dashboard` namespace, provisions a generated
 login password, and validates a live RocketMQ cluster overview:
 
 ```powershell
-.\rocketmq-sre\scripts\kind.ps1 -Action Up
+.\rocketmq-ai\rocketmq-sre\scripts\kind.ps1 -Action Up
 ```
 
-See `rocketmq-sre/deploy/kind/README.md` for the Dashboard port-forward and
+See `rocketmq-ai/rocketmq-sre/deploy/kind/README.md` for the Dashboard port-forward and
 generated-password commands. The frontend remains a ClusterIP Service and
 proxies `/api` to the backend inside the cluster.
 

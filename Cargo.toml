@@ -45,8 +45,8 @@ members = [
   "rocketmq-dashboard/rocketmq-dashboard-common",
 ]
 exclude = [
-  "rocketmq-tools/rocketmq-mcp",
-  "rocketmq-sre",
+  "rocketmq-ai/rocketmq-mcp",
+  "rocketmq-ai/rocketmq-sre",
 ]
 resolver = "2"
 

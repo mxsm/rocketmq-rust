@@ -1,0 +1,73 @@
+{
+  "schema_version": "rocketmq-sre.target-evidence-source-qualification.v1",
+  "operating_mode": "read_only",
+  "production_certified": false,
+  "grants_execution_authority": false,
+  "unattended_autonomous_execution": false,
+  "source_of_truth": {
+    "path": "rocketmq-ai/rocketmq-sre/config/qualification/diagnostic-packs.v1.json",
+    "schema_version": "rocketmq-sre.diagnostic-pack-qualification.v1",
+    "required_pack_count": 32,
+    "required_route_count": 32
+  },
+  "required_source_types": [
+    {
+      "source": "admin-query",
+      "maximum_freshness_seconds": 300
+    },
+    {
+      "source": "kubernetes",
+      "maximum_freshness_seconds": 600
+    },
+    {
+      "source": "prometheus",
+      "maximum_freshness_seconds": 120
+    },
+    {
+      "source": "rocketmq-mcp",
+      "maximum_freshness_seconds": 300
+    },
+    {
+      "source": "runtime",
+      "maximum_freshness_seconds": 60
+    },
+    {
+      "source": "topology",
+      "maximum_freshness_seconds": 600
+    }
+  ],
+  "report_contract": {
+    "schema_version": "rocketmq-sre.target-evidence-source-qualification-report.v1",
+    "machine_local_only": true,
+    "allowed_roots": [
+      "D:\\rocketmq-sre-evidence",
+      "F:\\rocketmq-sre-evidence"
+    ],
+    "maximum_report_age_hours": 24,
+    "maximum_validity_days": 90,
+    "minimum_samples_per_route": 3,
+    "requires_every_route_exactly_once": true,
+    "requires_opaque_environment_refs": true,
+    "requires_opaque_identity_refs": true
+  },
+  "required_route_assertions": [
+    "query_executed",
+    "canonical_schema_valid",
+    "tenant_scope_enforced",
+    "cluster_scope_enforced",
+    "freshness_enforced",
+    "row_bound_enforced",
+    "byte_bound_enforced",
+    "redaction_verified",
+    "missing_semantics_verified"
+  ],
+  "safety": {
+    "target_mutations": 0,
+    "executor_calls": 0,
+    "execution_agent_calls": 0,
+    "model_provider_calls": 0,
+    "credentials_recorded": false,
+    "message_bodies_recorded": false,
+    "evidence_payloads_recorded": false
+  }
+}

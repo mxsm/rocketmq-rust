@@ -301,7 +301,7 @@
             "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
             "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
             "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
-            "rocketmq-tools/rocketmq-mcp/src/main.rs"
+            "rocketmq-ai/rocketmq-mcp/src/main.rs"
           ]
         },
         {

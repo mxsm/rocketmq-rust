@@ -172,7 +172,7 @@ pub unsafe fn read_raw(pointer: *const u8) -> u8 {
 
         self.assertEqual([], safety)
         self.assertTrue(debt)
-        self.assertFalse(any(entry["path"].startswith("rocketmq-sre/") for entry in debt))
+        self.assertFalse(any(entry["path"].startswith("rocketmq-ai/rocketmq-sre/") for entry in debt))
         self.assertFalse(any("rocketmq-mcp" in entry["path"] for entry in debt))
         self.assertFalse(any(entry["path"].startswith("rocketmq-dashboard/") for entry in debt))
         self.assertEqual(527, sum(entry["kind"] == "panic_surface" for entry in debt))

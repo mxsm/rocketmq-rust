@@ -220,7 +220,7 @@ failure-mode contracts are documented in the
 | [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | Shared admin functionality used by CLI and terminal interfaces. |
 | [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | Terminal UI for interactive administration workflows. |
 | [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | Storage inspection utilities for broker data files. |
-| [rocketmq-mcp](./rocketmq-tools/rocketmq-mcp) | Model Context Protocol server for deny-by-default RocketMQ diagnostics and administration. |
+| [rocketmq-mcp](./rocketmq-ai/rocketmq-mcp) | Model Context Protocol server for deny-by-default RocketMQ diagnostics and administration. |
 | [rocketmq-dashboard](./rocketmq-dashboard) | Dashboard workspace for desktop, web, and shared management UI components. |
 | [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | Shared dashboard models and reusable dashboard infrastructure. |
 | [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | GPUI-based desktop dashboard. |

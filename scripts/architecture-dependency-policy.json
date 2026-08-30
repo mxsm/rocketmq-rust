@@ -5,7 +5,7 @@
     "source_root": ".",
     "standalone_manifests": [
       "rocketmq-example/Cargo.toml",
-      "rocketmq-tools/rocketmq-mcp/Cargo.toml",
+      "rocketmq-ai/rocketmq-mcp/Cargo.toml",
       "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml",
       "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml",
       "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml",

@@ -15,7 +15,7 @@ import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CATALOG_SOURCE = REPO_ROOT / "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/commands/catalog.rs"
-DEFAULT_OUTPUT = REPO_ROOT / "rocketmq-sre/config/capabilities/rocketmq-capability-catalog.v1.yaml"
+DEFAULT_OUTPUT = REPO_ROOT / "rocketmq-ai/rocketmq-sre/config/capabilities/rocketmq-capability-catalog.v1.yaml"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -116,7 +116,7 @@ COMPONENT_SURFACES = (
     ),
     ComponentSurface(
         "MCP",
-        "rocketmq-tools/rocketmq-mcp/src/resources/capability.rs",
+        "rocketmq-ai/rocketmq-mcp/src/resources/capability.rs",
         "CapabilityManifest",
         "queryable",
         "production-verify audit and exporter recovery alerts",

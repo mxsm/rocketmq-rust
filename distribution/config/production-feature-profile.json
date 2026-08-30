@@ -119,7 +119,7 @@
     },
     "mcp": {
       "package": "rocketmq-mcp",
-      "manifest": "rocketmq-tools/rocketmq-mcp/Cargo.toml",
+      "manifest": "rocketmq-ai/rocketmq-mcp/Cargo.toml",
       "binary": "rocketmq-mcp",
       "docker_target": "mcp",
       "features": [

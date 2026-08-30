@@ -704,7 +704,7 @@ function Get-BoundaryDisposition {
                 -MigrationPhase $phase
         }
         "current-runtime-adapter-sites" {
-            if ($path -match "^rocketmq-tools/" -or $path -match "^rocketmq-.+/src/(bin|main)\.rs$") {
+            if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)" -or $path -match "^rocketmq-.+/src/(bin|main)\.rs$") {
                 return New-BoundaryDisposition `
                     -Disposition "top-level-owned-runtime-boundary" `
                     -ActionRequired $false `
@@ -905,7 +905,7 @@ function Get-BoundaryDisposition {
                 -MigrationPhase $phase
         }
         "legacy-runtime-api-sites" {
-            if ($path -match "^rocketmq-tools/" -or $path -match "^rocketmq-.+/src/(bin|main)\.rs$") {
+            if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)" -or $path -match "^rocketmq-.+/src/(bin|main)\.rs$") {
                 return New-BoundaryDisposition `
                     -Disposition "top-level-owned-runtime-boundary" `
                     -ActionRequired $false `
@@ -1306,7 +1306,7 @@ function Get-RuntimeSpawnDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-tools/") {
+    if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)") {
         return [pscustomobject]@{
             Disposition = "tooling-follow-up"
             ActionRequired = $true
@@ -1564,7 +1564,7 @@ function Get-RuntimeCreationDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-tools/") {
+    if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)") {
         return [pscustomobject]@{
             Disposition = "tooling-runtime-boundary"
             ActionRequired = $false
@@ -1770,7 +1770,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-tools/") {
+    if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)") {
         return [pscustomobject]@{
             Disposition = "tooling-user-driven-polling"
             ActionRequired = $false
@@ -1786,7 +1786,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-connector/src/channel.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/src/channel.rs") {
         return [pscustomobject]@{
             Disposition = "sre-connector-owned-channel-timer"
             ActionRequired = $false
@@ -1794,7 +1794,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-probe/src/main.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/main.rs") {
         return [pscustomobject]@{
             Disposition = "sre-bounded-synthetic-probe-timer"
             ActionRequired = $false
@@ -1802,7 +1802,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-probe/src/rocketmq_driver.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/rocketmq_driver.rs") {
         return [pscustomobject]@{
             Disposition = "sre-bounded-probe-rate-pacing"
             ActionRequired = $false
@@ -1810,7 +1810,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-executor/src/verifier.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/src/verifier.rs") {
         return [pscustomobject]@{
             Disposition = "sre-bounded-verification-poll"
             ActionRequired = $false
@@ -1818,7 +1818,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart.rs") {
         return [pscustomobject]@{
             Disposition = "sre-bounded-proxy-restart-poll"
             ActionRequired = $false
@@ -1826,7 +1826,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart_tests.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart_tests.rs") {
         return [pscustomobject]@{
             Disposition = "sre-proxy-restart-test-fixture-poll"
             ActionRequired = $false
@@ -1834,7 +1834,7 @@ function Get-SchedulerDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_image_canary_tests.rs") {
+    if ($path -eq "rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_image_canary_tests.rs") {
         return [pscustomobject]@{
             Disposition = "sre-proxy-canary-test-fixture-poll"
             ActionRequired = $false
@@ -2056,7 +2056,7 @@ function Get-BlockingDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-tools/") {
+    if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)") {
         return [pscustomobject]@{
             Disposition = "tooling-blocking-io"
             ActionRequired = $false
@@ -2278,7 +2278,7 @@ function Get-ShutdownDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-tools/") {
+    if ($path -match "^(rocketmq-tools/|rocketmq-ai/rocketmq-mcp/)") {
         return [pscustomobject]@{
             Disposition = "tooling-lifecycle-boundary"
             ActionRequired = $false

@@ -31,7 +31,7 @@ npm-debug.log*
 package-lock.json
 !rocketmq-website/package-lock.json
 !rocketmq-dashboard/rocketmq-dashboard-tauri/package-lock.json
-!rocketmq-sre/ui/package-lock.json
+!rocketmq-ai/rocketmq-sre/ui/package-lock.json
 codekit-config.json
 
 # Build output
@@ -60,9 +60,9 @@ _site
 **/src-tauri/target
 **/gen/schemas
 docs
-!rocketmq-sre/docs/
-!rocketmq-sre/docs/**
-!rocketmq-tools/rocketmq-mcp/docs/
-!rocketmq-tools/rocketmq-mcp/docs/**
+!rocketmq-ai/rocketmq-sre/docs/
+!rocketmq-ai/rocketmq-sre/docs/**
+!rocketmq-ai/rocketmq-mcp/docs/
+!rocketmq-ai/rocketmq-mcp/docs/**
 !rocketmq-dashboard/rocketmq-dashboard-web/docs/
 !rocketmq-dashboard/rocketmq-dashboard-web/docs/**

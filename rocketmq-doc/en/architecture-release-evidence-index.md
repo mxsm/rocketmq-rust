@@ -75,8 +75,8 @@ must reference this baseline ID or a deliberately versioned successor.
 |---|---|---|---|---|---|
 | fuzz | Fuzz and production input maintainers | `nightly-2026-07-05` | `fuzz/Cargo.toml` | `cargo +nightly-2026-07-05 check --locked --manifest-path fuzz/Cargo.toml --all-targets --all-features` | `.github/workflows/fuzz-ci.yml` |
 | example | Examples maintainers | `1.95.0` | `rocketmq-example/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets -- -D warnings`<br>`cargo test`<br>`cargo build --examples` | `.github/workflows/rocketmq-example-ci.yaml` |
-| rocketmq-mcp | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-tools/rocketmq-mcp/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo check --locked`<br>`python scripts/check_read_only_boundary.py`<br>`cargo test --locked`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --features streamable-http -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
-| rocketmq-sre | RocketMQ AI SRE maintainers | `1.95.0` | `rocketmq-sre/Cargo.toml` | `cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check`<br>`cargo check --locked --workspace`<br>`cargo test --locked --workspace --all-features`<br>`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`<br>`cargo doc --locked --workspace --no-deps`<br>`python scripts/check_source_layout.py`<br>`python scripts/check_execution_dependency_boundary.py` | `.github/workflows/rocketmq-sre-ci.yml` |
+| rocketmq-mcp | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo check --locked`<br>`python scripts/check_read_only_boundary.py`<br>`cargo test --locked`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --features streamable-http -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
+| rocketmq-sre | RocketMQ AI SRE maintainers | `1.95.0` | `rocketmq-ai/rocketmq-sre/Cargo.toml` | `cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check`<br>`cargo check --locked --workspace`<br>`cargo test --locked --workspace --all-features`<br>`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`<br>`cargo doc --locked --workspace --no-deps`<br>`python scripts/check_source_layout.py`<br>`python scripts/check_execution_dependency_boundary.py` | `.github/workflows/rocketmq-sre-ci.yml` |
 | dashboard-gpui | Dashboard GPUI maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo check --all-targets --all-features`<br>`cargo test` | `.github/workflows/dashboard-gpui-ci.yml` |
 | dashboard-tauri-backend | Dashboard Tauri maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test --all-features` | `.github/workflows/dashboard-tauri-ci.yml` |
 | dashboard-web-backend | Dashboard Web backend maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo build --all-targets --all-features`<br>`cargo test` | `.github/workflows/dashboard-web-ci.yml` |
@@ -113,37 +113,37 @@ must reference this baseline ID or a deliberately versioned successor.
 | `rocketmq-rust-fuzz` | `rocketmq-controller` | `rocketmq-controller` |
 | `rocketmq-rust-fuzz` | `rocketmq-protocol` | `rocketmq-protocol` |
 | `rocketmq-rust-fuzz` | `rocketmq-store-local` | `rocketmq-store-local` |
-| `rocketmq-sre-cli` | `rocketmq-sre-client` | `rocketmq-sre/crates/rocketmq-sre-client` |
-| `rocketmq-sre-cli` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
-| `rocketmq-sre-client` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-cli` | `rocketmq-sre-client` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-client` |
+| `rocketmq-sre-cli` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-client` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
 | `rocketmq-sre-connector` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-sre-connector` | `rocketmq-observability` | `rocketmq-observability` |
 | `rocketmq-sre-connector` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-sre-connector` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
-| `rocketmq-sre-connector` | `rocketmq-sre-core` | `rocketmq-sre/crates/rocketmq-sre-core` |
+| `rocketmq-sre-connector` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-connector` | `rocketmq-sre-core` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-core` |
 | `rocketmq-sre-control-plane` | `rocketmq-observability` | `rocketmq-observability` |
 | `rocketmq-sre-control-plane` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-sre-control-plane` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
-| `rocketmq-sre-control-plane` | `rocketmq-sre-core` | `rocketmq-sre/crates/rocketmq-sre-core` |
-| `rocketmq-sre-control-plane` | `rocketmq-sre-model-gateway` | `rocketmq-sre/crates/rocketmq-sre-model-gateway` |
-| `rocketmq-sre-core` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-control-plane` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-control-plane` | `rocketmq-sre-core` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-core` |
+| `rocketmq-sre-control-plane` | `rocketmq-sre-model-gateway` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway` |
+| `rocketmq-sre-core` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
 | `rocketmq-sre-eval` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-sre-eval` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
-| `rocketmq-sre-eval` | `rocketmq-sre-core` | `rocketmq-sre/crates/rocketmq-sre-core` |
-| `rocketmq-sre-eval` | `rocketmq-sre-model-gateway` | `rocketmq-sre/crates/rocketmq-sre-model-gateway` |
+| `rocketmq-sre-eval` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-eval` | `rocketmq-sre-core` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-core` |
+| `rocketmq-sre-eval` | `rocketmq-sre-model-gateway` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway` |
 | `rocketmq-sre-execution-agent` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-sre-execution-agent` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-sre-execution-agent` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-execution-agent` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
 | `rocketmq-sre-executor` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-sre-executor` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
-| `rocketmq-sre-executor` | `rocketmq-sre-core` | `rocketmq-sre/crates/rocketmq-sre-core` |
-| `rocketmq-sre-executor` | `rocketmq-sre-execution-agent` | `rocketmq-sre/crates/rocketmq-sre-execution-agent` |
-| `rocketmq-sre-model-gateway` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-executor` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-executor` | `rocketmq-sre-core` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-core` |
+| `rocketmq-sre-executor` | `rocketmq-sre-execution-agent` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent` |
+| `rocketmq-sre-model-gateway` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
 | `rocketmq-sre-probe` | `rocketmq-client-rust` | `rocketmq-client` |
 | `rocketmq-sre-probe` | `rocketmq-error` | `rocketmq-error` |
 | `rocketmq-sre-probe` | `rocketmq-model` | `rocketmq-model` |
 | `rocketmq-sre-probe` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-sre-probe` | `rocketmq-sre-contracts` | `rocketmq-sre/crates/rocketmq-sre-contracts` |
+| `rocketmq-sre-probe` | `rocketmq-sre-contracts` | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-contracts` |
 
 ## Tokio feature declarations
 
@@ -185,19 +185,19 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `rocketmq-proxy/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
 | `rocketmq-runtime/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-runtime/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
-| `rocketmq-sre/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | no |
-| `rocketmq-sre/Cargo.toml` | `tokio-stream` | `net, sync` | no |
-| `rocketmq-sre/crates/rocketmq-sre-cli/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-client/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-connector/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-eval/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-execution-agent/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-executor/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio` | `io-util, macros, net, rt, signal, sync, time` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
-| `rocketmq-sre/crates/rocketmq-sre-probe/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | no |
+| `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio-stream` | `net, sync` | no |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-cli/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-client/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-eval/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio` | `io-util, macros, net, rt, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
 | `rocketmq-store-local/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-store-local/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
 | `rocketmq-store-rocksdb/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
@@ -209,8 +209,8 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/Cargo.toml` | `tokio-stream` | `fs, io-util, net, signal, sync, time` | yes |
-| `rocketmq-tools/rocketmq-mcp/Cargo.toml` | `tokio` | `full` | no |
-| `rocketmq-tools/rocketmq-mcp/Cargo.toml` | `tokio-util` | `full` | no |
+| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio` | `full` | no |
+| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio-util` | `full` | no |
 | `rocketmq-transport/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-transport/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
 

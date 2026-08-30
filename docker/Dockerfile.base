@@ -186,7 +186,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
 set -eux
 export CARGO_TARGET_DIR=/workspace/target
-cargo build --manifest-path rocketmq-tools/rocketmq-mcp/Cargo.toml --locked --release --package rocketmq-mcp --features streamable-http,otlp --bin rocketmq-mcp
+cargo build --manifest-path rocketmq-ai/rocketmq-mcp/Cargo.toml --locked --release --package rocketmq-mcp --features streamable-http,otlp --bin rocketmq-mcp
 install -D -m 0555 /workspace/target/release/rocketmq-mcp /opt/rocketmq-binaries/rocketmq-mcp
 EOF
 

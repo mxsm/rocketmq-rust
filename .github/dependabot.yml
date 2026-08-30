@@ -8,17 +8,17 @@ updates:
       interval: "daily"
     open-pull-requests-limit: 10
   - package-ecosystem: "cargo"
-    directory: "/rocketmq-tools/rocketmq-mcp"
+    directory: "/rocketmq-ai/rocketmq-mcp"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
   - package-ecosystem: "cargo"
-    directory: "/rocketmq-sre"
+    directory: "/rocketmq-ai/rocketmq-sre"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
   - package-ecosystem: "npm"
-    directory: "/rocketmq-sre/ui"
+    directory: "/rocketmq-ai/rocketmq-sre/ui"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10

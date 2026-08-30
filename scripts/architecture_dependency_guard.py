@@ -1059,7 +1059,7 @@ def source_caller(relative: str, packages: list[dict[str, Any]]) -> str:
     normalized = relative.replace("\\", "/")
     special = {
         "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/": "rocketmq-admin-core",
-        "rocketmq-tools/rocketmq-mcp/": "rocketmq-mcp",
+        "rocketmq-ai/rocketmq-mcp/": "rocketmq-mcp",
         "rocketmq-dashboard/rocketmq-dashboard-gpui/": "rocketmq-dashboard-gpui",
         "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/": "rocketmq-dashboard-tauri-backend",
         "rocketmq-dashboard/rocketmq-dashboard-web/backend/": "rocketmq-dashboard-web-backend",

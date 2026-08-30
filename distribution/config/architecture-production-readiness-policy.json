@@ -173,7 +173,7 @@
         ],
         "source_contracts": [
           {
-            "path": "rocketmq-tools/rocketmq-mcp/src/main.rs",
+            "path": "rocketmq-ai/rocketmq-mcp/src/main.rs",
             "required_markers": [
               "prepare_mcp_bootstrap",
               "McpApp::bootstrap_validated_typed",
@@ -182,7 +182,7 @@
             ]
           },
           {
-            "path": "rocketmq-tools/rocketmq-mcp/src/app.rs",
+            "path": "rocketmq-ai/rocketmq-mcp/src/app.rs",
             "required_markers": [
               "register_mcp_release_identity",
               "release_identity_registered"

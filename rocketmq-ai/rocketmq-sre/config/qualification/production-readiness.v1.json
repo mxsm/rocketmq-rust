@@ -1,0 +1,60 @@
+{
+  "schema_version": "rocketmq-sre.production-readiness-qualification.v1",
+  "environment": "disposable_kind",
+  "operating_mode": "rules_only",
+  "production_certified": false,
+  "model_provider_network_calls": false,
+  "unattended_autonomous_execution": false,
+  "live_mode_ceiling": "supervised",
+  "minimums": {
+    "soak_duration_seconds": 21600,
+    "soak_samples": 300,
+    "sampled_availability_ratio": 0.99,
+    "logical_clusters": 100,
+    "topic_assets": 10000,
+    "consumer_group_assets": 10000,
+    "asset_page_samples": 40,
+    "evidence_query_samples": 100,
+    "policy_evaluation_samples": 10000,
+    "precheck_samples": 1000,
+    "operational_measurement_samples": 1000
+  },
+  "latency_limits_millis": {
+    "evidence_query_p95": 500,
+    "policy_evaluation_p99": 50,
+    "precheck_p95": 50
+  },
+  "operational_limits": {
+    "error_rate": 0.01,
+    "execution_queue_depth": 256
+  },
+  "required_faults": [
+    "mcp_connector_pod_replacement",
+    "control_plane_pod_replacement",
+    "execution_agent_pod_replacement",
+    "model_mock_outage",
+    "postgres_pod_replacement",
+    "collector_outage",
+    "broker_pod_replacement"
+  ],
+  "repository_evidence": {
+    "qualification_runner": "rocketmq-ai/rocketmq-sre/scripts/production-readiness-qualification.ps1",
+    "soak_runner": "rocketmq-ai/rocketmq-sre/scripts/phase05-soak-chaos.ps1",
+    "scale_runner": "rocketmq-ai/rocketmq-sre/scripts/phase05-enterprise-smoke.ps1",
+    "postgres_ha_runner": "rocketmq-ai/rocketmq-sre/scripts/docker-infrastructure-recovery-smoke.ps1",
+    "disaster_recovery_runner": "rocketmq-ai/rocketmq-sre/scripts/disaster-recovery-qualification.ps1",
+    "service_image_contract": "scripts/service-image-contract.ps1",
+    "handoff_checklist": "rocketmq-ai/rocketmq-sre/docs/phase05-handoff-checklist.md"
+  },
+  "live_report": {
+    "schema_version": "rocketmq-sre.production-readiness-qualification-report.v1",
+    "machine_local_only": true,
+    "allowed_roots": [
+      "D:\\rocketmq-sre-evidence",
+      "F:\\rocketmq-sre-evidence"
+    ],
+    "secrets_recorded": false,
+    "message_bodies_recorded": false,
+    "external_operator_signoff_required_for_production": true
+  }
+}

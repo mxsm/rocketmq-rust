@@ -45,7 +45,7 @@ MODULE_BLOCK = re.compile(
 def owner_for(path: str) -> str:
     if path.startswith("rocketmq-tools/rocketmq-admin/"):
         return "admin"
-    if path.startswith("rocketmq-tools/rocketmq-mcp/"):
+    if path.startswith("rocketmq-ai/rocketmq-mcp/"):
         return "mcp"
     if path.startswith("rocketmq-dashboard/"):
         return "dashboard"
