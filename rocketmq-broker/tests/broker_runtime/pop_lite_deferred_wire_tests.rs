@@ -20,19 +20,19 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v1::AdmissionLimits;
-use rocketmq_transport::api::v2::DeferredAdmission;
-use rocketmq_transport::api::v2::DeferredExpiryMargins;
-use rocketmq_transport::api::v2::DeferredId;
-use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
-use rocketmq_transport::api::v2::DeferredWaitLimits;
-use rocketmq_transport::api::v2::DeferredWakeReason;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrdering;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::TransportServerV2;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::DeferredAdmission;
+use rocketmq_transport::api::DeferredExpiryMargins;
+use rocketmq_transport::api::DeferredId;
+use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredWaitLimits;
+use rocketmq_transport::api::DeferredWakeReason;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrdering;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::TransportServer;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -89,7 +89,7 @@ struct RegisteringProcessor {
     registrations: mpsc::UnboundedSender<DeferredId>,
 }
 
-impl RequestProcessorV2 for RegisteringProcessor {
+impl RequestProcessor for RegisteringProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let prepared = self
             .service
@@ -105,7 +105,7 @@ impl RequestProcessorV2 for RegisteringProcessor {
         Ok(HandlerOutcome::Deferred(registration))
     }
 
-    fn request_ordering(&self, _ingress: rocketmq_transport::api::v2::IngressRequestView<'_>) -> RequestOrdering {
+    fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
         RequestOrdering::Concurrent
     }
 }
@@ -134,15 +134,15 @@ async fn start_wire_server(
     processor: RegisteringProcessor,
     controller: Arc<AdmissionController>,
 ) -> (Connection, RunningWireServer) {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("pop-lite-real-store-v2-wire"))
-        .expect("PopLite real-store V2 runtime owner");
+    let owner = RuntimeOwner::new(RuntimeConfig::server_default("pop-lite-real-store-wire"))
+        .expect("PopLite real-store runtime owner");
     let server_context = owner.root_context().component("pop-lite.real-store.server");
     let runner_context: ChildServiceContext = owner.root_context().component("pop-lite.real-store.runner");
-    let server = TransportServerV2::new(
-        Arc::new(rocketmq_transport::api::v1::ServerConfig {
+    let server = TransportServer::new(
+        Arc::new(rocketmq_transport::api::ServerConfig {
             bind_address: "127.0.0.1".to_owned(),
             listen_port: 0,
-            ..rocketmq_transport::api::v1::ServerConfig::default()
+            ..rocketmq_transport::api::ServerConfig::default()
         }),
         server_context,
         processor,
@@ -152,7 +152,7 @@ async fn start_wire_server(
     let (startup_tx, startup_rx) = oneshot::channel();
     let (result_tx, result_rx) = oneshot::channel();
     runner_context
-        .spawn_service("pop-lite-real-store-v2-wire-server", async move {
+        .spawn_service("pop-lite-real-store-wire-server", async move {
             let report = server
                 .try_run_with_shutdown_report_and_startup(
                     async move {
@@ -164,7 +164,7 @@ async fn start_wire_server(
                 .expect("owned PopLite real-store server shutdown report");
             let _ = result_tx.send(report);
         })
-        .expect("spawn PopLite real-store V2 server");
+        .expect("spawn PopLite real-store server");
     let address = startup_rx
         .await
         .expect("PopLite real-store startup channel")
@@ -188,7 +188,7 @@ fn assert_response_header(response: &mut RemotingCommand, expected_order_count: 
     response.make_custom_header_to_net();
     let header = response
         .decode_command_custom_header::<PopLiteMessageResponseHeader>()
-        .expect("decode PopLite V2 response header");
+        .expect("decode PopLite response header");
     assert!(header.pop_time > 0);
     assert_eq!(header.invisible_time, INVISIBLE_TIME);
     assert_eq!(header.revive_qid, POP_ORDER_REVIVE_QUEUE);
@@ -221,13 +221,13 @@ fn assert_terminal_resources(service: &PopLiteDeferredService, dispatcher: &Lite
 }
 
 #[tokio::test]
-async fn pop_lite_deferred_v2_real_store_single_chain_writes_exact_terminal_frame() {
-    let mut runtime = new_lite_test_runtime("pop-lite-deferred-v2-real-store-wire").await;
+async fn pop_lite_deferred_real_store_single_chain_writes_exact_terminal_frame() {
+    let mut runtime = new_lite_test_runtime("pop-lite-deferred-real-store-wire").await;
     seed_lite_query_state(&mut runtime);
-    seed_lmq_message(&mut runtime, "child-a", b"lite-deferred-v2-real-store").await;
+    seed_lmq_message(&mut runtime, "child-a", b"lite-deferred-real-store").await;
     let _ = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let pop_lite = runtime
         .composition
         .state
@@ -307,7 +307,7 @@ async fn pop_lite_deferred_v2_real_store_single_chain_writes_exact_terminal_fram
     let mut body = response.body().cloned().expect("real-store PopLite response body");
     let message = MessageDecoder::decode(&mut body, true, false, false, false, false)
         .expect("decode real-store PopLite response body");
-    assert_eq!(message.body(), Some(Bytes::from_static(b"lite-deferred-v2-real-store")));
+    assert_eq!(message.body(), Some(Bytes::from_static(b"lite-deferred-real-store")));
     assert!(body.is_empty(), "response body contains exactly one stored message");
     assert_eq!(
         runtime
@@ -329,12 +329,12 @@ async fn pop_lite_deferred_v2_real_store_single_chain_writes_exact_terminal_fram
 }
 
 #[tokio::test]
-async fn pop_lite_deferred_v2_real_store_claimed_empty_is_exact_terminal_timeout() {
-    let mut runtime = new_lite_test_runtime("pop-lite-deferred-v2-real-store-empty").await;
+async fn pop_lite_deferred_real_store_claimed_empty_is_exact_terminal_timeout() {
+    let mut runtime = new_lite_test_runtime("pop-lite-deferred-real-store-empty").await;
     seed_lite_query_state(&mut runtime);
     let _ = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let pop_lite = runtime
         .composition
         .state

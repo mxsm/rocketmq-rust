@@ -19,9 +19,9 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 
@@ -153,7 +153,7 @@ impl ClusterTestRequestProcessor {
     }
 }
 
-impl RequestProcessorV2 for ClusterTestRequestProcessor {
+impl RequestProcessor for ClusterTestRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let response = self.handle_request(request.command_mut()).await?;
         crate::processor::response_outcome(response)

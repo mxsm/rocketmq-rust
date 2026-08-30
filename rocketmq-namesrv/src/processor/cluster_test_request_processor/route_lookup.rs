@@ -35,12 +35,12 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v1::AdmissionLimits;
-use rocketmq_transport::api::v1::DefaultTopAddressing;
-use rocketmq_transport::api::v1::OneShotTransportClient;
-use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::api::v1::TransportTelemetry;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::DefaultTopAddressing;
+use rocketmq_transport::api::OneShotTransportClient;
+use rocketmq_transport::api::RequestDeadline;
+use rocketmq_transport::api::TransportTelemetry;
 
 use super::lookup_cache::ClusterTestLookupCache;
 use super::lookup_cache::LookupCacheConfig;
@@ -387,13 +387,13 @@ mod tests {
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownReport;
-    use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v1::ServerStartError;
-    use rocketmq_transport::api::v2::HandlerOutcome;
-    use rocketmq_transport::api::v2::RemotingRequest;
-    use rocketmq_transport::api::v2::RequestProcessorV2;
-    use rocketmq_transport::api::v2::ResponsePlan;
-    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponsePlan;
+    use rocketmq_transport::api::ServerConfig;
+    use rocketmq_transport::api::ServerStartError;
+    use rocketmq_transport::api::TransportServer;
     use tokio::sync::oneshot;
     use tokio::sync::Notify;
 
@@ -444,7 +444,7 @@ mod tests {
         route: TopicRouteData,
     }
 
-    impl RequestProcessorV2 for RouteProcessor {
+    impl RequestProcessor for RouteProcessor {
         async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
             assert_eq!(request.command().code(), RequestCode::GetRouteinfoByTopic as i32);
             let header = request
@@ -463,7 +463,7 @@ mod tests {
         release: Arc<Notify>,
     }
 
-    impl RequestProcessorV2 for BlockingRouteProcessor {
+    impl RequestProcessor for BlockingRouteProcessor {
         async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
             self.entered.notify_one();
             self.release.notified().await;
@@ -480,29 +480,29 @@ mod tests {
         Ok(HandlerOutcome::Reply(plan))
     }
 
-    struct RunningV2RouteServer {
+    struct RunningRouteServer {
         local_addr: SocketAddr,
         shutdown: Option<oneshot::Sender<()>>,
         result: oneshot::Receiver<Result<ShutdownReport, ServerStartError>>,
     }
 
-    impl RunningV2RouteServer {
+    impl RunningRouteServer {
         async fn bind<P>(service: ChildServiceContext, processor: P) -> Self
         where
-            P: RequestProcessorV2 + Clone + Sync + 'static,
+            P: RequestProcessor + Clone + Sync + 'static,
         {
             let config = Arc::new(ServerConfig {
                 bind_address: "127.0.0.1".to_owned(),
                 listen_port: 0,
                 ..ServerConfig::default()
             });
-            let server = TransportServerV2::new(config, service.component("server"), processor);
+            let server = TransportServer::new(config, service.component("server"), processor);
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let (startup_tx, startup_rx) = oneshot::channel();
             let (result_tx, result_rx) = oneshot::channel();
             service
                 .component("runner")
-                .spawn_service("namesrv.route-lookup-v2-test-server", async move {
+                .spawn_service("namesrv.route-lookup-test-server", async move {
                     let result = server
                         .try_run_with_shutdown_report_and_startup(
                             async move {
@@ -513,11 +513,11 @@ mod tests {
                         .await;
                     let _ = result_tx.send(result);
                 })
-                .expect("V2 route lookup test server should be lifecycle-owned");
+                .expect("route lookup test server should be lifecycle-owned");
             let local_addr = startup_rx
                 .await
-                .expect("V2 route lookup startup channel")
-                .expect("V2 route lookup server should start");
+                .expect("route lookup startup channel")
+                .expect("route lookup server should start");
             Self {
                 local_addr,
                 shutdown: Some(shutdown_tx),
@@ -536,11 +536,11 @@ mod tests {
             let report = self
                 .result
                 .await
-                .expect("V2 route lookup server report channel")
-                .expect("V2 route lookup server should stop cleanly");
+                .expect("route lookup server report channel")
+                .expect("route lookup server should stop cleanly");
             report
                 .assert_no_task_leak()
-                .expect("V2 route lookup server should not leak tasks");
+                .expect("route lookup server should not leak tasks");
         }
     }
 
@@ -577,7 +577,7 @@ mod tests {
     #[tokio::test]
     async fn transport_lookup_decodes_route_and_caches_resolved_endpoints() {
         let runtime = RuntimeContext::from_current("namesrv-route-lookup-success-test");
-        let server = RunningV2RouteServer::bind(
+        let server = RunningRouteServer::bind(
             runtime.service_context("route-server"),
             RouteProcessor { route: sample_route() },
         )
@@ -619,7 +619,7 @@ mod tests {
         let runtime = RuntimeContext::from_current("namesrv-route-lookup-timeout-test");
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let server = RunningV2RouteServer::bind(
+        let server = RunningRouteServer::bind(
             runtime.service_context("hung-route-server"),
             BlockingRouteProcessor {
                 entered: entered.clone(),

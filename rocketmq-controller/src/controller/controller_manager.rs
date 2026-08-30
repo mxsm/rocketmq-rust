@@ -67,14 +67,14 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::RemotingClient;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::api::v2::TransportServerV2;
-use rocketmq_transport::api::v2::V2SessionEvent;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::RemotingClient;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::SessionEvent;
+use rocketmq_transport::api::SessionRegistry;
+use rocketmq_transport::api::TransportClientConfig;
+use rocketmq_transport::api::TransportServer;
+use rocketmq_transport::api::TransportTelemetry;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
@@ -93,12 +93,12 @@ struct PendingControllerRemotingServer {
     config: Arc<ServerConfig>,
     service_context: ChildServiceContext,
     telemetry: TransportTelemetry,
-    session_registry: Arc<V2SessionRegistry>,
+    session_registry: Arc<SessionRegistry>,
 }
 
 impl PendingControllerRemotingServer {
-    fn build(self, request_processor: ControllerRequestProcessor) -> TransportServerV2<ControllerRequestProcessor> {
-        TransportServerV2::new_with_telemetry(self.config, self.service_context, request_processor, self.telemetry)
+    fn build(self, request_processor: ControllerRequestProcessor) -> TransportServer<ControllerRequestProcessor> {
+        TransportServer::new_with_telemetry(self.config, self.service_context, request_processor, self.telemetry)
             .with_session_registry(self.session_registry)
     }
 }
@@ -326,7 +326,7 @@ pub struct ControllerManager {
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
 
     remoting_server: Mutex<Option<PendingControllerRemotingServer>>,
-    session_registry: Arc<V2SessionRegistry>,
+    session_registry: Arc<SessionRegistry>,
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
@@ -507,7 +507,7 @@ impl ControllerManager {
         let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "metrics", feature = "otel-traces")))]
         let transport_telemetry = TransportTelemetry::noop();
-        let session_registry = Arc::new(V2SessionRegistry::new());
+        let session_registry = Arc::new(SessionRegistry::new());
         let remoting_server = Some(PendingControllerRemotingServer {
             config: Arc::new(server_config),
             service_context: service_context.component("controller.remoting-server"),

@@ -24,10 +24,10 @@ use rocketmq_protocol::protocol::header::polling_info_response_header::PollingIn
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::error;
 use tracing::warn;
 
@@ -99,14 +99,14 @@ impl Clone for PollingInfoProcessor {
     }
 }
 
-impl RequestProcessorV2 for PollingInfoProcessor {
+impl RequestProcessor for PollingInfoProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl PollingInfoProcessor {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -118,22 +118,13 @@ impl PollingInfoProcessor {
             &command_factory,
             result,
             original_opaque,
-            "PollingInfoProcessor V2 command dispatch completed without a response",
+            "PollingInfoProcessor command dispatch completed without a response",
         )
     }
 }
 
 impl PollingInfoProcessor {
-    pub(crate) async fn process_legacy(
-        &self,
-        peer_label: String,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let processor = self.clone();
-        processor.process_command(&peer_label, request).await
-    }
-
-    /// V2 leaf business contract; the trusted peer label is diagnostic metadata only.
+    /// processor business contract; the trusted peer label is diagnostic metadata only.
     async fn process_command(
         &self,
         peer_label: &str,
@@ -281,16 +272,16 @@ mod tests {
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StateMachineVersionView;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::ResponseBodyKind;
-    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::ResponseBodyKind;
+    use rocketmq_transport::api::ServerConfig;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::api::TransportServer;
     use rocketmq_transport::test_support::Connection;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
     use tokio::net::TcpStream;
     use tokio::sync::oneshot;
 
@@ -316,18 +307,18 @@ mod tests {
         }
     }
 
-    struct EmbeddedV2Fixture {
+    struct EmbeddedFixture {
         owner: RuntimeOwner,
         context: rocketmq_runtime::ChildServiceContext,
-        harness: EmbeddedRequestHarnessV2<PollingInfoProcessor>,
+        harness: EmbeddedRequestHarness<PollingInfoProcessor>,
     }
 
-    impl EmbeddedV2Fixture {
+    impl EmbeddedFixture {
         fn new(processor: PollingInfoProcessor) -> Self {
-            let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-v2-test"))
-                .expect("PollingInfo V2 test runtime");
-            let context = owner.root_context().component("polling-info-v2-test.request");
-            let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+            let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-test"))
+                .expect("PollingInfo test runtime");
+            let context = owner.root_context().component("polling-info-test.request");
+            let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
                 processor,
                 Vec::new(),
                 Arc::new(TransportSecurity::secure_enforced(
@@ -336,10 +327,10 @@ mod tests {
                 )),
                 Arc::new(AdmissionController::new(AdmissionLimits::default())),
             ));
-            let harness = EmbeddedRequestHarnessV2::new(
+            let harness = EmbeddedRequestHarness::new(
                 dispatcher,
                 context.task_group().clone(),
-                Principal::new("polling-info-v2-test"),
+                Principal::new("polling-info-test"),
             );
             Self {
                 owner,
@@ -404,18 +395,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_embedded_header_error_is_an_empty_reply_plan() {
+    async fn embedded_header_error_is_an_empty_reply_plan() {
         let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(0));
-        let fixture = EmbeddedV2Fixture::new(test_processor(Arc::downgrade(&provider)));
+        let fixture = EmbeddedFixture::new(test_processor(Arc::downgrade(&provider)));
         let request = RemotingCommand::create_remoting_command(RequestCode::PollingInfo).set_opaque(711);
 
         let outcome = fixture
             .harness
             .dispatch(None, request)
             .await
-            .expect("embedded PollingInfo V2 header-error response");
+            .expect("embedded PollingInfo header-error response");
         let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-            panic!("PollingInfo V2 header error must return a reply plan");
+            panic!("PollingInfo header error must return a reply plan");
         };
 
         assert_eq!(plan.response_code(), ResponseCode::SystemError as i32);
@@ -425,17 +416,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_network_header_error_preserves_request_identity_and_wire_metadata() {
+    async fn network_header_error_preserves_request_identity_and_wire_metadata() {
         const ORIGINAL_OPAQUE: i32 = 9_013;
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-v2-network-test"))
-            .expect("PollingInfo V2 network test runtime");
-        let server_context = owner.root_context().component("polling-info-v2-network-test.server");
-        let runner_context = owner.root_context().component("polling-info-v2-network-test.runner");
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-network-test"))
+            .expect("PollingInfo network test runtime");
+        let server_context = owner.root_context().component("polling-info-network-test.server");
+        let runner_context = owner.root_context().component("polling-info-network-test.runner");
         let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(4_201, SerializeType::ROCKETMQ));
         let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(0));
         let mut processor = test_processor(Arc::downgrade(&provider));
         processor.command_factory = factory;
-        let server = TransportServerV2::new(
+        let server = TransportServer::new(
             Arc::new(ServerConfig {
                 bind_address: "127.0.0.1".to_owned(),
                 listen_port: 0,
@@ -448,7 +439,7 @@ mod tests {
         let (startup_sender, startup_receiver) = oneshot::channel();
         let (result_sender, result_receiver) = oneshot::channel();
         runner_context
-            .spawn_service("polling-info-v2-server", async move {
+            .spawn_service("polling-info-server", async move {
                 let result = server
                     .try_run_with_shutdown_report_and_startup(
                         async move {
@@ -459,40 +450,36 @@ mod tests {
                     .await;
                 let _ = result_sender.send(result);
             })
-            .expect("spawn PollingInfo V2 server");
+            .expect("spawn PollingInfo server");
 
         let address = startup_receiver
             .await
-            .expect("PollingInfo V2 startup channel")
-            .expect("PollingInfo V2 server startup");
-        let mut client = Connection::new(
-            TcpStream::connect(address)
-                .await
-                .expect("connect PollingInfo V2 client"),
-        );
+            .expect("PollingInfo startup channel")
+            .expect("PollingInfo server startup");
+        let mut client = Connection::new(TcpStream::connect(address).await.expect("connect PollingInfo client"));
         let request = RemotingCommand::create_remoting_command(RequestCode::PollingInfo).set_opaque(ORIGINAL_OPAQUE);
         let request_version = request.version();
         let request_serialize_type = request.serialize_type();
         assert_ne!(request_version, factory.defaults().version());
-        client.send_command(request).await.expect("send PollingInfo V2 request");
+        client.send_command(request).await.expect("send PollingInfo request");
 
         let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
             .await
-            .expect("PollingInfo V2 response deadline")
-            .expect("PollingInfo V2 connection remains open")
-            .expect("PollingInfo V2 response frame");
+            .expect("PollingInfo response deadline")
+            .expect("PollingInfo connection remains open")
+            .expect("PollingInfo response frame");
         assert_eq!(response.opaque(), ORIGINAL_OPAQUE);
         assert_eq!(response.code(), ResponseCode::SystemError as i32);
         assert_eq!(response.version(), request_version);
         assert_eq!(response.serialize_type(), request_serialize_type);
 
-        client.shutdown().await.expect("shutdown PollingInfo V2 client");
+        client.shutdown().await.expect("shutdown PollingInfo client");
         let _ = shutdown_sender.send(());
         let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
             .await
-            .expect("PollingInfo V2 shutdown deadline")
-            .expect("PollingInfo V2 shutdown result channel")
-            .expect("PollingInfo V2 shutdown report");
+            .expect("PollingInfo shutdown deadline")
+            .expect("PollingInfo shutdown result channel")
+            .expect("PollingInfo shutdown report");
         assert!(report.is_healthy(), "{}", report.to_json());
         assert!(owner.shutdown_tasks().await.is_healthy());
         assert!(owner.shutdown_background().is_healthy());

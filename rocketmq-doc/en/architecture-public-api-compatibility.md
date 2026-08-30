@@ -11,30 +11,19 @@ paths removed by the architecture migration.
 - Structural profiles: `profiles=50` (26 workspace defaults plus the 24 frozen
   public-feature matrix entries)
 - Snapshot comparison: `differences=0`
-- Canonical target path counts:
+- Current classified source-export counts:
 
-  | Package | Previous | Current | Reviewed cause |
-  |---|---:|---:|---|
-  | `rocketmq-client-rust` | 280 | 313 | scoped Admin/LitePull/Classic Pull/Producer/Session and Proxy Cluster capabilities |
-  | `rocketmq-runtime` | 351 | 374 | bounded operation/resource and versioned runtime diagnostics capabilities |
-  | `rocketmq-transport` | 194 | 204 | authorized dispatch and request/response sink capabilities |
-  | `rocketmq-store` | 254 | 276 | cumulative Store capability work, including the functional mapped-file builder |
+  | Package | Classified exports |
+  |---|---:|
+  | `rocketmq-client-rust` | 224 |
+  | `rocketmq-runtime` | 134 |
+  | `rocketmq-transport` | 219 |
+  | `rocketmq-store` | 211 |
 
-- Accepted source-level cleanup relative to the previous compatibility surface:
-  - additive groups: 4
-    - scoped Client capabilities
-    - versioned Runtime diagnostics and resource capabilities
-    - authorized Transport dispatch capabilities
-    - explicit, non-default `test-support` feature modules
-  - deprecated: 0
-  - breaking groups: 4
-    - Client compatibility facade, implementation aliases, and hidden
-      production probe exports removed
-    - unused Runtime implementation-module paths removed while canonical root
-      capabilities remain
-    - unused Transport concrete implementation exports removed and the local
-      harness moved under `test-support`
-    - Store `bench_support` moved under non-default `test-support`
+- The current Transport surface has one unversioned `api` module, one
+  `RequestProcessor` contract, one authorized dispatcher facade, and one
+  response-lifecycle observation callback. Migration-only aliases and the
+  duplicate versioned public modules were removed before release.
 
 Previously approved source cleanups remain in force: `ClientRuntime::new` was
 removed and callers use fallible `ClientRuntime::try_new`; `ClusterConfig` owns mandatory bounded-execution
@@ -72,7 +61,7 @@ Client/Transport/Store root exports removed by this cutover.
 | `run_namesrv_refresh_lifecycle_probe`, `NamesrvRefreshLifecycleProbe`, `run_consumer_stats_manager_lifecycle_probe`, `ConsumerStatsManagerLifecycleProbe`, `run_latency_fault_detector_lifecycle_probe`, `LatencyFaultDetectorLifecycleProbe` | Client integration tests and lifecycle benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
 | `run_produce_accumulator_guard_lifecycle_probe`, `ProduceAccumulatorGuardLifecycleProbe`, `with_timeout`, `with_timeout_all`, `TopicPublishInfo`, `run_request_future_holder_lifecycle_probe`, `run_request_future_holder_scan_probe`, `RequestFutureHolderLifecycleProbe`, `RequestFutureHolderScanProbe` | Client tests, doctests, and producer benchmarks | Test/benchmark helpers move to `rocketmq_client_rust::test_support::*`; timeout helpers remain internal |
 | `run_trace_queue_depth_accounting_probe`, `run_trace_worker_lifecycle_probe`, `TraceWorkerLifecycleProbe` | Client integration tests and trace benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
-| `rocketmq_transport::LocalRequestHarness` | Broker and NameServer processor tests before FIN-05 | Removed with the V1 processor graph; channel lifecycle tests use `rocketmq_transport::test_support::LocalChannelHarness`, while processor tests use the socket-free `EmbeddedRequestHarnessV2` |
+| `rocketmq_transport::LocalRequestHarness` | Historical Broker and NameServer processor tests | Removed with the compatibility processor graph; channel lifecycle tests use `rocketmq_transport::test_support::LocalChannelHarness`, while processor tests use the socket-free `EmbeddedRequestHarness` |
 | `rocketmq_transport::LocalResponseSink` | No external caller | Private Transport dispatch implementation |
 | `rocketmq_store::bench_support::*` | Store benchmarks and Store contract tests | `rocketmq_store::test_support::*` with explicit `test-support` |
 

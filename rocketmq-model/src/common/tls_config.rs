@@ -14,8 +14,8 @@
 
 //! Compatibility path for transport-owned TLS configuration.
 
-pub use rocketmq_transport::api::v1::TlsClientAuth;
-pub use rocketmq_transport::api::v1::TlsClientConfig;
-pub use rocketmq_transport::api::v1::TlsConfig;
-pub use rocketmq_transport::api::v1::TlsMode;
-pub use rocketmq_transport::api::v1::TlsServerConfig;
+pub use rocketmq_transport::api::TlsClientAuth;
+pub use rocketmq_transport::api::TlsClientConfig;
+pub use rocketmq_transport::api::TlsConfig;
+pub use rocketmq_transport::api::TlsMode;
+pub use rocketmq_transport::api::TlsServerConfig;

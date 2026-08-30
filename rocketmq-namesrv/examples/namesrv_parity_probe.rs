@@ -34,9 +34,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::TransportClient;
-use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::TransportClient;
+use rocketmq_transport::api::TransportClientConfig;
 
 const REQUEST_TIMEOUT_MILLIS: u64 = 3_000;
 

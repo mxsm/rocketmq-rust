@@ -13,9 +13,9 @@
 // limitations under the License.
 
 mod core;
+mod handler;
 mod response;
 mod resume;
-mod v2;
 
 #[cfg(any(test, feature = "test-support"))]
 use std::collections::HashMap;
@@ -347,10 +347,11 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
         })
     }
 
-    /// Installs the Broker-owned BRK-05 deferred Notification service.
+    /// Installs the Broker-owned deferred Notification service.
     ///
-    /// BRK-06 owns the service lifecycle and installs it once during Broker composition. Until
-    /// then, V2 requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`.
+    /// Broker composition owns the service lifecycle and installs it once.
+    /// Requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`
+    /// until installation completes.
     pub(crate) fn install_notification_deferred_service(
         &self,
         service: Arc<NotificationDeferredService>,

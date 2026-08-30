@@ -26,7 +26,7 @@ use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_transport::api::v2::DeferredId;
+use rocketmq_transport::api::DeferredId;
 
 use super::deadline::LongPollingDeadline;
 
@@ -1117,4 +1117,5 @@ impl fmt::Display for PopIndexError {
 impl Error for PopIndexError {}
 
 #[cfg(test)]
+#[path = "../../../tests/unit/long_polling/pop_deferred/index/p1_tests.rs"]
 mod p1_tests;

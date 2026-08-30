@@ -24,11 +24,7 @@ use crate::dispatch::RequestId;
 /// A response plan that is bound to immutable ingress identity.
 ///
 /// This capability is intentionally crate-private. It is the only value that
-/// later transport stages may use to recover the response head and body.
-#[allow(
-    dead_code,
-    reason = "the later private response encoder consumes this RSP-03 boundary"
-)]
+/// the response transport uses to recover the response head and body.
 pub(crate) struct BoundResponsePlan {
     request_id: RequestId,
     plan: ResponsePlan,
@@ -37,10 +33,6 @@ pub(crate) struct BoundResponsePlan {
 
 impl BoundResponsePlan {
     /// Returns the ingress-assigned process-local request identity.
-    #[allow(
-        dead_code,
-        reason = "the later private response encoder uses the bound request identity"
-    )]
     pub(crate) const fn request_id(&self) -> RequestId {
         self.request_id
     }

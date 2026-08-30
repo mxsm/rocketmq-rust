@@ -18,83 +18,21 @@ mod index;
 mod service;
 
 pub(crate) use data::PullHookMetadata;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 freezes the broker-private Pull criteria seam before MIG-04 production wiring"
-)]
 pub(crate) use data::PullMatchCriteria;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 freezes the broker-private retained request seam before MIG-04 production wiring"
-)]
-pub(crate) use data::PullRequestData;
 pub(crate) use data::PullSessionClientLookup;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 freezes the broker-private Pull deadline seam before MIG-04 production wiring"
-)]
-pub(crate) use deadline::PullWaitDeadline;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
-pub(crate) use index::PullArrivalView;
 pub(crate) use index::PullCandidateReservation;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
 pub(crate) use index::PullCriteriaLimits;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
-pub(crate) use service::PreparedPullRegistration;
-#[allow(
-    unused_imports,
-    reason = "broker-private Pull continuation seam remains available to focused acceptance tests"
-)]
-pub(crate) use service::PullArrivalContinuation;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
-pub(crate) use service::PullDeferredPrepareError;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
-pub(crate) use service::PullDeferredRegisterError;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
 pub(crate) use service::PullDeferredService;
 pub(crate) use service::PullPendingArrivalReservation;
 pub(crate) use service::PullPendingOffsetReservation;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
-pub(crate) use service::PullProducerStats;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
 pub(crate) use service::PullRetainedEstimate;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
 pub(crate) use service::PullSuspendTiming;
-#[allow(
-    unused_imports,
-    reason = "BRK-04 infrastructure is wired to production listeners and composition in BRK-06"
-)]
 pub(crate) use service::ResumePull;
 
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/pull_deferred/tests.rs"]
 mod tests;
 
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/pull_deferred/acceptance_tests.rs"]
 mod acceptance_tests;

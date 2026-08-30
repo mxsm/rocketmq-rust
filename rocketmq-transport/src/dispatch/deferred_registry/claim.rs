@@ -42,10 +42,6 @@ use crate::dispatch::WriteProgress;
 use crate::session_view::SessionId;
 
 /// Reason that caused a deferred request to become eligible for resume.
-///
-/// ```compile_fail
-/// use rocketmq_transport::api::v1::DeferredWakeReason;
-/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DeferredWakeReason {
     /// A matching message arrived.
@@ -379,7 +375,7 @@ impl Error for DeferredResumeError {
 /// Affine ownership of one claimed deferred request.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ClaimedDeferred;
+/// use rocketmq_transport::api::ClaimedDeferred;
 ///
 /// fn claimed_is_affine<R>(claimed: &ClaimedDeferred<R>) {
 ///     let _ = claimed.clone();

@@ -17,8 +17,8 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_store::BrokerReadStore;
-use rocketmq_transport::api::v2::DeferredWakeReason;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::DeferredWakeReason;
+use rocketmq_transport::api::ResponsePlan;
 
 use super::PullMessageProcessor;
 use crate::long_polling::pull_deferred::PullHookMetadata;
@@ -37,7 +37,7 @@ where
     MS: BrokerReadStore,
 {
     /// Re-runs the canonical Pull business path for an already-claimed deferred request.
-    #[allow(dead_code, reason = "called by the forthcoming V2 Pull leaf")]
+    #[allow(dead_code, reason = "called by the forthcoming Pull leaf")]
     pub(crate) async fn resume_pull(
         &self,
         resume: ResumePull,

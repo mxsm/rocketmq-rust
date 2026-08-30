@@ -26,8 +26,8 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::SessionStateView;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionStateView;
 
 use crate::route::tables::BrokerLiveInfo;
 pub use crate::route_info::broker_addr_info::BrokerAddrInfo;

@@ -16,10 +16,10 @@ use std::future::Future;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store_api::MessageAppender;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RequestControlView;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::ResponsePlanError;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RequestControlView;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::ResponsePlanError;
 
 #[derive(Clone)]
 pub(crate) enum StoreAwaitControl {
@@ -82,7 +82,7 @@ impl StructuredStoreReply {
 }
 
 /// Awaits one store operation inside the admitted request task and returns one
-/// canonical V2 reply. Cancellation stops waiting and suppresses a reply; it
+/// canonical reply. Cancellation stops waiting and suppresses a reply; it
 /// cannot prove that a store operation already handed to the backend did not
 /// commit. The only request-lifecycle value retained across the await is the
 /// read-only control view.
@@ -108,9 +108,8 @@ where
     })
 }
 
-/// Structured V2 leaf for an ordinary message-store append. This is kept
-/// route-neutral so MIG-04 can select it without reintroducing V1 transport
-/// context into the store future.
+/// Structured processor for an ordinary message-store append. This remains
+/// route-neutral so transport context cannot leak into the store future.
 pub(crate) async fn append_message_with_control_reply<S, M, B>(
     control: RequestControlView,
     store: &mut S,
@@ -126,4 +125,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "../../../tests/unit/processor/send_message/structured_store.rs"]
 mod tests;

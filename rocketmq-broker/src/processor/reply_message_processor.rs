@@ -40,15 +40,15 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_store_api::MessageAppender;
-use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestControlView;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ServerRequestCommand;
-use rocketmq_transport::api::v2::ServerRequestSender;
+use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestControlView;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ServerRequestCommand;
+use rocketmq_transport::api::ServerRequestSender;
 
 use crate::client::manager::producer_manager::ProducerReplySessionRegistry;
 use tracing::info;
@@ -93,7 +93,7 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 enum ReplyPushPortError {
     SessionNotFound,
     Call {
-        source: rocketmq_transport::api::v2::ServerRequestError,
+        source: rocketmq_transport::api::ServerRequestError,
     },
     #[cfg(test)]
     TestCall,
@@ -264,13 +264,13 @@ impl<MS: BrokerWriteStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
     }
 }
 
-impl<MS, TS> RequestProcessorV2 for ReplyMessageProcessor<MS, TS>
+impl<MS, TS> RequestProcessor for ReplyMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
     TS: TransactionalMessageService + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
@@ -291,14 +291,14 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original = request.original_identity();
         let inbound_peer = reply_request_peer(request.origin())?;
         let result = self
-            .process_v2_request(
+            .process_request(
                 inbound_peer,
                 request.control().clone(),
                 original.original_code(),
@@ -342,7 +342,7 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
-    async fn process_v2_request(
+    async fn process_request(
         &self,
         inbound_peer: SocketAddr,
         control: RequestControlView,
@@ -351,10 +351,10 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let request_code = RequestCode::from(original_code);
-        info!("ReplyMessageProcessor V2 received request code: {:?}", request_code);
+        info!("ReplyMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
-                self.process_v2_reply_message(inbound_peer, control, original_opaque, request)
+                self.process_reply_message(inbound_peer, control, original_opaque, request)
                     .await
             }
             _ => BrokerResponseParts::from_command(request_code_not_supported_with_factory_remark_and_opaque(
@@ -367,7 +367,7 @@ where
         }
     }
 
-    async fn process_v2_reply_message(
+    async fn process_reply_message(
         &self,
         inbound_peer: SocketAddr,
         control: RequestControlView,
@@ -402,19 +402,19 @@ where
             response = response
                 .set_code(ResponseCode::SystemError)
                 .set_remark(format!("broker unable to service, until, {start_timestamp}"));
-            return self.finish_v2_reply(response, send_message_context);
+            return self.finish_reply(response, send_message_context);
         }
         response.set_code_mut(-1);
         self.inner
             .msg_check_at(inbound_peer, request, &request_header, &mut response)
             .await;
         if response.code() != -1 {
-            return self.finish_v2_reply(response, send_message_context);
+            return self.finish_reply(response, send_message_context);
         }
         let topic_config = match self.inner.context.topics.select_topic_config(request_header.topic()) {
             Some(config) => config,
             None => {
-                return self.finish_v2_reply(
+                return self.finish_reply(
                     response
                         .set_code(ResponseCode::TopicNotExist)
                         .set_remark(format!("Topic {} does not exist", request_header.topic())),
@@ -442,7 +442,7 @@ where
 
         if !store_reply_message_enable {
             response = response.set_command_custom_header(response_header);
-            return self.finish_v2_reply(response, send_message_context);
+            return self.finish_reply(response, send_message_context);
         }
 
         let mut store = self.inner.context.store.clone();
@@ -475,12 +475,12 @@ where
             }
         })
         .await
-        .map_err(|error| rocketmq_error::RocketMQError::internal("reply-message-v2-store", error))?;
+        .map_err(|error| rocketmq_error::RocketMQError::internal("reply-message-store", error))?;
         let (outcome, _) = reply.into_parts();
         Ok(outcome)
     }
 
-    fn finish_v2_reply(
+    fn finish_reply(
         &self,
         mut response: RemotingCommand,
         mut send_message_context: SendMessageContext,
@@ -783,7 +783,7 @@ mod tests {
     use super::PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS;
 
     #[test]
-    fn reply_v2_shared_seam_accepts_an_arc_held_leaf() {
+    fn reply_shared_seam_accepts_an_arc_held_leaf() {
         type TransactionService =
             crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService<
                 StorePorts,
@@ -793,7 +793,7 @@ mod tests {
             leaf: &'a Arc<super::ReplyMessageProcessor<StorePorts, TransactionService>>,
             request: &'a mut super::RemotingRequest,
         ) -> impl Future<Output = rocketmq_error::RocketMQResult<super::HandlerOutcome>> + 'a {
-            leaf.process_v2_shared(request)
+            leaf.process_shared(request)
         }
 
         let _ = call_shared;
@@ -915,5 +915,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "reply_message_processor/structured_store_tests.rs"]
+#[path = "../../tests/unit/processor/reply_message/structured_store.rs"]
 mod structured_store_tests;

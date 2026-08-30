@@ -26,10 +26,10 @@ use std::time::Duration;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v1::AdmissionLimits;
-use rocketmq_transport::api::v1::ConnectionState;
-use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::ConnectionState;
+use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::run_connected_session_with_io_policy;
 use rocketmq_transport::test_support::Connection;
 use rocketmq_transport::test_support::ConnectionHandler;

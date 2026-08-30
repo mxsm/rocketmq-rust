@@ -27,9 +27,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
-use rocketmq_transport::api::v1::RpcClient;
-use rocketmq_transport::api::v1::RpcRequest;
+use rocketmq_transport::api::request_code_not_supported_with_remark;
+use rocketmq_transport::api::RpcClient;
+use rocketmq_transport::api::RpcRequest;
 use tracing::error;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;

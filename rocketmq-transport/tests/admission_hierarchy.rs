@@ -15,13 +15,13 @@
 use std::net::IpAddr;
 use std::str::FromStr;
 
-use rocketmq_transport::api::v1::AdmissionClass;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v1::AdmissionLimits;
-use rocketmq_transport::api::v1::AdmissionResource;
-use rocketmq_transport::api::v1::AdmissionScope;
-use rocketmq_transport::api::v1::FullPolicy;
-use rocketmq_transport::api::v1::ResourceLimit;
+use rocketmq_transport::api::AdmissionClass;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::AdmissionResource;
+use rocketmq_transport::api::AdmissionScope;
+use rocketmq_transport::api::FullPolicy;
+use rocketmq_transport::api::ResourceLimit;
 
 #[test]
 fn global_ip_tenant_and_session_limits_release_as_one_permit() {

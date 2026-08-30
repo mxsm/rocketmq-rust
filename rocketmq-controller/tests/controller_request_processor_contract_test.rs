@@ -37,9 +37,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::RemotingClient;
-use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::RemotingClient;
+use rocketmq_transport::api::TransportClientConfig;
 use tokio::time::sleep;
 
 const CLUSTER_NAME: &str = "contract-cluster";
@@ -498,7 +498,7 @@ async fn controller_request_contract_broker_heartbeat() {
                 .get_broker_live_info(CLUSTER_NAME, BROKER_NAME, broker_id)
                 .is_none()
         },
-        "V2 session disconnect to remove the broker registration",
+        "session disconnect to remove the broker registration",
     )
     .await;
     harness.manager.shutdown().await.expect("shutdown controller manager");

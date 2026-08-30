@@ -23,7 +23,7 @@ use crate::dispatch::RequestOrigin;
 
 /// Trusted entry adapter that materialized a dispatch request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestTransport {
+pub(crate) enum RequestTransport {
     /// A command decoded from an accepted network session.
     Network,
     /// A command submitted by the Broker-owned embedded Proxy adapter.
@@ -32,7 +32,7 @@ pub enum RequestTransport {
 
 /// Error returned before an entry adapter can create a trusted request context.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum RequestContextError {
+pub(crate) enum RequestContextError {
     /// Embedded dispatch is fail-closed when no trusted identity was injected.
     #[error("embedded proxy dispatch requires an authenticated principal")]
     MissingEmbeddedPrincipal,
@@ -44,17 +44,13 @@ pub enum RequestContextError {
 /// embedded identity. Network authentication and embedded composition are the
 /// only supported constructors.
 #[derive(Debug, Clone)]
-pub struct RequestContext {
+pub(crate) struct RequestContext {
     deadline: Option<RequestDeadline>,
     origin: RequestOrigin,
     authentication: AuthenticationState,
 }
 
 /// Trusted request facts transferred from ingress into the request builder.
-#[allow(
-    dead_code,
-    reason = "REQ-06 keeps this crate-private transfer object ready for later dispatcher wiring"
-)]
 pub(crate) struct RequestContextParts {
     pub(crate) deadline: Option<RequestDeadline>,
     pub(crate) origin: RequestOrigin,
@@ -62,12 +58,6 @@ pub(crate) struct RequestContextParts {
 }
 
 impl RequestContext {
-    /// Creates a context for a decoded network command.
-    #[must_use]
-    pub fn network(peer: PeerInfo, principal: Option<Principal>, deadline: Option<RequestDeadline>) -> Self {
-        Self::network_with_security_profile(peer, principal, deadline, SecurityBootstrapProfile::SecureEnforced)
-    }
-
     /// Creates a context for a decoded network command using the security
     /// profile selected by the trusted transport bootstrap.
     #[must_use]
@@ -83,19 +73,6 @@ impl RequestContext {
             origin: RequestOrigin::Network { peer },
             authentication,
         }
-    }
-
-    /// Creates a fail-closed context for a Broker-owned embedded adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RequestContextError::MissingEmbeddedPrincipal`] when the
-    /// composition root did not inject a trusted principal.
-    pub fn try_embedded(
-        principal: Option<Principal>,
-        deadline: Option<RequestDeadline>,
-    ) -> Result<Self, RequestContextError> {
-        Self::try_embedded_with_caller(EmbeddedCaller::BrokerProxy, principal, deadline)
     }
 
     /// Creates a fail-closed context for an explicitly identified embedded caller.
@@ -149,30 +126,20 @@ impl RequestContext {
 
     /// Returns the immutable origin captured by a trusted ingress adapter.
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "REQ-03 retains this crate-internal staging accessor for the REQ-06 request builder"
-    )]
+    #[cfg(test)]
     pub(crate) const fn origin(&self) -> &RequestOrigin {
         &self.origin
     }
 
     /// Returns the immutable authentication facts established at ingress.
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "REQ-03 retains this crate-internal staging accessor for the REQ-06 request builder"
-    )]
+    #[cfg(test)]
     pub(crate) const fn authentication(&self) -> &AuthenticationState {
         &self.authentication
     }
 
     /// Consumes the staging context after trusted ingress has finished
     /// materializing its request facts.
-    #[allow(
-        dead_code,
-        reason = "REQ-06 consumes staging facts from later dispatcher wiring; current coverage is builder-local"
-    )]
     pub(crate) fn into_parts(self) -> RequestContextParts {
         RequestContextParts {
             deadline: self.deadline,
@@ -266,23 +233,6 @@ mod tests {
                 caller: EmbeddedCaller::BrokerProxy
             }
         );
-        assert_eq!(context.authentication(), &AuthenticationState::authenticated(principal));
-    }
-
-    #[test]
-    fn embedded_compatibility_wrapper_uses_the_broker_proxy_caller() {
-        let principal = Principal::new("embedded-user");
-        let context = RequestContext::try_embedded(Some(principal.clone()), None)
-            .expect("trusted embedded principal must construct context");
-
-        assert_eq!(
-            context.origin(),
-            &RequestOrigin::Embedded {
-                caller: EmbeddedCaller::BrokerProxy
-            }
-        );
-        assert_eq!(context.peer(), None);
-        assert_eq!(context.principal(), Some(&principal));
         assert_eq!(context.authentication(), &AuthenticationState::authenticated(principal));
     }
 

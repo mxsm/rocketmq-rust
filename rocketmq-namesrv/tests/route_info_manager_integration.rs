@@ -46,10 +46,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TransportClient;
-use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::TransportClient;
+use rocketmq_transport::api::TransportClientConfig;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -356,8 +356,6 @@ async fn namesrv_returns_java_style_config_properties_over_remoting() {
     let properties = std::str::from_utf8(body).expect("config response should be valid utf-8");
     assert!(properties.contains("listenPort="));
     assert!(properties.contains("bindAddress=127.0.0.1"));
-    assert!(!properties.contains("useRouteInfoManagerV2"));
-
     harness.shutdown().await;
 }
 

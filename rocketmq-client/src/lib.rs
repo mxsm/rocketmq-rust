@@ -126,7 +126,7 @@ mod cluster_session {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_security_api::OutboundSigner;
     use rocketmq_security_api::SecurityRequestView;
-    use rocketmq_transport::api::v1::RPCHook;
+    use rocketmq_transport::api::RPCHook;
 
     pub use rocketmq_model::common::boundary_type::BoundaryType;
     pub use rocketmq_model::common::message::message_ext::MessageExt;

@@ -47,16 +47,16 @@ use rocketmq_store::BrokerReadStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::MAX_PULL_MSG_SIZE;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::RpcClient;
-use rocketmq_transport::api::v1::RpcClientUtils;
-use rocketmq_transport::api::v1::RpcRequest;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::RpcClient;
+use rocketmq_transport::api::RpcClientUtils;
+use rocketmq_transport::api::RpcRequest;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionView;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -122,12 +122,12 @@ enum PullClientIdentityError {
     RegistrationMissing,
 }
 
-impl<MS> RequestProcessorV2 for PullMessageProcessor<MS>
+impl<MS> RequestProcessor for PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
@@ -135,22 +135,19 @@ impl<MS> PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
-    /// Arc-callable V2 leaf boundary used by the MIG-05 Broker aggregate.
-    pub(crate) async fn process_v2_shared(
+    /// Arc-callable leaf boundary used by the Broker aggregate.
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let request_code = RequestCode::from(request.original_identity().original_code());
-        info!(?request_code, "PullMessageProcessor received a V2 request");
+        info!(?request_code, "PullMessageProcessor received a request");
         match request_code {
             RequestCode::PullMessage | RequestCode::LitePullMessage => {
-                self.process_supported_v2(request_code, request).await
+                self.process_supported(request_code, request).await
             }
             _ => {
-                warn!(
-                    ?request_code,
-                    "PullMessageProcessor received an unknown V2 request code"
-                );
+                warn!(?request_code, "PullMessageProcessor received an unknown request code");
                 BrokerResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
                     &self.context.command_factory,
                     request.original_identity().original_code(),
@@ -319,10 +316,11 @@ where
         self.session_client_lookup.set(lookup)
     }
 
-    /// Installs the Broker-owned BRK-04 deferred Pull service.
+    /// Installs the Broker-owned deferred Pull service.
     ///
-    /// BRK-06 owns the service lifecycle and calls this once during Broker composition. Until
-    /// then, V2 requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`.
+    /// Broker composition owns the service lifecycle and calls this once.
+    /// Requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`
+    /// until installation completes.
     pub(crate) fn install_pull_deferred_service(
         &self,
         service: Arc<PullDeferredService>,
@@ -802,7 +800,7 @@ impl<MS> PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
-    async fn process_supported_v2(
+    async fn process_supported(
         &self,
         request_code: RequestCode,
         request: &mut RemotingRequest,
@@ -1306,8 +1304,8 @@ fn consumer_compensation_for_request_source(request_source: RequestSource) -> (C
 }
 
 #[cfg(test)]
-#[path = "pull_message_processor/v2_tests.rs"]
-mod v2_tests;
+#[path = "../../tests/unit/processor/pull_message.rs"]
+mod processor_tests;
 
 #[cfg(test)]
 mod tests {

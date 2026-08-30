@@ -139,22 +139,6 @@ kvConfigPath = "/tmp/rocketmq/kvConfig.json"
     }
 
     #[test]
-    fn namesrv_config_parse_rejects_removed_route_manager_switch() {
-        let path = temp_config_path("removed-route-manager-switch");
-        fs::write(&path, "useRouteInfoManagerV2 = false\n").expect("test config should be written");
-
-        let error =
-            parse_command_and_config_file(path.clone()).expect_err("removed route manager switch must fail explicitly");
-        fs::remove_file(path).expect("test config should be removed");
-
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
-        assert!(error.to_string().contains("useRouteInfoManagerV2"));
-    }
-
-    #[test]
     fn namesrv_config_parse_errors_redact_observability_values() {
         for (source, canary) in [
             (

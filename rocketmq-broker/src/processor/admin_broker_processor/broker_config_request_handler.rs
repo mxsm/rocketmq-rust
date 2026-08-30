@@ -38,7 +38,7 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
+use rocketmq_transport::api::request_code_not_supported_with_remark;
 use sysinfo::Disks;
 
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -631,7 +631,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         let broker_active = self.is_special_service_running();
         runtime_info.insert(
             "sreDiagnosticsSchemaVersion".to_string(),
-            "rocketmq.broker-diagnostics.v1".to_string(),
+            "rocketmq.broker-diagnostics.legacy".to_string(),
         );
         runtime_info.insert(
             "sreDiagnosticsObservedAtMillis".to_string(),
@@ -1234,7 +1234,7 @@ mod tests {
         let initial = handler.prepare_runtime_info();
         assert_eq!(
             initial.get("sreDiagnosticsSchemaVersion").map(|value| value.as_str()),
-            Some("rocketmq.broker-diagnostics.v1")
+            Some("rocketmq.broker-diagnostics.legacy")
         );
         assert_eq!(
             initial.get("brokerConfigGeneration").map(|value| value.as_str()),

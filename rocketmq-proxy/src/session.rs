@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Proxy session contracts and V2 remoting capability binding.
+//! Proxy session contracts and remoting capability binding.
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -23,17 +23,17 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
-use rocketmq_transport::api::v2::ServerPushCommand;
-use rocketmq_transport::api::v2::ServerPushError;
-use rocketmq_transport::api::v2::ServerPushReceipt;
-use rocketmq_transport::api::v2::ServerPushSender;
-use rocketmq_transport::api::v2::SessionCloseError;
-use rocketmq_transport::api::v2::SessionCloseHandle;
-use rocketmq_transport::api::v2::SessionCloseReason;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::SessionView;
-use rocketmq_transport::api::v2::V2SessionLifecycleListener;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::ServerPushCommand;
+use rocketmq_transport::api::ServerPushError;
+use rocketmq_transport::api::ServerPushReceipt;
+use rocketmq_transport::api::ServerPushSender;
+use rocketmq_transport::api::SessionCloseError;
+use rocketmq_transport::api::SessionCloseHandle;
+use rocketmq_transport::api::SessionCloseReason;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionLifecycleListener;
+use rocketmq_transport::api::SessionRegistry;
+use rocketmq_transport::api::SessionView;
 
 use crate::context::ProxyContext;
 
@@ -68,7 +68,7 @@ pub struct RemotingSessionCapability {
 }
 
 impl RemotingSessionCapability {
-    /// Returns the canonical V2 session identity behind this binding.
+    /// Returns the transport session identity behind this binding.
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
@@ -88,7 +88,7 @@ impl RemotingSessionCapability {
         self.push.send(command, timeout).await
     }
 
-    /// Gracefully retires the bound canonical V2 session.
+    /// Gracefully retires the bound transport session.
     ///
     /// # Errors
     ///
@@ -98,7 +98,7 @@ impl RemotingSessionCapability {
     }
 }
 
-/// Proxy session state with a narrow V2 remoting capability specialization.
+/// Proxy session state with a narrow remoting capability specialization.
 pub type ClientSessionRegistry = rocketmq_proxy_core::session::ClientSessionRegistry<RemotingSessionCapability>;
 
 /// Typed instruction submitted by request processing after a valid heartbeat.
@@ -125,14 +125,14 @@ pub(crate) struct HeartbeatCommit {
 pub(crate) struct RetiredRemotingSession {
     binding: BindingGeneration,
     capability: RemotingSessionCapability,
-    registry: Weak<V2SessionRegistry>,
+    registry: Weak<SessionRegistry>,
 }
 
 impl RetiredRemotingSession {
     fn new(
         binding: BindingGeneration,
         capability: RemotingSessionCapability,
-        registry: Weak<V2SessionRegistry>,
+        registry: Weak<SessionRegistry>,
     ) -> Option<Self> {
         (capability.session_id() == binding.session_id).then_some(Self {
             binding,
@@ -375,14 +375,14 @@ impl<C: Clone> BindingState<C> {
     }
 }
 
-/// Independent lifecycle binder used by the V2 processor and session registry.
+/// Independent lifecycle binder used by the processor and session registry.
 ///
 /// Request processing can only submit [`ClientSessionBindInstruction`]. The
 /// registry lookup and capability acquisition remain private to this binder.
 #[derive(Clone)]
 pub(crate) struct ProxySessionBinder {
     sessions: ClientSessionRegistry,
-    transport_registry: Arc<OnceLock<Weak<V2SessionRegistry>>>,
+    transport_registry: Arc<OnceLock<Weak<SessionRegistry>>>,
     state: Arc<Mutex<BindingState<RemotingSessionCapability>>>,
 }
 
@@ -395,11 +395,11 @@ impl ProxySessionBinder {
         }
     }
 
-    pub(crate) fn attach(&self, registry: &Arc<V2SessionRegistry>) -> bool {
+    pub(crate) fn attach(&self, registry: &Arc<SessionRegistry>) -> bool {
         self.transport_registry.set(Arc::downgrade(registry)).is_ok()
     }
 
-    /// Atomically commits heartbeat membership and its live V2 capability.
+    /// Atomically commits heartbeat membership and its live remoting capability.
     ///
     /// Disconnect processing takes the same state lock and removes only the
     /// exact binding generation it observed. A late disconnect from a replaced
@@ -502,7 +502,7 @@ impl ProxySessionBinder {
     }
 }
 
-impl V2SessionLifecycleListener for ProxySessionBinder {
+impl SessionLifecycleListener for ProxySessionBinder {
     fn on_session_connected(&self, _session: &SessionView) {}
 
     fn on_session_disconnected(&self, session_id: SessionId) {

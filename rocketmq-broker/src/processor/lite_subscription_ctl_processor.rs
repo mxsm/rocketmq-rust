@@ -29,9 +29,9 @@ use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::warn;
 
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -108,14 +108,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
 }
 
 impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
-    pub(crate) async fn process_legacy(
-        &self,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_command(request).await
-    }
-
-    /// V2 leaf business contract; the subscription registry retains no raw session handle.
+    /// processor business contract; the subscription registry retains no raw session handle.
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
@@ -279,14 +272,14 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     }
 }
 
-impl<MS: BrokerStorePort + 'static> RequestProcessorV2 for LiteSubscriptionCtlProcessor<MS> {
+impl<MS: BrokerStorePort + 'static> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -297,7 +290,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
             &command_factory,
             result,
             original_opaque,
-            "LiteSubscriptionCtlProcessor V2 command dispatch completed without a response",
+            "LiteSubscriptionCtlProcessor command dispatch completed without a response",
         )
     }
 }
@@ -504,14 +497,14 @@ mod tests {
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::HandlerOutcome;
-    use rocketmq_transport::api::v2::RemotingRequest;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     use super::LiteSubscriptionCtlContext;
     use super::LiteSubscriptionCtlPolicy;
@@ -520,7 +513,7 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
     use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
-    use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::api::RequestProcessor;
 
     struct AllowEmbeddedPolicy;
 
@@ -535,7 +528,7 @@ mod tests {
         inner: Arc<tokio::sync::Mutex<LiteSubscriptionCtlProcessor<BrokerMessageStore>>>,
     }
 
-    impl RequestProcessorV2 for SharedLiteSubscriptionProcessor {
+    impl RequestProcessor for SharedLiteSubscriptionProcessor {
         async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
             self.inner.lock().await.process(request).await
         }
@@ -594,11 +587,11 @@ mod tests {
         ))
     }
 
-    async fn dispatch_v2(
+    async fn dispatch_request(
         processor: LiteSubscriptionCtlProcessor<BrokerMessageStore>,
         command: RemotingCommand,
     ) -> EmbeddedDispatchOutcome {
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             SharedLiteSubscriptionProcessor {
                 inner: Arc::new(tokio::sync::Mutex::new(processor)),
             },
@@ -609,14 +602,14 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        EmbeddedRequestHarnessV2::new(
+        EmbeddedRequestHarness::new(
             dispatcher,
-            crate::test_task_group("lite-subscription-v2"),
-            Principal::new("lite-subscription-v2-test"),
+            crate::test_task_group("lite-subscription"),
+            Principal::new("lite-subscription-test"),
         )
         .dispatch(None, command)
         .await
-        .expect("Lite subscription V2 dispatch should complete")
+        .expect("Lite subscription dispatch should complete")
     }
 
     fn seed_group_config(runtime: &mut BrokerRuntime, group: &str, attributes: HashMap<CheetahString, CheetahString>) {
@@ -644,14 +637,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lite_subscription_v2_returns_illegal_operation_for_a_missing_body() {
-        let mut runtime = new_test_runtime("v2-missing-body").await;
+    async fn lite_subscription_returns_illegal_operation_for_a_missing_body() {
+        let mut runtime = new_test_runtime("missing-body").await;
         let processor = lite_subscription_processor_for_test(&mut runtime);
         let request =
             RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {}).set_opaque(7_707);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
-            panic!("Lite subscription V2 must return an inline response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+            panic!("Lite subscription must return an inline response plan");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::IllegalOperation);

@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use rocketmq_protocol::code::request_code::RequestCode;
+#[cfg(test)]
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::RequestOrdering;
-use rocketmq_transport::api::v1::RequestOrderingKey;
-use rocketmq_transport::api::v2::IngressRequestView;
+use rocketmq_transport::api::IngressRequestView;
+use rocketmq_transport::api::RequestOrdering;
+use rocketmq_transport::api::RequestOrderingKey;
 
 const CLIENT_LIFECYCLE_KEY: u64 = 0x434c_4945_4e54;
 const SEND_NAMESPACE: u64 = 0x5345_4e44;
@@ -25,11 +26,12 @@ const TRANSACTION_NAMESPACE: u64 = 0x0054_584e;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-pub(super) fn broker_request_ordering(request: &RemotingCommand) -> RequestOrdering {
+#[cfg(test)]
+pub(super) fn broker_command_ordering(request: &RemotingCommand) -> RequestOrdering {
     broker_request_ordering_parts(request.code(), request.ext_fields())
 }
 
-pub(super) fn broker_request_ordering_v2(ingress: IngressRequestView<'_>) -> RequestOrdering {
+pub(super) fn broker_request_ordering(ingress: IngressRequestView<'_>) -> RequestOrdering {
     broker_request_ordering_parts(ingress.original_identity().original_code(), ingress.ext_fields())
 }
 
@@ -124,18 +126,18 @@ mod tests {
         let unregister = command(RequestCode::UnregisterClient, &[]);
 
         assert_eq!(
-            broker_request_ordering(&heartbeat),
-            broker_request_ordering(&unregister)
+            broker_command_ordering(&heartbeat),
+            broker_command_ordering(&unregister)
         );
     }
 
     #[test]
-    fn sends_are_ordered_per_topic_queue_and_v2_aliases_match_v1_fields() {
-        let v1 = command(
+    fn compact_send_header_aliases_match_standard_fields() {
+        let standard = command(
             RequestCode::SendMessage,
             &[("producerGroup", "producer-a"), ("topic", "topic-a"), ("queueId", "1")],
         );
-        let v2 = command(
+        let compact = command(
             RequestCode::SendMessageV2,
             &[("a", "producer-a"), ("b", "topic-a"), ("e", "1")],
         );
@@ -144,8 +146,11 @@ mod tests {
             &[("producerGroup", "producer-a"), ("topic", "topic-a"), ("queueId", "2")],
         );
 
-        assert_eq!(broker_request_ordering(&v1), broker_request_ordering(&v2));
-        assert_ne!(broker_request_ordering(&v1), broker_request_ordering(&other_queue));
+        assert_eq!(broker_command_ordering(&standard), broker_command_ordering(&compact));
+        assert_ne!(
+            broker_command_ordering(&standard),
+            broker_command_ordering(&other_queue)
+        );
     }
 
     #[test]
@@ -154,12 +159,12 @@ mod tests {
         let update = command(RequestCode::UpdateConsumerOffset, &fields);
         let query = command(RequestCode::QueryConsumerOffset, &fields);
 
-        assert_eq!(broker_request_ordering(&update), broker_request_ordering(&query));
+        assert_eq!(broker_command_ordering(&update), broker_command_ordering(&query));
     }
 
     #[test]
     fn unrelated_read_requests_remain_concurrent() {
         let pull = command(RequestCode::PullMessage, &[]);
-        assert_eq!(broker_request_ordering(&pull), RequestOrdering::Concurrent);
+        assert_eq!(broker_command_ordering(&pull), RequestOrdering::Concurrent);
     }
 }

@@ -19,9 +19,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::ConnectionContext;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::SessionView;
 use tonic::metadata::MetadataMap;
 use tonic::Request;
 use uuid::Uuid;
@@ -171,31 +170,11 @@ impl<P> ProxyContextWithPrincipal<P> {
         self.authenticated_principal = Some(principal);
     }
 
-    pub fn from_remoting_request<C>(rpc_name: &'static str, channel: &C, request: &RemotingCommand) -> Self
-    where
-        C: ConnectionContext,
-    {
-        Self {
-            request_id: request.opaque().to_string(),
-            rpc_name,
-            remote_addr: Some(channel.remote_address().to_string()),
-            local_addr: Some(channel.local_address().to_string()),
-            client_id: remoting_ext_field(request, "clientID"),
-            language: Some(format!("{:?}", request.language())),
-            client_version: Some(request.version().to_string()),
-            namespace: remoting_ext_field(request, "namespace"),
-            connection_id: Some(channel.connection_id().to_owned()),
-            deadline_at: None,
-            received_at: Instant::now(),
-            authenticated_principal: None,
-        }
-    }
-
-    /// Builds Proxy metadata from the immutable V2 request and session views.
+    /// Builds Proxy metadata from immutable request and session views.
     ///
     /// Network addresses are read only from the transport-owned session. An
     /// embedded session deliberately produces no socket metadata.
-    pub fn from_remoting_request_v2(rpc_name: &'static str, request: &RemotingRequest) -> Self {
+    pub fn from_remoting_request(rpc_name: &'static str, request: &RemotingRequest) -> Self {
         let command = request.command();
         let received_at = Instant::now();
         let deadline_at = request
@@ -357,13 +336,9 @@ pub(crate) fn parse_grpc_timeout(raw: &str) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::net::SocketAddr;
     use std::time::Duration;
     use std::time::Instant;
 
-    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_transport::api::v1::ConnectionContext;
     use tonic::Request;
 
     use super::parse_grpc_timeout;
@@ -371,26 +346,6 @@ mod tests {
     use super::ProxyContext;
     use super::ProxyContextWithPrincipal;
     use crate::error::ProxyError;
-
-    struct TestConnectionContext {
-        local: SocketAddr,
-        remote: SocketAddr,
-        id: String,
-    }
-
-    impl ConnectionContext for TestConnectionContext {
-        fn local_address(&self) -> SocketAddr {
-            self.local
-        }
-
-        fn remote_address(&self) -> SocketAddr {
-            self.remote
-        }
-
-        fn connection_id(&self) -> &str {
-            &self.id
-        }
-    }
 
     #[test]
     fn parse_grpc_timeout_supports_multiple_units() {
@@ -451,32 +406,6 @@ mod tests {
         assert!(context
             .deadline()
             .is_some_and(|remaining| { !remaining.is_zero() && remaining <= Duration::from_secs(1) }));
-    }
-
-    #[test]
-    fn proxy_context_projects_neutral_remoting_connection_metadata() {
-        let connection = TestConnectionContext {
-            local: "127.0.0.1:8080".parse().expect("local address"),
-            remote: "127.0.0.2:10911".parse().expect("remote address"),
-            id: "channel-a".to_owned(),
-        };
-        let request = RemotingCommand::create_remoting_command(10)
-            .set_opaque(7)
-            .set_version(123)
-            .set_ext_fields(HashMap::from([
-                ("clientID".into(), "client-a".into()),
-                ("namespace".into(), "tenant-a".into()),
-            ]));
-
-        let context = ProxyContext::from_remoting_request("QueryRoute", &connection, &request);
-
-        assert_eq!(context.request_id(), "7");
-        assert_eq!(context.local_addr(), Some("127.0.0.1:8080"));
-        assert_eq!(context.remote_addr(), Some("127.0.0.2:10911"));
-        assert_eq!(context.connection_id(), Some("channel-a"));
-        assert_eq!(context.client_id(), Some("client-a"));
-        assert_eq!(context.namespace(), Some("tenant-a"));
-        assert_eq!(context.client_version(), Some("123"));
     }
 
     #[test]

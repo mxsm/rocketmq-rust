@@ -20,6 +20,8 @@ pub(crate) mod prepare;
 pub(crate) mod service;
 
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/pop_lite_deferred/acceptance_tests.rs"]
 mod acceptance_tests;
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/pop_lite_deferred/tests.rs"]
 mod tests;

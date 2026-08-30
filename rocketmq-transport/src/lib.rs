@@ -14,10 +14,10 @@
 
 //! Bounded TCP/TLS transport ownership boundary.
 //!
-//! File-backed frames use [`api::v1::FileRegion`] to retain an immutable storage lease through writer
+//! File-backed frames use [`api::FileRegion`] to retain an immutable storage lease through writer
 //! completion. Portable transfers read one reusable 64 KiB buffer on the runtime-owned blocking
 //! I/O lane. With the default-off `linux-sendfile` feature,
-//! [`api::v1::FileTransferMode::Auto`] selects Linux `sendfile` for plaintext TCP regions of at
+//! [`api::FileTransferMode::Auto`] selects Linux `sendfile` for plaintext TCP regions of at
 //! least 64 KiB after a cached capability preflight; unsupported filesystems fall back before any
 //! frame bytes are written. TLS always uses portable reads so that payload bytes still pass
 //! through the userspace rustls record layer.
@@ -38,7 +38,6 @@ mod common;
 mod config;
 mod config_support;
 mod connection;
-mod connection_context;
 mod deadline;
 mod discovery;
 mod dispatch;
@@ -54,8 +53,6 @@ mod net;
 pub mod prelude;
 mod proxy_protocol;
 mod public_api;
-mod public_api_v2;
-#[path = "remoting_v2.rs"]
 mod remoting;
 mod remoting_server;
 mod request_ordering;
@@ -65,6 +62,7 @@ mod runtime;
 mod security;
 mod server;
 mod session_executor;
+mod session_registry;
 mod session_view;
 #[cfg(feature = "socks")]
 mod socks;
@@ -72,27 +70,11 @@ mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod tls;
-mod v2_session_registry;
 mod write_result;
 mod write_strategy;
 mod writer_runtime;
 
-/// Versioned, intentionally curated public API.
+/// Intentionally curated public API.
 pub mod api {
-    /// Stable source API for the 1.x release line.
-    pub mod v1 {
-        pub use crate::public_api::*;
-    }
-
-    /// Curated source API boundary for the 2.x release line.
-    ///
-    /// This surface exposes the trusted mutable request aggregate, immutable
-    /// ingress facts, and an owned [`ResponsePlan`](crate::api::v2::ResponsePlan).
-    /// A response plan provides only response metadata; raw body storage,
-    /// complete-frame encoders, response sinks, and raw file leases remain
-    /// private to the transport. Legacy channels, session handles, operation
-    /// contexts, and other legacy transport authority are also excluded.
-    pub mod v2 {
-        pub use crate::public_api_v2::*;
-    }
+    pub use crate::public_api::*;
 }

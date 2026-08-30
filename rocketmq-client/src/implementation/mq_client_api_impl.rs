@@ -255,13 +255,13 @@ use rocketmq_protocol::protocol::header::reset_master_flush_offset_header::Reset
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
-use rocketmq_transport::api::v1::ConnectTarget;
-use rocketmq_transport::api::v1::ConnectionNetEvent;
-use rocketmq_transport::api::v1::DefaultTopAddressing;
-use rocketmq_transport::api::v1::HeartbeatV2Result;
-use rocketmq_transport::api::v1::NameServerUpdateCallback;
-use rocketmq_transport::api::v1::RemotingClient;
-use rocketmq_transport::api::v1::TopAddressing;
+use rocketmq_transport::api::ConnectTarget;
+use rocketmq_transport::api::ConnectionNetEvent;
+use rocketmq_transport::api::DefaultTopAddressing;
+use rocketmq_transport::api::HeartbeatV2Result;
+use rocketmq_transport::api::NameServerUpdateCallback;
+use rocketmq_transport::api::RemotingClient;
+use rocketmq_transport::api::TopAddressing;
 
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
@@ -300,11 +300,11 @@ use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
-use rocketmq_transport::api::v1::RPCHook;
-use rocketmq_transport::api::v1::RpcRequestHeader;
-use rocketmq_transport::api::v1::TopicRequestHeader;
-use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v1::TransportTelemetry;
+use rocketmq_transport::api::RPCHook;
+use rocketmq_transport::api::RpcRequestHeader;
+use rocketmq_transport::api::TopicRequestHeader;
+use rocketmq_transport::api::TransportClientConfig;
+use rocketmq_transport::api::TransportTelemetry;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;

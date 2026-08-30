@@ -32,7 +32,7 @@ use tracing::warn;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::clients::client::ClientInboundOwner;
-use crate::clients::client::V2ClientInboundOwner;
+use crate::clients::client::ProcessorClientInboundOwner;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::codec::remoting_command_codec::FrameLimits;
@@ -43,7 +43,7 @@ use crate::runtime::config::client_config::GoAwayPolicy;
 #[cfg(test)]
 use crate::runtime::config::client_config::MaintenanceConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
-use crate::runtime::processor_v2::RequestProcessorV2;
+use crate::runtime::processor::RequestProcessor;
 #[cfg(test)]
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
@@ -51,7 +51,6 @@ use crate::telemetry::TransportTelemetry;
 #[cfg(test)]
 use crate::tls::TlsConfig;
 
-#[path = "rocketmq_tokio_client/api_v2_only.rs"]
 mod api;
 mod compatibility;
 mod connect_flight;
@@ -63,18 +62,9 @@ mod request;
 
 pub use api::{
     ClientShutdownReport, ClientSnapshot, ClientStartReport, ConnectionShutdownReport, PendingUsage, RemotingClient,
-    RemotingClientBuilder, RemotingClientV2Builder, RequestTarget, SendReceipt, TransportClientBuilder,
-    TransportClientV2Builder,
+    RemotingClientBuilder, RequestTarget, SendReceipt, TransportClientBuilder,
 };
 pub use compatibility::CachedConnectionState;
-
-/// Transport client alias whose omitted processor is the V2-native default.
-pub type V2TransportClient<PR = crate::request_processor::default_request_processor::DefaultRequestProcessor> =
-    TransportClient<PR>;
-
-/// Nameserver-aware client alias whose omitted processor is the V2-native default.
-pub type V2RemotingClient<PR = crate::request_processor::default_request_processor::DefaultRequestProcessor> =
-    RemotingClient<PR>;
 
 use connection_registry::ConnectionRegistry;
 use endpoint_state::EndpointStateStore;
@@ -272,7 +262,7 @@ impl<PR> Clone for TransportClient<PR> {
     }
 }
 
-impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     #[cfg(test)]
     pub(crate) fn build_for_test(
         config: Arc<TransportClientConfig>,
@@ -284,7 +274,7 @@ impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
             .expect("test transport client configuration must be valid")
     }
 
-    fn build_inner_v2(
+    fn build_inner(
         tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
@@ -302,7 +292,7 @@ impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
             },
             &process_budget,
         )?;
-        let owner = V2ClientInboundOwner::new(processor, pending_requests, &process_budget)?;
+        let owner = ProcessorClientInboundOwner::new(processor, pending_requests, &process_budget)?;
         Self::build_with_inbound_owner(
             tokio_client_config,
             Arc::new(owner),
@@ -471,4 +461,5 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/clients/rocketmq_tokio_client.rs"]
 mod tests;

@@ -27,10 +27,6 @@ pub fn command_from_error(error: &RocketMQError) -> RemotingCommand {
     command_from_error_with_factory(&application_remoting_command_factory(), error)
 }
 
-#[allow(
-    dead_code,
-    reason = "DSP-03 typed error plans are consumed by the not-yet-wired private dispatcher"
-)]
 pub(crate) fn response_plan_from_error(error: &RocketMQError) -> Result<ResponsePlan, ResponsePlanError> {
     ResponsePlan::command(command_from_error(error))
 }

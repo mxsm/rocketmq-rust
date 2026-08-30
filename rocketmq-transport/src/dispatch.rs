@@ -12,21 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[path = "dispatch/authorized_dispatcher_v2.rs"]
 mod authorized_dispatcher;
 mod deferred_admission;
 mod deferred_expiry;
 mod deferred_registry;
 mod deferred_responder;
-#[allow(
-    dead_code,
-    reason = "DEF-01 provides the deferred response foundation consumed by later DEF stages"
-)]
 mod deferred_response;
 pub(crate) mod deferred_resume;
 mod deferred_session_cleanup;
 mod embedded_dispatch;
 mod handler_outcome;
+mod processor_adapter;
 mod remoting_request;
 mod request_context;
 mod request_control;
@@ -35,18 +31,10 @@ mod request_origin;
 mod response;
 mod response_plan;
 mod response_sink;
-mod v2_processor_adapter;
 
-pub use authorized_dispatcher::AuthorizedCommandDispatcherV2;
-pub use authorized_dispatcher::AuthorizedDispatchBoundary;
+pub use authorized_dispatcher::AuthorizedCommandDispatcher;
+pub(crate) use authorized_dispatcher::AuthorizedDispatchBoundary;
 pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
-#[allow(
-    unused_imports,
-    reason = "DSP-03 exposes the private V2 dispatcher failure to later coexistence routing"
-)]
-pub(crate) use authorized_dispatcher::AuthorizedDispatchV2Error;
-pub use authorized_dispatcher::DispatchError;
-pub use authorized_dispatcher::DispatchOutcome;
 pub use deferred_admission::DeferredAdmission;
 pub use deferred_admission::DeferredAdmissionAcquireError;
 pub use deferred_admission::DeferredAdmissionAcquireErrorKind;
@@ -89,25 +77,9 @@ pub(crate) use deferred_responder::DeferredResponseSeed;
 pub use deferred_responder::TakeDeferredResponderError;
 pub use deferred_response::DeferredTerminalReason;
 pub(crate) use deferred_response::DeferredTransportDropHandle;
-#[allow(
-    unused_imports,
-    reason = "DEF-01 exposes the private state machine to later deferred runtime stages"
-)]
 pub(crate) use deferred_response::ResponseSendClaim;
-#[allow(
-    unused_imports,
-    reason = "DEF-01 exposes the private state machine to later deferred runtime stages"
-)]
 pub(crate) use deferred_response::ResponseState;
-#[allow(
-    unused_imports,
-    reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
-)]
 pub(crate) use deferred_response::ResponseStateError;
-#[allow(
-    unused_imports,
-    reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
-)]
 pub(crate) use deferred_response::ResponseStateSnapshot;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupOwner;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupRegistration;
@@ -120,20 +92,25 @@ pub use embedded_dispatch::EmbeddedDispatchError;
 pub use embedded_dispatch::EmbeddedDispatchErrorKind;
 pub use embedded_dispatch::EmbeddedDispatchOutcome;
 pub use handler_outcome::HandlerOutcome;
-#[allow(
-    unused_imports,
-    reason = "DSP-02 exposes the private inline handler contract to later dispatcher wiring"
-)]
 pub(crate) use handler_outcome::HandlerOutcomeContractError;
 pub(crate) use handler_outcome::InlineResponseSlot;
 pub use handler_outcome::ProtocolNoResponse;
 pub use handler_outcome::ProtocolNoResponseError;
 pub use handler_outcome::ProtocolNoResponseReason;
+pub(crate) use processor_adapter::DispatchMetricsGuard;
+pub(crate) use processor_adapter::DispatchProcessor;
+pub(crate) use processor_adapter::DispatchProcessorError;
+pub(crate) use processor_adapter::EmbeddedProcessorResolveError;
+pub(crate) use processor_adapter::EmbeddedResolvedOutcome;
+pub(crate) use processor_adapter::ExplicitProcessor;
+pub(crate) use processor_adapter::InternalFailureOrigin;
+pub(crate) use processor_adapter::InternalProcessorCandidate;
+pub(crate) use processor_adapter::InternalProcessorOutcome;
+pub(crate) use processor_adapter::NetworkSession;
 pub use remoting_request::IngressRequestView;
 pub use remoting_request::RemotingRequest;
-pub use request_context::RequestContext;
-pub use request_context::RequestContextError;
-pub use request_context::RequestTransport;
+pub(crate) use request_context::RequestContext;
+pub(crate) use request_context::RequestTransport;
 pub use request_control::RequestControlView;
 pub use request_control::RequestMeta;
 pub(crate) use request_identity::reserve_session_owner;
@@ -148,43 +125,14 @@ pub use response::ResponseErrorKind;
 pub use response::ResponseReceipt;
 pub use response::ResponseTerminalState;
 pub use response::WriteProgress;
-#[allow(
-    unused_imports,
-    reason = "later private response stages name the RSP-03 binding capability through dispatch"
-)]
 pub(crate) use response_plan::BoundResponsePlan;
 pub use response_plan::EmbeddedResponse;
 pub use response_plan::EmbeddedResponseBody;
-#[allow(
-    unused_imports,
-    reason = "later private response stages handle the RSP-03 binding failure through dispatch"
-)]
 pub(crate) use response_plan::ResponseBindingError;
-#[allow(
-    unused_imports,
-    reason = "later private response encoders recover the RSP-03 body owner through dispatch"
-)]
 pub(crate) use response_plan::ResponseBody;
 pub use response_plan::ResponseBodyKind;
 pub use response_plan::ResponsePlan;
 pub use response_plan::ResponsePlanError;
-#[allow(
-    unused_imports,
-    reason = "RSP-05 exposes the private local handoff seam consumed by RSP-06"
-)]
-pub(crate) use response_sink::LocalResponsePlanReceiver;
-pub use response_sink::LocalResponseReceiver;
 pub(crate) use response_sink::NetworkResponsePlanContext;
-pub use response_sink::ResponseSink;
-pub use response_sink::ResponseSinkError;
+pub(crate) use response_sink::ResponseSink;
 pub(crate) use response_sink::ResponseTransportDropHandle;
-pub(crate) use v2_processor_adapter::DispatchMetricsGuard;
-pub(crate) use v2_processor_adapter::DispatchProcessor;
-pub(crate) use v2_processor_adapter::DispatchProcessorError;
-pub(crate) use v2_processor_adapter::EmbeddedProcessorResolveError;
-pub(crate) use v2_processor_adapter::EmbeddedResolvedOutcome;
-pub(crate) use v2_processor_adapter::ExplicitV2Processor;
-pub(crate) use v2_processor_adapter::InternalFailureOrigin;
-pub(crate) use v2_processor_adapter::InternalProcessorCandidate;
-pub(crate) use v2_processor_adapter::InternalProcessorOutcome;
-pub(crate) use v2_processor_adapter::V2NetworkSession;

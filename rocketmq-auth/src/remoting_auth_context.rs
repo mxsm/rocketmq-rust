@@ -16,10 +16,10 @@ use std::net::SocketAddr;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_transport::api::v2::EmbeddedCaller;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::EmbeddedCaller;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::SessionView;
 
 /// Typed, read-only transport facts used by remoting authentication and authorization.
 ///
@@ -67,7 +67,7 @@ impl RemotingAuthContext {
     }
 
     /// Projects authentication facts from a request assembled by the trusted
-    /// V2 transport boundary.
+    /// transport boundary.
     ///
     /// # Errors
     ///
@@ -168,7 +168,7 @@ fn validate_embedded_caller(caller: EmbeddedCaller) -> RocketMQResult<()> {
 mod tests {
     use std::net::SocketAddr;
 
-    use rocketmq_transport::api::v2::EmbeddedCaller;
+    use rocketmq_transport::api::EmbeddedCaller;
 
     use super::validate_embedded_caller;
     use super::validate_network_origin;

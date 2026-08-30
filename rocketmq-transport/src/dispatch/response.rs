@@ -29,7 +29,7 @@ const RESERVED_RESPONSE_OWNER_ID: u64 = u64::MAX;
 /// other protocol content.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestId;
+/// use rocketmq_transport::api::RequestId;
 ///
 /// fn fields_are_private(request_id: RequestId) {
 ///     let _ = request_id.owner_id;
@@ -51,7 +51,7 @@ impl RequestId {
         }
     }
 
-    /// Returns the process-local request owner, including the reserved owner used by synthetic V1
+    /// Returns the process-local request owner, including the reserved owner used by synthetic
     /// direct-write receipts.
     #[must_use]
     pub const fn owner_id(self) -> u64 {
@@ -318,10 +318,6 @@ pub struct ResponseReceipt {
 }
 
 impl ResponseReceipt {
-    #[allow(
-        dead_code,
-        reason = "RSP-05 exact request receipts are created by later private dispatcher wiring"
-    )]
     pub(crate) const fn new(request_id: RequestId, disposition: ResponseDisposition) -> Self {
         Self {
             request_id,

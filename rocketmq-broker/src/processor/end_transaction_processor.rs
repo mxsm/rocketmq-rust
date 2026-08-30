@@ -37,10 +37,10 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -165,13 +165,13 @@ impl<TM, MS: BrokerWriteStore> Clone for EndTransactionProcessor<TM, MS> {
     }
 }
 
-impl<TM, MS> RequestProcessorV2 for EndTransactionProcessor<TM, MS>
+impl<TM, MS> RequestProcessor for EndTransactionProcessor<TM, MS>
 where
     TM: TransactionalMessageService + 'static,
     MS: BrokerWriteStore + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
@@ -180,7 +180,7 @@ where
     TM: TransactionalMessageService,
     MS: BrokerWriteStore,
 {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -189,7 +189,7 @@ where
         let result = match self.process_command(request.command_mut()).await {
             Ok(Some(response)) => Ok(Some(response)),
             Ok(None) => Ok(Some(
-                // Legacy callers use None for pending or unknown transaction states. V2 must make
+                // Legacy callers use None for pending or unknown transaction states. must make
                 // that branch explicit: one-way ingress still suppresses this plan in the dispatcher,
                 // while a malformed two-way caller receives a deterministic protocol error instead
                 // of a false success or an indefinite timeout.
@@ -206,7 +206,7 @@ where
             &command_factory,
             result,
             opaque,
-            "EndTransactionProcessor V2 command dispatch completed without a response",
+            "EndTransactionProcessor command dispatch completed without a response",
         )
     }
 }
@@ -216,15 +216,7 @@ where
     TM: TransactionalMessageService,
     MS: BrokerWriteStore,
 {
-    pub(crate) async fn process_legacy(
-        &self,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let processor = self.clone();
-        processor.process_command(request).await
-    }
-
-    /// V2 leaf business contract; transaction completion does not need a transport handle.
+    /// processor business contract; transaction completion does not need a transport handle.
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
@@ -714,12 +706,12 @@ mod tests {
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::StorePorts;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     struct AllowEmbeddedPolicy;
 
@@ -756,11 +748,11 @@ mod tests {
         runtime
     }
 
-    async fn dispatch_v2<P>(processor: P, command: RemotingCommand) -> EmbeddedDispatchOutcome
+    async fn dispatch_request<P>(processor: P, command: RemotingCommand) -> EmbeddedDispatchOutcome
     where
-        P: RequestProcessorV2 + Clone + Sync + 'static,
+        P: RequestProcessor + Clone + Sync + 'static,
     {
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             Vec::new(),
             Arc::new(TransportSecurity::secure_enforced(
@@ -769,19 +761,19 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        EmbeddedRequestHarnessV2::new(
+        EmbeddedRequestHarness::new(
             dispatcher,
-            crate::test_task_group("end-transaction-v2"),
-            Principal::new("end-transaction-v2-test"),
+            crate::test_task_group("end-transaction"),
+            Principal::new("end-transaction-test"),
         )
         .dispatch(None, command)
         .await
-        .expect("end transaction V2 dispatch should complete")
+        .expect("end transaction dispatch should complete")
     }
 
     #[tokio::test]
-    async fn end_transaction_v2_maps_legacy_pending_none_to_illegal_operation() {
-        let mut runtime = new_test_runtime("v2-pending").await;
+    async fn end_transaction_maps_pending_none_to_illegal_operation() {
+        let mut runtime = new_test_runtime("pending").await;
         let processor = {
             let inner = runtime.runtime_state_mut();
             let transactional_message_service = inner
@@ -810,8 +802,8 @@ mod tests {
         )
         .set_opaque(6_606);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
-            panic!("end transaction V2 must return an inline response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+            panic!("end transaction must return an inline response plan");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::IllegalOperation);

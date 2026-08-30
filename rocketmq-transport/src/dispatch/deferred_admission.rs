@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Retained-byte admission for deferred V2 waits.
+//! Retained-byte admission for deferred waits.
 
 use std::alloc::Layout;
 use std::error::Error;
@@ -490,7 +490,7 @@ impl fmt::Debug for DeferredAdmission {
 /// processor execution permit and creates no task or wait queue.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredWaitPermit;
+/// use rocketmq_transport::api::DeferredWaitPermit;
 ///
 /// fn permits_are_affine(permit: &DeferredWaitPermit) {
 ///     let _: DeferredWaitPermit = permit.clone();
@@ -613,5 +613,5 @@ fn response_state_allocation_bytes() -> usize {
 }
 
 #[cfg(test)]
-#[path = "deferred_admission/tests.rs"]
+#[path = "../../tests/unit/dispatch/deferred_admission.rs"]
 mod tests;

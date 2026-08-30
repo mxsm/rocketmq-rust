@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Transactional ownership for deferred V2 requests.
+//! Transactional ownership for deferred requests.
 
 use std::error::Error;
 use std::fmt;
@@ -77,7 +77,7 @@ use internal::TestRegistrationOwner;
 /// after returning `u64::MAX - 1`; identifiers are never reused.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredId;
+/// use rocketmq_transport::api::DeferredId;
 ///
 /// let forged = DeferredId(7);
 /// ```
@@ -98,7 +98,7 @@ impl DeferredId {
 /// been admitted, but before the registry publishes a prepared request.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredParts;
+/// use rocketmq_transport::api::DeferredParts;
 ///
 /// fn parts_are_affine(parts: &DeferredParts) -> DeferredParts {
 ///     parts.clone()
@@ -238,7 +238,7 @@ impl fmt::Debug for DeferredParts {
 /// One resume value and its affine deferred response ownership.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredRequest;
+/// use rocketmq_transport::api::DeferredRequest;
 ///
 /// fn requests_are_affine(request: &DeferredRequest<String>) -> DeferredRequest<String> {
 ///     request.clone()
@@ -458,7 +458,7 @@ where
     /// [`super::HandlerOutcome::Deferred`] before the dispatcher commits it.
     /// Lifecycle checkpoints resolve simultaneous stops in parent-cancellation,
     /// session-close, then deadline order. A stop published after the final
-    /// registry publication checkpoint is handled by DEF-06 cleanup.
+    /// registry publication checkpoint is handled by deferred-session cleanup.
     ///
     /// # Errors
     ///
@@ -544,7 +544,7 @@ where
     /// lifecycle stop. Checkpoints before and after it resolve simultaneous
     /// stops in parent-cancellation, session-close, then deadline order. A stop
     /// published after the final registry publication checkpoint is handled by
-    /// DEF-06 cleanup.
+    /// Deferred-session cleanup.
     ///
     /// # Errors
     ///
@@ -889,7 +889,7 @@ where
 /// non-generic so [`super::HandlerOutcome`] stays a closed public enum.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::{DeferredId, DeferredRegistration, RequestId};
+/// use rocketmq_transport::api::{DeferredId, DeferredRegistration, RequestId};
 ///
 /// fn cannot_forge(id: DeferredId, request_id: RequestId) -> DeferredRegistration {
 ///     DeferredRegistration { id, request_id, owner: None }
@@ -897,7 +897,7 @@ where
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredRegistration;
+/// use rocketmq_transport::api::DeferredRegistration;
 ///
 /// fn registrations_are_affine(registration: &DeferredRegistration) {
 ///     let _: DeferredRegistration = registration.clone();
@@ -993,5 +993,5 @@ fn registry_error<R, E>(
 }
 
 #[cfg(test)]
-#[path = "deferred_registry/tests.rs"]
+#[path = "../../tests/unit/dispatch/deferred_registry.rs"]
 mod tests;

@@ -36,37 +36,37 @@ use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_store::ArcMessageFilter;
-use rocketmq_transport::api::v2::ClaimedDeferred;
-use rocketmq_transport::api::v2::DeferredAdmission;
-use rocketmq_transport::api::v2::DeferredAdmissionAcquireError;
-use rocketmq_transport::api::v2::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::v2::DeferredClaimError;
-use rocketmq_transport::api::v2::DeferredClaimErrorKind;
-use rocketmq_transport::api::v2::DeferredExpiryBatch;
-use rocketmq_transport::api::v2::DeferredExpiryBatchStats;
-use rocketmq_transport::api::v2::DeferredExpiryError;
-use rocketmq_transport::api::v2::DeferredExpiryErrorKind;
-use rocketmq_transport::api::v2::DeferredExpiryMargins;
-use rocketmq_transport::api::v2::DeferredId;
-use rocketmq_transport::api::v2::DeferredParts;
-use rocketmq_transport::api::v2::DeferredRegistration;
-use rocketmq_transport::api::v2::DeferredRegistry;
-use rocketmq_transport::api::v2::DeferredRegistryError;
-use rocketmq_transport::api::v2::DeferredRegistryErrorKind;
-use rocketmq_transport::api::v2::DeferredRegistryShutdownOutcome;
-use rocketmq_transport::api::v2::DeferredResumeError;
-use rocketmq_transport::api::v2::DeferredResumeErrorKind;
-use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
-use rocketmq_transport::api::v2::DeferredRetainedSizeParts;
-use rocketmq_transport::api::v2::DeferredTerminalReason;
-use rocketmq_transport::api::v2::DeferredWakeReason;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestId;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::ResponseReceipt;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::TakeDeferredResponderError;
+use rocketmq_transport::api::ClaimedDeferred;
+use rocketmq_transport::api::DeferredAdmission;
+use rocketmq_transport::api::DeferredAdmissionAcquireError;
+use rocketmq_transport::api::DeferredAdmissionSnapshot;
+use rocketmq_transport::api::DeferredClaimError;
+use rocketmq_transport::api::DeferredClaimErrorKind;
+use rocketmq_transport::api::DeferredExpiryBatch;
+use rocketmq_transport::api::DeferredExpiryBatchStats;
+use rocketmq_transport::api::DeferredExpiryError;
+use rocketmq_transport::api::DeferredExpiryErrorKind;
+use rocketmq_transport::api::DeferredExpiryMargins;
+use rocketmq_transport::api::DeferredId;
+use rocketmq_transport::api::DeferredParts;
+use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistry;
+use rocketmq_transport::api::DeferredRegistryError;
+use rocketmq_transport::api::DeferredRegistryErrorKind;
+use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredResumeError;
+use rocketmq_transport::api::DeferredResumeErrorKind;
+use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredRetainedSizeParts;
+use rocketmq_transport::api::DeferredTerminalReason;
+use rocketmq_transport::api::DeferredWakeReason;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestId;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::ResponseReceipt;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::TakeDeferredResponderError;
 use tokio::sync::oneshot;
 
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
@@ -155,7 +155,7 @@ impl PopRequestData {
         self.header.queue_id
     }
 
-    /// Returns the trusted effective peer captured by the V2 ingress boundary.
+    /// Returns the trusted effective peer captured by the ingress boundary.
     #[must_use]
     pub(crate) const fn caller_host(&self) -> &CheetahString {
         &self.caller_host
@@ -306,7 +306,7 @@ pub(crate) struct PreparedPopRegistration {
     criteria: Arc<PopMatchCriteria>,
     deadline: LongPollingDeadline,
     reservation: PopIndexReservation,
-    permit: rocketmq_transport::api::v2::DeferredWaitPermit,
+    permit: rocketmq_transport::api::DeferredWaitPermit,
     provenance: Option<PreparedRequestProvenance>,
 }
 
@@ -338,7 +338,7 @@ pub(crate) struct PopDeferredService {
     closed: AtomicBool,
 }
 
-/// Affine completion owner for one V2 POP wake attempt.
+/// Affine completion owner for one POP wake attempt.
 ///
 /// The sender is completed only from the authoritative registry claim or
 /// canonical deferred resume/write result. Dropping it reports cancellation

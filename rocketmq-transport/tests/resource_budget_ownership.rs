@@ -18,12 +18,12 @@ use std::net::Ipv4Addr;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_transport::api::v1::AdmissionClass;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v1::AdmissionLimits;
-use rocketmq_transport::api::v1::AdmissionResource;
-use rocketmq_transport::api::v1::AdmissionScope;
-use rocketmq_transport::api::v1::ResourceLimit;
+use rocketmq_transport::api::AdmissionClass;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::AdmissionResource;
+use rocketmq_transport::api::AdmissionScope;
+use rocketmq_transport::api::ResourceLimit;
 
 #[test]
 fn transport_controllers_share_the_injected_process_ceiling() {

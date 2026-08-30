@@ -23,7 +23,7 @@ use rocketmq_security_api::Decision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
-use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::api::TransportSecurity;
 
 const NAMESRV_REQUESTS: [RequestCode; 23] = [
     RequestCode::GetRouteinfoByTopic,

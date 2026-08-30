@@ -39,10 +39,10 @@ use crate::guard::http_auth::HttpAuthState;
 use crate::protocol::server::RocketmqMcpServer;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
-use rocketmq_transport::api::v1::TlsConfig;
-use rocketmq_transport::api::v1::TlsMode;
-use rocketmq_transport::api::v1::TlsServerConfig;
-use rocketmq_transport::api::v1::TlsServerRuntime;
+use rocketmq_transport::api::TlsConfig;
+use rocketmq_transport::api::TlsMode;
+use rocketmq_transport::api::TlsServerConfig;
+use rocketmq_transport::api::TlsServerRuntime;
 
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

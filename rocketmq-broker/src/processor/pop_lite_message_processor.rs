@@ -47,9 +47,9 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupC
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub(crate) mod core;
+mod handler;
 pub(crate) mod response;
 mod resume;
-mod v2;
 
 #[derive(Clone)]
 pub(crate) struct PopLiteMessagePolicy {
@@ -292,9 +292,9 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         })
     }
 
-    /// Installs the Broker-owned BRK-05 deferred POP Lite service.
+    /// Installs the Broker-owned deferred POP Lite service.
     ///
-    /// BRK-06 owns the service lifecycle and installs it once during Broker composition. The
+    /// Broker composition owns the service lifecycle and installs it once. The
     /// service must share this processor's `LiteEventDispatcher` reservation domain.
     pub(crate) fn install_pop_lite_deferred_service(
         &self,
@@ -734,4 +734,5 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/processor/pop_lite_message.rs"]
 mod tests;

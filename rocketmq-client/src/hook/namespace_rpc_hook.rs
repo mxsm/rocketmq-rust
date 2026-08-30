@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 
@@ -97,7 +97,7 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_transport::api::v1::RPCHook;
+    use rocketmq_transport::api::RPCHook;
 
     use super::*;
 

@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use tokio::sync::oneshot;
 
-use super::LocalResponseMode;
 use super::LocalResponseSink;
 use super::ResponseSink;
 use crate::admission::AdmissionClass;
@@ -76,10 +75,6 @@ impl NetworkResponsePlanContext {
     pub(crate) fn same_lifecycle_owner(&self, session: &SessionHandle) -> bool {
         self.control
             .same_lifecycle_owner(session.session_view().state(), session.task_group())
-    }
-
-    pub(crate) fn terminal_state(&self) -> Option<ResponseTerminalState> {
-        self.slot.terminal_state()
     }
 
     #[cfg(test)]
@@ -149,10 +144,6 @@ impl LocalPlanSenderState {
         &self.control
     }
 
-    pub(super) fn terminal_state(&self) -> Option<ResponseTerminalState> {
-        self.slot.terminal_state()
-    }
-
     pub(super) fn close_last_sender(&self) {
         let Some(sender) = self.take_sender() else {
             return;
@@ -172,10 +163,6 @@ pub(crate) struct LocalResponsePlanReceiver {
 }
 
 impl LocalResponsePlanReceiver {
-    pub(crate) const fn control(&self) -> &RequestControlView {
-        &self.control
-    }
-
     pub(crate) async fn receive(mut self) -> Result<ResponsePlan, ResponseError> {
         if let Some(stop) = current_stop(&self.control) {
             self.slot.finish_external(stop);
@@ -230,9 +217,7 @@ impl ResponseSink {
             control.clone(),
             Arc::clone(&slot),
         ));
-        let sink = Self::Local(LocalResponseSink {
-            mode: LocalResponseMode::Plan(state),
-        });
+        let sink = Self::Local(LocalResponseSink { state });
         let receiver = LocalResponsePlanReceiver {
             receiver,
             control,
@@ -256,9 +241,7 @@ impl ResponseSink {
             LocalPlanSenderState::new(sender, Arc::clone(&sender_taken), control.clone(), Arc::clone(&slot))
                 .with_handoff_gate(checked, resume, Arc::clone(&attempts)),
         );
-        let sink = Self::Local(LocalResponseSink {
-            mode: LocalResponseMode::Plan(state),
-        });
+        let sink = Self::Local(LocalResponseSink { state });
         let receiver = LocalResponsePlanReceiver {
             receiver,
             control,
@@ -438,10 +421,7 @@ async fn send_network_plan(
 }
 
 async fn send_local_plan(sink: LocalResponseSink, bound: BoundResponsePlan) -> Result<ResponseReceipt, ResponseError> {
-    let state = match &sink.mode {
-        LocalResponseMode::Plan(state) => Arc::clone(state),
-        LocalResponseMode::Command(_) => return Err(ResponseError::SessionClosed),
-    };
+    let state = Arc::clone(&sink.state);
     let claim = state.slot.claim().await?;
     #[cfg(test)]
     if let Some((checked, resume)) = &state.handoff_gate {
@@ -569,13 +549,6 @@ impl ResponseCompletionSlot {
         Self {
             state: parking_lot::Mutex::new(ResponseCompletionState::Open),
             changed: tokio::sync::Notify::new(),
-        }
-    }
-
-    fn terminal_state(&self) -> Option<ResponseTerminalState> {
-        match &*self.state.lock() {
-            ResponseCompletionState::Terminal { state, .. } => Some(*state),
-            ResponseCompletionState::Open | ResponseCompletionState::Claimed => None,
         }
     }
 
@@ -856,5 +829,5 @@ impl Drop for ResponseClaim {
 }
 
 #[cfg(test)]
-#[path = "plan_tests/harness_tests.rs"]
+#[path = "../../../tests/unit/dispatch/response_sink/plan.rs"]
 mod tests;

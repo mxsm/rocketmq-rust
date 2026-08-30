@@ -22,7 +22,7 @@ use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::benchmark_support::ResponsePlanPreparationHarness;
 
 #[path = "support/criterion_profile.rs"]

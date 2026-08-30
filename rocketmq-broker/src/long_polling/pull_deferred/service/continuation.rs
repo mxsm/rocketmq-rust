@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_transport::api::v2::DeferredWakeReason;
+use rocketmq_transport::api::DeferredWakeReason;
 
 use crate::long_polling::pending_arrival_latch::PendingArrivalValue;
 use crate::long_polling::pull_deferred::index::PullArrivalView;

@@ -16,9 +16,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::api::v1::SocksProxyConfig;
-use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::RequestDeadline;
+use rocketmq_transport::api::SocksProxyConfig;
+use rocketmq_transport::api::TlsConfig;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;

@@ -917,4 +917,5 @@ enum StartAttempt {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/unit/clients/rocketmq_tokio_client/lifecycle.rs"]
 mod tests;

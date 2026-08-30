@@ -22,7 +22,7 @@ use std::time::Duration;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::RPCHook;
 
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::client_adapter::security::rpc_hook_from_credentials;

@@ -21,9 +21,9 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::ArcMessageFilter;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestId;
-use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestId;
+use rocketmq_transport::api::SessionId;
 
 use super::NotificationDeferredPrepareError;
 use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadline;
@@ -222,7 +222,7 @@ pub(crate) struct PreparedNotificationRegistration {
     pub(super) criteria: Arc<NotificationMatchCriteria>,
     pub(super) deadline: NotificationWaitDeadline,
     pub(super) reservation: NotificationIndexReservation,
-    pub(super) permit: rocketmq_transport::api::v2::DeferredWaitPermit,
+    pub(super) permit: rocketmq_transport::api::DeferredWaitPermit,
     pub(super) provenance: Option<PreparedRequestProvenance>,
     pub(super) observation: PreparedObservation,
 }

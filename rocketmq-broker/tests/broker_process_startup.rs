@@ -30,7 +30,7 @@ use std::time::Instant;
 use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
 use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::ServerConfig;
 use tokio::sync::oneshot;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);

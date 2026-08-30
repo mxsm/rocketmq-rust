@@ -49,12 +49,12 @@ use rocketmq_store_api::checkpoint::CheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_remark;
-use rocketmq_transport::api::v2::EmbeddedCaller;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::request_code_not_supported_with_factory_and_remark;
+use rocketmq_transport::api::EmbeddedCaller;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
 
 use crate::config::broker_config::BrokerConfig;
 use crate::processor::response_plan::immediate_outcome_from_command_result;
@@ -126,7 +126,7 @@ impl MaintenanceRequestProcessor {
         Ok(response.set_opaque(request.opaque()))
     }
 
-    async fn authorize_v2(
+    async fn authorize_request(
         &self,
         request: &RemotingRequest,
         original_code: i32,
@@ -281,17 +281,17 @@ impl MaintenanceRequestProcessor {
     }
 }
 
-impl RequestProcessorV2 for MaintenanceRequestProcessor {
+impl RequestProcessor for MaintenanceRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl MaintenanceRequestProcessor {
-    pub(crate) async fn process_v2_shared(&self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let original_code = request.original_identity().original_code();
-        let result = match self.authorize_v2(request, original_code).await {
+        let result = match self.authorize_request(request, original_code).await {
             Ok(grant) => self
                 .process_authorized(&grant, RequestCode::from(original_code), request.command_mut())
                 .await
@@ -483,16 +483,16 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::RPCHook;
-    use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::RPCHook;
+    use rocketmq_transport::api::ServerConfig;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::api::TransportServer;
     use rocketmq_transport::test_support::Connection;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
     use tokio::net::TcpStream;
     use tokio::sync::oneshot;
 
@@ -527,7 +527,7 @@ mod tests {
     fn maintenance_policy() -> MaintenancePolicy {
         MaintenancePolicy {
             schema_version: MAINTENANCE_POLICY_SCHEMA_VERSION,
-            policy_id: "broker-maintenance-v2-test".to_string(),
+            policy_id: "broker-maintenance-test".to_string(),
             policy_version: 7,
             require_authentication: true,
             require_authorization: true,
@@ -559,7 +559,7 @@ mod tests {
     }
 
     async fn maintenance_processor_for_test() -> MaintenanceRequestProcessor {
-        let service_context = crate::test_service_context("maintenance-v2");
+        let service_context = crate::test_service_context("maintenance");
         let auth_runtime = Arc::new(
             AuthRuntimeBuilder::new(maintenance_auth_config(), service_context.component("auth"))
                 .build()
@@ -571,7 +571,7 @@ mod tests {
         ));
         let checkpoint_service = Arc::new(StoreReleaseCheckpointService::new(
             Weak::<StorePorts>::new(),
-            PathBuf::from("maintenance-v2-unused"),
+            PathBuf::from("maintenance-unused"),
             service_context.component("checkpoint"),
         ));
         MaintenanceRequestProcessor::new(
@@ -589,7 +589,7 @@ mod tests {
 
     async fn maintenance_processor_with_store_for_test(
     ) -> (MaintenanceRequestProcessor, Arc<StorePorts>, tempfile::TempDir) {
-        let service_context = crate::test_service_context("maintenance-v2-original-code");
+        let service_context = crate::test_service_context("maintenance-original-code");
         let auth_runtime = Arc::new(
             AuthRuntimeBuilder::new(maintenance_auth_config(), service_context.component("auth"))
                 .build()
@@ -632,21 +632,21 @@ mod tests {
         (processor, store, root)
     }
 
-    async fn dispatch_v2(
+    async fn dispatch_request(
         processor: MaintenanceRequestProcessor,
         principal: &'static str,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::v2::EmbeddedDispatchError> {
-        dispatch_v2_with_hooks(processor, principal, command, Vec::new()).await
+    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::EmbeddedDispatchError> {
+        dispatch_request_with_hooks(processor, principal, command, Vec::new()).await
     }
 
-    async fn dispatch_v2_with_hooks(
+    async fn dispatch_request_with_hooks(
         processor: MaintenanceRequestProcessor,
         principal: &'static str,
         command: RemotingCommand,
         hooks: Vec<Arc<dyn RPCHook>>,
-    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::v2::EmbeddedDispatchError> {
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::EmbeddedDispatchError> {
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             hooks,
             Arc::new(TransportSecurity::secure_enforced(
@@ -655,9 +655,9 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        EmbeddedRequestHarnessV2::new(
+        EmbeddedRequestHarness::new(
             dispatcher,
-            crate::test_task_group("maintenance-request-v2"),
+            crate::test_task_group("maintenance-request"),
             Principal::new(principal),
         )
         .dispatch(None, command)
@@ -750,24 +750,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maintenance_v2_uses_authenticated_principal_for_authorization() {
+    async fn maintenance_uses_authenticated_principal_for_authorization() {
         let processor = maintenance_processor_for_test().await;
 
         let EmbeddedDispatchOutcome::Reply(plan) =
-            dispatch_v2(processor.clone(), "release-operator", verify_request(5_505))
+            dispatch_request(processor.clone(), "release-operator", verify_request(5_505))
                 .await
                 .expect("bound maintenance principal should be authorized")
         else {
-            panic!("authorized maintenance V2 must return an inline response plan");
+            panic!("authorized maintenance must return an inline response plan");
         };
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
         assert!(plan.body_len() > 0);
 
-        let EmbeddedDispatchOutcome::Reply(denied) = dispatch_v2(processor, "ordinary-admin", verify_request(5_506))
-            .await
-            .expect("authorization failures should become typed response plans")
+        let EmbeddedDispatchOutcome::Reply(denied) =
+            dispatch_request(processor, "ordinary-admin", verify_request(5_506))
+                .await
+                .expect("authorization failures should become typed response plans")
         else {
-            panic!("denied maintenance V2 must return an inline response plan");
+            panic!("denied maintenance must return an inline response plan");
         };
         assert_eq!(ResponseCode::from(denied.response_code()), ResponseCode::NoPermission);
         assert_eq!(denied.body_len(), 0);
@@ -777,17 +778,17 @@ mod tests {
     async fn network_maintenance_uses_verified_credentials_not_bootstrap_authentication_state() {
         const AUTHENTICATED_OPAQUE: i32 = 5_508;
         const FORGED_OPAQUE: i32 = 5_509;
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("maintenance-v2-network-auth"))
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("maintenance-network-auth"))
             .expect("maintenance network test runtime");
-        let server_context = owner.root_context().component("maintenance-v2-network-auth.server");
-        let runner_context = owner.root_context().component("maintenance-v2-network-auth.runner");
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let server_context = owner.root_context().component("maintenance-network-auth.server");
+        let runner_context = owner.root_context().component("maintenance-network-auth.runner");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             maintenance_processor_for_test().await,
             Vec::new(),
             Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        let server = TransportServerV2::new_with_authorized_dispatcher(
+        let server = TransportServer::new_with_authorized_dispatcher(
             Arc::new(ServerConfig {
                 bind_address: "127.0.0.1".to_owned(),
                 listen_port: 0,
@@ -800,7 +801,7 @@ mod tests {
         let (startup_sender, startup_receiver) = oneshot::channel();
         let (result_sender, result_receiver) = oneshot::channel();
         runner_context
-            .spawn_service("maintenance-v2-network-server", async move {
+            .spawn_service("maintenance-network-server", async move {
                 let result = server
                     .try_run_with_shutdown_report_and_startup(
                         async move {
@@ -811,17 +812,13 @@ mod tests {
                     .await;
                 let _ = result_sender.send(result);
             })
-            .expect("spawn maintenance V2 network server");
+            .expect("spawn maintenance network server");
 
         let address = startup_receiver
             .await
-            .expect("maintenance V2 startup channel")
-            .expect("maintenance V2 server startup");
-        let mut client = Connection::new(
-            TcpStream::connect(address)
-                .await
-                .expect("connect maintenance V2 client"),
-        );
+            .expect("maintenance startup channel")
+            .expect("maintenance server startup");
+        let mut client = Connection::new(TcpStream::connect(address).await.expect("connect maintenance client"));
 
         client
             .send_command(sign_maintenance_request(
@@ -855,22 +852,22 @@ mod tests {
         assert_eq!(denied.opaque(), FORGED_OPAQUE);
         assert_eq!(ResponseCode::from(denied.code()), ResponseCode::NoPermission);
 
-        client.shutdown().await.expect("shutdown maintenance V2 client");
+        client.shutdown().await.expect("shutdown maintenance client");
         let _ = shutdown_sender.send(());
         let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
             .await
-            .expect("maintenance V2 shutdown deadline")
-            .expect("maintenance V2 shutdown result channel")
-            .expect("maintenance V2 shutdown report");
+            .expect("maintenance shutdown deadline")
+            .expect("maintenance shutdown result channel")
+            .expect("maintenance shutdown report");
         assert!(report.is_healthy(), "{}", report.to_json());
         assert!(owner.shutdown_tasks().await.is_healthy());
     }
 
     #[tokio::test]
-    async fn maintenance_v2_before_hook_cannot_replace_the_original_operation() {
+    async fn maintenance_before_hook_cannot_replace_the_original_operation() {
         let (processor, _store, _root) = maintenance_processor_with_store_for_test().await;
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2_with_hooks(
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request_with_hooks(
             processor,
             "release-operator",
             capabilities_request(5_507),

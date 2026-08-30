@@ -37,7 +37,7 @@ use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageR
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::RpcRequestHeader;
+use rocketmq_transport::api::RpcRequestHeader;
 
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pop_callback::PopCallback;

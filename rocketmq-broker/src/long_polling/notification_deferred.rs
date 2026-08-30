@@ -17,6 +17,8 @@ pub(crate) mod index;
 pub(crate) mod service;
 
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/notification_deferred/acceptance_tests.rs"]
 mod acceptance_tests;
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/notification_deferred/tests.rs"]
 mod tests;

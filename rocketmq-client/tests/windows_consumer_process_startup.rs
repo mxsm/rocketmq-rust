@@ -42,7 +42,7 @@ use rocketmq_observability::TelemetryHandle;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::ServerConfig;
 use tokio::sync::oneshot;
 
 const CHILD_MODE_ENV: &str = "ROCKETMQ_CLIENT_STACK_TEST_CHILD";

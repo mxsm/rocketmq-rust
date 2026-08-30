@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The trusted V2 request aggregate and immutable ingress ordering view.
+//! The trusted  request aggregate and immutable ingress ordering view.
 
 use std::collections::HashMap;
 
@@ -37,25 +37,13 @@ use crate::session_view::SessionView;
 
 mod builder;
 
-#[allow(
-    unused_imports,
-    reason = "REQ-06 exposes the crate-private builder to later dispatcher wiring without expanding the public API"
-)]
 pub(crate) use builder::RemotingRequestBuildError;
-#[allow(
-    unused_imports,
-    reason = "REQ-06 exposes the crate-private builder to later dispatcher wiring without expanding the public API"
-)]
 pub(crate) use builder::RemotingRequestBuilder;
-#[allow(
-    unused_imports,
-    reason = "REQ-06 exposes sealed lifecycle provenance to later dispatcher wiring without expanding the public API"
-)]
 pub(crate) use builder::RequestLifecycleProvenance;
 
 /// One trusted request with immutable ingress facts and one mutable command.
 ///
-/// The request owns the [`RemotingCommand`] handed to a V2 processor. Its
+/// The request owns the [`RemotingCommand`] handed to a processor. Its
 /// original identity is captured before hooks or processors can mutate that
 /// command. Ordering receives a short-lived [`IngressRequestView`] from the
 /// trusted builder before this aggregate is built; processors use
@@ -66,7 +54,7 @@ pub(crate) use builder::RequestLifecycleProvenance;
 /// ownership and blur response/lifecycle boundaries.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RemotingRequest;
+/// use rocketmq_transport::api::RemotingRequest;
 ///
 /// fn cannot_clone(request: &RemotingRequest) {
 ///     let _: RemotingRequest = request.clone();
@@ -74,7 +62,7 @@ pub(crate) use builder::RequestLifecycleProvenance;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RemotingRequest;
+/// use rocketmq_transport::api::RemotingRequest;
 ///
 /// fn cannot_recover_legacy_transport_capabilities(request: &RemotingRequest) {
 ///     let _ = request.channel();
@@ -82,7 +70,7 @@ pub(crate) use builder::RequestLifecycleProvenance;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RemotingRequest;
+/// use rocketmq_transport::api::RemotingRequest;
 ///
 /// fn cannot_cancel_or_close_through_the_request(request: &RemotingRequest) {
 ///     request.cancel();
@@ -90,7 +78,7 @@ pub(crate) use builder::RequestLifecycleProvenance;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RemotingRequest;
+/// use rocketmq_transport::api::RemotingRequest;
 ///
 /// fn cannot_recover_a_pre_mutation_ingress_view(request: &RemotingRequest) {
 ///     let _ = request.ingress();
@@ -98,15 +86,15 @@ pub(crate) use builder::RequestLifecycleProvenance;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RemotingRequestBuilder;
+/// use rocketmq_transport::api::RemotingRequestBuilder;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredSlot;
+/// use rocketmq_transport::api::DeferredSlot;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RemotingCommand;
+/// use rocketmq_transport::api::RemotingCommand;
 /// ```
 pub struct RemotingRequest {
     original: OriginalRequestIdentity,
@@ -171,7 +159,7 @@ impl RemotingRequest {
     ///
     /// ```
     /// use rocketmq_error::RocketMQResult;
-    /// use rocketmq_transport::api::v2::{
+    /// use rocketmq_transport::api::{
     ///     HandlerOutcome, ProtocolNoResponseReason, RemotingRequest,
     /// };
     ///
@@ -189,7 +177,7 @@ impl RemotingRequest {
 
     /// Transfers the request's single later-response capability.
     ///
-    /// Only admitted network V2 requests can provide this capability. Taking
+    /// Only admitted network requests can provide this capability. Taking
     /// it exposes no channel, session, context, cancellation authority, or raw
     /// transport writer. Failed takes leave the response contract available
     /// for its honest current state and allocate no deferred response state.
@@ -247,26 +235,16 @@ impl RemotingRequest {
         self.extensions.try_insert(value)
     }
 
-    #[allow(
-        dead_code,
-        reason = "DSP-02 preserves the deferred-capability builder regression before dispatcher wiring"
-    )]
+    #[cfg(test)]
     pub(crate) const fn has_reserved_deferred_response(&self) -> bool {
         self.inline_response.has_deferred_capability()
     }
 
-    #[allow(
-        dead_code,
-        reason = "DSP-02 exposes inline deferred transition to later dispatcher wiring"
-    )]
+    #[cfg(test)]
     pub(crate) fn mark_deferred_response_taken(&mut self) -> Result<(), HandlerOutcomeContractError> {
         self.inline_response.mark_deferred_taken(self.original)
     }
 
-    #[allow(
-        dead_code,
-        reason = "DSP-02 exposes terminal outcome validation to later dispatcher wiring"
-    )]
     pub(crate) fn resolve_handler_outcome(
         &mut self,
         outcome: HandlerOutcome,
@@ -289,10 +267,6 @@ impl RemotingRequest {
         self.inline_response.consume_oneway_no_reply(self.original, marker)
     }
 
-    #[allow(
-        dead_code,
-        reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"
-    )]
     pub(crate) fn with_body_free_hook_command<T>(
         &mut self,
         apply: impl FnOnce(&mut RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
@@ -305,16 +279,12 @@ impl RemotingRequest {
         }
         if attached_body.is_some() {
             return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook attached a request body through the body-free V2 projection",
+                "RPC hook attached a request body through the body-free projection",
             ));
         }
         result
     }
 
-    #[allow(
-        dead_code,
-        reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"
-    )]
     pub(crate) fn with_body_free_hook_request<T>(
         &mut self,
         apply: impl FnOnce(&RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
@@ -337,7 +307,7 @@ impl RemotingRequest {
 /// without copying or retaining the payload.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::IngressRequestView;
+/// use rocketmq_transport::api::IngressRequestView;
 ///
 /// fn ingress_view_cannot_expose_the_request_body(view: IngressRequestView<'_>) {
 ///     let _ = view.body();
@@ -370,4 +340,5 @@ impl<'a> IngressRequestView<'a> {
 pub(crate) type DeferredSlot = InlineResponseSlot;
 
 #[cfg(test)]
+#[path = "../../tests/unit/dispatch/remoting_request.rs"]
 mod tests;

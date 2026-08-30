@@ -58,7 +58,7 @@ impl DeferredGenerationArrivalAdapter<'_> {
     }
 }
 
-/// Affine accounting for one accepted canonical V2 deferred route.
+/// Affine accounting for one accepted canonical deferred route.
 #[derive(Debug)]
 #[must_use]
 pub(crate) struct RoutePermit {

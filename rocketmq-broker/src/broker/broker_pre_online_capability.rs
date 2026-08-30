@@ -35,7 +35,7 @@ use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::HAConnectionStateNotificationRequest;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::api::v1::RemotingHelper;
+use rocketmq_transport::api::RemotingHelper;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;

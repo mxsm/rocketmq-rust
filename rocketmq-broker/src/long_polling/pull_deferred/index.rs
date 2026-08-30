@@ -26,7 +26,7 @@ use std::sync::Weak;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_store::CqExtUnit;
-use rocketmq_transport::api::v2::DeferredId;
+use rocketmq_transport::api::DeferredId;
 
 use super::data::PullMatchCriteria;
 

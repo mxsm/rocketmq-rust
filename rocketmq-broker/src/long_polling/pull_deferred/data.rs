@@ -21,7 +21,7 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::SessionId;
 
 /// Named request metadata consumed by the existing Pull consume hooks.
 #[derive(Default)]

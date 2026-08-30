@@ -18,11 +18,11 @@ use std::time::Duration;
 
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v2::DeferredAdmission;
-use rocketmq_transport::api::v2::DeferredExpiryMargins;
-use rocketmq_transport::api::v2::DeferredRegistryShutdownOutcome;
-use rocketmq_transport::api::v2::DeferredWaitLimits;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::DeferredAdmission;
+use rocketmq_transport::api::DeferredExpiryMargins;
+use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredWaitLimits;
 
 use super::*;
 use crate::broker_runtime::deferred_producer::BrokerDeferredProducer;

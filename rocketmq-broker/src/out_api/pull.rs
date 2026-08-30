@@ -32,7 +32,7 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::RpcRequestHeader;
+use rocketmq_transport::api::RpcRequestHeader;
 
 use crate::out_api::result::BrokerPullResponse;
 

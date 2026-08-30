@@ -1189,7 +1189,7 @@ fn advance_segments(
 }
 
 #[cfg(test)]
-#[path = "write_strategy/brk02_tests.rs"]
+#[path = "../tests/unit/write_strategy/brk02.rs"]
 mod brk02_tests;
 
 #[cfg(test)]

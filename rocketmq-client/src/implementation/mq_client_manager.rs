@@ -27,7 +27,7 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::RPCHook;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;

@@ -6,7 +6,7 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper;
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v1::ClientMetadata;
+use rocketmq_transport::api::ClientMetadata;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;

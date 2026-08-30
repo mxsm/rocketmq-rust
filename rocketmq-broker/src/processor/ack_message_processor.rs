@@ -46,11 +46,11 @@ use rocketmq_store::BatchAckMsg;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -285,17 +285,17 @@ pub struct AckMessageProcessor<MS: BrokerReadWriteStore> {
     context: AckMessageProcessorContext<MS>,
 }
 
-impl<MS> RequestProcessorV2 for AckMessageProcessor<MS>
+impl<MS> RequestProcessor for AckMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl<MS: BrokerReadWriteStore> AckMessageProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -307,7 +307,7 @@ impl<MS: BrokerReadWriteStore> AckMessageProcessor<MS> {
             &command_factory,
             result,
             original_opaque,
-            "AckMessageProcessor V2 command dispatch completed without a response",
+            "AckMessageProcessor command dispatch completed without a response",
         )
     }
 }
@@ -324,16 +324,7 @@ impl<MS> AckMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    pub(crate) async fn process_legacy(
-        &self,
-        request_source: String,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_source = CheetahString::from_string(request_source);
-        self.process_command(request, &request_source).await
-    }
-
-    /// V2 leaf business contract; the typed origin is reduced to a diagnostic/offset source label.
+    /// processor business contract; the typed origin is reduced to a diagnostic/offset source label.
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
@@ -872,14 +863,14 @@ mod tests {
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchError;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::ResponseBodyKind;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchError;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::ResponseBodyKind;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     struct TestLeafProcessor<P> {
         processor: Arc<tokio::sync::Mutex<P>>,
@@ -901,9 +892,9 @@ mod tests {
         }
     }
 
-    impl<P> RequestProcessorV2 for TestLeafProcessor<P>
+    impl<P> RequestProcessor for TestLeafProcessor<P>
     where
-        P: RequestProcessorV2 + Send,
+        P: RequestProcessor + Send,
     {
         async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
             self.processor.lock().await.process(request).await
@@ -918,17 +909,17 @@ mod tests {
         }
     }
 
-    async fn dispatch_embedded_v2<P>(
+    async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
     ) -> Result<EmbeddedDispatchOutcome, EmbeddedDispatchError>
     where
-        P: RequestProcessorV2 + Send + 'static,
+        P: RequestProcessor + Send + 'static,
     {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("ack-message-v2-test"))
-            .expect("AckMessage V2 test runtime");
-        let context = owner.root_context().component("ack-message-v2-test.request");
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let owner =
+            RuntimeOwner::new(RuntimeConfig::server_default("ack-message-test")).expect("AckMessage test runtime");
+        let context = owner.root_context().component("ack-message-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             TestLeafProcessor::new(processor),
             Vec::new(),
             Arc::new(TransportSecurity::secure_enforced(
@@ -937,10 +928,10 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        let harness = EmbeddedRequestHarnessV2::new(
+        let harness = EmbeddedRequestHarness::new(
             dispatcher,
             context.task_group().clone(),
-            Principal::new("ack-message-v2-test"),
+            Principal::new("ack-message-test"),
         );
         let outcome = harness.dispatch(None, command).await;
 
@@ -951,7 +942,7 @@ mod tests {
         outcome
     }
 
-    fn v2_test_processor() -> AckMessageProcessor<StorePorts> {
+    fn test_processor() -> AckMessageProcessor<StorePorts> {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = MessageStoreConfig::default();
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -1022,15 +1013,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_embedded_unknown_request_returns_a_reply_plan() {
-        let outcome = dispatch_embedded_v2(
-            v2_test_processor(),
+    async fn embedded_unknown_request_returns_a_reply_plan() {
+        let outcome = dispatch_embedded(
+            test_processor(),
             RemotingCommand::create_remoting_command(-98_451).set_opaque(317),
         )
         .await
-        .expect("embedded AckMessage V2 response");
+        .expect("embedded AckMessage response");
         let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-            panic!("AckMessage V2 unknown request must return a reply plan");
+            panic!("AckMessage unknown request must return a reply plan");
         };
 
         assert_eq!(plan.response_code(), ResponseCode::RequestCodeNotSupported as i32);

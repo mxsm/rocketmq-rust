@@ -34,11 +34,11 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
-use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -155,12 +155,12 @@ impl QueryResponseParts {
     }
 }
 
-impl<S> RequestProcessorV2 for QueryMessageProcessor<S>
+impl<S> RequestProcessor for QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
@@ -168,13 +168,13 @@ impl<S> QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone,
 {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let original = request.original_identity();
         match self
-            .process_v2_command(
+            .process_command(
                 request.command_mut(),
                 original.original_code(),
                 original.original_opaque(),
@@ -231,20 +231,20 @@ impl<S> QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone,
 {
-    async fn process_v2_command(
+    async fn process_command(
         &self,
         request: &mut RemotingCommand,
         original_code: i32,
         original_opaque: i32,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let request_code = RequestCode::from(original_code);
-        info!("QueryMessageProcessor V2 received request code: {:?}", request_code);
+        info!("QueryMessageProcessor received request code: {:?}", request_code);
         let parts = match request_code {
             RequestCode::QueryMessage => self.query_message_parts(request).await?,
             RequestCode::ViewMessageById => self.view_message_by_id_parts(request).await?,
             _ => {
                 warn!(
-                    "QueryMessageProcessor V2 received unknown request code: {:?}",
+                    "QueryMessageProcessor received unknown request code: {:?}",
                     request_code
                 );
                 QueryResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
@@ -489,9 +489,9 @@ mod tests {
     use rocketmq_runtime::RuntimeOwner;
     use rocketmq_store::QueryMessageResult;
     use rocketmq_store::StorePorts;
-    use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v2::ResponseBodyKind;
-    use rocketmq_transport::api::v2::TransportServerV2;
+    use rocketmq_transport::api::ResponseBodyKind;
+    use rocketmq_transport::api::ServerConfig;
+    use rocketmq_transport::api::TransportServer;
     use rocketmq_transport::test_support::Connection;
     use tokio::net::TcpStream;
     use tokio::sync::oneshot;
@@ -542,12 +542,12 @@ mod tests {
     }
 
     #[test]
-    fn query_v2_shared_seam_accepts_an_arc_held_leaf() {
+    fn query_shared_seam_accepts_an_arc_held_leaf() {
         fn call_shared<'a>(
             leaf: &'a Arc<QueryMessageProcessor<TestQueryStore>>,
             request: &'a mut RemotingRequest,
         ) -> impl Future<Output = rocketmq_error::RocketMQResult<HandlerOutcome>> + 'a {
-            leaf.process_v2_shared(request)
+            leaf.process_shared(request)
         }
 
         let _ = call_shared;
@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_query_success_returns_one_owned_bytes_plan() {
+    async fn query_success_returns_one_owned_bytes_plan() {
         let body = Bytes::from_static(b"query-body");
         let processor = QueryMessageProcessor::new(
             64,
@@ -643,9 +643,9 @@ mod tests {
         request.make_custom_header_to_net();
 
         let outcome = processor
-            .process_v2_command(&mut request, RequestCode::QueryMessage as i32, 0)
+            .process_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
-            .expect("V2 query response plan");
+            .expect("query response plan");
         let HandlerOutcome::Reply(plan) = outcome else {
             panic!("query success must return an inline reply");
         };
@@ -657,13 +657,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_query_real_dispatcher_rebinds_the_original_opaque() {
+    async fn query_real_dispatcher_rebinds_the_original_opaque() {
         const ORIGINAL_OPAQUE: i32 = 8_701;
 
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-query-v2-dispatch-test"))
-            .expect("query V2 test runtime owner");
-        let server_context = owner.root_context().component("query-v2-server");
-        let runner_context = owner.root_context().component("query-v2-runner");
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-query-dispatch-test"))
+            .expect("query test runtime owner");
+        let server_context = owner.root_context().component("query-server");
+        let runner_context = owner.root_context().component("query-runner");
         let processor = QueryMessageProcessor::new(
             64,
             TestQueryStore {
@@ -671,7 +671,7 @@ mod tests {
                 view_body: None,
             },
         );
-        let server = TransportServerV2::new(
+        let server = TransportServer::new(
             Arc::new(ServerConfig {
                 bind_address: "127.0.0.1".to_owned(),
                 listen_port: 0,
@@ -684,7 +684,7 @@ mod tests {
         let (startup_sender, startup_receiver) = oneshot::channel();
         let (result_sender, result_receiver) = oneshot::channel();
         runner_context
-            .spawn_service("query-v2-server", async move {
+            .spawn_service("query-server", async move {
                 let result = server
                     .try_run_with_shutdown_report_and_startup(
                         async move {
@@ -695,34 +695,34 @@ mod tests {
                     .await;
                 let _ = result_sender.send(result);
             })
-            .expect("spawn query V2 server");
+            .expect("spawn query server");
 
         let address = startup_receiver
             .await
-            .expect("query V2 startup channel")
-            .expect("query V2 server startup");
-        let mut client = Connection::new(TcpStream::connect(address).await.expect("connect query V2 client"));
+            .expect("query startup channel")
+            .expect("query server startup");
+        let mut client = Connection::new(TcpStream::connect(address).await.expect("connect query client"));
         let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None))
             .set_opaque(ORIGINAL_OPAQUE);
         request.make_custom_header_to_net();
-        client.send_command(request).await.expect("send query V2 request");
+        client.send_command(request).await.expect("send query request");
 
         let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
             .await
-            .expect("query V2 response deadline")
-            .expect("query V2 connection remains open")
-            .expect("query V2 response frame");
+            .expect("query response deadline")
+            .expect("query connection remains open")
+            .expect("query response frame");
         assert_eq!(ORIGINAL_OPAQUE, response.opaque());
         assert_eq!(ResponseCode::Success as i32, response.code());
         assert_eq!(Some(&Bytes::from_static(b"query-dispatch-body")), response.body());
 
-        client.shutdown().await.expect("shutdown query V2 client");
+        client.shutdown().await.expect("shutdown query client");
         let _ = shutdown_sender.send(());
         let report = tokio::time::timeout(Duration::from_secs(2), result_receiver)
             .await
-            .expect("query V2 shutdown deadline")
-            .expect("query V2 shutdown result channel")
-            .expect("query V2 shutdown report");
+            .expect("query shutdown deadline")
+            .expect("query shutdown result channel")
+            .expect("query shutdown report");
         assert!(report.is_healthy(), "{}", report.to_json());
         let task_report = owner.shutdown_tasks().await;
         assert!(task_report.is_healthy(), "{}", task_report.to_json());
@@ -731,7 +731,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_view_consumes_the_selected_owner_into_one_bytes_plan() {
+    async fn view_consumes_the_selected_owner_into_one_bytes_plan() {
         let body = Bytes::from_static(b"view-body");
         let processor = QueryMessageProcessor::new(
             64,
@@ -747,9 +747,9 @@ mod tests {
         request.make_custom_header_to_net();
 
         let outcome = processor
-            .process_v2_command(&mut request, RequestCode::ViewMessageById as i32, 0)
+            .process_command(&mut request, RequestCode::ViewMessageById as i32, 0)
             .await
-            .expect("V2 view response plan");
+            .expect("view response plan");
         let HandlerOutcome::Reply(plan) = outcome else {
             panic!("view success must return an inline reply");
         };
@@ -760,15 +760,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_query_not_found_returns_an_empty_reply_plan() {
+    async fn query_not_found_returns_an_empty_reply_plan() {
         let processor = QueryMessageProcessor::new(64, TestQueryStore::default());
         let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None));
         request.make_custom_header_to_net();
 
         let outcome = processor
-            .process_v2_command(&mut request, RequestCode::QueryMessage as i32, 0)
+            .process_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
-            .expect("V2 not-found response plan");
+            .expect("not-found response plan");
         let HandlerOutcome::Reply(plan) = outcome else {
             panic!("query not found must return an inline reply");
         };
@@ -776,12 +776,5 @@ mod tests {
         assert_eq!(ResponseCode::QueryNotFound as i32, plan.response_code());
         assert_eq!(ResponseBodyKind::Empty, plan.body_kind());
         assert_eq!(0, plan.body_len());
-    }
-
-    #[test]
-    fn query_processor_is_a_send_v2_leaf() {
-        fn assert_v2_processor<T: RequestProcessorV2 + Clone + Send + Sync + 'static>() {}
-
-        assert_v2_processor::<QueryMessageProcessor<TestQueryStore>>();
     }
 }

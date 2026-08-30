@@ -31,7 +31,7 @@ use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::NAMESRV_ADDR_PROPERTY;
 use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::ServerConfig;
 
 pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> =
     std::sync::LazyLock::new(|| std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some));
@@ -845,7 +845,7 @@ pub struct BrokerConfig {
     ///
     /// Structured fast-failure dispatch never transfers a request, channel,
     /// or connection context to a detached writer. A configured `true` value
-    /// is ignored with a startup warning until the V2 deferred cutover owns
+    /// is ignored with a startup warning until the deferred cutover owns
     /// genuinely post-return Send work.
     #[serde(default = "defaults::send_request_executor_detached_enable")]
     pub send_request_executor_detached_enable: bool,

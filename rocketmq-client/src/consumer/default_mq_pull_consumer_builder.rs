@@ -20,7 +20,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::RPCHook;
 
 use crate::base::client_options::ClientOptions;
 use crate::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;

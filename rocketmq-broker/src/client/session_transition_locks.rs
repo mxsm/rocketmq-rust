@@ -22,7 +22,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use parking_lot::MutexGuard;
-use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::SessionId;
 
 const SESSION_TRANSITION_STRIPES: usize = 64;
 

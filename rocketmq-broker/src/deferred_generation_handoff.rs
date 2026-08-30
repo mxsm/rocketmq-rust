@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Broker-private lifecycle accounting for canonical V2 deferred routes.
+//! Broker-private lifecycle accounting for canonical deferred routes.
 
 use std::sync::Arc;
 
@@ -24,6 +24,7 @@ mod snapshot;
 mod state;
 mod target;
 #[cfg(test)]
+#[path = "../tests/unit/deferred_generation_handoff.rs"]
 mod tests;
 
 pub(crate) use lease::*;
@@ -31,7 +32,7 @@ pub(crate) use snapshot::*;
 use state::DeferredGenerationHandoffState;
 pub(crate) use target::*;
 
-/// Serializes route admission and shutdown for Broker-owned V2 deferred work.
+/// Serializes route admission and shutdown for Broker-owned deferred work.
 #[derive(Debug)]
 pub(crate) struct DeferredGenerationHandoff {
     write_gate: Arc<Mutex<DeferredGenerationHandoffState>>,

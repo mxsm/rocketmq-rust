@@ -43,12 +43,12 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::ProtocolNoResponseReason;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::ProtocolNoResponseReason;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::SessionView;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -79,7 +79,7 @@ impl ClientRemotingProcessor {
     }
 }
 
-impl RequestProcessorV2 for ClientRemotingProcessor {
+impl RequestProcessor for ClientRemotingProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let remote_address = match request.session() {
             SessionView::Network { remote_addr, .. } => *remote_addr,
@@ -621,8 +621,8 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::ShutdownDeadline;
-    use rocketmq_transport::api::v1::TransportClientConfig;
-    use rocketmq_transport::api::v2::TransportClient;
+    use rocketmq_transport::api::TransportClient;
+    use rocketmq_transport::api::TransportClientConfig;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
@@ -749,13 +749,13 @@ mod tests {
         let processor = ClientRemotingProcessor::new(&client_instance);
 
         assert!(matches!(
-            RequestProcessorV2::reject_request(&processor, RequestCode::CheckTransactionState as i32),
-            rocketmq_transport::api::v2::RejectRequestDecision::Proceed
+            RequestProcessor::reject_request(&processor, RequestCode::CheckTransactionState as i32),
+            rocketmq_transport::api::RejectRequestDecision::Proceed
         ));
     }
 
     #[tokio::test]
-    async fn v2_transport_round_trip_uses_client_processor_and_drops_oneway_reply() {
+    async fn transport_round_trip_uses_client_processor_and_drops_oneway_reply() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind broker peer");
         let target = CheetahString::from_string(listener.local_addr().expect("broker peer address").to_string());
         let peer = tokio::spawn(async move {
@@ -814,15 +814,15 @@ mod tests {
             );
         });
 
-        let client_instance = test_client_instance(ClientConfig::default(), "v2-network-ingress-client");
+        let client_instance = test_client_instance(ClientConfig::default(), "network-ingress-client");
         let processor = ClientRemotingProcessor::new(&client_instance);
-        let client = TransportClient::builder_v2(
+        let client = TransportClient::builder(
             Arc::new(TransportClientConfig::default()),
             processor,
-            crate::runtime::test_service_context("client-remoting-v2-network-ingress"),
+            crate::runtime::test_service_context("client-remoting-network-ingress"),
         )
         .build()
-        .expect("build V2 transport client");
+        .expect("build transport client");
         let bootstrap_response = client
             .invoke_request(
                 Some(&target),

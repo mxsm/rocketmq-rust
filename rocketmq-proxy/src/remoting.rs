@@ -94,18 +94,18 @@ use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RejectRequestDecision;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::ServerConfig;
-use rocketmq_transport::api::v2::ServerPushCommand;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::TransportServerV2;
-use rocketmq_transport::api::v2::TransportTelemetry;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RejectRequestDecision;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::ServerPushCommand;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionRegistry;
+use rocketmq_transport::api::TransportServer;
+use rocketmq_transport::api::TransportTelemetry;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -236,7 +236,7 @@ where
 
     #[allow(
         clippy::too_many_arguments,
-        reason = "assembles the V2 request boundary with its independent session binder"
+        reason = "assembles the request boundary with its independent session binder"
     )]
     fn new_with_session_binder(
         config: Arc<ProxyConfig>,
@@ -267,7 +267,7 @@ where
     }
 }
 
-impl<P> RequestProcessorV2 for ProxyRequestProcessor<P>
+impl<P> RequestProcessor for ProxyRequestProcessor<P>
 where
     P: MessagingProcessor + 'static,
 {
@@ -275,8 +275,7 @@ where
         let original_code = request.original_identity().original_code();
         let mut auth_command = request.command().clone();
         auth_command.set_code_ref(original_code);
-        let mut context =
-            ProxyContext::from_remoting_request_v2(RemotingIngressRoute::rpc_name(original_code), request);
+        let mut context = ProxyContext::from_remoting_request(RemotingIngressRoute::rpc_name(original_code), request);
         let drain_management = is_drain_management_request(original_code);
         if drain_management && self.auth_runtime.is_none() {
             return response_plan(authentication_required_response(
@@ -423,7 +422,7 @@ where
             return response_plan(response);
         }
 
-        self.dispatcher.dispatch_v2(&context, request).await
+        self.dispatcher.dispatch_request(&context, request).await
     }
 
     fn reject_request(&self, _code: i32) -> RejectRequestDecision {
@@ -434,7 +433,7 @@ where
 fn response_plan(response: RemotingCommand) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
     ResponsePlan::from_command(response)
         .map(HandlerOutcome::Reply)
-        .map_err(|error| RocketMQError::response_process_failed("proxy_v2_response_plan", error.to_string()))
+        .map_err(|error| RocketMQError::response_process_failed("proxy_response_plan", error.to_string()))
 }
 
 #[doc(hidden)]
@@ -673,7 +672,7 @@ where
     })?;
     let proxy_protocol = config.remoting.proxy_protocol.clone();
     let session_binder = Arc::new(ProxySessionBinder::new(sessions.clone()));
-    let transport_sessions = Arc::new(V2SessionRegistry::with_lifecycle_listener(session_binder.clone()));
+    let transport_sessions = Arc::new(SessionRegistry::with_lifecycle_listener(session_binder.clone()));
     if !session_binder.attach(&transport_sessions) {
         return Err(ProxyError::Transport {
             message: "proxy remoting session binder was already attached".to_owned(),
@@ -689,7 +688,7 @@ where
         command_factory,
         session_binder.as_ref().clone(),
     );
-    let server = TransportServerV2::new(Arc::new(ServerConfig::default()), service_context, request_processor)
+    let server = TransportServer::new(Arc::new(ServerConfig::default()), service_context, request_processor)
         .with_telemetry(telemetry)
         .try_with_proxy_protocol(proxy_protocol)?
         .with_session_registry(transport_sessions);
@@ -866,7 +865,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::SystemError,
-                "heartbeat requires the V2 atomic session-binding boundary",
+                "heartbeat requires the atomic session-binding boundary",
             ),
             RemotingIngressRoute::UnregisterClient => self.dispatch_unregister_client(request, None).await,
             RemotingIngressRoute::GetConsumerListByGroup => self.dispatch_get_consumer_list_by_group(request).await,
@@ -877,7 +876,7 @@ where
                 unsupported_response(
                     &self.command_factory,
                     request.opaque(),
-                    "backend forwarding requires the V2 dispatch boundary",
+                    "backend forwarding requires the request dispatch boundary",
                 )
             }
             RemotingIngressRoute::CheckClientConfig => self.dispatch_check_client_config(request).await,
@@ -897,7 +896,7 @@ where
             RemotingIngressRoute::ForwardBackend => unsupported_response(
                 &self.command_factory,
                 request.opaque(),
-                "backend forwarding requires the V2 dispatch boundary",
+                "backend forwarding requires the request dispatch boundary",
             ),
             RemotingIngressRoute::AuthAdminUnsupported => unsupported_response(
                 &self.command_factory,
@@ -919,7 +918,7 @@ where
         }
     }
 
-    async fn dispatch_v2(
+    async fn dispatch_request(
         &self,
         context: &ProxyContext,
         request: &mut RemotingRequest,
@@ -954,7 +953,7 @@ where
             let mut backend_command = request.command().clone();
             backend_command.set_code_ref(request.original_identity().original_code());
             backend_command.set_opaque_mut(request.original_identity().original_opaque());
-            return match backend.process_v2(backend_command).await {
+            return match backend.process(backend_command).await {
                 Ok(EmbeddedDispatchOutcome::Reply(plan)) => Ok(HandlerOutcome::Reply(plan)),
                 Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(
                     ResponseCode::Success as i32,
@@ -1199,7 +1198,7 @@ where
                     &self.command_factory,
                     request.opaque(),
                     ResponseCode::SystemError,
-                    "unregisterClient requires a typed V2 session identity",
+                    "unregisterClient requires a typed session identity",
                 );
             };
             if !session_binder.unregister_client_groups_for_session(
@@ -2495,17 +2494,17 @@ mod tests {
     use rocketmq_security_api::Decision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
-    use rocketmq_transport::api::v2::AdmissionController;
-    use rocketmq_transport::api::v2::AdmissionLimits;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::HandlerOutcome;
-    use rocketmq_transport::api::v2::RejectRequestDecision;
-    use rocketmq_transport::api::v2::RemotingRequest;
-    use rocketmq_transport::api::v2::RequestProcessorV2;
-    use rocketmq_transport::api::v2::ResponsePlan;
-    use rocketmq_transport::api::v2::TransportSecurity;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::RejectRequestDecision;
+    use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponsePlan;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     use super::response_with_header;
     use super::ProxyDrainPhase;
@@ -2701,7 +2700,7 @@ mod tests {
     }
 
     impl ProxyRemotingBackend for TestRemotingBackend {
-        fn process_v2(
+        fn process(
             &self,
             request: RemotingCommand,
         ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
@@ -2727,13 +2726,13 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct MutatingV2Fixture<P> {
+    struct MutatingRequestFixture<P> {
         inner: P,
     }
 
-    impl<P> RequestProcessorV2 for MutatingV2Fixture<P>
+    impl<P> RequestProcessor for MutatingRequestFixture<P>
     where
-        P: RequestProcessorV2 + Clone + Sync,
+        P: RequestProcessor + Clone + Sync,
     {
         async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
             request.command_mut().set_code_ref(RequestCode::BeginProxyDrain);
@@ -2747,7 +2746,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_v2_routes_and_binds_from_original_identity_without_a_channel() {
+    async fn embedded_routes_and_bindings_use_original_identity_without_a_channel() {
         let backend = Arc::new(TestRemotingBackend::default());
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
             LocalServiceManager::with_services(
@@ -2771,8 +2770,8 @@ mod tests {
             Some(backend.clone()),
             drain.clone(),
         );
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
-            MutatingV2Fixture { inner: proxy },
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
+            MutatingRequestFixture { inner: proxy },
             Vec::new(),
             Arc::new(TransportSecurity::secure_enforced(
                 Some(Arc::new(AllowEmbeddedProxyPolicy)),
@@ -2780,10 +2779,10 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        let runtime = RuntimeContext::from_current("proxy-embedded-v2-original-identity-test");
-        let service = runtime.service_context("proxy-embedded-v2-original-identity");
+        let runtime = RuntimeContext::from_current("proxy-embedded-original-identity-test");
+        let service = runtime.service_context("proxy-embedded-original-identity");
         let harness =
-            EmbeddedRequestHarnessV2::new(dispatcher, service.task_group().clone(), Principal::new("broker-proxy"));
+            EmbeddedRequestHarness::new(dispatcher, service.task_group().clone(), Principal::new("broker-proxy"));
 
         let response = harness
             .dispatch(
@@ -2791,7 +2790,7 @@ mod tests {
                 RemotingCommand::create_remoting_command(RequestCode::ConsumerSendMsgBack).set_opaque(9_701),
             )
             .await
-            .expect("embedded V2 Proxy reply");
+            .expect("embedded Proxy reply");
         let EmbeddedDispatchOutcome::Reply(plan) = response else {
             panic!("forward backend must produce a reply")
         };
@@ -2812,7 +2811,7 @@ mod tests {
                 .set_opaque(9_703),
             )
             .await
-            .expect("embedded V2 non-backend reply");
+            .expect("embedded non-backend reply");
         let EmbeddedDispatchOutcome::Reply(plan) = local_response else {
             panic!("original CheckClientConfig route must produce a reply")
         };
@@ -2824,7 +2823,7 @@ mod tests {
         let one_way_outcome = harness
             .dispatch(None, one_way)
             .await
-            .expect("embedded V2 one-way compatibility mapping");
+            .expect("embedded one-way compatibility mapping");
         assert!(matches!(one_way_outcome, EmbeddedDispatchOutcome::OneWay { .. }));
 
         {
@@ -3001,7 +3000,7 @@ mod tests {
             None,
             None,
         );
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             request_processor,
             Vec::new(),
             Arc::new(TransportSecurity::secure_enforced(
@@ -3010,10 +3009,10 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        let runtime = RuntimeContext::from_current("proxy-drain-auth-v2-test");
-        let service = runtime.service_context("proxy-drain-auth-v2");
+        let runtime = RuntimeContext::from_current("proxy-drain-auth-test");
+        let service = runtime.service_context("proxy-drain-auth");
         let harness =
-            EmbeddedRequestHarnessV2::new(dispatcher, service.task_group().clone(), Principal::new("proxy-admin"));
+            EmbeddedRequestHarness::new(dispatcher, service.task_group().clone(), Principal::new("proxy-admin"));
 
         let outcome = harness
             .dispatch(
@@ -3021,7 +3020,7 @@ mod tests {
                 RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState),
             )
             .await
-            .expect("V2 request should be rejected with a response plan");
+            .expect("request should be rejected with a response plan");
         let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
             panic!("drain authentication rejection must be a reply")
         };
@@ -3638,7 +3637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_command_dispatch_rejects_forward_routes_without_materializing_v2_responses() {
+    async fn command_dispatch_rejects_forward_routes_without_materializing_responses() {
         let backend = Arc::new(TestRemotingBackend::default());
         let dispatcher = ProxyRemotingDispatcher::new(
             Arc::new(ProxyConfig {

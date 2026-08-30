@@ -211,10 +211,10 @@ pub(crate) mod network {
     use rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_transport::api::v1::DefaultRequestProcessor;
-    use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v1::TransportClient;
-    use rocketmq_transport::api::v1::TransportClientConfig;
+    use rocketmq_transport::api::DefaultRequestProcessor;
+    use rocketmq_transport::api::ServerConfig;
+    use rocketmq_transport::api::TransportClient;
+    use rocketmq_transport::api::TransportClientConfig;
     use serde::Serialize;
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;

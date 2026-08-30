@@ -34,9 +34,9 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Principal;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::api::v2::EmbeddedDispatchErrorKind;
-use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchErrorKind;
+use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::RequestDeadline;
 
 use crate::broker_runtime::BrokerRuntime;
 use crate::lifecycle::BrokerReadiness;
@@ -206,7 +206,7 @@ impl ProxyBrokerFacade {
         Ok(self.runtime.subscription_group(&CheetahString::from(group)))
     }
 
-    /// Dispatches one local Proxy command through the prepared Broker V2 graph.
+    /// Dispatches one local Proxy command through the prepared Broker graph.
     ///
     /// The transport boundary fixes the origin to `EmbeddedCaller::BrokerProxy`;
     /// the principal below is a composition-owned service identity and is never
@@ -214,19 +214,19 @@ impl ProxyBrokerFacade {
     ///
     /// # Errors
     ///
-    /// Returns an error when the prepared V2 dispatcher is unavailable, the
+    /// Returns an error when the prepared dispatcher is unavailable, the
     /// embedded request cannot be admitted or completed, or the response
     /// deadline elapses.
-    pub async fn process_request_v2(
+    pub async fn process_request(
         &self,
         request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         timeout: Duration,
     ) -> rocketmq_error::RocketMQResult<EmbeddedDispatchOutcome> {
-        self.process_request_v2_with_deadline(request, RequestDeadline::after(timeout))
+        self.process_request_with_deadline(request, RequestDeadline::after(timeout))
             .await
     }
 
-    async fn process_request_v2_with_deadline(
+    async fn process_request_with_deadline(
         &self,
         mut request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         deadline: RequestDeadline,
@@ -234,53 +234,29 @@ impl ProxyBrokerFacade {
         request.make_custom_header_to_net();
         let dispatcher = self
             .runtime
-            .canonical_v2_dispatcher()
-            .ok_or_else(embedded_broker_v2_request_processor_not_ready)?;
+            .canonical_dispatcher()
+            .ok_or_else(embedded_broker_request_processor_not_ready)?;
         dispatcher
-            .dispatch_embedded_v2_wait_response(
+            .dispatch_embedded_wait_response(
                 &self.local_request_tasks,
                 Principal::new("broker-proxy"),
                 Some(deadline),
                 request,
             )
             .await
-            .map_err(|error| embedded_dispatch_v2_error(error, deadline.budget()))
+            .map_err(|error| embedded_dispatch_request_error(error, deadline.budget()))
     }
 }
 
-#[cfg(test)]
 fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
 }
 
-fn embedded_broker_v2_request_processor_not_ready() -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::not_initialized("embedded_broker_v2_request_processor")
-}
-
-fn embedded_dispatch_v2_error(
-    error: rocketmq_transport::api::v2::EmbeddedDispatchError,
+fn embedded_dispatch_request_error(
+    error: rocketmq_transport::api::EmbeddedDispatchError,
     timeout: Duration,
 ) -> rocketmq_error::RocketMQError {
     if matches!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded) {
-        return rocketmq_error::RocketMQError::Timeout {
-            operation: "embedded_broker_v2_response",
-            timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-        };
-    }
-    rocketmq_error::RocketMQError::response_process_failed("embedded_broker_v2_dispatch", error.to_string())
-}
-
-#[cfg(test)]
-fn embedded_dispatch_error(
-    error: rocketmq_transport::api::v1::DispatchError,
-    timeout: Duration,
-) -> rocketmq_error::RocketMQError {
-    if matches!(
-        &error,
-        rocketmq_transport::api::v1::DispatchError::Response(
-            rocketmq_transport::api::v1::ResponseSinkError::DeadlineExceeded,
-        )
-    ) {
         return rocketmq_error::RocketMQError::Timeout {
             operation: "embedded_broker_response",
             timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -324,23 +300,5 @@ mod tests {
         let error = embedded_broker_request_processor_not_ready();
 
         assert_eq!(error.kind(), ErrorKind::NotInitialized);
-    }
-
-    #[test]
-    fn embedded_dispatch_timeout_reports_the_explicit_budget() {
-        let error = embedded_dispatch_error(
-            rocketmq_transport::api::v1::DispatchError::Response(
-                rocketmq_transport::api::v1::ResponseSinkError::DeadlineExceeded,
-            ),
-            Duration::from_millis(15_500),
-        );
-
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::Timeout {
-                operation: "embedded_broker_response",
-                timeout_ms: 15_500
-            }
-        ));
     }
 }

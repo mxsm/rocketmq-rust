@@ -80,14 +80,14 @@ use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestId;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ResponseWriteObservationV2;
+use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestId;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseObservation;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -123,7 +123,7 @@ use structured_store::StoreHookCompletion;
 
 pub struct SendMessageProcessor<MS: BrokerWriteStore, TS> {
     inner: Arc<Inner<MS, TS>>,
-    v2_after_hooks: Arc<Mutex<HashMap<RequestId, SendMessageContext>>>,
+    after_hooks: Arc<Mutex<HashMap<RequestId, SendMessageContext>>>,
 }
 
 struct SendCompletionFacts {
@@ -167,7 +167,7 @@ impl<MS: BrokerWriteStore, TS> Clone for SendMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            v2_after_hooks: Arc::clone(&self.v2_after_hooks),
+            after_hooks: Arc::clone(&self.after_hooks),
         }
     }
 }
@@ -219,17 +219,20 @@ where
     }
 }
 
-impl<MS, TS> RequestProcessorV2 for SendMessageProcessor<MS, TS>
+impl<MS, TS> RequestProcessor for SendMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
     TS: TransactionalMessageService + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 
-    fn observe_response_write(&self, observation: ResponseWriteObservationV2) {
-        let Some(mut context) = self.v2_after_hooks.lock().remove(&observation.request_id()) else {
+    fn observe_response(&self, observation: ResponseObservation) {
+        let Some(observation) = observation.write_projection() else {
+            return;
+        };
+        let Some(mut context) = self.after_hooks.lock().remove(&observation.request_id()) else {
             return;
         };
         self.inner.execute_send_message_hook_after(None, &mut context);
@@ -253,7 +256,7 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -262,7 +265,7 @@ where
         let control = request.control().clone();
         let (receive_span, parsed_request) = self.receive_span_and_request(request.command());
         let result = self
-            .process_v2_request(
+            .process_request(
                 origin,
                 control,
                 original.request_id(),
@@ -288,10 +291,10 @@ where
         }
     }
 
-    async fn process_v2_request(
+    async fn process_request(
         &self,
         origin: RequestOrigin,
-        control: rocketmq_transport::api::v2::RequestControlView,
+        control: rocketmq_transport::api::RequestControlView,
         request_id: RequestId,
         original_code: i32,
         original_opaque: i32,
@@ -300,11 +303,11 @@ where
         parsed_request: Option<ParsedSendRequest>,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let request_code = RequestCode::from(original_code);
-        debug!("SendMessageProcessor V2 received request code: {:?}", request_code);
+        debug!("SendMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage => {
                 let inbound_peer = send_request_peer(&origin)?;
-                self.process_v2_send_message(
+                self.process_send_message(
                     inbound_peer,
                     control,
                     request_id,
@@ -321,7 +324,7 @@ where
                     &self.inner.context.command_factory,
                     result,
                     original_opaque,
-                    "SendMessageProcessor V2 consumer send-back completed without a response",
+                    "SendMessageProcessor consumer send-back completed without a response",
                 )
             }
             _ => BrokerResponseParts::from_command(request_code_not_supported_with_factory_remark_and_opaque(
@@ -334,10 +337,10 @@ where
         }
     }
 
-    async fn process_v2_send_message(
+    async fn process_send_message(
         &self,
         inbound_peer: SocketAddr,
-        control: rocketmq_transport::api::v2::RequestControlView,
+        control: rocketmq_transport::api::RequestControlView,
         request_id: RequestId,
         original_oneway: bool,
         request_code: RequestCode,
@@ -375,7 +378,7 @@ where
         clear_reserved_properties(&mut request_header, &mut request_properties);
 
         if request_header.is_batch() {
-            self.send_batch_message_v2(
+            self.send_batch_message(
                 inbound_peer,
                 control,
                 request_id,
@@ -388,7 +391,7 @@ where
             )
             .await
         } else {
-            self.send_message_v2(
+            self.send_message(
                 inbound_peer,
                 control,
                 request_id,
@@ -471,18 +474,18 @@ where
                 transactional_message_service,
                 context,
             }),
-            v2_after_hooks: Arc::new(Mutex::new(HashMap::new())),
+            after_hooks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     #[allow(
         clippy::too_many_arguments,
-        reason = "the V2 leaf preserves the existing send request state while replacing only transport ownership"
+        reason = "the leaf preserves the existing send request state while replacing only transport ownership"
     )]
-    async fn send_message_v2(
+    async fn send_message(
         &self,
         inbound_peer: SocketAddr,
-        control: rocketmq_transport::api::v2::RequestControlView,
+        control: rocketmq_transport::api::RequestControlView,
         request_id: RequestId,
         original_oneway: bool,
         request: &mut RemotingCommand,
@@ -601,7 +604,7 @@ where
             let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
             let result = await_store(StoreAwaitControl::Request(control), store.append_message(message_ext))
                 .await
-                .map_err(|StoreAwaitStopped| RocketMQError::invariant_violated("V2 message store await stopped"))?
+                .map_err(|StoreAwaitStopped| RocketMQError::invariant_violated("message store await stopped"))?
                 .map_err(map_store_api_error)?;
             let (max_phy_offset, flushed_where) = self
                 .inner
@@ -623,7 +626,7 @@ where
                 topic_message_type,
                 MessageType::NormalMsg,
             );
-            return self.finish_v2_send_message_response(
+            return self.finish_send_message_response(
                 request_id,
                 original_oneway,
                 completion,
@@ -650,7 +653,7 @@ where
                     topic_message_type,
                     MessageType::NormalMsg,
                 );
-                processor.prepare_v2_send_store_reply(
+                processor.prepare_send_store_reply(
                     request_id,
                     original_oneway,
                     completion,
@@ -666,19 +669,19 @@ where
             ),
         })
         .await
-        .map_err(|error| RocketMQError::internal("send-message-v2-store", error))?;
+        .map_err(|error| RocketMQError::internal("send-message-store", error))?;
         let (outcome, _) = reply.into_parts();
         Ok(outcome)
     }
 
     #[allow(
         clippy::too_many_arguments,
-        reason = "the V2 leaf preserves the existing batch request state while replacing only transport ownership"
+        reason = "the leaf preserves the existing batch request state while replacing only transport ownership"
     )]
-    async fn send_batch_message_v2(
+    async fn send_batch_message(
         &self,
         inbound_peer: SocketAddr,
-        control: rocketmq_transport::api::v2::RequestControlView,
+        control: rocketmq_transport::api::RequestControlView,
         request_id: RequestId,
         original_oneway: bool,
         request: &mut RemotingCommand,
@@ -809,7 +812,7 @@ where
                             topic_message_type,
                             MessageType::NormalMsg,
                         );
-                        processor.prepare_v2_send_store_reply(
+                        processor.prepare_send_store_reply(
                             request_id,
                             original_oneway,
                             completion,
@@ -844,7 +847,7 @@ where
                         topic_message_type,
                         MessageType::NormalMsg,
                     );
-                    processor.prepare_v2_send_store_reply(
+                    processor.prepare_send_store_reply(
                         request_id,
                         original_oneway,
                         completion,
@@ -861,12 +864,12 @@ where
             })
             .await
         }
-        .map_err(|error| RocketMQError::internal("send-batch-message-v2-store", error))?;
+        .map_err(|error| RocketMQError::internal("send-batch-message-store", error))?;
         let (outcome, _) = reply.into_parts();
         Ok(outcome)
     }
 
-    fn finish_v2_send_message_response(
+    fn finish_send_message_response(
         &self,
         request_id: RequestId,
         original_oneway: bool,
@@ -881,7 +884,7 @@ where
         if after_canonical_write && !original_oneway {
             self.inner
                 .update_send_message_context_from_response(&response, &mut send_message_context);
-            self.v2_after_hooks.lock().insert(request_id, send_message_context);
+            self.after_hooks.lock().insert(request_id, send_message_context);
         } else {
             self.inner
                 .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
@@ -889,7 +892,7 @@ where
         BrokerResponseParts::from_command(response)?.into_handler_outcome()
     }
 
-    fn prepare_v2_send_store_reply(
+    fn prepare_send_store_reply(
         &self,
         request_id: RequestId,
         original_oneway: bool,
@@ -904,7 +907,7 @@ where
         if after_canonical_write && !original_oneway {
             self.inner
                 .update_send_message_context_from_response(&response, &mut send_message_context);
-            self.v2_after_hooks.lock().insert(request_id, send_message_context);
+            self.after_hooks.lock().insert(request_id, send_message_context);
             (response, StoreHookCompletion::AfterCanonicalWrite)
         } else {
             self.inner
@@ -1451,8 +1454,8 @@ where
 }
 
 /// Applies the production Send store receipt to the wire response header.
-/// Both legacy completion and the route-neutral structured leaf use this
-/// mapping, so transaction and recall fields cannot drift during MIG-04.
+/// Both command completion and the route-neutral structured leaf use this
+/// mapping, so transaction and recall fields cannot drift between paths.
 #[inline]
 fn set_success_response_header(
     response_header: &mut SendMessageResponseHeader,
@@ -2186,7 +2189,7 @@ mod tests {
     use crate::send_message_constants::apply_topic_delivery_properties;
 
     #[test]
-    fn send_v2_shared_seam_accepts_an_arc_held_leaf() {
+    fn send_shared_seam_accepts_an_arc_held_leaf() {
         type TransactionService =
             crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService<
                 StorePorts,
@@ -2196,7 +2199,7 @@ mod tests {
             leaf: &'a Arc<super::SendMessageProcessor<StorePorts, TransactionService>>,
             request: &'a mut super::RemotingRequest,
         ) -> impl Future<Output = rocketmq_error::RocketMQResult<super::HandlerOutcome>> + 'a {
-            leaf.process_v2_shared(request)
+            leaf.process_shared(request)
         }
 
         let _ = call_shared;

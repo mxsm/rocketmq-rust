@@ -56,9 +56,9 @@ use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapError;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TlsMode;
-use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::TlsMode;
+use rocketmq_transport::api::TransportClientConfig;
 use serde::Deserialize;
 use tracing::info;
 

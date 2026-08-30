@@ -17,14 +17,14 @@ use std::sync::Weak;
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v2::ServerPushSender;
-use rocketmq_transport::api::v2::ServerRequestSender;
-use rocketmq_transport::api::v2::SessionCloseHandle;
-use rocketmq_transport::api::v2::SessionCloseReason;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::ServerPushSender;
+use rocketmq_transport::api::ServerRequestSender;
+use rocketmq_transport::api::SessionCloseHandle;
+use rocketmq_transport::api::SessionCloseReason;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionRegistry;
 
-/// Exact-generation transport capabilities retained for one registered V2 client.
+/// Exact-generation transport capabilities retained for one registered client.
 ///
 /// The bundle deliberately exposes no raw connection or arbitrary command writer. Its
 /// `SessionId` is checked when it is assembled so manager cleanup can remove exactly the
@@ -38,7 +38,7 @@ pub(crate) struct ClientSessionTransport {
 }
 
 impl ClientSessionTransport {
-    pub(crate) fn resolve(registry: &V2SessionRegistry, session_id: SessionId) -> Option<Self> {
+    pub(crate) fn resolve(registry: &SessionRegistry, session_id: SessionId) -> Option<Self> {
         let (push, close) = registry.capabilities(session_id)?;
         let requests = registry.server_request_sender(session_id)?;
         debug_assert_eq!(push.session_id(), session_id);
@@ -68,7 +68,7 @@ impl ClientSessionTransport {
         self.close.clone()
     }
 
-    pub(crate) fn retirement(&self, registry: Weak<V2SessionRegistry>) -> ClientSessionRetirement {
+    pub(crate) fn retirement(&self, registry: Weak<SessionRegistry>) -> ClientSessionRetirement {
         ClientSessionRetirement {
             close: self.close_handle(),
             registry,
@@ -79,7 +79,7 @@ impl ClientSessionTransport {
 #[derive(Clone)]
 pub(crate) struct ClientSessionRetirement {
     close: SessionCloseHandle,
-    registry: Weak<V2SessionRegistry>,
+    registry: Weak<SessionRegistry>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,7 +110,7 @@ impl ClientSessionRetirement {
     }
 }
 
-/// Client identity retained for a V2 transport session.
+/// Client identity retained for a transport session.
 ///
 /// This value contains no transport writer, request, session view, or connection
 /// context. The stable session identifier is the only link back to transport

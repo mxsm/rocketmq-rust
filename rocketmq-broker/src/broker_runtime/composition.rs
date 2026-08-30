@@ -41,13 +41,13 @@ impl BrokerComposition {
         state: Box<BrokerRuntimeState<BrokerMessageStore>>,
         escape_bridge_owner: Arc<EscapeBridge<BrokerMessageStore>>,
         consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
-        v2_session_registry: Arc<V2SessionRegistry>,
+        session_registry: Arc<SessionRegistry>,
         configuration_error: Option<String>,
         #[cfg(feature = "rocksdb_store")] rocksdb_config_managers: Option<BrokerRocksDbConfigManagers>,
     ) -> Self {
         Self {
             state,
-            request_pipeline: BrokerRequestPipeline::new(consumer_ids_change_listener, v2_session_registry),
+            request_pipeline: BrokerRequestPipeline::new(consumer_ids_change_listener, session_registry),
             data_plane: BrokerDataPlane::new(escape_bridge_owner),
             control_plane: BrokerControlPlane::new(),
             metadata: BrokerMetadata::new(
@@ -1108,9 +1108,9 @@ impl BrokerRuntime {
         #[cfg(not(feature = "otel-metrics"))]
         let pop_metrics_manager = None;
         #[cfg(any(feature = "otel-metrics", feature = "otel-traces"))]
-        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::from_handle(&telemetry_handle);
+        let transport_telemetry = rocketmq_transport::api::TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces")))]
-        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::noop();
+        let transport_telemetry = rocketmq_transport::api::TransportTelemetry::noop();
         let store_telemetry = rocketmq_store::StoreTelemetry::from_handle(&telemetry_handle);
         let resource_budget = validated_config
             .sections()
@@ -1456,18 +1456,16 @@ impl BrokerRuntime {
             stats_manager,
             state.broker_service_context(),
         ));
-        let v2_session_lifecycle_listener: Arc<dyn rocketmq_transport::api::v2::V2SessionLifecycleListener> =
+        let session_lifecycle_listener: Arc<dyn rocketmq_transport::api::SessionLifecycleListener> =
             client_housekeeping_service.clone();
-        let v2_session_registry = Arc::new(V2SessionRegistry::with_lifecycle_listener(
-            v2_session_lifecycle_listener,
-        ));
+        let session_registry = Arc::new(SessionRegistry::with_lifecycle_listener(session_lifecycle_listener));
         assert!(
-            state.producer_manager.install_v2_session_registry(&v2_session_registry),
-            "producer manager V2 session registry is installed exactly once"
+            state.producer_manager.install_session_registry(&session_registry),
+            "producer manager session registry is installed exactly once"
         );
         assert!(
-            state.consumer_manager.install_v2_session_registry(&v2_session_registry),
-            "consumer manager V2 session registry is installed exactly once"
+            state.consumer_manager.install_session_registry(&session_registry),
+            "consumer manager session registry is installed exactly once"
         );
         state.client_housekeeping_service = Some(client_housekeeping_service);
         state.slave_synchronize = Some(Arc::new(SlaveSynchronize::new_with_master_addr(
@@ -1498,7 +1496,7 @@ impl BrokerRuntime {
                 state,
                 escape_bridge,
                 consumer_ids_change_listener,
-                v2_session_registry,
+                session_registry,
                 None,
                 #[cfg(feature = "rocksdb_store")]
                 rocksdb_config_managers,
