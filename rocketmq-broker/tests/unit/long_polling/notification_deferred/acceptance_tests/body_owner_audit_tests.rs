@@ -137,7 +137,7 @@ async fn notification_deferred_owner_backed_body_success_releases_once_without_r
                 assert_eq!(resume.request().effective_peer(), registration.peer);
                 response_attempts.fetch_add(1, Ordering::SeqCst);
                 let body = Bytes::from_owner(CountingBodyOwner::new(OWNER_BODY.to_vec(), response_owner_drops));
-                ResponsePlan::bytes(notification_head(), body)
+                RemotingResponse::bytes(notification_head(), body)
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
             },
         )
@@ -187,7 +187,7 @@ async fn notification_deferred_prewrite_failure_releases_owner_once_without_retr
                     vec![b'x'; ONE_OVER_FRAME_BODY_BYTES],
                     response_owner_drops,
                 ));
-                ResponsePlan::bytes(notification_head(), body)
+                RemotingResponse::bytes(notification_head(), body)
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
             },
         )
@@ -234,7 +234,7 @@ async fn notification_deferred_parent_cancel_releases_prepared_owner_once_withou
                         assert_eq!(reason, DeferredWakeReason::MessageArrived);
                         response_attempts.fetch_add(1, Ordering::SeqCst);
                         let body = Bytes::from_owner(CountingBodyOwner::new(OWNER_BODY.to_vec(), response_owner_drops));
-                        let plan = ResponsePlan::bytes(notification_head(), body)
+                        let plan = RemotingResponse::bytes(notification_head(), body)
                             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
                         let _ = plan_ready_tx.send(());
                         release_plan_rx
@@ -306,7 +306,7 @@ async fn notification_deferred_post_writer_claim_partial_releases_file_owner_onc
             move |_resume, reason| async move {
                 assert_eq!(reason, DeferredWakeReason::MessageArrived);
                 response_attempts.fetch_add(1, Ordering::SeqCst);
-                ResponsePlan::file_regions(notification_head(), regions)
+                RemotingResponse::file_regions(notification_head(), regions)
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
             },
         )

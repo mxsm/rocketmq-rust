@@ -132,7 +132,7 @@ impl Harness {
             self.session.view().state().clone(),
             &self.parent,
         );
-        let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+        let (sink, _receiver) = ResponseSink::local(control.clone());
         let seed = sink
             .deferred_seed_for_test(TransportTelemetry::noop(), self.session.view().id(), control)
             .with_session_cleanup(cleanup.registration());
@@ -152,7 +152,7 @@ impl Harness {
             session.view().state().clone(),
             &self.parent,
         );
-        let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+        let (sink, _receiver) = ResponseSink::local(control.clone());
         let seed = sink.deferred_seed_for_test(TransportTelemetry::noop(), session.view().id(), control);
         let responder = seed.into_responder(original);
         let permit = self.admission.try_reserve(retained).expect("registry wait permit");
@@ -187,7 +187,7 @@ where
         harness.session.view().state().clone(),
         &harness.parent,
     );
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let seed = sink.deferred_seed_for_test(TransportTelemetry::noop(), harness.session.view().id(), control);
     let seed = match cleanup {
         Some(cleanup) => seed.with_session_cleanup(cleanup.registration()),
@@ -943,7 +943,7 @@ fn simultaneous_lifecycle_stops_report_parent_before_session_and_deadline() {
         harness.session.view().state().clone(),
         &harness.parent,
     );
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let responder = sink
         .deferred_seed_for_test(TransportTelemetry::noop(), harness.session.view().id(), control)
         .into_responder(original);
@@ -1596,8 +1596,8 @@ async fn resume_without_an_owned_processor_terminalizes_as_processor_unavailable
         .resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(
-                crate::dispatch::ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
-                    .expect("unused response plan"),
+                crate::dispatch::RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
+                    .expect("unused remoting response"),
             )
         })
         .await
@@ -1647,8 +1647,8 @@ async fn claimed_owner_cutoff_cancels_without_reentering_the_handler() {
         .resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(
-                crate::dispatch::ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
-                    .expect("unused response plan"),
+                crate::dispatch::RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
+                    .expect("unused remoting response"),
             )
         })
         .await

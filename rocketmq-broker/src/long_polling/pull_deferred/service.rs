@@ -49,9 +49,9 @@ use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::RequestOrigin;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::TakeDeferredResponderError;
@@ -159,7 +159,7 @@ impl PullRetainedEstimate {
 pub(crate) struct PullSuspensionCandidate {
     request: PullRequestData,
     criteria: Arc<PullMatchCriteria>,
-    fallback: ResponsePlan,
+    fallback: RemotingResponse,
     timing: PullSuspendTiming,
     retained: PullRetainedEstimate,
     provenance: PreparedRequestProvenance,
@@ -169,7 +169,7 @@ impl PullSuspensionCandidate {
     pub(crate) fn from_request(
         request: &RemotingRequest,
         criteria: PullMatchCriteria,
-        fallback: ResponsePlan,
+        fallback: RemotingResponse,
         timing: PullSuspendTiming,
         retained: PullRetainedEstimate,
     ) -> Result<Self, PullCandidateBuildError> {
@@ -240,7 +240,7 @@ impl PullSuspensionCandidate {
     fn from_test_parts(
         request: PullRequestData,
         criteria: Arc<PullMatchCriteria>,
-        fallback: ResponsePlan,
+        fallback: RemotingResponse,
         timing: PullSuspendTiming,
         retained: PullRetainedEstimate,
         provenance: PreparedRequestProvenance,
@@ -255,7 +255,7 @@ impl PullSuspensionCandidate {
         }
     }
 
-    pub(crate) fn into_fallback(self) -> ResponsePlan {
+    pub(crate) fn into_fallback(self) -> RemotingResponse {
         self.fallback
     }
 
@@ -438,7 +438,7 @@ impl PullDeferredService {
         &self,
         request: &RemotingRequest,
         criteria: PullMatchCriteria,
-        fallback: ResponsePlan,
+        fallback: RemotingResponse,
         timing: PullSuspendTiming,
         retained: PullRetainedEstimate,
     ) -> Result<PreparedPullRegistration, PullDeferredPrepareError> {
@@ -872,7 +872,7 @@ impl PullDeferredService {
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let observation = Arc::new(Mutex::new(None));
         let accepted = Arc::clone(&observation);
@@ -903,7 +903,7 @@ impl PullDeferredService {
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -1124,14 +1124,14 @@ pub(crate) enum PullCandidateBuildErrorKind {
 
 pub(crate) struct PullCandidateBuildError {
     kind: PullCandidateBuildErrorKind,
-    fallback: ResponsePlan,
+    fallback: RemotingResponse,
     source: Option<rocketmq_error::RocketMQError>,
 }
 
 impl PullCandidateBuildError {
     fn new(
         kind: PullCandidateBuildErrorKind,
-        fallback: ResponsePlan,
+        fallback: RemotingResponse,
         source: Option<rocketmq_error::RocketMQError>,
     ) -> Self {
         Self { kind, fallback, source }
@@ -1141,7 +1141,7 @@ impl PullCandidateBuildError {
         self.kind
     }
 
-    pub(crate) fn into_fallback(self) -> ResponsePlan {
+    pub(crate) fn into_fallback(self) -> RemotingResponse {
         self.fallback
     }
 }
@@ -1221,7 +1221,7 @@ impl PullDeferredPrepareError {
         }
     }
 
-    pub(crate) fn into_fallback(self) -> ResponsePlan {
+    pub(crate) fn into_fallback(self) -> RemotingResponse {
         match self {
             Self::Build(source) => source.into_fallback(),
             Self::Rejected { candidate, .. }
@@ -1313,7 +1313,7 @@ impl PullDeferredRegisterError {
         }
     }
 
-    pub(crate) fn into_pre_take_fallback(self) -> Result<ResponsePlan, Self> {
+    pub(crate) fn into_pre_take_fallback(self) -> Result<RemotingResponse, Self> {
         self.into_candidate().map(PullSuspensionCandidate::into_fallback)
     }
 

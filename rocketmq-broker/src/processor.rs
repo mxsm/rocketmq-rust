@@ -47,7 +47,7 @@ pub(crate) mod query_message_processor;
 pub(crate) mod recall_message_processor;
 pub(crate) mod reply_message_processor;
 mod request_ordering;
-pub(crate) mod response_plan;
+pub(crate) mod response_assembly;
 pub(crate) mod send_message_processor;
 
 const fn is_privileged_maintenance_request(request_code: RequestCode) -> bool {

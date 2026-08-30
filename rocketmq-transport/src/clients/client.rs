@@ -905,7 +905,7 @@ mod inbound_tests {
     use super::*;
     use crate::dispatch::HandlerOutcome;
     use crate::dispatch::RemotingRequest;
-    use crate::dispatch::ResponsePlan;
+    use crate::dispatch::RemotingResponse;
 
     #[derive(Clone)]
     struct EchoProcessor;
@@ -913,10 +913,11 @@ mod inbound_tests {
     impl RequestProcessor for EchoProcessor {
         async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
             let response = RemotingCommand::create_response_command_with_code(request.command().code() + 1);
-            let plan = ResponsePlan::bytes(response, Bytes::from_static(b"client-inbound")).map_err(|error| {
-                RocketMQError::response_process_failed("client_inbound_test.response_plan", error.to_string())
-            })?;
-            Ok(HandlerOutcome::Reply(plan))
+            let response =
+                RemotingResponse::bytes(response, Bytes::from_static(b"client-inbound")).map_err(|error| {
+                    RocketMQError::response_process_failed("client_inbound_test.remoting_response", error.to_string())
+                })?;
+            Ok(HandlerOutcome::Reply(response))
         }
     }
 

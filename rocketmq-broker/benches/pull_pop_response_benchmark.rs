@@ -25,8 +25,8 @@ use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::ResponsePlan;
-use rocketmq_transport::benchmark_support::ResponsePlanPreparationHarness;
+use rocketmq_transport::api::RemotingResponse;
+use rocketmq_transport::benchmark_support::RemotingResponsePreparationHarness;
 
 fn pull_head() -> RemotingCommand {
     RemotingCommand::create_success_response_command_with_header(PullMessageResponseHeader {
@@ -65,7 +65,7 @@ fn four_segments(payload: &Bytes) -> Vec<Bytes> {
 }
 
 fn benchmark_pull_pop_response(criterion: &mut Criterion) {
-    let preparation = ResponsePlanPreparationHarness::new();
+    let preparation = RemotingResponsePreparationHarness::new();
     let mut group = criterion.benchmark_group("broker_pull_pop_response");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -94,7 +94,8 @@ fn benchmark_pull_pop_response(criterion: &mut Criterion) {
             &payload,
             |bencher, payload| {
                 bencher.iter(|| {
-                    let plan = ResponsePlan::bytes(pull_head(), payload.clone()).expect("canonical Pull response plan");
+                    let plan = RemotingResponse::bytes(pull_head(), payload.clone())
+                        .expect("canonical Pull remoting response");
                     black_box(preparation.prepare(plan, 901));
                 });
             },
@@ -117,8 +118,8 @@ fn benchmark_pull_pop_response(criterion: &mut Criterion) {
             &pop_segments,
             |bencher, pop_segments| {
                 bencher.iter(|| {
-                    let plan =
-                        ResponsePlan::segments(pop_head(), pop_segments.clone()).expect("canonical Pop response plan");
+                    let plan = RemotingResponse::segments(pop_head(), pop_segments.clone())
+                        .expect("canonical Pop remoting response");
                     black_box(preparation.prepare(plan, 902));
                 });
             },

@@ -47,9 +47,9 @@ use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::test_support::Connection;
@@ -372,7 +372,7 @@ async fn pop_lite_deferred_event_claim_writes_one_frame() {
                             body: b"owner-backed-pop-lite-success".to_vec(),
                             drops: body_drops_for_handler,
                         });
-                        ResponsePlan::bytes(head, body)
+                        RemotingResponse::bytes(head, body)
                             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
                     },
                 )

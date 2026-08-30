@@ -71,15 +71,15 @@ fn heap_success_builds_one_bytes_reply_without_a_channel() {
     let outcome = pop_heap_response_parts(head, Some(body.clone()))
         .expect("heap response parts")
         .into_handler_outcome()
-        .expect("heap response plan");
-    let HandlerOutcome::Reply(plan) = outcome else {
-        panic!("immediate POP success must be represented by a reply plan");
+        .expect("heap remoting response");
+    let HandlerOutcome::Reply(response) = outcome else {
+        panic!("immediate POP success must be represented by a reply response");
     };
 
-    assert_eq!(ResponseCode::Success as i32, plan.response_code());
-    assert_eq!(ResponseBodyKind::Bytes, plan.body_kind());
-    assert_eq!(body.len(), plan.body_len());
-    assert_eq!(1, plan.body_part_count());
+    assert_eq!(ResponseCode::Success as i32, response.response_code());
+    assert_eq!(ResponseBodyKind::Bytes, response.body_kind());
+    assert_eq!(body.len(), response.body_len());
+    assert_eq!(1, response.body_part_count());
 }
 
 #[test]
@@ -104,13 +104,13 @@ fn non_heap_success_moves_ordered_body_only_segments_into_a_reply() {
     let outcome = pop_segmented_response_parts(head, body_segments)
         .expect("segmented response parts")
         .into_handler_outcome()
-        .expect("segmented response plan");
-    let HandlerOutcome::Reply(plan) = outcome else {
-        panic!("immediate non-heap POP success must be represented by a reply plan");
+        .expect("segmented remoting response");
+    let HandlerOutcome::Reply(response) = outcome else {
+        panic!("immediate non-heap POP success must be represented by a reply response");
     };
 
-    assert_eq!(ResponseCode::Success as i32, plan.response_code());
-    assert_eq!(ResponseBodyKind::Segments, plan.body_kind());
-    assert_eq!(body_len, plan.body_len());
-    assert_eq!(2, plan.body_part_count());
+    assert_eq!(ResponseCode::Success as i32, response.response_code());
+    assert_eq!(ResponseBodyKind::Segments, response.body_kind());
+    assert_eq!(body_len, response.body_len());
+    assert_eq!(2, response.body_part_count());
 }

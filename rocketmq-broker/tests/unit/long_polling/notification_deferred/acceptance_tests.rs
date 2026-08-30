@@ -47,10 +47,10 @@ use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::FileTransferMode;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::test_support::Connection;
@@ -296,7 +296,8 @@ async fn notification_deferred_tcp_prepare_register_claim_resume_writes_one_fram
                                 polling_full: false,
                             },
                         );
-                        ResponsePlan::command(head).map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        RemotingResponse::command(head)
+                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
                     },
                 )
                 .await;
@@ -385,7 +386,8 @@ async fn notification_deferred_filter_miss_stays_registered_then_later_match_cla
                                 polling_full: false,
                             },
                         );
-                        ResponsePlan::command(head).map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        RemotingResponse::command(head)
+                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
                     },
                 )
                 .await;

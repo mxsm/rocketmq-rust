@@ -91,7 +91,7 @@ impl QueryAssignmentProcessor {
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
         let result = self.process_command(request.command_mut(), &peer_label).await;
-        crate::processor::response_plan::immediate_outcome_from_command_result(
+        crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
             result,
             original_opaque,
@@ -821,7 +821,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_unknown_request_returns_a_reply_plan() {
+    async fn embedded_unknown_request_returns_a_reply_response() {
         let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-test"))
             .expect("QueryAssignment test runtime");
         let context = owner.root_context().component("query-assignment-test.request");
@@ -844,12 +844,12 @@ mod tests {
             .dispatch(None, RemotingCommand::create_remoting_command(-98_453).set_opaque(320))
             .await
             .expect("embedded QueryAssignment response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-            panic!("QueryAssignment unknown request must return a reply plan");
+        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+            panic!("QueryAssignment unknown request must return a reply response");
         };
 
-        assert_eq!(plan.response_code(), ResponseCode::RequestCodeNotSupported as i32);
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+        assert_eq!(response.response_code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Empty);
 
         drop(harness);
         drop(context);
@@ -893,14 +893,14 @@ mod tests {
             .dispatch(None, request)
             .await
             .expect("embedded QueryAssignment success response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-            panic!("QueryAssignment success must return a reply plan");
+        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+            panic!("QueryAssignment success must return a reply response");
         };
 
-        assert_eq!(plan.response_code(), ResponseCode::Success as i32);
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
-        assert!(plan.body_len() > 0);
-        assert_eq!(plan.body_part_count(), 1);
+        assert_eq!(response.response_code(), ResponseCode::Success as i32);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Bytes);
+        assert!(response.body_len() > 0);
+        assert_eq!(response.body_part_count(), 1);
 
         drop(harness);
         drop(context);

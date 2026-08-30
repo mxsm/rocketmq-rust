@@ -98,8 +98,8 @@ use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::ServerPushCommand;
 use rocketmq_transport::api::SessionId;
@@ -278,7 +278,7 @@ where
         let mut context = ProxyContext::from_remoting_request(RemotingIngressRoute::rpc_name(original_code), request);
         let drain_management = is_drain_management_request(original_code);
         if drain_management && self.auth_runtime.is_none() {
-            return response_plan(authentication_required_response(
+            return remoting_response(authentication_required_response(
                 &self.dispatcher.command_factory,
                 request.original_identity().original_opaque(),
             ));
@@ -288,7 +288,7 @@ where
             let auth_context = match RemotingAuthContext::from_request(request) {
                 Ok(auth_context) => auth_context,
                 Err(error) => {
-                    return response_plan(auth_error_response(
+                    return remoting_response(auth_error_response(
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
                         ProxyError::from(error),
@@ -299,7 +299,7 @@ where
                 Ok(Some(principal)) => context.set_authenticated_principal(principal),
                 Ok(None) => {}
                 Err(error) => {
-                    return response_plan(auth_error_response(
+                    return remoting_response(auth_error_response(
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
                         error,
@@ -307,13 +307,13 @@ where
                 }
             }
             if drain_management && context.authenticated_principal().is_none() {
-                return response_plan(authentication_required_response(
+                return remoting_response(authentication_required_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                 ));
             }
             if let Err(error) = auth_runtime.authorize_remoting(&auth_context, &auth_command).await {
-                return response_plan(auth_error_response(
+                return remoting_response(auth_error_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                     error,
@@ -327,7 +327,7 @@ where
             match self.drain.try_admit() {
                 Ok(admission) => Some(admission),
                 Err(_) => {
-                    return response_plan(
+                    return remoting_response(
                         self.dispatcher
                             .command_factory
                             .create_response_command_with_code(ResponseCode::ServiceNotAvailable)
@@ -340,7 +340,7 @@ where
 
         if RequestCode::from(original_code) == RequestCode::HeartBeat {
             if let Err(error) = auth_command.decode_command_custom_header::<HeartbeatRequestHeader>() {
-                return response_plan(decode_error_response(
+                return remoting_response(decode_error_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                     "decode heartbeat header",
@@ -348,7 +348,7 @@ where
                 ));
             }
             let Some(body) = auth_command.body() else {
-                return response_plan(transport_error_response(
+                return remoting_response(transport_error_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                     "decode heartbeat body",
@@ -358,7 +358,7 @@ where
             let heartbeat = match SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body.as_ref()) {
                 Ok(heartbeat) => heartbeat,
                 Err(error) => {
-                    return response_plan(transport_error_response(
+                    return remoting_response(transport_error_response(
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
                         "decode heartbeat body",
@@ -367,7 +367,7 @@ where
                 }
             };
             if heartbeat.client_id.is_empty() {
-                return response_plan(response_with_code(
+                return remoting_response(response_with_code(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                     ResponseCode::SystemError,
@@ -389,7 +389,7 @@ where
                     .collect(),
             );
             let Some(commit) = self.session_binder.commit_heartbeat(&context, instruction) else {
-                return response_plan(response_with_code(
+                return remoting_response(response_with_code(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                     ResponseCode::SystemError,
@@ -419,7 +419,7 @@ where
                 .set_opaque(request.original_identity().original_opaque());
             response.add_ext_field(IS_SUPPORT_HEART_BEAT_V2, true.to_string());
             response.add_ext_field(IS_SUB_CHANGE, commit.membership_changed.to_string());
-            return response_plan(response);
+            return remoting_response(response);
         }
 
         self.dispatcher.dispatch_request(&context, request).await
@@ -430,10 +430,10 @@ where
     }
 }
 
-fn response_plan(response: RemotingCommand) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-    ResponsePlan::from_command(response)
+fn remoting_response(response: RemotingCommand) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    RemotingResponse::from_command(response)
         .map(HandlerOutcome::Reply)
-        .map_err(|error| RocketMQError::response_process_failed("proxy_response_plan", error.to_string()))
+        .map_err(|error| RocketMQError::response_process_failed("proxy_remoting_response", error.to_string()))
 }
 
 #[doc(hidden)]
@@ -929,7 +929,7 @@ where
             let mut dispatch_command = request.command().clone();
             dispatch_command.set_code_ref(request.original_identity().original_code());
             dispatch_command.set_opaque_mut(request.original_identity().original_opaque());
-            return response_plan(
+            return remoting_response(
                 self.dispatch_unregister_client(&dispatch_command, Some(request.session().id()))
                     .await,
             );
@@ -941,7 +941,7 @@ where
                 | RemotingIngressRoute::UnlockBatchMessageQueue
         ) {
             let Some(backend) = self.remoting_backend.as_ref() else {
-                return response_plan(unsupported_response(
+                return remoting_response(unsupported_response(
                     &self.command_factory,
                     request.original_identity().original_opaque(),
                     format!(
@@ -955,9 +955,9 @@ where
             backend_command.set_opaque_mut(request.original_identity().original_opaque());
             return match backend.process(backend_command).await {
                 Ok(EmbeddedDispatchOutcome::Reply(plan)) => Ok(HandlerOutcome::Reply(plan)),
-                Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(
-                    ResponseCode::Success as i32,
-                ))),
+                Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(HandlerOutcome::Reply(
+                    RemotingResponse::empty_response(ResponseCode::Success as i32),
+                )),
                 Ok(EmbeddedDispatchOutcome::NoReply { reason, .. }) => request
                     .protocol_no_response(reason)
                     .map(HandlerOutcome::NoReply)
@@ -965,7 +965,7 @@ where
                 Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(RocketMQError::invariant_violated(
                     "terminal Proxy backend route returned an unresolved deferred outcome",
                 )),
-                Err(error) => response_plan(proxy_error_response(
+                Err(error) => remoting_response(proxy_error_response(
                     &self.command_factory,
                     request.original_identity().original_opaque(),
                     error,
@@ -979,7 +979,7 @@ where
         let mut dispatch_command = request.command().clone();
         dispatch_command.set_code_ref(request.original_identity().original_code());
         dispatch_command.set_opaque_mut(request.original_identity().original_opaque());
-        response_plan(self.dispatch(context, &dispatch_command).await)
+        remoting_response(self.dispatch(context, &dispatch_command).await)
     }
 
     fn dispatch_get_consumer_connection_list(&self, request: &RemotingCommand) -> RemotingCommand {
@@ -2501,8 +2501,8 @@ mod tests {
     use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RejectRequestDecision;
     use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
-    use rocketmq_transport::api::ResponsePlan;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -2706,12 +2706,12 @@ mod tests {
         ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
             Box::pin(async move {
                 self.seen_requests.lock().expect("backend mutex poisoned").push(request);
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
                 .map(EmbeddedDispatchOutcome::Reply)
                 .map_err(|error| ProxyError::Transport {
-                    message: format!("test response plan: {error}"),
+                    message: format!("test remoting response: {error}"),
                 })
             })
         }
@@ -3020,7 +3020,7 @@ mod tests {
                 RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState),
             )
             .await
-            .expect("request should be rejected with a response plan");
+            .expect("request should be rejected with a remoting response");
         let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
             panic!("drain authentication rejection must be a reply")
         };

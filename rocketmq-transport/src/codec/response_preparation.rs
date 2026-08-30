@@ -17,7 +17,7 @@
 use rocketmq_error::SerializationError;
 
 use super::remoting_command_codec::FrameLimits;
-use crate::dispatch::BoundResponsePlan;
+use crate::dispatch::BoundResponse;
 use crate::dispatch::RequestId;
 use crate::dispatch::ResponseBody;
 use crate::dispatch::ResponseBodyKind;
@@ -102,10 +102,7 @@ impl PreparedResponseMetadata {
     dead_code,
     reason = "the later private response sink invokes this RSP-04 preparation seam"
 )]
-pub(crate) fn prepare_response(
-    bound: BoundResponsePlan,
-    limits: FrameLimits,
-) -> Result<PreparedResponse, ResponseError> {
+pub(crate) fn prepare_response(bound: BoundResponse, limits: FrameLimits) -> Result<PreparedResponse, ResponseError> {
     let opaque_was_corrected = bound.opaque_was_corrected();
     let (request_id, head, body) = bound.into_parts();
     let response_code = head.code();
@@ -221,12 +218,12 @@ mod tests {
 
     use super::*;
     use crate::dispatch::OriginalRequestIdentity;
-    use crate::dispatch::ResponsePlan;
+    use crate::dispatch::RemotingResponse;
     use crate::file_region::FileRegion;
     use crate::file_region::FileRegionLease;
     use crate::file_region::FileRegionSequence;
 
-    fn bind(plan: ResponsePlan, owner_id: u64, original_opaque: i32) -> BoundResponsePlan {
+    fn bind(plan: RemotingResponse, owner_id: u64, original_opaque: i32) -> BoundResponse {
         let sequence = AtomicU64::new(1);
         let request = RemotingCommand::create_remoting_command(41).set_opaque(original_opaque);
         let original = OriginalRequestIdentity::capture(owner_id, &sequence, &request)
@@ -280,20 +277,20 @@ mod tests {
     fn all_body_kinds_report_exact_metadata_and_retain_the_bound_identity() {
         let cases = [
             (
-                ResponsePlan::command(response_head(71, -1, SerializeType::JSON)).expect("empty plan"),
+                RemotingResponse::command(response_head(71, -1, SerializeType::JSON)).expect("empty plan"),
                 ResponseBodyKind::Empty,
                 0,
                 0,
             ),
             (
-                ResponsePlan::bytes(response_head(72, -1, SerializeType::JSON), Bytes::from_static(b"bytes"))
+                RemotingResponse::bytes(response_head(72, -1, SerializeType::JSON), Bytes::from_static(b"bytes"))
                     .expect("bytes plan"),
                 ResponseBodyKind::Bytes,
                 5,
                 1,
             ),
             (
-                ResponsePlan::segments(
+                RemotingResponse::segments(
                     response_head(73, -1, SerializeType::JSON),
                     vec![Bytes::from_static(b"left"), Bytes::from_static(b"right")],
                 )
@@ -332,7 +329,8 @@ mod tests {
             FileRegionSequence::single(FileRegion::try_new(Arc::new(file), 0, 9).expect("valid file region"));
         let prepared = prepare_response(
             bind(
-                ResponsePlan::file_regions(response_head(74, 903, SerializeType::JSON), sequence).expect("file plan"),
+                RemotingResponse::file_regions(response_head(74, 903, SerializeType::JSON), sequence)
+                    .expect("file plan"),
                 103,
                 903,
             ),
@@ -359,7 +357,7 @@ mod tests {
                 .expect("canonical empty command should encode")
                 .into_bytes();
             let empty = prepare_response(
-                bind(ResponsePlan::command(empty_head).expect("empty plan"), 201, 377),
+                bind(RemotingResponse::command(empty_head).expect("empty plan"), 201, 377),
                 FrameLimits::default(),
             )
             .expect("empty response should prepare");
@@ -376,9 +374,9 @@ mod tests {
             )
             .expect("canonical body command should encode")
             .into_bytes();
-            let bytes_plan = ResponsePlan::bytes(response_head(82, -77, serialize_type), canonical_body.clone())
+            let bytes_plan = RemotingResponse::bytes(response_head(82, -77, serialize_type), canonical_body.clone())
                 .expect("bytes plan");
-            let segments_plan = ResponsePlan::segments(
+            let segments_plan = RemotingResponse::segments(
                 response_head(82, -77, serialize_type),
                 vec![
                     Bytes::from_static(b"left"),
@@ -396,7 +394,7 @@ mod tests {
                 FileRegion::try_new(Arc::clone(&file), 7, 6).expect("separator and right file region"),
             ])
             .expect("ordered file regions");
-            let file_plan = ResponsePlan::file_regions(response_head(82, -77, serialize_type), file_regions)
+            let file_plan = RemotingResponse::file_regions(response_head(82, -77, serialize_type), file_regions)
                 .expect("file-region plan");
 
             for (owner, expected_kind, plan) in [
@@ -426,7 +424,7 @@ mod tests {
         let bytes_pointer = bytes.as_ptr();
         let prepared = prepare_response(
             bind(
-                ResponsePlan::bytes(response_head(82, 9, SerializeType::JSON), bytes).expect("bytes plan"),
+                RemotingResponse::bytes(response_head(82, 9, SerializeType::JSON), bytes).expect("bytes plan"),
                 202,
                 9,
             ),
@@ -450,7 +448,7 @@ mod tests {
         let vector_pointer = input.as_ptr();
         let prepared = prepare_response(
             bind(
-                ResponsePlan::segments(response_head(83, 10, SerializeType::JSON), input).expect("segments plan"),
+                RemotingResponse::segments(response_head(83, 10, SerializeType::JSON), input).expect("segments plan"),
                 203,
                 10,
             ),
@@ -483,15 +481,15 @@ mod tests {
         }
     }
 
-    fn counting_plan(encodes: Arc<AtomicUsize>, body: Bytes, serialize_type: SerializeType) -> ResponsePlan {
-        ResponsePlan::bytes(
+    fn counting_plan(encodes: Arc<AtomicUsize>, body: Bytes, serialize_type: SerializeType) -> RemotingResponse {
+        RemotingResponse::bytes(
             RemotingCommand::create_response_command_with_code(84)
                 .set_opaque(11)
                 .set_serialize_type(serialize_type)
                 .set_command_custom_header(CountingHeader { encodes }),
             body,
         )
-        .expect("counting response plan")
+        .expect("counting remoting response")
     }
 
     #[test]
@@ -560,7 +558,8 @@ mod tests {
         let body = Bytes::from_static(b"limit-body");
         let baseline = prepare_response(
             bind(
-                ResponsePlan::bytes(response_head(85, 12, SerializeType::JSON), body.clone()).expect("baseline plan"),
+                RemotingResponse::bytes(response_head(85, 12, SerializeType::JSON), body.clone())
+                    .expect("baseline plan"),
                 207,
                 12,
             ),
@@ -581,7 +580,7 @@ mod tests {
         };
         let prepared = prepare_response(
             bind(
-                ResponsePlan::bytes(response_head(85, 12, SerializeType::JSON), body.clone()).expect("exact plan"),
+                RemotingResponse::bytes(response_head(85, 12, SerializeType::JSON), body.clone()).expect("exact plan"),
                 208,
                 12,
             ),
@@ -606,7 +605,7 @@ mod tests {
         ] {
             let Err(error) = prepare_response(
                 bind(
-                    ResponsePlan::bytes(response_head(85, 12, SerializeType::JSON), body.clone())
+                    RemotingResponse::bytes(response_head(85, 12, SerializeType::JSON), body.clone())
                         .expect("one-over plan"),
                     209,
                     12,
@@ -644,7 +643,7 @@ mod tests {
 
         let exact = response_head(88, 15, SerializeType::JSON).set_remark("a".repeat(exact_remark_len));
         let prepared = prepare_response(
-            bind(ResponsePlan::command(exact).expect("exact header plan"), 212, 15),
+            bind(RemotingResponse::command(exact).expect("exact header plan"), 212, 15),
             limits,
         )
         .expect("24-bit header ceiling should encode");
@@ -657,7 +656,7 @@ mod tests {
 
         let over = response_head(88, 15, SerializeType::JSON).set_remark("a".repeat(exact_remark_len + 1));
         let Err(error) = prepare_response(
-            bind(ResponsePlan::command(over).expect("one-over header plan"), 213, 15),
+            bind(RemotingResponse::command(over).expect("one-over header plan"), 213, 15),
             limits,
         ) else {
             panic!("header above the 24-bit field must fail");
@@ -686,7 +685,7 @@ mod tests {
         let exact_region = FileRegion::try_new(file.clone(), 0, exact_body_len as u64).expect("exact file region");
         let prepared = prepare_response(
             bind(
-                ResponsePlan::file_regions(head.clone(), FileRegionSequence::single(exact_region))
+                RemotingResponse::file_regions(head.clone(), FileRegionSequence::single(exact_region))
                     .expect("exact signed frame plan"),
                 214,
                 16,
@@ -700,7 +699,7 @@ mod tests {
         let over_region = FileRegion::try_new(file, 0, (exact_body_len + 1) as u64).expect("one-over file region");
         let Err(error) = prepare_response(
             bind(
-                ResponsePlan::file_regions(head, FileRegionSequence::single(over_region))
+                RemotingResponse::file_regions(head, FileRegionSequence::single(over_region))
                     .expect("one-over signed frame plan"),
                 215,
                 16,
@@ -757,8 +756,8 @@ mod tests {
         assert_eq!(Arc::strong_count(&lease), 3);
         let prepared = prepare_response(
             bind(
-                ResponsePlan::file_regions(response_head(86, 13, SerializeType::JSON), sequence)
-                    .expect("file response plan"),
+                RemotingResponse::file_regions(response_head(86, 13, SerializeType::JSON), sequence)
+                    .expect("file remoting response"),
                 210,
                 13,
             ),
@@ -781,8 +780,8 @@ mod tests {
         let (lease, sequence) = counting_file_sequence(&file_accesses, &drops);
         let Err(error) = prepare_response(
             bind(
-                ResponsePlan::file_regions(response_head(87, 14, SerializeType::JSON), sequence)
-                    .expect("file response plan"),
+                RemotingResponse::file_regions(response_head(87, 14, SerializeType::JSON), sequence)
+                    .expect("file remoting response"),
                 211,
                 14,
             ),

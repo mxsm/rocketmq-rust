@@ -20,18 +20,18 @@ use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::HandlerOutcome;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::RemotingRequest;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestId;
 use crate::dispatch::ResponseBodyKind;
 use crate::dispatch::ResponseError;
 use crate::dispatch::ResponseErrorKind;
-use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::WriteProgress;
 use crate::request_ordering::RequestOrdering;
 
 /// Decision returned before a request enters processor execution.
 ///
-/// A rejection owns its response plan. The decision is affine because cloning
+/// A rejection owns its remoting response. The decision is affine because cloning
 /// it would duplicate response ownership.
 ///
 /// ```compile_fail
@@ -45,14 +45,14 @@ use crate::request_ordering::RequestOrdering;
 #[derive(Debug, Default)]
 #[allow(
     clippy::large_enum_variant,
-    reason = "the public contract requires direct affine ResponsePlan ownership without indirection"
+    reason = "the public contract requires direct affine RemotingResponse ownership without indirection"
 )]
 pub enum RejectRequestDecision {
     /// Continue with normal request processing.
     #[default]
     Proceed,
-    /// Reject processing and deliver the owned response plan.
-    Reject(ResponsePlan),
+    /// Reject processing and deliver the owned remoting response.
+    Reject(RemotingResponse),
 }
 
 /// Response lifecycle path observed at the canonical write boundary.
@@ -84,7 +84,7 @@ pub enum ResponseObservationOutcome {
     Oneway,
     /// Protocol policy explicitly permits no response.
     ProtocolNoResponse,
-    /// A deferred response ended without attempting a response plan.
+    /// A deferred response ended without attempting a remoting response.
     Cancelled(DeferredTerminalReason),
     /// Response processing or delivery failed with redacted metadata.
     Failed {
@@ -101,7 +101,7 @@ pub struct ResponseMetadata {
     request_id: RequestId,
     original_code: i32,
     response_code: Option<i32>,
-    plan_kind: Option<ResponseBodyKind>,
+    body_kind: Option<ResponseBodyKind>,
     mode: ResponseObservationMode,
     outcome: ResponseObservationOutcome,
 }
@@ -111,7 +111,7 @@ impl ResponseMetadata {
         request_id: RequestId,
         original_code: i32,
         response_code: Option<i32>,
-        plan_kind: Option<ResponseBodyKind>,
+        body_kind: Option<ResponseBodyKind>,
         mode: ResponseObservationMode,
         outcome: ResponseObservationOutcome,
     ) -> Self {
@@ -119,7 +119,7 @@ impl ResponseMetadata {
             request_id,
             original_code,
             response_code,
-            plan_kind,
+            body_kind,
             mode,
             outcome,
         }
@@ -143,10 +143,10 @@ impl ResponseMetadata {
         self.response_code
     }
 
-    /// Returns the response plan's storage category without exposing its body.
+    /// Returns the remoting response's storage category without exposing its body.
     #[must_use]
-    pub const fn plan_kind(self) -> Option<ResponseBodyKind> {
-        self.plan_kind
+    pub const fn body_kind(self) -> Option<ResponseBodyKind> {
+        self.body_kind
     }
 
     /// Returns the response lifecycle mode.
@@ -205,7 +205,7 @@ impl ResponseObservation {
     #[must_use]
     pub fn write_projection(self) -> Option<ResponseWriteObservation> {
         let response_code = self.metadata.response_code?;
-        let body_kind = self.metadata.plan_kind?;
+        let body_kind = self.metadata.body_kind?;
         let path = match self.metadata.mode {
             ResponseObservationMode::Inline => ResponseWritePath::Inline,
             ResponseObservationMode::Deferred => ResponseWritePath::Deferred,
@@ -555,27 +555,27 @@ mod tests {
     }
 
     #[test]
-    fn rejection_moves_the_owned_response_plan() {
-        let plan = ResponsePlan::bytes(
+    fn rejection_moves_the_owned_remoting_response() {
+        let response = RemotingResponse::bytes(
             rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_response_command_with_code(7),
             bytes::Bytes::from_static(b"owned response"),
         )
-        .expect("response plan");
-        let ResponseBody::Bytes(body) = plan.test_body() else {
+        .expect("remoting response");
+        let ResponseBody::Bytes(body) = response.test_body() else {
             panic!("byte response should retain contiguous storage");
         };
         let pointer = body.as_ptr();
 
-        let decision = RejectRequestDecision::Reject(plan);
-        let RejectRequestDecision::Reject(plan) = decision else {
-            panic!("rejection should retain its plan");
+        let decision = RejectRequestDecision::Reject(response);
+        let RejectRequestDecision::Reject(response) = decision else {
+            panic!("rejection should retain its response");
         };
-        let ResponseBody::Bytes(body) = plan.test_body() else {
+        let ResponseBody::Bytes(body) = response.test_body() else {
             panic!("rejection should retain contiguous storage");
         };
         assert_eq!(body.as_ptr(), pointer);
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
-        assert_eq!(plan.body_len(), 14);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Bytes);
+        assert_eq!(response.body_len(), 14);
     }
 
     #[test]

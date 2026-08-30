@@ -18,45 +18,45 @@ use super::*;
 mod deferred;
 
 #[tokio::test]
-async fn network_plan_prepares_and_writes_all_four_bodies_before_issuing_receipts() {
+async fn network_prepares_and_writes_all_four_bodies_before_issuing_receipts() {
     let mut harness = NetworkHarness::new(
-        "network-plan-four-bodies",
+        "network-response-four-bodies",
         FrameLimits::default(),
         AdmissionLimits::default(),
         None,
     )
     .await;
     let encodes = Arc::new(AtomicUsize::new(0));
-    let (file_plan, file_accesses, file_drops) = counting_file_plan(94, 903, b"file-body");
-    let plans = [
-        ResponsePlan::command(response_head(91, 900)).expect("empty response plan"),
-        ResponsePlan::bytes(
+    let (file_response, file_accesses, file_drops) = counting_file_response(94, 903, b"file-body");
+    let responses = [
+        RemotingResponse::command(response_head(91, 900)).expect("empty remoting response"),
+        RemotingResponse::bytes(
             response_head(92, 901).set_command_custom_header(CountingHeader {
                 encodes: Arc::clone(&encodes),
             }),
             Bytes::from_static(b"bytes-body"),
         )
-        .expect("bytes response plan"),
-        ResponsePlan::segments(
+        .expect("bytes remoting response"),
+        RemotingResponse::segments(
             response_head(93, 902),
             vec![Bytes::from_static(b"segment-"), Bytes::from_static(b"body")],
         )
-        .expect("segments response plan"),
-        file_plan,
+        .expect("segments remoting response"),
+        file_response,
     ];
     let expected_bodies: [&[u8]; 4] = [b"", b"bytes-body", b"segment-body", b"file-body"];
     assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
     assert_eq!(file_drops.load(Ordering::SeqCst), 0);
 
-    for (index, (plan, expected_body)) in plans.into_iter().zip(expected_bodies).enumerate() {
+    for (index, (response, expected_body)) in responses.into_iter().zip(expected_bodies).enumerate() {
         let owner = 801 + index as u64;
-        let (control, _parent) = harness.control("network-plan-four-bodies-control", None);
-        let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
+        let (control, _parent) = harness.control("network-response-four-bodies-control", None);
+        let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
         let flushes_before = harness.flushes.load(Ordering::SeqCst);
         let receipt = sink
-            .send_plan(bind(plan, owner, 1_001 + index as i32))
+            .send_response(bind(response, owner, 1_001 + index as i32))
             .await
-            .expect("network plan should complete through writer");
+            .expect("network response should complete through writer");
         assert_eq!(receipt.request_id().owner_id(), owner);
         assert_eq!(receipt.disposition(), ResponseDisposition::TransportWritten);
         assert!(harness.flushes.load(Ordering::SeqCst) > flushes_before);
@@ -75,18 +75,18 @@ async fn network_plan_prepares_and_writes_all_four_bodies_before_issuing_receipt
 }
 
 #[tokio::test]
-async fn network_plan_flush_failure_reports_exact_progress_and_never_issues_or_retries_a_receipt() {
-    let harness = NetworkHarness::new_with_flush_failure("network-plan-flush-failure").await;
+async fn network_flush_failure_reports_exact_progress_and_never_issues_or_retries_a_receipt() {
+    let harness = NetworkHarness::new_with_flush_failure("network-response-flush-failure").await;
     let flushes = Arc::clone(&harness.flushes);
-    let (control, _parent) = harness.control("network-plan-flush-failure-control", None);
-    let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
+    let (control, _parent) = harness.control("network-response-flush-failure-control", None);
+    let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
     let duplicate = sink.clone();
-    let (plan, accesses, drops) = counting_file_plan(117, 1_117, b"written-before-flush-fails");
+    let (response, accesses, drops) = counting_file_response(117, 1_117, b"written-before-flush-fails");
     assert_eq!(accesses.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
 
     let error = sink
-        .send_plan(bind(plan, 824, 1_117))
+        .send_response(bind(response, 824, 1_117))
         .await
         .expect_err("flush failure must prevent a receipt");
     assert!(matches!(
@@ -98,8 +98,8 @@ async fn network_plan_flush_failure_reports_exact_progress_and_never_issues_or_r
     ));
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(118, 1_118)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(118, 1_118)).expect("duplicate remoting response"),
                 825,
                 1_118,
             ))
@@ -124,9 +124,9 @@ async fn network_plan_flush_failure_reports_exact_progress_and_never_issues_or_r
 }
 
 #[tokio::test]
-async fn network_plan_rejects_pre_encode_stops_and_preserves_typed_encode_failures() {
+async fn network_rejects_pre_encode_stops_and_preserves_typed_encode_failures() {
     let harness = NetworkHarness::new(
-        "network-plan-preflight-errors",
+        "network-response-preflight-errors",
         FrameLimits {
             max_header_bytes: 0,
             ..FrameLimits::default()
@@ -137,28 +137,28 @@ async fn network_plan_rejects_pre_encode_stops_and_preserves_typed_encode_failur
     .await;
     let encodes = Arc::new(AtomicUsize::new(0));
     let (expired, _parent) = harness.control(
-        "network-plan-expired-control",
+        "network-response-expired-control",
         Some(RequestDeadline::after(Duration::ZERO)),
     );
-    let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, expired);
-    let plan = ResponsePlan::command(response_head(95, 910).set_command_custom_header(CountingHeader {
+    let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, expired);
+    let response = RemotingResponse::command(response_head(95, 910).set_command_custom_header(CountingHeader {
         encodes: Arc::clone(&encodes),
     }))
-    .expect("response plan");
+    .expect("remoting response");
     assert!(matches!(
-        sink.send_plan(bind(plan, 805, 1_005)).await,
+        sink.send_response(bind(response, 805, 1_005)).await,
         Err(ResponseError::DeadlineExceeded)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 0);
 
-    let (control, _parent) = harness.control("network-plan-encode-control", None);
-    let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
-    let plan = ResponsePlan::command(response_head(96, 911).set_command_custom_header(CountingHeader {
+    let (control, _parent) = harness.control("network-response-encode-control", None);
+    let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
+    let response = RemotingResponse::command(response_head(96, 911).set_command_custom_header(CountingHeader {
         encodes: Arc::clone(&encodes),
     }))
-    .expect("response plan");
+    .expect("remoting response");
     let error = sink
-        .send_plan(bind(plan, 806, 1_006))
+        .send_response(bind(response, 806, 1_006))
         .await
         .expect_err("zero header limit should reject encoding");
     let ResponseError::Encode { source } = error else {
@@ -171,9 +171,9 @@ async fn network_plan_rejects_pre_encode_stops_and_preserves_typed_encode_failur
 }
 
 #[tokio::test]
-async fn network_plan_rechecks_control_after_encoding_without_retrying_the_encoder() {
+async fn network_rechecks_control_after_encoding_without_retrying_the_encoder() {
     let harness = NetworkHarness::new(
-        "network-plan-post-encode-stop",
+        "network-response-post-encode-stop",
         FrameLimits::default(),
         AdmissionLimits::default(),
         None,
@@ -182,8 +182,8 @@ async fn network_plan_rechecks_control_after_encoding_without_retrying_the_encod
     let checked = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Notify::new());
     let encodes = Arc::new(AtomicUsize::new(0));
-    let (control, parent) = harness.control("network-plan-post-encode-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_gate(
+    let (control, parent) = harness.control("network-response-post-encode-control", None);
+    let sink = ResponseSink::network_with_enqueue_gate(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
@@ -192,18 +192,18 @@ async fn network_plan_rechecks_control_after_encoding_without_retrying_the_encod
     );
     let duplicate = sink.clone();
     let send = tokio::spawn(
-        sink.send_plan(bind(
-            ResponsePlan::command(response_head(97, 1_007).set_command_custom_header(CountingHeader {
+        sink.send_response(bind(
+            RemotingResponse::command(response_head(97, 1_007).set_command_custom_header(CountingHeader {
                 encodes: Arc::clone(&encodes),
             }))
-            .expect("response plan"),
+            .expect("remoting response"),
             807,
             1_007,
         )),
     );
     checked.notified().await;
-    let duplicate = tokio::spawn(duplicate.send_plan(bind(
-        ResponsePlan::command(response_head(98, 1_008)).expect("duplicate response plan"),
+    let duplicate = tokio::spawn(duplicate.send_response(bind(
+        RemotingResponse::command(response_head(98, 1_008)).expect("duplicate remoting response"),
         808,
         1_008,
     )));
@@ -215,12 +215,12 @@ async fn network_plan_rechecks_control_after_encoding_without_retrying_the_encod
     parent.cancel();
 
     assert!(matches!(
-        send.await.expect("plan send task"),
+        send.await.expect("response send task"),
         Err(ResponseError::Cancelled)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        duplicate.await.expect("duplicate plan task"),
+        duplicate.await.expect("duplicate response task"),
         Err(ResponseError::AlreadyCompleted {
             state: ResponseTerminalState::Cancelled
         })
@@ -230,9 +230,9 @@ async fn network_plan_rechecks_control_after_encoding_without_retrying_the_encod
 }
 
 #[tokio::test]
-async fn network_plan_queue_rejection_is_not_started_and_drops_a_file_lease_once() {
+async fn network_queue_rejection_is_not_started_and_drops_a_file_lease_once() {
     let harness = NetworkHarness::new(
-        "network-plan-queue-reject",
+        "network-response-queue-reject",
         FrameLimits::default(),
         AdmissionLimits {
             queued: ResourceLimit { count: 64, bytes: 1 },
@@ -241,19 +241,19 @@ async fn network_plan_queue_rejection_is_not_started_and_drops_a_file_lease_once
         None,
     )
     .await;
-    let (plan, accesses, drops) = counting_file_plan(99, 1_009, b"leased body");
-    let (control, _parent) = harness.control("network-plan-queue-reject-control", None);
-    let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
+    let (response, accesses, drops) = counting_file_response(99, 1_009, b"leased body");
+    let (control, _parent) = harness.control("network-response-queue-reject-control", None);
+    let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
     let duplicate = sink.clone();
 
     assert!(matches!(
-        sink.send_plan(bind(plan, 809, 1_009)).await,
+        sink.send_response(bind(response, 809, 1_009)).await,
         Err(ResponseError::QueueSaturated)
     ));
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(100, 1_010)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(100, 1_010)).expect("duplicate remoting response"),
                 810,
                 1_010,
             ))
@@ -271,32 +271,32 @@ async fn network_plan_queue_rejection_is_not_started_and_drops_a_file_lease_once
 }
 
 #[tokio::test]
-async fn network_plan_preserves_session_close_before_and_after_encoding() {
+async fn network_preserves_session_close_before_and_after_encoding() {
     let pre_encode = NetworkHarness::new(
-        "network-plan-pre-encode-close",
+        "network-response-pre-encode-close",
         FrameLimits::default(),
         AdmissionLimits::default(),
         None,
     )
     .await;
     let encodes = Arc::new(AtomicUsize::new(0));
-    let (control, _parent) = pre_encode.control("network-plan-pre-encode-close-control", None);
-    let sink = ResponseSink::network_plan(pre_encode.session.clone(), AdmissionClass::Data, control);
+    let (control, _parent) = pre_encode.control("network-response-pre-encode-close-control", None);
+    let sink = ResponseSink::network(pre_encode.session.clone(), AdmissionClass::Data, control);
     let duplicate = sink.clone();
     pre_encode.session.abort();
-    let plan = ResponsePlan::command(response_head(112, 1_112).set_command_custom_header(CountingHeader {
+    let response = RemotingResponse::command(response_head(112, 1_112).set_command_custom_header(CountingHeader {
         encodes: Arc::clone(&encodes),
     }))
-    .expect("response plan");
+    .expect("remoting response");
     assert!(matches!(
-        sink.send_plan(bind(plan, 819, 1_112)).await,
+        sink.send_response(bind(response, 819, 1_112)).await,
         Err(ResponseError::SessionClosed)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 0);
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(113, 1_113)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(113, 1_113)).expect("duplicate remoting response"),
                 820,
                 1_113,
             ))
@@ -308,7 +308,7 @@ async fn network_plan_preserves_session_close_before_and_after_encoding() {
     pre_encode.shutdown().await;
 
     let post_encode = NetworkHarness::new(
-        "network-plan-post-encode-close",
+        "network-response-post-encode-close",
         FrameLimits::default(),
         AdmissionLimits::default(),
         None,
@@ -316,23 +316,23 @@ async fn network_plan_preserves_session_close_before_and_after_encoding() {
     .await;
     let checked = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Notify::new());
-    let (control, _parent) = post_encode.control("network-plan-post-encode-close-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_gate(
+    let (control, _parent) = post_encode.control("network-response-post-encode-close-control", None);
+    let sink = ResponseSink::network_with_enqueue_gate(
         post_encode.session.clone(),
         AdmissionClass::Data,
         control,
         Arc::clone(&checked),
         resume,
     );
-    let plan = ResponsePlan::command(response_head(114, 1_114).set_command_custom_header(CountingHeader {
+    let response = RemotingResponse::command(response_head(114, 1_114).set_command_custom_header(CountingHeader {
         encodes: Arc::clone(&encodes),
     }))
-    .expect("response plan");
-    let send = tokio::spawn(sink.send_plan(bind(plan, 821, 1_114)));
+    .expect("remoting response");
+    let send = tokio::spawn(sink.send_response(bind(response, 821, 1_114)));
     checked.notified().await;
     post_encode.session.abort();
     assert!(matches!(
-        send.await.expect("plan send task"),
+        send.await.expect("response send task"),
         Err(ResponseError::SessionClosed)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 1);
@@ -340,12 +340,12 @@ async fn network_plan_preserves_session_close_before_and_after_encoding() {
 }
 
 #[tokio::test]
-async fn dropping_a_waiting_network_send_cancels_before_start_and_writes_no_plan_bytes() {
+async fn dropping_a_waiting_network_send_cancels_before_start_and_writes_no_response_bytes() {
     let checked = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
     let mut harness = NetworkHarness::new(
-        "network-plan-waiting-drop",
+        "network-response-waiting-drop",
         FrameLimits::default(),
         AdmissionLimits::default(),
         Some(barrier),
@@ -362,27 +362,33 @@ async fn dropping_a_waiting_network_send_cancels_before_start_and_writes_no_plan
     checked.notified().await;
 
     let enqueued = Arc::new(tokio::sync::Notify::new());
-    let (control, _parent) = harness.control("network-plan-waiting-drop-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let (control, _parent) = harness.control("network-response-waiting-drop-control", None);
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let send = tokio::spawn(sink.send_plan(bind(
-        ResponsePlan::bytes(response_head(102, 1_102), Bytes::from_static(b"must-not-write")).expect("response plan"),
-        811,
-        1_102,
-    )));
+    let send = tokio::spawn(
+        sink.send_response(bind(
+            RemotingResponse::bytes(response_head(102, 1_102), Bytes::from_static(b"must-not-write"))
+                .expect("remoting response"),
+            811,
+            1_102,
+        )),
+    );
     enqueued.notified().await;
     send.abort();
-    assert!(send.await.expect_err("aborted plan send should stop").is_cancelled());
+    assert!(send
+        .await
+        .expect_err("aborted response send should stop")
+        .is_cancelled());
 
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(103, 1_103)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(103, 1_103)).expect("duplicate remoting response"),
                 812,
                 1_103,
             ))
@@ -401,7 +407,7 @@ async fn dropping_a_waiting_network_send_cancels_before_start_and_writes_no_plan
         tokio::time::timeout(Duration::from_millis(25), harness.peer.receive_command())
             .await
             .is_err(),
-        "cancelled waiting plan must not write a second frame"
+        "cancelled waiting response must not write a second frame"
     );
     assert_eq!(harness.session.writer_snapshot().deadline_expired, 0);
 
@@ -414,7 +420,7 @@ async fn dropping_a_writer_claimed_network_send_is_terminally_possibly_partial_a
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
     let mut harness = NetworkHarness::new(
-        "network-plan-claimed-drop",
+        "network-response-claimed-drop",
         FrameLimits::default(),
         AdmissionLimits::default(),
         Some(barrier),
@@ -422,28 +428,34 @@ async fn dropping_a_writer_claimed_network_send_is_terminally_possibly_partial_a
     .await;
 
     let enqueued = Arc::new(tokio::sync::Notify::new());
-    let (control, _parent) = harness.control("network-plan-claimed-drop-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let (control, _parent) = harness.control("network-response-claimed-drop-control", None);
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let send = tokio::spawn(sink.send_plan(bind(
-        ResponsePlan::bytes(response_head(104, 1_104), Bytes::from_static(b"write-once")).expect("response plan"),
-        813,
-        1_104,
-    )));
+    let send = tokio::spawn(
+        sink.send_response(bind(
+            RemotingResponse::bytes(response_head(104, 1_104), Bytes::from_static(b"write-once"))
+                .expect("remoting response"),
+            813,
+            1_104,
+        )),
+    );
     enqueued.notified().await;
     checked.notified().await;
     send.abort();
-    assert!(send.await.expect_err("aborted plan send should stop").is_cancelled());
+    assert!(send
+        .await
+        .expect_err("aborted response send should stop")
+        .is_cancelled());
 
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(105, 1_105)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(105, 1_105)).expect("duplicate remoting response"),
                 814,
                 1_105,
             ))
@@ -474,34 +486,34 @@ async fn session_close_after_writer_claim_but_before_start_stays_closed_and_writ
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
     let harness = NetworkHarness::new(
-        "network-plan-claimed-close",
+        "network-response-claimed-close",
         FrameLimits::default(),
         AdmissionLimits::default(),
         Some(barrier),
     )
     .await;
     let enqueued = Arc::new(tokio::sync::Notify::new());
-    let (control, _parent) = harness.control("network-plan-claimed-close-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let (control, _parent) = harness.control("network-response-claimed-close-control", None);
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let (plan, accesses, drops) = counting_file_plan(115, 1_115, b"must-not-start");
-    let send = tokio::spawn(sink.send_plan(bind(plan, 822, 1_115)));
+    let (response, accesses, drops) = counting_file_response(115, 1_115, b"must-not-start");
+    let send = tokio::spawn(sink.send_response(bind(response, 822, 1_115)));
     enqueued.notified().await;
     checked.notified().await;
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     harness.session.abort();
     assert!(matches!(
-        send.await.expect("plan send task"),
+        send.await.expect("response send task"),
         Err(ResponseError::SessionClosed)
     ));
     let duplicate_result = duplicate
-        .send_plan(bind(
-            ResponsePlan::command(response_head(116, 1_116)).expect("duplicate response plan"),
+        .send_response(bind(
+            RemotingResponse::command(response_head(116, 1_116)).expect("duplicate remoting response"),
             823,
             1_116,
         ))
@@ -531,19 +543,19 @@ async fn session_close_after_writer_start_reports_possibly_partial_and_never_ret
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
     let mut harness = NetworkHarness::new(
-        "network-plan-started-close",
+        "network-response-started-close",
         FrameLimits::default(),
         AdmissionLimits::default(),
         Some(barrier),
     )
     .await;
-    let (control, _parent) = harness.control("network-plan-started-close-control", None);
-    let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
+    let (control, _parent) = harness.control("network-response-started-close-control", None);
+    let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
     let duplicate = sink.clone();
     let send = tokio::spawn(
-        sink.send_plan(bind(
-            ResponsePlan::bytes(response_head(119, 1_119), Bytes::from(vec![0x5a; 2 * 1024 * 1024]))
-                .expect("response plan"),
+        sink.send_response(bind(
+            RemotingResponse::bytes(response_head(119, 1_119), Bytes::from(vec![0x5a; 2 * 1024 * 1024]))
+                .expect("remoting response"),
             826,
             1_119,
         )),
@@ -564,7 +576,7 @@ async fn session_close_after_writer_start_reports_possibly_partial_and_never_ret
     harness.session.abort();
 
     assert!(matches!(
-        send.await.expect("plan send task"),
+        send.await.expect("response send task"),
         Err(ResponseError::Transport {
             progress: WriteProgress::PossiblyPartial,
             ..
@@ -572,8 +584,8 @@ async fn session_close_after_writer_start_reports_possibly_partial_and_never_ret
     ));
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(120, 1_120)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(120, 1_120)).expect("duplicate remoting response"),
                 827,
                 1_120,
             ))
@@ -599,7 +611,7 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
     let harness = NetworkHarness::new(
-        "network-plan-waiting-cancel",
+        "network-response-waiting-cancel",
         FrameLimits::default(),
         AdmissionLimits::default(),
         Some(barrier),
@@ -615,27 +627,27 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
     checked.notified().await;
 
     let enqueued = Arc::new(tokio::sync::Notify::new());
-    let (control, parent) = harness.control("network-plan-waiting-cancel-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let (control, parent) = harness.control("network-response-waiting-cancel-control", None);
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let (plan, accesses, drops) = counting_file_plan(107, 1_107, b"cancelled");
-    let send = tokio::spawn(sink.send_plan(bind(plan, 815, 1_107)));
+    let (response, accesses, drops) = counting_file_response(107, 1_107, b"cancelled");
+    let send = tokio::spawn(sink.send_response(bind(response, 815, 1_107)));
     enqueued.notified().await;
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     parent.cancel();
     assert!(matches!(
-        send.await.expect("plan send task"),
+        send.await.expect("response send task"),
         Err(ResponseError::Cancelled)
     ));
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(108, 1_108)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(108, 1_108)).expect("duplicate remoting response"),
                 816,
                 1_108,
             ))
@@ -657,12 +669,12 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
 }
 
 #[tokio::test(start_paused = true)]
-async fn deadline_of_a_waiting_network_send_is_not_started_and_writes_no_plan_bytes() {
+async fn deadline_of_a_waiting_network_send_is_not_started_and_writes_no_response_bytes() {
     let checked = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Notify::new());
     let barrier = crate::write_strategy::WritePreflightBarrier::new(Arc::clone(&checked), Arc::clone(&resume));
     let mut harness = NetworkHarness::new(
-        "network-plan-waiting-deadline",
+        "network-response-waiting-deadline",
         FrameLimits::default(),
         AdmissionLimits::default(),
         Some(barrier),
@@ -679,29 +691,29 @@ async fn deadline_of_a_waiting_network_send_is_not_started_and_writes_no_plan_by
 
     let enqueued = Arc::new(tokio::sync::Notify::new());
     let deadline = RequestDeadline::after(Duration::from_secs(1));
-    let (control, _parent) = harness.control("network-plan-waiting-deadline-control", Some(deadline));
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let (control, _parent) = harness.control("network-response-waiting-deadline-control", Some(deadline));
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
         Arc::clone(&enqueued),
     );
     let duplicate = sink.clone();
-    let send = tokio::spawn(sink.send_plan(bind(
-        ResponsePlan::bytes(response_head(110, 1_110), Bytes::from_static(b"expired")).expect("response plan"),
+    let send = tokio::spawn(sink.send_response(bind(
+        RemotingResponse::bytes(response_head(110, 1_110), Bytes::from_static(b"expired")).expect("remoting response"),
         817,
         1_110,
     )));
     enqueued.notified().await;
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(matches!(
-        send.await.expect("plan send task"),
+        send.await.expect("response send task"),
         Err(ResponseError::DeadlineExceeded)
     ));
     assert!(matches!(
         duplicate
-            .send_plan(bind(
-                ResponsePlan::command(response_head(111, 1_111)).expect("duplicate response plan"),
+            .send_response(bind(
+                RemotingResponse::command(response_head(111, 1_111)).expect("duplicate remoting response"),
                 818,
                 1_111,
             ))

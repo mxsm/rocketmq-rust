@@ -38,8 +38,8 @@ use super::HandlerOutcome;
 use super::ProtocolNoResponseReason;
 use super::RejectRequestDecision;
 use super::RemotingRequest;
+use super::RemotingResponse;
 use super::RequestProcessor;
-use super::ResponsePlan;
 use super::TransportServer;
 use crate::telemetry::TransportTelemetry;
 
@@ -85,7 +85,7 @@ impl RequestProcessor for ConstructionProbeProcessor {
                     .map_err(|_| RocketMQError::illegal_argument("construction registration observer closed"))?;
                 Ok(HandlerOutcome::Deferred(registration))
             }
-            REPLY_CODE => ResponsePlan::bytes(
+            REPLY_CODE => RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"inline-without-deferred-state"),
             )
@@ -107,7 +107,7 @@ impl RequestProcessor for ConstructionProbeProcessor {
     fn reject_request(&self, code: i32) -> RejectRequestDecision {
         if code == REJECT_CODE {
             return RejectRequestDecision::Reject(
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::NoPermission,
                 ))
                 .expect("construction-probe rejection plan"),

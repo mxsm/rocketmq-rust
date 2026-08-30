@@ -46,8 +46,8 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::ProtocolNoResponseReason;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::SessionView;
 use tracing::debug;
 use tracing::info;
@@ -91,11 +91,11 @@ impl RequestProcessor for ClientRemotingProcessor {
         let response = self.process_command(remote_address, request.command_mut()).await?;
 
         if let Some(response) = response {
-            return Ok(HandlerOutcome::Reply(Self::response_plan(response)?));
+            return Ok(HandlerOutcome::Reply(Self::remoting_response(response)?));
         }
         if request.original_identity().is_one_way() {
             let response = self.remoting_command_factory.create_success_response_command();
-            return Ok(HandlerOutcome::Reply(Self::response_plan(response)?));
+            return Ok(HandlerOutcome::Reply(Self::remoting_response(response)?));
         }
         let reason = match request_code {
             RequestCode::CheckTransactionState | RequestCode::ResetConsumerClientOffset => {
@@ -116,10 +116,10 @@ impl RequestProcessor for ClientRemotingProcessor {
 }
 
 impl ClientRemotingProcessor {
-    fn response_plan(response: RemotingCommand) -> rocketmq_error::RocketMQResult<ResponsePlan> {
-        ResponsePlan::from_command(response).map_err(|error| {
+    fn remoting_response(response: RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+        RemotingResponse::from_command(response).map_err(|error| {
             rocketmq_error::RocketMQError::response_process_failed(
-                "client_remoting_processor.response_plan",
+                "client_remoting_processor.remoting_response",
                 error.to_string(),
             )
         })

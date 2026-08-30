@@ -46,8 +46,8 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::SessionView;
 use tracing::warn;
 
@@ -274,12 +274,12 @@ impl ControllerRequestProcessor {
 
     fn response_outcome(mut response: RemotingCommand) -> RocketMQResult<HandlerOutcome> {
         let body = response.take_body();
-        let plan = match body {
-            Some(body) => ResponsePlan::bytes(response, body),
-            None => ResponsePlan::command(response),
+        let response = match body {
+            Some(body) => RemotingResponse::bytes(response, body),
+            None => RemotingResponse::command(response),
         }
-        .map_err(|error| RocketMQError::response_process_failed("controller.response_plan", error.to_string()))?;
-        Ok(HandlerOutcome::Reply(plan))
+        .map_err(|error| RocketMQError::response_process_failed("controller.remoting_response", error.to_string()))?;
+        Ok(HandlerOutcome::Reply(response))
     }
 }
 

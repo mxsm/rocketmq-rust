@@ -59,8 +59,8 @@ use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullResponseContext;
 use crate::processor::pull_message_result_handler::PullSuspension;
-use crate::processor::response_plan::store_response_parts;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::store_response_parts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 pub struct DefaultPullMessageResultHandler<MS: BrokerReadStore> {
     context: Arc<PullMessageProcessorContext<MS>>,
@@ -666,21 +666,22 @@ mod tests {
     use rocketmq_store::MappedFile;
     use rocketmq_store::SelectMappedBufferResult;
     use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::ResponseBodyKind;
-    use rocketmq_transport::api::ResponsePlan;
 
     fn response_head() -> RemotingCommand {
         RemotingCommand::create_response_command_with_code(ResponseCode::Success)
     }
 
-    fn reply_plan(result: rocketmq_error::RocketMQResult<PullMessageResult>) -> ResponsePlan {
+    fn reply_response(result: rocketmq_error::RocketMQResult<PullMessageResult>) -> RemotingResponse {
         let PullMessageResult::Reply(parts) = result.expect("valid Pull result") else {
             panic!("expected an immediate Pull reply");
         };
-        let HandlerOutcome::Reply(plan) = parts.into_handler_outcome().expect("valid Pull response plan") else {
+        let HandlerOutcome::Reply(response) = parts.into_handler_outcome().expect("valid Pull remoting response")
+        else {
             panic!("immediate Pull parts must map to a Reply outcome");
         };
-        plan
+        response
     }
 
     #[test]
@@ -690,21 +691,21 @@ mod tests {
         let PullMessageResult::Reply(parts) = immediate else {
             panic!("immediate Pull result must remain a reply");
         };
-        let HandlerOutcome::Reply(plan) = parts.into_handler_outcome().expect("valid empty Pull plan") else {
+        let HandlerOutcome::Reply(response) = parts.into_handler_outcome().expect("valid empty Pull response") else {
             panic!("immediate Pull parts must map to a Reply outcome");
         };
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Empty);
     }
 
     #[test]
     fn heap_pull_reply_exposes_bytes_at_the_dispatch_seam() {
         let body = Bytes::from_static(b"heap-pull-body");
-        let plan = reply_plan(bytes_result(response_head(), body));
+        let response = reply_response(bytes_result(response_head(), body));
 
-        assert_eq!(plan.response_code(), ResponseCode::Success as i32);
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
-        assert_eq!(plan.body_len(), 14);
-        assert_eq!(plan.body_part_count(), 1);
+        assert_eq!(response.response_code(), ResponseCode::Success as i32);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Bytes);
+        assert_eq!(response.body_len(), 14);
+        assert_eq!(response.body_part_count(), 1);
     }
 
     #[test]
@@ -734,10 +735,10 @@ mod tests {
             .iter()
             .all(|selected| !selected.has_byte_snapshot()));
 
-        let plan = reply_plan(store_result(response_head(), result));
-        assert_eq!(plan.body_kind(), ResponseBodyKind::FileRegions);
-        assert_eq!(plan.body_len(), 15);
-        assert_eq!(plan.body_part_count(), 2);
+        let response = reply_response(store_result(response_head(), result));
+        assert_eq!(response.body_kind(), ResponseBodyKind::FileRegions);
+        assert_eq!(response.body_len(), 15);
+        assert_eq!(response.body_part_count(), 2);
     }
 
     #[test]
@@ -758,9 +759,9 @@ mod tests {
         result.add_message(file_selection, 0, 1);
         result.add_message(byte_selection, 1, 1);
 
-        let plan = reply_plan(store_result(response_head(), result));
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Segments);
-        assert_eq!(plan.body_len(), 22);
-        assert_eq!(plan.body_part_count(), 2);
+        let response = reply_response(store_result(response_head(), result));
+        assert_eq!(response.body_kind(), ResponseBodyKind::Segments);
+        assert_eq!(response.body_len(), 22);
+        assert_eq!(response.body_part_count(), 2);
     }
 }

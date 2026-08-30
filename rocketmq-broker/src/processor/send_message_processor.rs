@@ -97,7 +97,7 @@ use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::mqtrace::send_message_hook::SendMessageHook;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 use crate::send_message_constants::error_messages;
 use crate::send_message_constants::message_limits;
 use crate::send_message_constants::queue_config;
@@ -320,7 +320,7 @@ where
             }
             RequestCode::ConsumerSendMsgBack => {
                 let result = self.inner.consumer_send_msg_back(request).await;
-                crate::processor::response_plan::immediate_outcome_from_command_result(
+                crate::processor::response_assembly::immediate_outcome_from_command_result(
                     &self.inner.context.command_factory,
                     result,
                     original_opaque,

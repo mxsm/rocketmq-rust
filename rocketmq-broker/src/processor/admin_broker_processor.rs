@@ -62,7 +62,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::warn;
 
-use crate::processor::response_plan::immediate_outcome_from_command_result;
+use crate::processor::response_assembly::immediate_outcome_from_command_result;
 
 mod batch_mq_handler;
 mod broker_config_request_handler;

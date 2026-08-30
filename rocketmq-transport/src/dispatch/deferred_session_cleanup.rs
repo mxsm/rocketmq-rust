@@ -801,7 +801,7 @@ mod tests {
             session.view().state().clone(),
             &parent,
         );
-        let (sink, _receiver) = crate::dispatch::ResponseSink::local_plan(control.clone());
+        let (sink, _receiver) = crate::dispatch::ResponseSink::local(control.clone());
         let responder = sink
             .deferred_seed_for_test(
                 crate::telemetry::TransportTelemetry::noop(),

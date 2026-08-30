@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Owned  response heads and body storage.
+//! Validated remoting responses with affine body ownership.
 
 mod binding;
 
@@ -23,14 +23,14 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::file_region::FileRegionSequence;
 
-pub(crate) use binding::BoundResponsePlan;
+pub(crate) use binding::BoundResponse;
 pub(crate) use binding::ResponseBindingError;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
 /// A validated response head and exactly one owned response body.
 ///
-/// The head never carries a body. Instead, the plan owns either no body,
+/// The head never carries a body. Instead, the response owns either no body,
 /// contiguous bytes, body-only segments, or a validated file-region sequence.
 /// This keeps response metadata available to processors and later dispatch
 /// stages without exposing response storage, an encoder, or file handles.
@@ -39,18 +39,18 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// response ownership or file-region leases.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_clone(plan: &ResponsePlan) {
-///     let _: ResponsePlan = plan.clone();
+/// fn cannot_clone(response: &RemotingResponse) {
+///     let _: RemotingResponse = response.clone();
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
 /// fn cannot_construct_with_fields() {
-///     let _ = ResponsePlan {
+///     let _ = RemotingResponse {
 ///         head: panic!(),
 ///         body: panic!(),
 ///         body_len: 0,
@@ -60,42 +60,42 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_read_the_body(plan: &ResponsePlan) {
-///     let _ = plan.body();
+/// fn cannot_read_the_body(response: &RemotingResponse) {
+///     let _ = response.body();
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_read_the_head(plan: &ResponsePlan) {
-///     let _ = plan.head();
+/// fn cannot_read_the_head(response: &RemotingResponse) {
+///     let _ = response.head();
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_read_contiguous_body_bytes(plan: &ResponsePlan) {
-///     let _ = plan.bytes();
+/// fn cannot_read_contiguous_body_bytes(response: &RemotingResponse) {
+///     let _ = response.bytes();
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_read_body_segments(plan: &ResponsePlan) {
-///     let _ = plan.segments();
+/// fn cannot_read_body_segments(response: &RemotingResponse) {
+///     let _ = response.segments();
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_read_file_regions(plan: &ResponsePlan) {
-///     let _ = plan.file_regions();
+/// fn cannot_read_file_regions(response: &RemotingResponse) {
+///     let _ = response.file_regions();
 /// }
 /// ```
 ///
@@ -104,19 +104,19 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_encode_an_arbitrary_complete_frame(plan: ResponsePlan) {
-///     let _ = plan.into_bytes();
+/// fn cannot_encode_an_arbitrary_complete_frame(response: RemotingResponse) {
+///     let _ = response.into_bytes();
 /// }
 /// ```
 ///
 /// ```compile_fail
 /// use bytes::Bytes;
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
 /// fn cannot_accept_a_pre_encoded_frame(frame: Bytes) {
-///     let _ = ResponsePlan::encoded(frame);
+///     let _ = RemotingResponse::encoded(frame);
 /// }
 /// ```
 ///
@@ -130,26 +130,26 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::OriginalRequestIdentity;
-/// use rocketmq_transport::api::ResponsePlan;
+/// use rocketmq_transport::api::RemotingResponse;
 ///
-/// fn cannot_bind_a_plan_outside_the_transport(plan: ResponsePlan, identity: OriginalRequestIdentity) {
-///     let _ = plan.bind(identity);
+/// fn cannot_bind_a_response_outside_the_transport(response: RemotingResponse, identity: OriginalRequestIdentity) {
+///     let _ = response.bind(identity);
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::BoundResponsePlan;
+/// use rocketmq_transport::api::BoundResponse;
 /// ```
 ///
-pub struct ResponsePlan {
+pub struct RemotingResponse {
     head: RemotingCommand,
     body: ResponseBody,
     body_len: usize,
     body_part_count: usize,
 }
 
-impl ResponsePlan {
-    /// Creates an empty response plan from a response code.
+impl RemotingResponse {
+    /// Creates an empty response from a response code.
     ///
     /// Unlike [`Self::command`], this constructor is infallible because it
     /// creates the response head itself: the head is response-typed, is not
@@ -168,9 +168,9 @@ impl ResponsePlan {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponsePlanError`] when `head` already owns a body, is a
+    /// Returns [`ResponseBuildError`] when `head` already owns a body, is a
     /// request command, or is marked one-way.
-    pub fn command(head: RemotingCommand) -> Result<Self, ResponsePlanError> {
+    pub fn command(head: RemotingCommand) -> Result<Self, ResponseBuildError> {
         Self::validate_head(&head)?;
         Ok(Self::new(head, ResponseBody::Empty, 0, 0))
     }
@@ -181,9 +181,9 @@ impl ResponsePlan {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponsePlanError`] when the head is invalid or the body
+    /// Returns [`ResponseBuildError`] when the head is invalid or the body
     /// exceeds the protocol's absolute representable length.
-    pub fn bytes(head: RemotingCommand, body: Bytes) -> Result<Self, ResponsePlanError> {
+    pub fn bytes(head: RemotingCommand, body: Bytes) -> Result<Self, ResponseBuildError> {
         Self::validate_head(&head)?;
         let body_len = checked_body_len([body.len() as u64])?;
         if body.is_empty() {
@@ -192,16 +192,16 @@ impl ResponsePlan {
         Ok(Self::new(head, ResponseBody::Bytes(body), body_len, 1))
     }
 
-    /// Moves a materialized response command into the owned plan representation.
+    /// Moves a materialized response command into the owned response representation.
     ///
     /// The body is detached before the head is validated, so a valid contiguous
     /// body retains its original `Bytes` allocation without cloning or decoding.
     ///
     /// # Errors
     ///
-    /// Returns [`ResponsePlanError`] when the command is not a valid response
+    /// Returns [`ResponseBuildError`] when the command is not a valid response
     /// head or its body exceeds the protocol's representable length.
-    pub fn from_command(mut command: RemotingCommand) -> Result<Self, ResponsePlanError> {
+    pub fn from_command(mut command: RemotingCommand) -> Result<Self, ResponseBuildError> {
         match command.take_body() {
             Some(body) => Self::bytes(command, body),
             None => Self::command(command),
@@ -215,9 +215,9 @@ impl ResponsePlan {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponsePlanError`] when the head is invalid, segment lengths
+    /// Returns [`ResponseBuildError`] when the head is invalid, segment lengths
     /// overflow, or the aggregate body exceeds the protocol's absolute limit.
-    pub fn segments(head: RemotingCommand, body_segments: Vec<Bytes>) -> Result<Self, ResponsePlanError> {
+    pub fn segments(head: RemotingCommand, body_segments: Vec<Bytes>) -> Result<Self, ResponseBuildError> {
         Self::validate_head(&head)?;
         let body_segments = body_segments
             .into_iter()
@@ -243,10 +243,10 @@ impl ResponsePlan {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponsePlanError`] when the head is invalid, the sequence
+    /// Returns [`ResponseBuildError`] when the head is invalid, the sequence
     /// length overflows, or the aggregate body exceeds the protocol's absolute
     /// limit.
-    pub fn file_regions(head: RemotingCommand, regions: FileRegionSequence) -> Result<Self, ResponsePlanError> {
+    pub fn file_regions(head: RemotingCommand, regions: FileRegionSequence) -> Result<Self, ResponseBuildError> {
         Self::validate_head(&head)?;
         let body_len = checked_body_len([regions.len()])?;
         let body_part_count = regions.regions().len();
@@ -277,17 +277,17 @@ impl ResponsePlan {
     }
 
     /// Returns the number of contiguous body allocations, segments, or file
-    /// regions retained by this plan.
+    /// regions retained by this response.
     ///
-    /// Empty plans contain zero parts, contiguous byte plans contain one part,
-    /// and segmented or file-region plans contain their respective number of
+    /// Empty responses contain zero parts, contiguous byte responses contain one part,
+    /// and segmented or file-region responses contain their respective number of
     /// retained body parts.
     #[must_use]
     pub const fn body_part_count(&self) -> usize {
         self.body_part_count
     }
 
-    /// Converts this affine plan into the zero-encoding representation used by
+    /// Converts this affine response into the zero-encoding representation used by
     /// an in-process  consumer.
     ///
     /// The response head and every body owner move without cloning,
@@ -321,7 +321,7 @@ impl ResponsePlan {
         }
         if self.head.is_oneway_rpc() {
             return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook marked a response plan head as one-way",
+                "RPC hook marked a remoting response head as one-way",
             ));
         }
         result
@@ -346,24 +346,24 @@ impl ResponsePlan {
         }
     }
 
-    fn validate_head(head: &RemotingCommand) -> Result<(), ResponsePlanError> {
+    fn validate_head(head: &RemotingCommand) -> Result<(), ResponseBuildError> {
         if head.body().is_some() {
-            return Err(ResponsePlanError::HeadHasBody);
+            return Err(ResponseBuildError::HeadHasBody);
         }
         if !head.is_response_type() {
-            return Err(ResponsePlanError::RequestHead);
+            return Err(ResponseBuildError::RequestHead);
         }
         if head.is_oneway_rpc() {
-            return Err(ResponsePlanError::OneWayHead);
+            return Err(ResponseBuildError::OneWayHead);
         }
         Ok(())
     }
 }
 
-impl fmt::Debug for ResponsePlan {
+impl fmt::Debug for RemotingResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ResponsePlan")
+            .debug_struct("RemotingResponse")
             .field("response_code", &self.response_code())
             .field("body_kind", &self.body_kind())
             .field("body_len", &self.body_len())
@@ -449,21 +449,21 @@ impl fmt::Debug for EmbeddedResponseBody {
     }
 }
 
-/// Metadata category for the one body owner in a [`ResponsePlan`].
+/// Metadata category for the one body owner in a [`RemotingResponse`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ResponseBodyKind {
-    /// The plan has no body owner.
+    /// The response has no body owner.
     Empty,
-    /// The plan owns one contiguous [`Bytes`] value.
+    /// The response owns one contiguous [`Bytes`] value.
     Bytes,
-    /// The plan owns ordered body-only [`Bytes`] segments.
+    /// The response owns ordered body-only [`Bytes`] segments.
     Segments,
-    /// The plan owns an ordered sequence of validated file regions.
+    /// The response owns an ordered sequence of validated file regions.
     FileRegions,
 }
 
 impl ResponseBodyKind {
-    /// Returns the stable low-cardinality response-plan label.
+    /// Returns the stable low-cardinality remoting-response label.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -475,7 +475,7 @@ impl ResponseBodyKind {
     }
 }
 
-/// Internal storage owned by a [`ResponsePlan`].
+/// Internal storage owned by a [`RemotingResponse`].
 ///
 /// This type remains crate-private so  processors can choose an explicit
 /// constructor without recovering the stored bytes, file leases, or an
@@ -516,47 +516,49 @@ impl ResponseBody {
     }
 }
 
-/// Failure returned while constructing a [`ResponsePlan`].
+/// Failure returned while constructing a [`RemotingResponse`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ResponsePlanError {
+pub enum ResponseBuildError {
     /// The supplied response head already owns a body, including an empty one.
-    #[error("response plan head must not already own a body")]
+    #[error("remoting response head must not already own a body")]
     HeadHasBody,
     /// The supplied head is a request command rather than a response command.
-    #[error("response plan head must be a response command")]
+    #[error("remoting response head must be a response command")]
     RequestHead,
     /// The supplied response head is marked one-way.
-    #[error("response plan head must not be one-way")]
+    #[error("remoting response head must not be one-way")]
     OneWayHead,
     /// Adding body part lengths exceeded the protocol's length representation.
-    #[error("response plan body length overflowed u64")]
+    #[error("remoting response body length overflowed u64")]
     BodyLengthOverflow,
     /// The body exceeds the absolute RocketMQ frame body ceiling.
-    #[error("response plan body length {actual} exceeds the maximum {MAX_RESPONSE_BODY_LEN}")]
+    #[error("remoting response body length {actual} exceeds the maximum {MAX_RESPONSE_BODY_LEN}")]
     BodyTooLarge {
         /// Aggregate byte length supplied to the constructor.
         actual: u64,
     },
     /// The wire-representable body length does not fit this platform's address space.
-    #[error("response plan body length {actual} is not representable as usize")]
+    #[error("remoting response body length {actual} is not representable as usize")]
     BodyLengthNotRepresentable {
         /// Aggregate byte length supplied to the constructor.
         actual: u64,
     },
 }
 
-fn checked_body_len<I>(lengths: I) -> Result<usize, ResponsePlanError>
+fn checked_body_len<I>(lengths: I) -> Result<usize, ResponseBuildError>
 where
     I: IntoIterator<Item = u64>,
 {
     let mut body_len = 0_u64;
     for len in lengths {
-        body_len = body_len.checked_add(len).ok_or(ResponsePlanError::BodyLengthOverflow)?;
+        body_len = body_len
+            .checked_add(len)
+            .ok_or(ResponseBuildError::BodyLengthOverflow)?;
     }
     if body_len > MAX_RESPONSE_BODY_LEN {
-        return Err(ResponsePlanError::BodyTooLarge { actual: body_len });
+        return Err(ResponseBuildError::BodyTooLarge { actual: body_len });
     }
-    usize::try_from(body_len).map_err(|_| ResponsePlanError::BodyLengthNotRepresentable { actual: body_len })
+    usize::try_from(body_len).map_err(|_| ResponseBuildError::BodyLengthNotRepresentable { actual: body_len })
 }
 
 #[cfg(test)]
@@ -579,7 +581,7 @@ mod tests {
     fn embedded_response_moves_bytes_and_segments_without_materializing_a_command_body() {
         let bytes = Bytes::from_static(b"embedded-bytes");
         let bytes_ptr = bytes.as_ptr();
-        let response = ResponsePlan::bytes(response_head(), bytes)
+        let response = RemotingResponse::bytes(response_head(), bytes)
             .expect("valid bytes response")
             .into_embedded_response();
         assert_eq!(response.response_code(), 7);
@@ -592,7 +594,7 @@ mod tests {
         let segments = vec![Bytes::from_static(b"first"), Bytes::from_static(b"second")];
         let vector_ptr = segments.as_ptr();
         let segment_ptrs = segments.iter().map(|segment| segment.as_ptr()).collect::<Vec<_>>();
-        let response = ResponsePlan::segments(response_head(), segments)
+        let response = RemotingResponse::segments(response_head(), segments)
             .expect("valid segmented response")
             .into_embedded_response();
         assert_eq!(response.body().kind(), ResponseBodyKind::Segments);
@@ -606,25 +608,26 @@ mod tests {
         );
     }
 
-    fn assert_metadata(plan: &ResponsePlan, kind: ResponseBodyKind, body_len: usize, body_part_count: usize) {
-        assert_eq!(plan.response_code(), 7);
-        assert_eq!(plan.body_kind(), kind);
-        assert_eq!(plan.body_len(), body_len);
-        assert_eq!(plan.body_part_count(), body_part_count);
+    fn assert_metadata(response: &RemotingResponse, kind: ResponseBodyKind, body_len: usize, body_part_count: usize) {
+        assert_eq!(response.response_code(), 7);
+        assert_eq!(response.body_kind(), kind);
+        assert_eq!(response.body_len(), body_len);
+        assert_eq!(response.body_part_count(), body_part_count);
     }
 
     #[test]
     fn constructors_keep_exactly_one_normalized_body_owner() {
-        let infallible_empty = ResponsePlan::empty_response(7);
+        let infallible_empty = RemotingResponse::empty_response(7);
         assert_metadata(&infallible_empty, ResponseBodyKind::Empty, 0, 0);
 
-        let empty = ResponsePlan::command(response_head()).expect("valid empty response");
+        let empty = RemotingResponse::command(response_head()).expect("valid empty response");
         assert_metadata(&empty, ResponseBodyKind::Empty, 0, 0);
 
-        let bytes = ResponsePlan::bytes(response_head(), Bytes::from_static(b"bytes")).expect("valid bytes response");
+        let bytes =
+            RemotingResponse::bytes(response_head(), Bytes::from_static(b"bytes")).expect("valid bytes response");
         assert_metadata(&bytes, ResponseBodyKind::Bytes, 5, 1);
 
-        let segments = ResponsePlan::segments(
+        let segments = RemotingResponse::segments(
             response_head(),
             vec![
                 Bytes::new(),
@@ -641,9 +644,9 @@ mod tests {
     fn command_conversion_moves_the_original_bytes_owner() {
         let body = Bytes::from_static(b"response body");
         let body_pointer = body.as_ptr();
-        let plan = ResponsePlan::from_command(response_head().set_body(body)).expect("valid response command");
+        let response = RemotingResponse::from_command(response_head().set_body(body)).expect("valid response command");
 
-        let ResponseBody::Bytes(moved) = plan.test_body() else {
+        let ResponseBody::Bytes(moved) = response.test_body() else {
             panic!("non-empty body must remain contiguous bytes");
         };
         assert_eq!(moved.as_ptr(), body_pointer);
@@ -655,8 +658,8 @@ mod tests {
         let malformed = RemotingCommand::create_remoting_command(7).set_body(Bytes::from_static(b"body"));
 
         assert!(matches!(
-            ResponsePlan::from_command(malformed),
-            Err(ResponsePlanError::RequestHead)
+            RemotingResponse::from_command(malformed),
+            Err(ResponseBuildError::RequestHead)
         ));
     }
 
@@ -667,10 +670,10 @@ mod tests {
         let left_ptr = left.as_ptr();
         let right_ptr = right.as_ptr();
 
-        let plan = ResponsePlan::segments(response_head(), vec![Bytes::new(), left, Bytes::new(), right])
+        let response = RemotingResponse::segments(response_head(), vec![Bytes::new(), left, Bytes::new(), right])
             .expect("valid segmented response");
 
-        let ResponseBody::Segments(segments) = &plan.body else {
+        let ResponseBody::Segments(segments) = &response.body else {
             panic!("non-empty segments must retain their segmented body owner");
         };
         assert_eq!(segments.len(), 2);
@@ -680,40 +683,40 @@ mod tests {
 
     #[test]
     fn empty_bytes_and_segments_normalize_to_empty() {
-        let bytes = ResponsePlan::bytes(response_head(), Bytes::new()).expect("empty bytes normalize");
+        let bytes = RemotingResponse::bytes(response_head(), Bytes::new()).expect("empty bytes normalize");
         assert_metadata(&bytes, ResponseBodyKind::Empty, 0, 0);
 
-        let segments = ResponsePlan::segments(response_head(), vec![Bytes::new(), Bytes::new()])
+        let segments = RemotingResponse::segments(response_head(), vec![Bytes::new(), Bytes::new()])
             .expect("empty segments normalize");
         assert_metadata(&segments, ResponseBodyKind::Empty, 0, 0);
     }
 
     #[test]
     fn segments_accept_payloads_that_resemble_frame_prefixes() {
-        let plan = ResponsePlan::segments(response_head(), vec![Bytes::from_static(&[0, 0, 0, 2, 0x7f, 0xff])])
+        let response = RemotingResponse::segments(response_head(), vec![Bytes::from_static(&[0, 0, 0, 2, 0x7f, 0xff])])
             .expect("body-only segments do not parse frame contents");
 
-        assert_metadata(&plan, ResponseBodyKind::Segments, 6, 1);
+        assert_metadata(&response, ResponseBodyKind::Segments, 6, 1);
     }
 
     #[test]
     fn constructors_reject_invalid_response_heads() {
         let head_with_empty_body = response_head().set_body(Bytes::new());
         assert!(matches!(
-            ResponsePlan::command(head_with_empty_body),
-            Err(ResponsePlanError::HeadHasBody)
+            RemotingResponse::command(head_with_empty_body),
+            Err(ResponseBuildError::HeadHasBody)
         ));
 
         let request_head = RemotingCommand::create_remoting_command(7);
         assert!(matches!(
-            ResponsePlan::command(request_head),
-            Err(ResponsePlanError::RequestHead)
+            RemotingResponse::command(request_head),
+            Err(ResponseBuildError::RequestHead)
         ));
 
         let one_way_head = response_head().mark_oneway_rpc();
         assert!(matches!(
-            ResponsePlan::command(one_way_head),
-            Err(ResponsePlanError::OneWayHead)
+            RemotingResponse::command(one_way_head),
+            Err(ResponseBuildError::OneWayHead)
         ));
     }
 
@@ -728,20 +731,20 @@ mod tests {
     fn every_body_constructor_validates_its_response_head() {
         let body_head = response_head().set_body(Bytes::new());
         assert!(matches!(
-            ResponsePlan::bytes(body_head, Bytes::from_static(b"body")),
-            Err(ResponsePlanError::HeadHasBody)
+            RemotingResponse::bytes(body_head, Bytes::from_static(b"body")),
+            Err(ResponseBuildError::HeadHasBody)
         ));
 
         let request_head = RemotingCommand::create_remoting_command(7);
         assert!(matches!(
-            ResponsePlan::segments(request_head, vec![Bytes::from_static(b"segment")]),
-            Err(ResponsePlanError::RequestHead)
+            RemotingResponse::segments(request_head, vec![Bytes::from_static(b"segment")]),
+            Err(ResponseBuildError::RequestHead)
         ));
 
         let one_way_head = response_head().mark_oneway_rpc();
         assert!(matches!(
-            ResponsePlan::file_regions(one_way_head, file_region_sequence_with_len(1)),
-            Err(ResponsePlanError::OneWayHead)
+            RemotingResponse::file_regions(one_way_head, file_region_sequence_with_len(1)),
+            Err(ResponseBuildError::OneWayHead)
         ));
     }
 
@@ -753,13 +756,13 @@ mod tests {
         );
         assert_eq!(
             checked_body_len([MAX_RESPONSE_BODY_LEN + 1]),
-            Err(ResponsePlanError::BodyTooLarge {
+            Err(ResponseBuildError::BodyTooLarge {
                 actual: MAX_RESPONSE_BODY_LEN + 1,
             })
         );
         assert_eq!(
             checked_body_len([u64::MAX, 1]),
-            Err(ResponsePlanError::BodyLengthOverflow)
+            Err(ResponseBuildError::BodyLengthOverflow)
         );
     }
 
@@ -769,8 +772,8 @@ mod tests {
         let regions = file_region_sequence_with_len(body_len);
 
         assert!(matches!(
-            ResponsePlan::file_regions(response_head(), regions),
-            Err(ResponsePlanError::BodyTooLarge { actual }) if actual == body_len
+            RemotingResponse::file_regions(response_head(), regions),
+            Err(ResponseBuildError::BodyTooLarge { actual }) if actual == body_len
         ));
     }
 
@@ -779,10 +782,10 @@ mod tests {
         let mut head = response_head().set_remark("response-remark-secret");
         head.add_ext_field("response-ext-key-secret", "response-ext-value-secret");
         let bytes =
-            ResponsePlan::bytes(head, Bytes::from_static(b"response-body-secret")).expect("valid bytes response");
+            RemotingResponse::bytes(head, Bytes::from_static(b"response-body-secret")).expect("valid bytes response");
         let debug = format!("{bytes:?}");
 
-        assert!(debug.contains("ResponsePlan"));
+        assert!(debug.contains("RemotingResponse"));
         assert!(debug.contains("body_kind: Bytes"));
         assert!(!debug.contains("response-remark-secret"));
         assert!(!debug.contains("response-ext-key-secret"));
@@ -827,27 +830,29 @@ mod tests {
         let regions = FileRegionSequence::try_new(vec![region]).expect("validated region sequence");
 
         assert_eq!(Arc::strong_count(&lease), 2);
-        let mut plan = ResponsePlan::file_regions(response_head(), regions).expect("valid file-region response");
+        let mut response =
+            RemotingResponse::file_regions(response_head(), regions).expect("valid file-region response");
         assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
-        assert_metadata(&plan, ResponseBodyKind::FileRegions, 11, 1);
+        assert_metadata(&response, ResponseBodyKind::FileRegions, 11, 1);
         assert_eq!(Arc::strong_count(&lease), 2);
-        plan.with_body_free_hook_head(|head| {
-            assert!(head.body().is_none());
-            head.set_remark_mut("hook-observed");
-            Ok(())
-        })
-        .expect("body-free hook projection");
-        assert_eq!(plan.response_code(), 7);
-        assert_eq!(plan.body_len(), 11);
+        response
+            .with_body_free_hook_head(|head| {
+                assert!(head.body().is_none());
+                head.set_remark_mut("hook-observed");
+                Ok(())
+            })
+            .expect("body-free hook projection");
+        assert_eq!(response.response_code(), 7);
+        assert_eq!(response.body_len(), 11);
         assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
-        let debug = format!("{plan:?}");
+        let debug = format!("{response:?}");
         assert!(!debug.contains("FileRegion {"));
         assert!(!debug.contains("offset"));
         assert!(!debug.contains("lease"));
         assert_eq!(file_accesses.load(Ordering::SeqCst), 1);
 
-        drop(plan);
+        drop(response);
         assert_eq!(Arc::strong_count(&lease), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
         drop(lease);

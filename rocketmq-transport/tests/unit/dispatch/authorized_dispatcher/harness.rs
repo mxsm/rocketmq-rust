@@ -132,11 +132,11 @@ impl RequestProcessor for TestProcessor {
         }
         match self.behavior {
             Behavior::Reply | Behavior::WaitReply | Behavior::Reject => Ok(HandlerOutcome::Reply(
-                ResponsePlan::bytes(
+                RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                     Bytes::from_static(b"response body"),
                 )
-                .expect("test response plan"),
+                .expect("test remoting response"),
             )),
             Behavior::Error => Err(RocketMQError::illegal_argument("processor failure")),
             Behavior::NoReply => Ok(HandlerOutcome::NoReply(
@@ -158,7 +158,7 @@ impl RequestProcessor for TestProcessor {
                     .mark_deferred_response_taken()
                     .expect("test request reserves deferred capability");
                 Ok(HandlerOutcome::Reply(
-                    ResponsePlan::command(RemotingCommand::create_response_command_with_code(75))
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(75))
                         .expect("reply after deferred plan"),
                 ))
             }
@@ -170,7 +170,7 @@ impl RequestProcessor for TestProcessor {
         self.state.events.lock().expect("event lock").push("reject");
         match self.behavior {
             Behavior::Reject => RejectRequestDecision::Reject(
-                ResponsePlan::bytes(
+                RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(73).set_opaque(-991),
                     Bytes::from_static(b"structured rejection"),
                 )

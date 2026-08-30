@@ -96,7 +96,7 @@ async fn notification_deferred_execution_admission_rejects_before_handler_and_wr
             DeferredResumeRetainedSize::new(AdmissionLimits::default().queued.bytes),
             move |_resume, _reason| async move {
                 handler_calls_for_resume.fetch_add(1, Ordering::SeqCst);
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
                 .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -209,7 +209,7 @@ async fn notification_deferred_service_shutdown_stops_accepted_handler_without_a
                         let _drop_signal = DropSignal(dropped_for_handler);
                         started_for_handler.notify_one();
                         release_for_handler.notified().await;
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -279,7 +279,7 @@ async fn notification_deferred_parent_cancel_stops_accepted_handler_without_a_fr
                         let _drop_signal = DropSignal(dropped_for_handler);
                         started_for_handler.notify_one();
                         release_for_handler.notified().await;
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))

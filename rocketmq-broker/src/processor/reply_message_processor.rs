@@ -55,7 +55,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::mqtrace::send_message_context::SendMessageContext;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 use crate::processor::send_message_processor::capability::SendMessageProcessorContext;
 use crate::processor::send_message_processor::structured_store::append_message_with_control_reply;
 use crate::processor::send_message_processor::structured_store::StoreHookCompletion;

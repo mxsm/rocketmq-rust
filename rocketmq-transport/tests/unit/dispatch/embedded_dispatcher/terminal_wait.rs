@@ -196,7 +196,7 @@ async fn terminal_wait_commits_resumes_and_returns_the_final_plan_with_compositi
     claim
         .resume(DeferredResumeRetainedSize::new(0), |(), reason| async move {
             assert_eq!(reason, DeferredWakeReason::MessageArrived);
-            ResponsePlan::bytes(
+            RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(0),
                 Bytes::from_static(b"embedded-terminal-response"),
             )
@@ -209,7 +209,7 @@ async fn terminal_wait_commits_resumes_and_returns_the_final_plan_with_compositi
         .expect("terminal dispatch join")
         .expect("terminal embedded response");
     let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-        panic!("terminal wait must return the final response plan")
+        panic!("terminal wait must return the final remoting response")
     };
     assert_eq!(plan.test_head().opaque(), 811);
     let ResponseBody::Bytes(body) = plan.test_body() else {

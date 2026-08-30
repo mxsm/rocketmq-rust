@@ -34,7 +34,7 @@ use crate::long_polling::notification_deferred::index::NotificationIndexErrorKin
 use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareError;
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterError;
 use crate::long_polling::notification_deferred::service::NotificationRetainedEstimate;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 impl<MS> RequestProcessor for NotificationProcessor<MS>
 where

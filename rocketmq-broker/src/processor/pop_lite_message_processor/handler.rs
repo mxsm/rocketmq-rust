@@ -34,7 +34,7 @@ use crate::long_polling::pop_lite_deferred::index::PopLiteIndexErrorKind;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareError;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterError;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteRetainedEstimate;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 impl<MS> RequestProcessor for PopLiteMessageProcessor<MS>
 where
@@ -96,7 +96,7 @@ where
             None => self.execute_pop_lite_without_events(&request_header).await,
         };
         if result.body.is_some() {
-            return Ok(HandlerOutcome::Reply(self.compose_pop_lite_plan(
+            return Ok(HandlerOutcome::Reply(self.compose_pop_lite_response(
                 &request_header,
                 result,
                 PopLiteResponseKind::Found,
@@ -190,7 +190,7 @@ where
         request_header: &PopLiteMessageRequestHeader,
         kind: PopLiteResponseKind,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        Ok(HandlerOutcome::Reply(self.compose_pop_lite_plan(
+        Ok(HandlerOutcome::Reply(self.compose_pop_lite_response(
             request_header,
             PopLiteCoreResult {
                 body: None,

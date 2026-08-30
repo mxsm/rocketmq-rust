@@ -24,8 +24,8 @@ use super::remoting_request::RemotingRequestBuilder;
 use super::HandlerOutcome;
 use super::HandlerOutcomeContractError;
 use super::RemotingRequest;
-use super::ResponsePlan;
-use super::ResponsePlanError;
+use super::RemotingResponse;
+use super::ResponseBuildError;
 use super::ResponseSink;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
@@ -164,7 +164,7 @@ impl InternalFailureOrigin {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DispatchProcessorError {
     #[error(transparent)]
-    ResponsePlan(#[from] ResponsePlanError),
+    ResponseConstruction(#[from] ResponseBuildError),
     #[error(transparent)]
     HandlerContract(#[from] HandlerOutcomeContractError),
 }
@@ -250,7 +250,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
 
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError>;
 
-    fn deadline_candidate(&self, plan: ResponsePlan) -> InternalProcessorCandidate;
+    fn deadline_candidate(&self, response: RemotingResponse) -> InternalProcessorCandidate;
 
     fn install_deferred_response(
         &self,
@@ -406,15 +406,15 @@ where
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError> {
         Ok(match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(plan) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(plan)),
+            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
+                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
             )),
         })
     }
 
-    fn deadline_candidate(&self, plan: ResponsePlan) -> InternalProcessorCandidate {
+    fn deadline_candidate(&self, response: RemotingResponse) -> InternalProcessorCandidate {
         InternalProcessorCandidate::failure(
-            InternalProcessorOutcome::Handled(HandlerOutcome::Reply(plan)),
+            InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
             InternalFailureOrigin::Deadline,
         )
     }
@@ -467,7 +467,7 @@ where
                 }
                 Err(error) => InternalProcessorCandidate::failure(
                     InternalProcessorOutcome::Handled(HandlerOutcome::Reply(
-                        crate::error_response::response_plan_from_error(&error)?,
+                        crate::error_response::remoting_response_from_error(&error)?,
                     )),
                     InternalFailureOrigin::BeforeHook,
                 ),
@@ -495,27 +495,27 @@ fn apply_after_hook(
     remote_address: SocketAddr,
 ) -> Result<InternalProcessorCandidate, DispatchProcessorError> {
     let InternalProcessorCandidate { outcome, failure } = candidate;
-    let InternalProcessorOutcome::Handled(HandlerOutcome::Reply(mut plan)) = outcome else {
+    let InternalProcessorOutcome::Handled(HandlerOutcome::Reply(mut response)) = outcome else {
         return Ok(InternalProcessorCandidate { outcome, failure });
     };
     let result = request.with_body_free_hook_request(|request_head| {
-        plan.with_body_free_hook_head(|response_head| {
+        response.with_body_free_hook_head(|response_head| {
             run_after_rpc_hooks(hook_snapshot, remote_address, request_head, response_head)
         })
     });
     match result {
         Ok(()) => Ok(InternalProcessorCandidate {
-            outcome: InternalProcessorOutcome::Handled(HandlerOutcome::Reply(plan)),
+            outcome: InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
             failure,
         }),
         Err(error) => {
-            drop(plan);
+            drop(response);
             let failure = failure
                 .map(InternalFailureOrigin::after_hook_error)
                 .unwrap_or(InternalFailureOrigin::AfterHook);
             Ok(InternalProcessorCandidate::failure(
                 InternalProcessorOutcome::Handled(HandlerOutcome::Reply(
-                    crate::error_response::response_plan_from_error(&error)?,
+                    crate::error_response::remoting_response_from_error(&error)?,
                 )),
                 failure,
             ))

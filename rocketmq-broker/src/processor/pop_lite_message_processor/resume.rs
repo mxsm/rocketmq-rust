@@ -14,7 +14,7 @@
 
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 
 use super::core::PopLiteCoreResult;
 use super::response::PopLiteResponseKind;
@@ -32,7 +32,7 @@ where
         resume: ResumePopLite,
         reason: DeferredWakeReason,
         events: LiteEventBatchExecution,
-    ) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
         debug_assert_eq!(reason, DeferredWakeReason::MessageArrived);
         let request_header = resume.into_request().into_header();
         let result = self.execute_pop_lite_terminal_batch(&request_header, events).await;
@@ -41,17 +41,17 @@ where
         } else {
             PopLiteResponseKind::PollingTimeout
         };
-        self.compose_pop_lite_plan(&request_header, result, kind)
+        self.compose_pop_lite_response(&request_header, result, kind)
     }
 
     pub(crate) fn resume_pop_lite_timeout(
         &self,
         resume: ResumePopLite,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
         debug_assert_eq!(reason, DeferredWakeReason::Timeout);
         let request_header = resume.into_request().into_header();
-        self.compose_pop_lite_plan(
+        self.compose_pop_lite_response(
             &request_header,
             PopLiteCoreResult {
                 body: None,

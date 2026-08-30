@@ -52,7 +52,7 @@ use crate::long_polling::pop_deferred::index::PopIndexErrorKind;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareError;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterError;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 pub(super) struct PopInitialSuspend {
     pub(super) request_header: PopMessageRequestHeader,

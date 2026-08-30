@@ -26,9 +26,9 @@ use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::ProtocolNoResponse;
 use crate::dispatch::RemotingRequest;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::ResponseBodyKind;
 use crate::dispatch::ResponseError;
-use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
@@ -40,7 +40,7 @@ use super::DispatchProcessorError;
 use super::ExplicitProcessor;
 
 pub(crate) enum EmbeddedResolvedOutcome {
-    Reply(ResponsePlan),
+    Reply(RemotingResponse),
     OneWay,
     Deferred(DeferredRegistration),
     NoReply(ProtocolNoResponse),
@@ -65,8 +65,8 @@ where
     pub(crate) fn embedded_reject_request(&self, request_code: i32) -> Option<InternalProcessorCandidate> {
         match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(plan) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(plan)),
+            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
+                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
             )),
         }
     }
@@ -85,12 +85,12 @@ where
             ))),
             Ok(Err(error)) => Ok(InternalProcessorCandidate::failure(
                 InternalProcessorOutcome::Handled(HandlerOutcome::Reply(
-                    crate::error_response::response_plan_from_error(&error)?,
+                    crate::error_response::remoting_response_from_error(&error)?,
                 )),
                 InternalFailureOrigin::ProcessorError,
             )),
             Err(_) => Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(ResponsePlan::command(
+                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(
                     super::super::authorized_dispatcher::deadline_response(
                         request.original_identity().original_opaque(),
                     ),
@@ -108,8 +108,8 @@ where
         let InternalProcessorOutcome::Handled(outcome) = outcome;
         if request.original_identity().is_one_way() {
             return match outcome {
-                HandlerOutcome::Reply(plan) => {
-                    let resolved = request.resolve_handler_outcome(HandlerOutcome::Reply(plan))?;
+                HandlerOutcome::Reply(response) => {
+                    let resolved = request.resolve_handler_outcome(HandlerOutcome::Reply(response))?;
                     drop(resolved);
                     Ok(EmbeddedResolvedOutcome::OneWay)
                 }
@@ -124,7 +124,7 @@ where
             };
         }
         match request.resolve_handler_outcome(outcome)? {
-            HandlerOutcome::Reply(plan) => Ok(EmbeddedResolvedOutcome::Reply(plan)),
+            HandlerOutcome::Reply(response) => Ok(EmbeddedResolvedOutcome::Reply(response)),
             HandlerOutcome::Deferred(registration) => Ok(EmbeddedResolvedOutcome::Deferred(registration)),
             HandlerOutcome::NoReply(marker) => Ok(EmbeddedResolvedOutcome::NoReply(marker)),
         }

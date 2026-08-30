@@ -91,7 +91,7 @@ fn real_registration_fixture(name: &'static str, owner: u64) -> (RealRegistratio
         session.view().state().clone(),
         &parent,
     );
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let responder = sink
         .deferred_seed_for_test(TransportTelemetry::noop(), session.view().id(), control)
         .into_responder(original);
@@ -161,11 +161,11 @@ impl RequestProcessor for PublicDeferredProcessor {
         assert!(responder.control().same_lifecycle_view(request.control()));
         let receipt = responder
             .respond(
-                ResponsePlan::bytes(
+                RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(0).set_opaque(original_opaque + 1),
                     Bytes::from_static(b"public-deferred"),
                 )
-                .expect("deferred response plan"),
+                .expect("deferred remoting response"),
             )
             .await
             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
@@ -278,7 +278,7 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
                 assert!(execution.processors.current_bytes > 0);
                 assert_eq!(resume, "dispatcher-owned deferred resume");
                 assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
             },
         )
@@ -431,7 +431,7 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
         .resume(DeferredResumeRetainedSize::default(), move |_, _| {
             called.store(true, Ordering::SeqCst);
             async move {
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
             }
         })

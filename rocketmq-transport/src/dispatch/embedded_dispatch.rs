@@ -20,12 +20,12 @@ use rocketmq_runtime::RuntimeError;
 use super::DeferredCommitError;
 use super::HandlerOutcomeContractError;
 use super::ProtocolNoResponseReason;
+use super::RemotingResponse;
 use super::RequestId;
 use super::ResponseBindingError;
+use super::ResponseBuildError;
 use super::ResponseError;
 use super::ResponseErrorKind;
-use super::ResponsePlan;
-use super::ResponsePlanError;
 use super::WriteProgress;
 use crate::admission::AdmissionError;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
@@ -33,7 +33,7 @@ use crate::dispatch::remoting_request::RemotingRequestBuildError;
 /// Terminal result of one channel-free embedded dispatch.
 ///
 /// Each variant owns the corresponding affine handler state. The result is
-/// intentionally not cloneable, so a response plan or deferred proof cannot
+/// intentionally not cloneable, so a remoting response or deferred proof cannot
 /// be completed through more than one path.
 ///
 /// ```compile_fail
@@ -47,8 +47,8 @@ use crate::dispatch::remoting_request::RemotingRequestBuildError;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EmbeddedDispatchOutcome {
-    /// An owned response plan was accepted by the in-process response boundary.
-    Reply(ResponsePlan),
+    /// An owned remoting response was accepted by the in-process response boundary.
+    Reply(RemotingResponse),
     /// The original request was one-way and every produced response was discarded.
     OneWay {
         /// The immutable request identity captured before processor mutation.
@@ -82,13 +82,13 @@ pub enum EmbeddedDispatchErrorKind {
     SessionClosed,
     /// The immutable request deadline elapsed.
     DeadlineExceeded,
-    /// The configured admission policy rejected the request without a response plan.
+    /// The configured admission policy rejected the request without a remoting response.
     Admission,
     /// Trusted request construction rejected inconsistent ingress facts.
     RequestConstruction,
-    /// A processor error could not be converted to an owned response plan.
+    /// A processor error could not be converted to an owned remoting response.
     ResponseConstruction,
-    /// Immutable response binding rejected the plan.
+    /// Immutable response binding rejected the response.
     ResponseBinding,
     /// The processor violated the affine handler-outcome contract.
     HandlerContract,
@@ -172,7 +172,7 @@ impl EmbeddedDispatchError {
         )
     }
 
-    pub(crate) fn response_construction(error: ResponsePlanError) -> Self {
+    pub(crate) fn response_construction(error: ResponseBuildError) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::ResponseConstruction,
             EmbeddedDispatchErrorSource::ResponseConstruction(error),
@@ -259,7 +259,7 @@ enum EmbeddedDispatchErrorSource {
     Stop(EmbeddedStopError),
     Admission(AdmissionError),
     RequestConstruction(RemotingRequestBuildError),
-    ResponseConstruction(ResponsePlanError),
+    ResponseConstruction(ResponseBuildError),
     ResponseBinding(ResponseBindingError),
     HandlerContract(HandlerOutcomeContractError),
     DeferredCommit(DeferredCommitError),

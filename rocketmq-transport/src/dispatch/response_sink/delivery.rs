@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Consuming plan-aware network and embedded response delivery.
+//! Consuming network and embedded response delivery.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -24,11 +24,11 @@ use super::LocalResponseSink;
 use super::ResponseSink;
 use crate::admission::AdmissionClass;
 use crate::codec::prepare_response;
-use crate::dispatch::BoundResponsePlan;
+use crate::dispatch::BoundResponse;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseError;
-use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseSendClaim;
 use crate::dispatch::ResponseTerminalState;
@@ -36,7 +36,7 @@ use crate::dispatch::WriteProgress;
 use crate::server::SessionHandle;
 
 #[derive(Clone)]
-pub(crate) struct NetworkResponsePlanContext {
+pub(crate) struct ResponseDeliveryContext {
     control: RequestControlView,
     slot: Arc<ResponseCompletionSlot>,
     transport_drop: ResponseTransportDropHandle,
@@ -46,7 +46,7 @@ pub(crate) struct NetworkResponsePlanContext {
     enqueue_complete_signal: Option<Arc<tokio::sync::Notify>>,
 }
 
-impl NetworkResponsePlanContext {
+impl ResponseDeliveryContext {
     fn new(control: RequestControlView) -> Self {
         let slot = Arc::new(ResponseCompletionSlot::new());
         Self {
@@ -90,8 +90,8 @@ impl NetworkResponsePlanContext {
     }
 }
 
-pub(super) struct LocalPlanSenderState {
-    sender: parking_lot::Mutex<Option<oneshot::Sender<Result<ResponsePlan, ResponseError>>>>,
+pub(super) struct LocalResponseSenderState {
+    sender: parking_lot::Mutex<Option<oneshot::Sender<Result<RemotingResponse, ResponseError>>>>,
     sender_taken: Arc<AtomicBool>,
     control: RequestControlView,
     slot: Arc<ResponseCompletionSlot>,
@@ -101,9 +101,9 @@ pub(super) struct LocalPlanSenderState {
     handoff_attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl LocalPlanSenderState {
+impl LocalResponseSenderState {
     fn new(
-        sender: oneshot::Sender<Result<ResponsePlan, ResponseError>>,
+        sender: oneshot::Sender<Result<RemotingResponse, ResponseError>>,
         sender_taken: Arc<AtomicBool>,
         control: RequestControlView,
         slot: Arc<ResponseCompletionSlot>,
@@ -132,7 +132,7 @@ impl LocalPlanSenderState {
         self
     }
 
-    fn take_sender(&self) -> Option<oneshot::Sender<Result<ResponsePlan, ResponseError>>> {
+    fn take_sender(&self) -> Option<oneshot::Sender<Result<RemotingResponse, ResponseError>>> {
         let sender = self.sender.lock().take();
         if sender.is_some() {
             self.sender_taken.store(true, Ordering::Release);
@@ -154,16 +154,16 @@ impl LocalPlanSenderState {
     }
 }
 
-/// Single owner of an exact in-process response plan handoff.
-pub(crate) struct LocalResponsePlanReceiver {
-    receiver: oneshot::Receiver<Result<ResponsePlan, ResponseError>>,
+/// Single owner of an exact in-process response handoff.
+pub(crate) struct LocalResponseReceiver {
+    receiver: oneshot::Receiver<Result<RemotingResponse, ResponseError>>,
     control: RequestControlView,
     slot: Arc<ResponseCompletionSlot>,
     sender_taken: Arc<AtomicBool>,
 }
 
-impl LocalResponsePlanReceiver {
-    pub(crate) async fn receive(mut self) -> Result<ResponsePlan, ResponseError> {
+impl LocalResponseReceiver {
+    pub(crate) async fn receive(mut self) -> Result<RemotingResponse, ResponseError> {
         if let Some(stop) = current_stop(&self.control) {
             self.slot.finish_external(stop);
             return Err(stop.into_error());
@@ -185,7 +185,7 @@ impl LocalResponsePlanReceiver {
     }
 }
 
-impl Drop for LocalResponsePlanReceiver {
+impl Drop for LocalResponseReceiver {
     fn drop(&mut self) {
         if !self.sender_taken.load(Ordering::Acquire) {
             self.slot.close_from_receiver_drop();
@@ -194,31 +194,31 @@ impl Drop for LocalResponsePlanReceiver {
 }
 
 impl ResponseSink {
-    pub(crate) fn network_plan(
+    pub(crate) fn network(
         session: SessionHandle,
         admission_class: AdmissionClass,
         control: RequestControlView,
     ) -> Self {
-        let context = NetworkResponsePlanContext::new(control);
+        let context = ResponseDeliveryContext::new(control);
         Self::Network(Arc::new(
             session
                 .with_response_class(admission_class)
-                .with_response_plan_context(context),
+                .with_response_context(context),
         ))
     }
 
-    pub(crate) fn local_plan(control: RequestControlView) -> (Self, LocalResponsePlanReceiver) {
+    pub(crate) fn local(control: RequestControlView) -> (Self, LocalResponseReceiver) {
         let (sender, receiver) = oneshot::channel();
         let slot = Arc::new(ResponseCompletionSlot::new());
         let sender_taken = Arc::new(AtomicBool::new(false));
-        let state = Arc::new(LocalPlanSenderState::new(
+        let state = Arc::new(LocalResponseSenderState::new(
             sender,
             Arc::clone(&sender_taken),
             control.clone(),
             Arc::clone(&slot),
         ));
         let sink = Self::Local(LocalResponseSink { state });
-        let receiver = LocalResponsePlanReceiver {
+        let receiver = LocalResponseReceiver {
             receiver,
             control,
             slot,
@@ -228,21 +228,21 @@ impl ResponseSink {
     }
 
     #[cfg(test)]
-    pub(in crate::dispatch) fn local_plan_with_handoff_gate(
+    pub(in crate::dispatch) fn local_with_handoff_gate(
         control: RequestControlView,
         checked: Arc<tokio::sync::Notify>,
         resume: Arc<tokio::sync::Notify>,
-    ) -> (Self, LocalResponsePlanReceiver, Arc<std::sync::atomic::AtomicUsize>) {
+    ) -> (Self, LocalResponseReceiver, Arc<std::sync::atomic::AtomicUsize>) {
         let (sender, receiver) = oneshot::channel();
         let slot = Arc::new(ResponseCompletionSlot::new());
         let sender_taken = Arc::new(AtomicBool::new(false));
         let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let state = Arc::new(
-            LocalPlanSenderState::new(sender, Arc::clone(&sender_taken), control.clone(), Arc::clone(&slot))
+            LocalResponseSenderState::new(sender, Arc::clone(&sender_taken), control.clone(), Arc::clone(&slot))
                 .with_handoff_gate(checked, resume, Arc::clone(&attempts)),
         );
         let sink = Self::Local(LocalResponseSink { state });
-        let receiver = LocalResponsePlanReceiver {
+        let receiver = LocalResponseReceiver {
             receiver,
             control,
             slot,
@@ -252,61 +252,61 @@ impl ResponseSink {
     }
 
     #[cfg(test)]
-    fn network_plan_with_enqueue_gate(
+    fn network_with_enqueue_gate(
         session: SessionHandle,
         admission_class: AdmissionClass,
         control: RequestControlView,
         checked: Arc<tokio::sync::Notify>,
         resume: Arc<tokio::sync::Notify>,
     ) -> Self {
-        let context = NetworkResponsePlanContext::new(control).with_enqueue_gate(checked, resume);
+        let context = ResponseDeliveryContext::new(control).with_enqueue_gate(checked, resume);
         Self::Network(Arc::new(
             session
                 .with_response_class(admission_class)
-                .with_response_plan_context(context),
+                .with_response_context(context),
         ))
     }
 
     #[cfg(test)]
-    fn network_plan_with_enqueue_observer(
+    fn network_with_enqueue_observer(
         session: SessionHandle,
         admission_class: AdmissionClass,
         control: RequestControlView,
         signal: Arc<tokio::sync::Notify>,
     ) -> Self {
-        let context = NetworkResponsePlanContext::new(control).with_enqueue_complete_signal(signal);
+        let context = ResponseDeliveryContext::new(control).with_enqueue_complete_signal(signal);
         Self::Network(Arc::new(
             session
                 .with_response_class(admission_class)
-                .with_response_plan_context(context),
+                .with_response_context(context),
         ))
     }
 
-    pub(crate) async fn send_plan(self, bound: BoundResponsePlan) -> Result<ResponseReceipt, ResponseError> {
+    pub(crate) async fn send_response(self, bound: BoundResponse) -> Result<ResponseReceipt, ResponseError> {
         match self {
-            Self::Network(session) => send_network_plan(session, bound).await,
-            Self::Local(sink) => send_local_plan(sink, bound).await,
+            Self::Network(session) => send_network_response(session, bound).await,
+            Self::Local(sink) => send_local_response(sink, bound).await,
         }
     }
 
-    pub(crate) async fn send_deferred_plan(
+    pub(crate) async fn send_deferred_response(
         self,
-        bound: BoundResponsePlan,
+        bound: BoundResponse,
         deferred_claim: &mut ResponseSendClaim,
     ) -> Result<ResponseReceipt, ResponseError> {
         match self {
-            Self::Network(session) => send_deferred_network_plan(session, bound, deferred_claim).await,
-            Self::Local(sink) => send_deferred_local_plan(sink, bound).await,
+            Self::Network(session) => send_deferred_network(session, bound, deferred_claim).await,
+            Self::Local(sink) => send_deferred_local(sink, bound).await,
         }
     }
 }
 
-async fn send_deferred_network_plan(
+async fn send_deferred_network(
     session: Arc<SessionHandle>,
-    bound: BoundResponsePlan,
+    bound: BoundResponse,
     deferred_claim: &mut ResponseSendClaim,
 ) -> Result<ResponseReceipt, ResponseError> {
-    let Some(context) = session.response_plan_context() else {
+    let Some(context) = session.response_context() else {
         return Err(ResponseError::SessionClosed);
     };
     let mut response_claim = context.slot().claim().await?;
@@ -360,18 +360,15 @@ async fn send_deferred_network_plan(
     }
 }
 
-async fn send_deferred_local_plan(
-    sink: LocalResponseSink,
-    bound: BoundResponsePlan,
-) -> Result<ResponseReceipt, ResponseError> {
-    send_local_plan(sink, bound).await
+async fn send_deferred_local(sink: LocalResponseSink, bound: BoundResponse) -> Result<ResponseReceipt, ResponseError> {
+    send_local_response(sink, bound).await
 }
 
-async fn send_network_plan(
+async fn send_network_response(
     session: Arc<SessionHandle>,
-    bound: BoundResponsePlan,
+    bound: BoundResponse,
 ) -> Result<ResponseReceipt, ResponseError> {
-    let Some(context) = session.response_plan_context() else {
+    let Some(context) = session.response_context() else {
         return Err(ResponseError::SessionClosed);
     };
     let mut claim = context.slot().claim().await?;
@@ -420,7 +417,7 @@ async fn send_network_plan(
     }
 }
 
-async fn send_local_plan(sink: LocalResponseSink, bound: BoundResponsePlan) -> Result<ResponseReceipt, ResponseError> {
+async fn send_local_response(sink: LocalResponseSink, bound: BoundResponse) -> Result<ResponseReceipt, ResponseError> {
     let state = Arc::clone(&sink.state);
     let claim = state.slot.claim().await?;
     #[cfg(test)]
@@ -433,8 +430,8 @@ async fn send_local_plan(sink: LocalResponseSink, bound: BoundResponsePlan) -> R
     }
 
     let (request_id, head, body) = bound.into_parts();
-    let plan = ResponsePlan::from_bound_parts(head, body);
-    claim.commit_local_handoff(&state, plan)?;
+    let response = RemotingResponse::from_bound_parts(head, body);
+    claim.commit_local_handoff(&state, response)?;
     Ok(ResponseReceipt::new(request_id, ResponseDisposition::InProcessAccepted))
 }
 
@@ -690,8 +687,8 @@ impl ResponseCompletionSlot {
 
     fn commit_local_handoff(
         &self,
-        sender_state: &LocalPlanSenderState,
-        plan: ResponsePlan,
+        sender_state: &LocalResponseSenderState,
+        response: RemotingResponse,
     ) -> Result<(), ResponseError> {
         let mut state = self.state.lock();
         let (result, changed) = match &mut *state {
@@ -699,7 +696,7 @@ impl ResponseCompletionSlot {
                 if let Some(sender) = sender_state.take_sender() {
                     #[cfg(test)]
                     sender_state.handoff_attempts.fetch_add(1, Ordering::SeqCst);
-                    let result = if sender.send(Ok(plan)).is_ok() {
+                    let result = if sender.send(Ok(response)).is_ok() {
                         *state = ResponseCompletionState::Terminal {
                             state: ResponseTerminalState::Completed,
                             primary_session_closed: false,
@@ -803,12 +800,12 @@ impl ResponseClaim {
 
     fn commit_local_handoff(
         mut self,
-        sender_state: &LocalPlanSenderState,
-        plan: ResponsePlan,
+        sender_state: &LocalResponseSenderState,
+        response: RemotingResponse,
     ) -> Result<(), ResponseError> {
         self.slot.take().map_or_else(
             || Err(ResponseError::SessionClosed),
-            |slot| slot.commit_local_handoff(sender_state, plan),
+            |slot| slot.commit_local_handoff(sender_state, response),
         )
     }
 }
@@ -829,5 +826,5 @@ impl Drop for ResponseClaim {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/dispatch/response_sink/plan.rs"]
+#[path = "../../../tests/unit/dispatch/response_sink/delivery.rs"]
 mod tests;

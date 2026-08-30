@@ -101,7 +101,7 @@ impl RequestProcessor for OneWayProbeProcessor {
         self.observed
             .send(error.kind())
             .map_err(|_| RocketMQError::illegal_argument("one-way observer closed"))?;
-        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
         ))
         .map(HandlerOutcome::Reply)

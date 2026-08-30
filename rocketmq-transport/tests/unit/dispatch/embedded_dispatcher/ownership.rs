@@ -22,7 +22,7 @@ use crate::file_region::FileRegionSequence;
 use super::*;
 
 struct PlanProcessor {
-    plan: Arc<Mutex<Option<ResponsePlan>>>,
+    plan: Arc<Mutex<Option<RemotingResponse>>>,
 }
 
 impl Clone for PlanProcessor {
@@ -45,7 +45,7 @@ impl RequestProcessor for PlanProcessor {
     }
 }
 
-async fn dispatch_plan(plan: ResponsePlan, name: &'static str) -> ResponsePlan {
+async fn dispatch_plan(plan: RemotingResponse, name: &'static str) -> RemotingResponse {
     let fixture = EmbeddedFixture::new(name);
     let dispatcher = AuthorizedCommandDispatcher::new(
         PlanProcessor {
@@ -89,9 +89,9 @@ impl Drop for CountingLease {
 }
 
 #[tokio::test]
-async fn local_plan_handoff_preserves_empty_segments_and_file_region_ownership() {
+async fn local_handoff_preserves_empty_segments_and_file_region_ownership() {
     let empty = dispatch_plan(
-        ResponsePlan::command(RemotingCommand::create_response_command_with_code(80)).expect("empty plan"),
+        RemotingResponse::command(RemotingCommand::create_response_command_with_code(80)).expect("empty plan"),
         "embedded-empty-plan",
     )
     .await;
@@ -102,7 +102,7 @@ async fn local_plan_handoff_preserves_empty_segments_and_file_region_ownership()
     let first_pointer = first.as_ptr();
     let second_pointer = second.as_ptr();
     let segments = dispatch_plan(
-        ResponsePlan::segments(
+        RemotingResponse::segments(
             RemotingCommand::create_response_command_with_code(81),
             vec![first, second],
         )
@@ -127,7 +127,8 @@ async fn local_plan_handoff_preserves_empty_segments_and_file_region_ownership()
     let region = FileRegion::try_new(lease, 0, 18).expect("file region");
     let regions = FileRegionSequence::try_new(vec![region]).expect("file region sequence");
     let file_plan = dispatch_plan(
-        ResponsePlan::file_regions(RemotingCommand::create_response_command_with_code(82), regions).expect("file plan"),
+        RemotingResponse::file_regions(RemotingCommand::create_response_command_with_code(82), regions)
+            .expect("file plan"),
         "embedded-file-plan",
     )
     .await;

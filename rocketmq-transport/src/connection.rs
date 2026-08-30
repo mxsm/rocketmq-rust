@@ -627,7 +627,7 @@ pub struct Connection {
 
     telemetry: TransportTelemetry,
 
-    response_plan_drop: Option<ResponseTransportDropHandle>,
+    response_drop: Option<ResponseTransportDropHandle>,
 
     #[cfg(test)]
     enqueue_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -777,7 +777,7 @@ impl Connection {
             state_rx,
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
             telemetry: TransportTelemetry::noop(),
-            response_plan_drop: None,
+            response_drop: None,
             #[cfg(test)]
             enqueue_gate: None,
             #[cfg(test)]
@@ -830,7 +830,7 @@ impl Connection {
             state_rx,
             connection_id,
             telemetry,
-            response_plan_drop: None,
+            response_drop: None,
             #[cfg(test)]
             enqueue_gate: None,
             #[cfg(test)]
@@ -848,8 +848,8 @@ impl Connection {
         self.enqueue_complete_signal = Some(signal);
     }
 
-    pub(crate) fn with_response_plan_drop(mut self, drop_handle: Option<ResponseTransportDropHandle>) -> Self {
-        self.response_plan_drop = drop_handle;
+    pub(crate) fn with_response_drop(mut self, drop_handle: Option<ResponseTransportDropHandle>) -> Self {
+        self.response_drop = drop_handle;
         self
     }
 
@@ -983,7 +983,7 @@ impl Connection {
         response_queue_wait_observation: ResponseQueueWaitObservation,
         target: String,
     ) -> Result<(), SendFailure> {
-        let response_plan_drop = self.response_plan_drop.clone();
+        let response_drop = self.response_drop.clone();
         let encoded_len = payload.encoded_len();
         let legacy_reason = match &self.outbound {
             ConnectionWriter::Direct(writer) => {
@@ -1080,8 +1080,8 @@ impl Connection {
                     });
                 }
             }
-            let mut in_flight_drop = response_plan_drop
-                .map(|handle| InFlightQueuedSendDrop::new(handle, deferred_drop, Arc::clone(&progress)));
+            let mut in_flight_drop =
+                response_drop.map(|handle| InFlightQueuedSendDrop::new(handle, deferred_drop, Arc::clone(&progress)));
             #[cfg(test)]
             if let Some(signal) = &self.enqueue_complete_signal {
                 signal.notify_one();
@@ -1221,7 +1221,7 @@ impl Connection {
     }
 
     /// Sends a server response through the canonical writer with a stage-aware
-    /// completion error. This remains crate-private because response plans own
+    /// completion error. This remains crate-private because remoting responses own
     /// the public delivery contract.
     pub(crate) async fn send_prepared_response(
         &mut self,
@@ -1259,7 +1259,7 @@ impl Connection {
         if self.queued_writer().is_none() {
             return Err(ResponseError::SessionClosed);
         }
-        if self.response_plan_drop.is_none() {
+        if self.response_drop.is_none() {
             return Err(ResponseError::SessionClosed);
         }
         let Some(class) = self.response_class() else {

@@ -22,8 +22,8 @@ use super::DeferredRegistration;
 use super::DeferredResponder;
 use super::DeferredResponseSeed;
 use super::OriginalRequestIdentity;
+use super::RemotingResponse;
 use super::RequestId;
-use super::ResponsePlan;
 use super::TakeDeferredResponderError;
 
 mod oneway;
@@ -31,7 +31,7 @@ mod oneway;
 /// The one terminal contract outcome returned by a request handler.
 ///
 /// Each variant owns an affine capability or response payload. A handler must
-/// either return a standard response plan, prove that trusted deferred storage
+/// either return a standard remoting response, prove that trusted deferred storage
 /// owns the response lifecycle, or return a request-bound protocol marker.
 /// There is deliberately no direct-write bypass variant.
 ///
@@ -40,8 +40,8 @@ mod oneway;
 ///
 /// fn inspect(outcome: HandlerOutcome) {
 ///     match outcome {
-///         HandlerOutcome::Reply(plan) => {
-///             let _ = plan.response_code();
+///         HandlerOutcome::Reply(response) => {
+///             let _ = response.response_code();
 ///         }
 ///         HandlerOutcome::Deferred(registration) => {
 ///             let _ = registration.request_id();
@@ -71,8 +71,8 @@ mod oneway;
 #[must_use]
 #[derive(Debug)]
 pub enum HandlerOutcome {
-    /// Return one owned response plan through canonical response binding and delivery.
-    Reply(ResponsePlan),
+    /// Return one owned remoting response through canonical response binding and delivery.
+    Reply(RemotingResponse),
     /// Complete the inline contract with a sealed deferred-registry proof.
     Deferred(DeferredRegistration),
     /// Complete the request without a direct response where protocol policy permits it.
@@ -441,9 +441,9 @@ mod tests {
         }
     }
 
-    fn counting_file_plan(
+    fn counting_file_response(
         response_code: i32,
-    ) -> (ResponsePlan, Arc<CountingLease>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    ) -> (RemotingResponse, Arc<CountingLease>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
         let mut file = tempfile::tempfile().expect("temporary file");
         file.write_all(b"file-body").expect("write file body");
         let accesses = Arc::new(AtomicUsize::new(0));
@@ -455,8 +455,8 @@ mod tests {
         });
         let region = FileRegion::try_new(lease.clone(), 0, 9).expect("file region");
         let regions = FileRegionSequence::single(region);
-        let plan = ResponsePlan::file_regions(response_head(response_code), regions).expect("file plan");
-        (plan, lease, accesses, drops)
+        let response = RemotingResponse::file_regions(response_head(response_code), regions).expect("file response");
+        (response, lease, accesses, drops)
     }
 
     #[test]
@@ -505,44 +505,44 @@ mod tests {
         let second = Bytes::from_static(b"second");
         let first_ptr = first.as_ptr();
         let second_ptr = second.as_ptr();
-        let plan = ResponsePlan::segments(response_head(7), vec![first, second]).expect("segment plan");
-        let ResponseBody::Segments(before) = plan.test_body() else {
+        let response = RemotingResponse::segments(response_head(7), vec![first, second]).expect("segment response");
+        let ResponseBody::Segments(before) = response.test_body() else {
             panic!("segments should retain their representation");
         };
         let allocation = before.as_ptr();
         let mut slot = InlineResponseSlot::disabled();
-        let HandlerOutcome::Reply(plan) = slot
-            .resolve(original, HandlerOutcome::Reply(plan))
+        let HandlerOutcome::Reply(response) = slot
+            .resolve(original, HandlerOutcome::Reply(response))
             .expect("open reply should resolve")
         else {
             panic!("reply should remain a reply");
         };
-        let ResponseBody::Segments(after) = plan.test_body() else {
+        let ResponseBody::Segments(after) = response.test_body() else {
             panic!("segments should retain their representation");
         };
         assert_eq!(after.as_ptr(), allocation);
         assert_eq!(after[0].as_ptr(), first_ptr);
         assert_eq!(after[1].as_ptr(), second_ptr);
 
-        let (plan, lease, accesses, drops) = counting_file_plan(8);
-        let ResponseBody::FileRegions(before) = plan.test_body() else {
-            panic!("file plan representation");
+        let (response, lease, accesses, drops) = counting_file_response(8);
+        let ResponseBody::FileRegions(before) = response.test_body() else {
+            panic!("file response representation");
         };
         let allocation = before.regions().as_ptr();
         assert_eq!(accesses.load(Ordering::SeqCst), 1);
         let mut slot = InlineResponseSlot::disabled();
-        let HandlerOutcome::Reply(plan) = slot
-            .resolve(original, HandlerOutcome::Reply(plan))
+        let HandlerOutcome::Reply(response) = slot
+            .resolve(original, HandlerOutcome::Reply(response))
             .expect("file reply should resolve")
         else {
             panic!("reply should remain a reply");
         };
-        let ResponseBody::FileRegions(after) = plan.test_body() else {
-            panic!("file plan representation");
+        let ResponseBody::FileRegions(after) = response.test_body() else {
+            panic!("file response representation");
         };
         assert_eq!(after.regions().as_ptr(), allocation);
         assert_eq!(accesses.load(Ordering::SeqCst), 1);
-        drop(plan);
+        drop(response);
         assert_eq!(Arc::strong_count(&lease), 1);
         drop(lease);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -562,7 +562,7 @@ mod tests {
         assert!(matches!(
             cross_request.resolve(
                 second,
-                HandlerOutcome::Reply(ResponsePlan::command(response_head(9)).expect("reply"))
+                HandlerOutcome::Reply(RemotingResponse::command(response_head(9)).expect("reply"))
             ),
             Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
         ));
@@ -694,12 +694,12 @@ mod tests {
     #[test]
     fn reply_and_no_reply_after_defer_drop_payloads_and_complete_the_slot() {
         let original = identity(41, RequestCode::CheckTransactionState);
-        let (plan, lease, accesses, drops) = counting_file_plan(10);
+        let (response, lease, accesses, drops) = counting_file_response(10);
         drop(lease);
         let mut slot = InlineResponseSlot::deferred_capable();
         slot.mark_deferred_taken(original).expect("take deferred responder");
         assert!(matches!(
-            slot.resolve(original, HandlerOutcome::Reply(plan)),
+            slot.resolve(original, HandlerOutcome::Reply(response)),
             Err(HandlerOutcomeContractError::ReplyAfterDeferredTaken)
         ));
         assert_eq!(accesses.load(Ordering::SeqCst), 1);

@@ -30,6 +30,19 @@ removed and callers use fallible `ClientRuntime::try_new`; `ClusterConfig` owns 
 fields without changing Serde backward reads; and `MappedBuffer::read_zero_copy`
 was replaced by the accurately named `MappedBuffer::read_copy`.
 
+The repository owner also approved the pre-release Transport rename from
+`ResponsePlan` to `RemotingResponse` on 2026-08-30. The aggregate had not
+shipped in a release, and the new name states its role as the validated
+counterpart to `RemotingRequest`. `ResponseBuildError` now identifies the
+construction phase separately from the existing delivery-stage `ResponseError`;
+no compatibility alias is retained and no wire behavior changes.
+The same approval covers the associated `ResponseMetadata::body_kind`
+accessor, `DeferredResumeErrorKind::ResponseConstruction` variant and
+`response_construction` label, plus the `response_body_kind` tracing field.
+These names describe the represented body and construction stage directly;
+the structural snapshot and freeze decisions record the migration of the
+unreleased source and observation surfaces.
+
 The package count is derived from `cargo metadata`; the guard rejects a
 baseline that is missing a current library target or retains a removed one.
 

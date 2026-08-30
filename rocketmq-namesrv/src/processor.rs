@@ -34,9 +34,9 @@ use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::LayerRequirement;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseObservation;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ResponseWriteOutcome;
 
 pub use self::client_request_processor::ClientRequestProcessor;
@@ -423,9 +423,9 @@ pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> rocketmq_er
             "NameServer processor returned no response without a protocol marker",
         ));
     };
-    let plan = ResponsePlan::from_command(response)
-        .map_err(|error| RocketMQError::response_process_failed("namesrv.response_plan", error.to_string()))?;
-    Ok(HandlerOutcome::Reply(plan))
+    let response = RemotingResponse::from_command(response)
+        .map_err(|error| RocketMQError::response_process_failed("namesrv.remoting_response", error.to_string()))?;
+    Ok(HandlerOutcome::Reply(response))
 }
 
 fn record_admission_metric(

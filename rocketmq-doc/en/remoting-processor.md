@@ -8,7 +8,7 @@ Consumers import processor and transport types directly from `rocketmq_transport
 
 ```rust
 use rocketmq_transport::api::{
-    HandlerOutcome, RemotingRequest, RequestProcessor, ResponsePlan,
+    HandlerOutcome, RemotingRequest, RequestProcessor, RemotingResponse,
 };
 ```
 
@@ -23,7 +23,7 @@ impl RequestProcessor for Processor {
         &mut self,
         _request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(0)))
+        Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(0)))
     }
 }
 ```
@@ -32,11 +32,11 @@ The transport captures immutable ingress identity, applies admission and securit
 
 ## Response and deferred ownership
 
-- `HandlerOutcome::Reply` transfers one affine `ResponsePlan` to the transport.
+- `HandlerOutcome::Reply` transfers one affine `RemotingResponse` to the transport.
 - `HandlerOutcome::Deferred` transfers a registered deferred response owner.
 - `HandlerOutcome::NoReply` records an explicit protocol-level non-response reason.
 - One-way requests never gain response-write authority.
-- `ResponsePlan` retains byte segments and file leases until writer completion.
+- `RemotingResponse` retains byte segments and file leases until writer completion.
 - Session shutdown cancels and awaits owned request, deferred, and writer work.
 
 ## Embedded dispatch

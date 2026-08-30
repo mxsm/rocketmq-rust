@@ -40,9 +40,9 @@ use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
 use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseSink;
 use crate::runtime::processor::RequestProcessor;
 use crate::session_executor::SessionDispatchError;
@@ -90,7 +90,7 @@ where
     }
 
     /// Dispatches one embedded command and resolves an accepted deferred
-    /// response into its final in-process response plan.
+    /// response into its final in-process remoting response.
     ///
     /// This terminal form is intended for the Broker-owned local Proxy. It
     /// retains the embedded session and its deferred cleanup owner while the
@@ -162,14 +162,14 @@ where
         let mut deferred_receiver = None;
 
         if builder.deadline().is_some_and(RequestDeadline::is_expired) {
-            match ResponsePlan::command(deadline_response(original.original_opaque())) {
-                Ok(plan) => {
+            match RemotingResponse::command(deadline_response(original.original_opaque())) {
+                Ok(response) => {
                     complete_candidate(
                         self.core.explicit_processor(),
                         builder,
                         original,
                         request_started,
-                        reply_candidate(plan),
+                        reply_candidate(response),
                         terminal_sender,
                     )
                     .await;
@@ -184,20 +184,20 @@ where
             Resource::new(ResourceKind::Other, original.original_code().to_string()),
             Action::Manage,
         ) {
-            match ResponsePlan::command(
+            match RemotingResponse::command(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::NoPermission,
                     reason.to_string(),
                 )
                 .set_opaque(original.original_opaque()),
             ) {
-                Ok(plan) => {
+                Ok(response) => {
                     complete_candidate(
                         self.core.explicit_processor(),
                         builder,
                         original,
                         request_started,
-                        reply_candidate(plan),
+                        reply_candidate(response),
                         terminal_sender,
                     )
                     .await;
@@ -216,9 +216,9 @@ where
                     Ok(session) => {
                         let class = AdmissionClass::for_request_code(original.original_code());
                         let builder = if wait_for_deferred_response && !original.is_one_way() {
-                            let (response, receiver) = ResponseSink::local_plan(builder.control().clone());
+                            let (sink, receiver) = ResponseSink::local(builder.control().clone());
                             deferred_receiver = Some(receiver);
-                            response
+                            sink
                                 .local_deferred_seed_with_resume(
                                     self.telemetry.clone(),
                                     &embedded_session_view,
@@ -371,15 +371,16 @@ where
                 }
             },
             move |_operation, error| async move {
-                let plan = ResponsePlan::command(admission_response(rejected_original.original_opaque(), &error));
-                let result = match plan {
-                    Ok(plan) => {
+                let response =
+                    RemotingResponse::command(admission_response(rejected_original.original_opaque(), &error));
+                let result = match response {
+                    Ok(response) => {
                         let lifecycle_result = finish_rejected_candidate(
                             rejected_core.explicit_processor(),
                             delayed_rejected_control,
                             rejected_original,
                             request_started,
-                            reply_candidate(plan),
+                            reply_candidate(response),
                         )
                         .await;
                         lifecycle_result
@@ -397,15 +398,15 @@ where
                 retained_partial,
             }) if error.policy() == FullPolicy::Reject => {
                 drop(retained_partial);
-                let plan = ResponsePlan::command(admission_response(original.original_opaque(), &error));
-                let result = match plan {
-                    Ok(plan) => {
+                let response = RemotingResponse::command(admission_response(original.original_opaque(), &error));
+                let result = match response {
+                    Ok(response) => {
                         finish_rejected_candidate(
                             self.core.explicit_processor(),
                             rejected_control,
                             original,
                             request_started,
-                            reply_candidate(plan),
+                            reply_candidate(response),
                         )
                         .await
                     }
@@ -491,7 +492,7 @@ where
     P: RequestProcessor + Clone + Sync + 'static,
 {
     if builder.deadline().is_some_and(RequestDeadline::is_expired) {
-        let plan = ResponsePlan::command(deadline_response(original.original_opaque()))
+        let response = RemotingResponse::command(deadline_response(original.original_opaque()))
             .map_err(EmbeddedDispatchError::response_construction)?;
         let result = finish_rejected_candidate(
             processor,
@@ -499,7 +500,7 @@ where
             original,
             request_started,
             InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(plan)),
+                InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)),
                 InternalFailureOrigin::Deadline,
             ),
         )
@@ -579,14 +580,14 @@ async fn finish_rejected_candidate<P>(
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(plan)) = candidate.outcome else {
+    let InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)) = candidate.outcome else {
         return Err(EmbeddedDispatchError::one_way_contract("invalid_rejection"));
     };
     let outcome = if original.is_one_way() {
-        drop(plan);
+        drop(response);
         EmbeddedResolvedOutcome::OneWay
     } else {
-        EmbeddedResolvedOutcome::Reply(plan)
+        EmbeddedResolvedOutcome::Reply(response)
     };
     finish_resolved(processor, control, original, request_started, outcome, false).await
 }
@@ -617,13 +618,15 @@ where
             request_id: marker.request_id(),
             reason: marker.reason(),
         }),
-        EmbeddedResolvedOutcome::Reply(plan) => {
-            let response_code = plan.response_code();
-            let body_kind = plan.body_kind();
-            let bound = plan.bind(original).map_err(EmbeddedDispatchError::response_binding)?;
-            let (sink, receiver) = ResponseSink::local_plan(control);
+        EmbeddedResolvedOutcome::Reply(response) => {
+            let response_code = response.response_code();
+            let body_kind = response.body_kind();
+            let bound = response
+                .bind(original)
+                .map_err(EmbeddedDispatchError::response_binding)?;
+            let (sink, receiver) = ResponseSink::local(control);
             let write_started = Instant::now();
-            let send_result = sink.send_plan(bound).await;
+            let send_result = sink.send_response(bound).await;
             let failure = send_result
                 .as_ref()
                 .err()
@@ -652,15 +655,15 @@ where
     }
 }
 
-fn reply_candidate(plan: ResponsePlan) -> InternalProcessorCandidate {
+fn reply_candidate(response: RemotingResponse) -> InternalProcessorCandidate {
     InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
-        crate::dispatch::HandlerOutcome::Reply(plan),
+        crate::dispatch::HandlerOutcome::Reply(response),
     ))
 }
 
 fn map_processor_error(error: crate::dispatch::DispatchProcessorError) -> EmbeddedDispatchError {
     match error {
-        crate::dispatch::DispatchProcessorError::ResponsePlan(error) => {
+        crate::dispatch::DispatchProcessorError::ResponseConstruction(error) => {
             EmbeddedDispatchError::response_construction(error)
         }
         crate::dispatch::DispatchProcessorError::HandlerContract(error) => {

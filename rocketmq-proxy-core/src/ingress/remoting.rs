@@ -38,8 +38,8 @@ pub trait ProxyRemotingBackend: Send + Sync {
     /// Processes a canonical command through the channel-free Broker boundary.
     ///
     /// Local and remote implementations both return the affine dispatch result;
-    /// remote providers wrap their response command in a `ResponsePlan`
-    /// without introducing a reverse plan-to-command adapter.
+    /// remote providers wrap their response command in a `RemotingResponse`
+    /// without introducing a reverse response-to-command adapter.
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome>;
 }
 

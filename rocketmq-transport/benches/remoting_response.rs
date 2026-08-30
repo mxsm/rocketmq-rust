@@ -22,8 +22,8 @@ use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::ResponsePlan;
-use rocketmq_transport::benchmark_support::ResponsePlanPreparationHarness;
+use rocketmq_transport::api::RemotingResponse;
+use rocketmq_transport::benchmark_support::RemotingResponsePreparationHarness;
 
 #[path = "support/criterion_profile.rs"]
 mod criterion_profile;
@@ -31,7 +31,7 @@ mod criterion_profile;
 use criterion_profile::apply_remoting_command_baseline_profile;
 
 fn response_head() -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code(0).set_remark("response-plan-benchmark")
+    RemotingCommand::create_response_command_with_code(0).set_remark("remoting-response-benchmark")
 }
 
 fn segments(payload: &Bytes) -> Vec<Bytes> {
@@ -45,9 +45,9 @@ fn segments(payload: &Bytes) -> Vec<Bytes> {
         .collect()
 }
 
-fn benchmark_response_plan(criterion: &mut Criterion) {
-    let harness = ResponsePlanPreparationHarness::new();
-    let mut group = criterion.benchmark_group("transport_response_plan");
+fn benchmark_remoting_response(criterion: &mut Criterion) {
+    let harness = RemotingResponsePreparationHarness::new();
+    let mut group = criterion.benchmark_group("transport_remoting_response");
     apply_remoting_command_baseline_profile(&mut group);
 
     for body_bytes in [128, 4 * 1024, 256 * 1024] {
@@ -72,9 +72,9 @@ fn benchmark_response_plan(criterion: &mut Criterion) {
             &payload,
             |bencher, payload| {
                 bencher.iter(|| {
-                    let plan =
-                        ResponsePlan::bytes(response_head(), payload.clone()).expect("canonical byte response plan");
-                    black_box(harness.prepare(plan, 811));
+                    let response = RemotingResponse::bytes(response_head(), payload.clone())
+                        .expect("canonical byte remoting response");
+                    black_box(harness.prepare(response, 811));
                 });
             },
         );
@@ -84,9 +84,9 @@ fn benchmark_response_plan(criterion: &mut Criterion) {
             |bencher, payload| {
                 let body_segments = segments(payload);
                 bencher.iter(|| {
-                    let plan = ResponsePlan::segments(response_head(), body_segments.clone())
-                        .expect("canonical segmented response plan");
-                    black_box(harness.prepare(plan, 811));
+                    let response = RemotingResponse::segments(response_head(), body_segments.clone())
+                        .expect("canonical segmented remoting response");
+                    black_box(harness.prepare(response, 811));
                 });
             },
         );
@@ -94,5 +94,5 @@ fn benchmark_response_plan(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_response_plan);
+criterion_group!(benches, benchmark_remoting_response);
 criterion_main!(benches);

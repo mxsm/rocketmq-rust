@@ -66,9 +66,9 @@ use crate::dispatch::reserve_session_owner;
 use crate::dispatch::AuthorizedDispatchBoundary;
 use crate::dispatch::AuthorizedDispatchSession;
 use crate::dispatch::DeferredSessionCleanupReport;
-use crate::dispatch::NetworkResponsePlanContext;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
+use crate::dispatch::ResponseDeliveryContext;
 use crate::file_region::FileTransferMode;
 use crate::proxy_protocol::read_proxy_protocol;
 use crate::proxy_protocol::ProxyProtocolConfig;
@@ -474,7 +474,7 @@ pub struct SessionHandle {
     request_operation: OperationContext,
     response_class: Option<AdmissionClass>,
     original_request_identity: Option<OriginalRequestIdentity>,
-    response_plan_context: Option<NetworkResponsePlanContext>,
+    response_context: Option<ResponseDeliveryContext>,
 }
 
 struct SessionRetirementGuard<'a> {
@@ -540,10 +540,10 @@ impl SessionHandle {
             self.send.lifecycle.clone(),
             self.send.telemetry.clone(),
         )
-        .with_response_plan_drop(
-            self.response_plan_context
+        .with_response_drop(
+            self.response_context
                 .as_ref()
-                .map(NetworkResponsePlanContext::transport_drop_handle),
+                .map(ResponseDeliveryContext::transport_drop_handle),
         )
     }
 
@@ -618,13 +618,13 @@ impl SessionHandle {
         self
     }
 
-    pub(crate) fn with_response_plan_context(mut self, context: NetworkResponsePlanContext) -> Self {
-        self.response_plan_context = Some(context);
+    pub(crate) fn with_response_context(mut self, context: ResponseDeliveryContext) -> Self {
+        self.response_context = Some(context);
         self
     }
 
-    pub(crate) fn response_plan_context(&self) -> Option<&NetworkResponsePlanContext> {
-        self.response_plan_context.as_ref()
+    pub(crate) fn response_context(&self) -> Option<&ResponseDeliveryContext> {
+        self.response_context.as_ref()
     }
 
     /// Requests the server-owned ordered session close and waits for its full completion.
@@ -1460,7 +1460,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
         request_operation: request_operation.clone(),
         response_class: None,
         original_request_identity: None,
-        response_plan_context: None,
+        response_context: None,
     };
     let mut close_completion = SessionCloseCompletionGuard::new(session.clone());
 

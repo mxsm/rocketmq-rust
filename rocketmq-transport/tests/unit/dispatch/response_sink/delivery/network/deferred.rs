@@ -37,7 +37,7 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
         harness.session.session_view().state().clone(),
         harness.session.task_group(),
     );
-    let sink = ResponseSink::network_plan(harness.session.clone(), AdmissionClass::Data, control);
+    let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
     assert!(sink.network_deferred_seed(&other.session).is_none());
     let seed = sink
         .network_deferred_seed(&harness.session)
@@ -50,8 +50,8 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
     let receipt = seed
         .into_responder(original)
         .respond(
-            ResponsePlan::bytes(response_head(129, 7), Bytes::from_static(b"canonical-deferred"))
-                .expect("deferred response plan"),
+            RemotingResponse::bytes(response_head(129, 7), Bytes::from_static(b"canonical-deferred"))
+                .expect("deferred remoting response"),
         )
         .await
         .expect("deferred response uses the canonical writer");
@@ -62,9 +62,9 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
     );
     assert!(matches!(
         duplicate
-            .send_plan(
-                ResponsePlan::command(response_head(130, 8))
-                    .expect("duplicate response plan")
+            .send_response(
+                RemotingResponse::command(response_head(130, 8))
+                    .expect("duplicate remoting response")
                     .bind(original)
                     .expect("duplicate binding")
             )
@@ -101,7 +101,7 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
 
     let enqueued = Arc::new(tokio::sync::Notify::new());
     let (control, _parent) = harness.control("deferred-network-waiting-drop-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
@@ -112,10 +112,10 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
     let state_for_assert = Arc::clone(&state);
     let mut claim = state.begin_sending().expect("deferred send claim");
     let send = tokio::spawn(async move {
-        sink.send_deferred_plan(
+        sink.send_deferred_response(
             bind(
-                ResponsePlan::bytes(response_head(122, 1_122), Bytes::from_static(b"deferred-waiting"))
-                    .expect("response plan"),
+                RemotingResponse::bytes(response_head(122, 1_122), Bytes::from_static(b"deferred-waiting"))
+                    .expect("remoting response"),
                 831,
                 1_122,
             ),
@@ -135,8 +135,8 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
     assert_eq!(state_for_assert.terminal_reason(), None);
     let before_duplicate = harness.session.writer_snapshot();
     let duplicate_error = duplicate
-        .send_plan(bind(
-            ResponsePlan::command(response_head(123, 1_123)).expect("duplicate plan"),
+        .send_response(bind(
+            RemotingResponse::command(response_head(123, 1_123)).expect("duplicate response"),
             832,
             1_123,
         ))
@@ -186,7 +186,7 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
     .await;
     let enqueued = Arc::new(tokio::sync::Notify::new());
     let (control, _parent) = harness.control("deferred-network-claimed-drop-control", None);
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
@@ -197,10 +197,10 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
     let state_for_assert = Arc::clone(&state);
     let mut claim = state.begin_sending().expect("deferred send claim");
     let send = tokio::spawn(async move {
-        sink.send_deferred_plan(
+        sink.send_deferred_response(
             bind(
-                ResponsePlan::bytes(response_head(124, 1_124), Bytes::from_static(b"deferred-started"))
-                    .expect("response plan"),
+                RemotingResponse::bytes(response_head(124, 1_124), Bytes::from_static(b"deferred-started"))
+                    .expect("remoting response"),
                 833,
                 1_124,
             ),
@@ -221,8 +221,8 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
     assert_eq!(state_for_assert.terminal_reason(), None);
     let before_duplicate = harness.session.writer_snapshot();
     let duplicate_error = duplicate
-        .send_plan(bind(
-            ResponsePlan::command(response_head(125, 1_125)).expect("duplicate plan"),
+        .send_response(bind(
+            RemotingResponse::command(response_head(125, 1_125)).expect("duplicate response"),
             834,
             1_125,
         ))
@@ -273,7 +273,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     let enqueued = Arc::new(tokio::sync::Notify::new());
     let deadline = RequestDeadline::after(Duration::from_millis(10));
     let (control, _parent) = harness.control("deferred-network-deadline-control", Some(deadline));
-    let sink = ResponseSink::network_plan_with_enqueue_observer(
+    let sink = ResponseSink::network_with_enqueue_observer(
         harness.session.clone(),
         AdmissionClass::Data,
         control,
@@ -284,9 +284,10 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     let state_for_assert = Arc::clone(&state);
     let mut claim = state.begin_sending().expect("deferred send claim");
     let send = tokio::spawn(async move {
-        sink.send_deferred_plan(
+        sink.send_deferred_response(
             bind(
-                ResponsePlan::bytes(response_head(127, 1_127), Bytes::from_static(b"expired")).expect("response plan"),
+                RemotingResponse::bytes(response_head(127, 1_127), Bytes::from_static(b"expired"))
+                    .expect("remoting response"),
                 835,
                 1_127,
             ),
@@ -310,8 +311,8 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     assert_eq!(state_for_assert.terminal_reason(), None);
     let before_duplicate = harness.session.writer_snapshot();
     let duplicate_error = duplicate
-        .send_plan(bind(
-            ResponsePlan::command(response_head(128, 1_128)).expect("duplicate plan"),
+        .send_response(bind(
+            RemotingResponse::command(response_head(128, 1_128)).expect("duplicate response"),
             836,
             1_128,
         ))

@@ -31,7 +31,7 @@ use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterErro
 use crate::long_polling::pop_lite_deferred::prepare::PreparedPopLiteRegistration;
 
 fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-    ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)

@@ -68,7 +68,7 @@ impl PartsFixture {
             session.view().state().clone(),
             &parent,
         );
-        let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+        let (sink, _receiver) = ResponseSink::local(control.clone());
         let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
         let responder = sink
             .deferred_seed_for_test(telemetry, session.view().id(), control)

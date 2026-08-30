@@ -37,7 +37,7 @@ use super::DeferredResumeError;
 use super::DeferredResumeErrorKind;
 use super::DeferredResumeRetainedSize;
 use super::DeferredWakeReason;
-use super::ResponsePlan;
+use super::RemotingResponse;
 use super::ResponseReceipt;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionError;
@@ -67,7 +67,7 @@ pub(crate) async fn resume_claimed<R, F, Fut>(
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
 {
     let id = claimed.deferred_id();
     let request_id = claimed.request_id();
@@ -143,7 +143,7 @@ pub(crate) fn submit_claimed<R, F, Fut, O>(
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
     O: FnOnce(&ResumeResult) + Send + 'static,
 {
     let id = claimed.deferred_id();
@@ -515,7 +515,7 @@ impl<R, F, Fut> DeferredResumeWork for ResumeWorkImpl<R, F>
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
 {
     fn release_wait_permit(&mut self) {
         if let Some(parts) = self.parts.as_mut() {
@@ -576,7 +576,7 @@ async fn execute_work<R, F, Fut>(parts: ClaimExecutionParts<R>, handler: F, stop
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
 {
     let ClaimExecutionParts {
         id,
@@ -637,7 +637,7 @@ where
     };
     let result = match outcome {
         HandlerOutcome::Stopped(result) => result,
-        HandlerOutcome::Completed(Ok(plan)) => {
+        HandlerOutcome::Completed(Ok(response)) => {
             if let Some(stop) = stop_view.current_before_write() {
                 return finish_lifecycle(
                     id,
@@ -651,19 +651,19 @@ where
             let result = map_response(
                 id,
                 request_id,
-                responder.take().expect("response responder").respond(plan).await,
+                responder.take().expect("response responder").respond(response).await,
             );
             drop(marker.take());
             result
         }
         HandlerOutcome::Completed(Err(error)) => {
-            let plan = match crate::error_response::response_plan_from_error(&error) {
-                Ok(plan) => plan,
+            let response = match crate::error_response::remoting_response_from_error(&error) {
+                Ok(response) => response,
                 Err(source) => {
                     drop(responder.take());
                     drop(marker.take());
                     return Err(DeferredResumeError::new(
-                        DeferredResumeErrorKind::ResponsePlan,
+                        DeferredResumeErrorKind::ResponseConstruction,
                         id,
                         request_id,
                         None,
@@ -685,7 +685,11 @@ where
             let result = map_response(
                 id,
                 request_id,
-                responder.take().expect("error response responder").respond(plan).await,
+                responder
+                    .take()
+                    .expect("error response responder")
+                    .respond(response)
+                    .await,
             );
             drop(marker.take());
             result
@@ -713,13 +717,13 @@ where
     }
     drop(resume);
     if error.policy() == FullPolicy::Reject {
-        let plan = match ResponsePlan::command(admission_response(responder.original_opaque(), &error)) {
-            Ok(plan) => plan,
+        let response = match RemotingResponse::command(admission_response(responder.original_opaque(), &error)) {
+            Ok(response) => response,
             Err(source) => {
                 drop(responder);
                 drop(marker);
                 return Err(DeferredResumeError::new(
-                    DeferredResumeErrorKind::ResponsePlan,
+                    DeferredResumeErrorKind::ResponseConstruction,
                     id,
                     request_id,
                     None,
@@ -731,7 +735,7 @@ where
         if let Some(stop) = stop_view.current_before_write() {
             return finish_lifecycle(id, request_id, responder, marker, stop, None);
         }
-        let result = map_response(id, request_id, responder.respond(plan).await);
+        let result = map_response(id, request_id, responder.respond(response).await);
         drop(marker);
         result
     } else {

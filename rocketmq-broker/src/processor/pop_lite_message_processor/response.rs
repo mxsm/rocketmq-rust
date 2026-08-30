@@ -20,11 +20,11 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 
 use super::core::PopLiteCoreResult;
 use super::PopLiteMessageProcessor;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 #[derive(Clone, Copy)]
 pub(crate) enum PopLiteResponseKind {
@@ -52,13 +52,13 @@ where
         head
     }
 
-    pub(super) fn compose_pop_lite_plan(
+    pub(super) fn compose_pop_lite_response(
         &self,
         request_header: &PopLiteMessageRequestHeader,
         result: PopLiteCoreResult,
         kind: PopLiteResponseKind,
-    ) -> rocketmq_error::RocketMQResult<ResponsePlan> {
-        compose_pop_lite_response_plan(&self.context.command_factory, request_header, result, kind)
+    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+        compose_pop_lite_response(&self.context.command_factory, request_header, result, kind)
     }
 
     fn compose_pop_lite_parts(
@@ -71,16 +71,16 @@ where
     }
 }
 
-pub(crate) fn compose_pop_lite_response_plan(
+pub(crate) fn compose_pop_lite_response(
     command_factory: &RemotingCommandFactory,
     request_header: &PopLiteMessageRequestHeader,
     result: PopLiteCoreResult,
     kind: PopLiteResponseKind,
-) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+) -> rocketmq_error::RocketMQResult<RemotingResponse> {
     let (head, body) = compose_pop_lite_response_parts(command_factory, request_header, result, kind);
     match body {
-        Some(body) => BrokerResponseParts::bytes(head, body)?.into_response_plan(),
-        None => BrokerResponseParts::command(head)?.into_response_plan(),
+        Some(body) => BrokerResponseParts::bytes(head, body)?.into_remoting_response(),
+        None => BrokerResponseParts::command(head)?.into_remoting_response(),
     }
 }
 

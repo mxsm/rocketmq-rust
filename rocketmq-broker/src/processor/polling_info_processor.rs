@@ -114,7 +114,7 @@ impl PollingInfoProcessor {
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
         let result = self.process_command(&peer_label, request.command_mut()).await;
-        crate::processor::response_plan::immediate_outcome_from_command_result(
+        crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
             result,
             original_opaque,
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_header_error_is_an_empty_reply_plan() {
+    async fn embedded_header_error_is_an_empty_reply_response() {
         let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(0));
         let fixture = EmbeddedFixture::new(test_processor(Arc::downgrade(&provider)));
         let request = RemotingCommand::create_remoting_command(RequestCode::PollingInfo).set_opaque(711);
@@ -405,13 +405,13 @@ mod tests {
             .dispatch(None, request)
             .await
             .expect("embedded PollingInfo header-error response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-            panic!("PollingInfo header error must return a reply plan");
+        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+            panic!("PollingInfo header error must return a reply response");
         };
 
-        assert_eq!(plan.response_code(), ResponseCode::SystemError as i32);
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
-        assert_eq!(plan.body_len(), 0);
+        assert_eq!(response.response_code(), ResponseCode::SystemError as i32);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Empty);
+        assert_eq!(response.body_len(), 0);
         fixture.finish().await;
     }
 

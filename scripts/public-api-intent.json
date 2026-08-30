@@ -6951,6 +6951,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::dispatch::RemotingResponse",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::RemotingResponse",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::dispatch::RequestControlView",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::RequestControlView",
           "owner": "transport",
@@ -6996,6 +7005,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::dispatch::ResponseBuildError",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseBuildError",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::dispatch::ResponseDisposition",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseDisposition",
           "owner": "transport",
@@ -7007,24 +7025,6 @@
           "category": "stable",
           "declaration": "pub use crate::dispatch::ResponseErrorKind",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseErrorKind",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::ResponsePlan",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponsePlan",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::ResponsePlanError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponsePlanError",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

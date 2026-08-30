@@ -153,11 +153,11 @@ impl RequestProcessor for TestProcessor {
                 request.command_mut().set_code_ref(999_001);
                 request.command_mut().set_opaque_mut(-900);
                 Ok(HandlerOutcome::Reply(
-                    ResponsePlan::bytes(
+                    RemotingResponse::bytes(
                         RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                         self.response.clone(),
                     )
-                    .expect("response plan"),
+                    .expect("remoting response"),
                 ))
             }
             Behavior::Error => Err(RocketMQError::illegal_argument("embedded processor failure")),
@@ -170,11 +170,11 @@ impl RequestProcessor for TestProcessor {
                     Err(crate::dispatch::TakeDeferredResponderError::Unavailable)
                 ));
                 Ok(HandlerOutcome::Reply(
-                    ResponsePlan::bytes(
+                    RemotingResponse::bytes(
                         RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                         self.response.clone(),
                     )
-                    .expect("response plan"),
+                    .expect("remoting response"),
                 ))
             }
             Behavior::UnclaimedDeferred | Behavior::ForgedDeferred => Ok(HandlerOutcome::Deferred(
@@ -204,7 +204,7 @@ impl RequestProcessor for TestProcessor {
         self.state.rejects.fetch_add(1, Ordering::SeqCst);
         if matches!(self.behavior, Behavior::Reject) {
             RejectRequestDecision::Reject(
-                ResponsePlan::bytes(
+                RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(73).set_opaque(-778),
                     self.response.clone(),
                 )
@@ -331,7 +331,7 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         let ResponseWriteOutcome::Written(receipt) = observations[0].outcome() else {
-            panic!("local response plan must be accepted")
+            panic!("local remoting response must be accepted")
         };
         assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
         assert_eq!(

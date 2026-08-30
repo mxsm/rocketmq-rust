@@ -31,7 +31,7 @@ fn prepared(
         SubscriptionData::default(),
         Arc::new(MatchAll),
     );
-    let fallback = ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+    let fallback = RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::PullNotFound,
     ))
     .expect("valid PullNotFound fallback");

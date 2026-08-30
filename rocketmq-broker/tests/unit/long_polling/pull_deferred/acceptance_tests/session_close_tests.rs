@@ -89,7 +89,7 @@ async fn tcp_session_close_drops_prepared_owner_once_without_retrying() {
                         release_plan_rx
                             .await
                             .map_err(|_| RocketMQError::illegal_argument("session-close plan release closed"))?;
-                        ResponsePlan::bytes(
+                        RemotingResponse::bytes(
                             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                             body,
                         )
@@ -101,7 +101,7 @@ async fn tcp_session_close_drops_prepared_owner_once_without_retrying() {
         })
         .expect("spawn owned session-close Pull resume");
 
-    plan_ready_rx.await.expect("session-close Pull response plan ready");
+    plan_ready_rx.await.expect("session-close Pull remoting response ready");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 0);
     drop(framed);
     tokio::time::timeout(Duration::from_secs(2), async {

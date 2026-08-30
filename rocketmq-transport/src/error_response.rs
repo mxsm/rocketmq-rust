@@ -19,16 +19,16 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 
-use crate::dispatch::ResponsePlan;
-use crate::dispatch::ResponsePlanError;
+use crate::dispatch::RemotingResponse;
+use crate::dispatch::ResponseBuildError;
 
 /// Convert a typed RocketMQ error into a remoting response command.
 pub fn command_from_error(error: &RocketMQError) -> RemotingCommand {
     command_from_error_with_factory(&application_remoting_command_factory(), error)
 }
 
-pub(crate) fn response_plan_from_error(error: &RocketMQError) -> Result<ResponsePlan, ResponsePlanError> {
-    ResponsePlan::command(command_from_error(error))
+pub(crate) fn remoting_response_from_error(error: &RocketMQError) -> Result<RemotingResponse, ResponseBuildError> {
+    RemotingResponse::command(command_from_error(error))
 }
 
 /// Convert a typed RocketMQ error with an explicitly owned command factory.

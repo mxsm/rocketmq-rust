@@ -27,7 +27,7 @@ use crate::long_polling::pop_deferred::service::PopDeferredRegisterErrorKind;
 use crate::long_polling::pop_deferred::service::PreparedPopRegistration;
 
 fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-    ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)
