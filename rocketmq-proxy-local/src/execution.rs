@@ -472,7 +472,7 @@ impl LocalBrokerCommand {
             | Self::QueryTopicMessageType { .. }
             | Self::QuerySubscriptionGroup { .. }
             | Self::QueryAssignment { .. } => LocalExecutionClass::Control,
-            Self::ProcessRemotingV2 { request, .. } => match RequestCode::from(request.code()) {
+            Self::ProcessRemoting { request, .. } => match RequestCode::from(request.code()) {
                 RequestCode::PopMessage | RequestCode::PullMessage => LocalExecutionClass::LongPoll,
                 RequestCode::AckMessage
                 | RequestCode::BatchAckMessage
@@ -504,7 +504,7 @@ impl LocalBrokerCommand {
             | Self::EndTransaction {
                 client_id, request_id, ..
             } => LocalOrderingKey::new("producer", [client_id.clone().unwrap_or_else(|| request_id.clone())]),
-            Self::ProcessRemotingV2 { request, .. } => remoting_ordering_key(request),
+            Self::ProcessRemoting { request, .. } => remoting_ordering_key(request),
         }
     }
 }
@@ -636,7 +636,7 @@ mod tests {
     impl LocalCommandHandler for BlockingHandler {
         async fn handle(&self, command: LocalBrokerCommand) {
             let id = match &command {
-                LocalBrokerCommand::ProcessRemotingV2 { request, .. } => request.opaque(),
+                LocalBrokerCommand::ProcessRemoting { request, .. } => request.opaque(),
                 LocalBrokerCommand::QueryRoute { .. } => -1,
                 _ => -2,
             };
@@ -678,7 +678,7 @@ mod tests {
         )
         .set_opaque(opaque);
         request.make_custom_header_to_net();
-        LocalBrokerCommand::ProcessRemotingV2 {
+        LocalBrokerCommand::ProcessRemoting {
             request,
             timeout: Duration::from_millis(15_500),
             reply,
@@ -713,7 +713,7 @@ mod tests {
             },
         );
         let (pop_reply, _pop_receiver) = oneshot::channel();
-        let pop = LocalBrokerCommand::ProcessRemotingV2 {
+        let pop = LocalBrokerCommand::ProcessRemoting {
             request: pop,
             timeout: Duration::from_millis(15_500),
             reply: pop_reply,

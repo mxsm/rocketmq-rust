@@ -30,7 +30,7 @@ use rocketmq_model::common::key_builder::POP_RETRY_SEPARATOR_V2;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::CqExtUnit;
-use rocketmq_transport::api::v2::DeferredId;
+use rocketmq_transport::api::DeferredId;
 
 use super::deadline::NotificationWaitDeadline;
 

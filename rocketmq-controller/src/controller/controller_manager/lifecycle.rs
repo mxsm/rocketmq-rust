@@ -41,8 +41,8 @@ impl ControllerManager {
             .spawn_cancellable_service("controller.broker-session-monitor", async move {
                 loop {
                     match events.recv().await {
-                        Ok(V2SessionEvent::Connected(_)) => {}
-                        Ok(V2SessionEvent::Disconnected(session_id)) => {
+                        Ok(SessionEvent::Connected(_)) => {}
+                        Ok(SessionEvent::Disconnected(session_id)) => {
                             heartbeat_manager.on_broker_session_close(BrokerSessionId::from(session_id));
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -102,7 +102,7 @@ impl ControllerManager {
             info!("Broker inactive listener registered");
         }
 
-        // The V2 server takes exclusive processor ownership during start.
+        // The server takes exclusive processor ownership during start.
         info!("Controller request processor wiring initialized");
 
         // Metrics manager is already initialized from the injected telemetry handle in new().

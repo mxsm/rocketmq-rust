@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub(crate) use client::TransportSession;
-#[path = "clients/client_v2.rs"]
 mod client;
 pub mod nameserver_endpoint;
 pub(crate) mod nameserver_failover;

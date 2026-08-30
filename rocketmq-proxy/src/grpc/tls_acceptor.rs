@@ -26,10 +26,10 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::api::v1::TlsClientAuth;
-use rocketmq_transport::api::v1::TlsConfig;
-use rocketmq_transport::api::v1::TlsMode;
-use rocketmq_transport::api::v1::TlsServerConfig;
+use rocketmq_transport::api::TlsClientAuth;
+use rocketmq_transport::api::TlsConfig;
+use rocketmq_transport::api::TlsMode;
+use rocketmq_transport::api::TlsServerConfig;
 use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
@@ -165,7 +165,7 @@ impl ReloadableGrpcTlsAcceptor {
 }
 
 fn build_acceptor(config: &GrpcTlsConfig) -> rocketmq_error::RocketMQResult<TlsAcceptor> {
-    rocketmq_transport::api::v1::build_server_acceptor_exact_with_alpn(&transport_tls_config(config), &[b"h2".to_vec()])
+    rocketmq_transport::api::build_server_acceptor_exact_with_alpn(&transport_tls_config(config), &[b"h2".to_vec()])
 }
 
 fn transport_tls_config(config: &GrpcTlsConfig) -> TlsConfig {

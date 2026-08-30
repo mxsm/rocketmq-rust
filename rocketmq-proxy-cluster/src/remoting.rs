@@ -43,7 +43,7 @@ impl ClusterRemotingBackend {
 }
 
 impl ProxyRemotingBackend for ClusterRemotingBackend {
-    fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
         Box::pin(async move {
             let opaque = request.opaque();
             let body = request
@@ -84,7 +84,7 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
                 _ => return Err(ProxyError::not_implemented("cluster remoting backend request")),
             }?;
             let plan = ResponsePlan::from_command(response).map_err(|error| ProxyError::Transport {
-                message: format!("cluster backend response could not become a V2 response plan: {error}"),
+                message: format!("cluster backend response could not become a response plan: {error}"),
             })?;
             Ok(EmbeddedDispatchOutcome::Reply(plan))
         })

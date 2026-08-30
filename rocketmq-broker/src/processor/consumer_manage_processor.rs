@@ -29,15 +29,15 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v1::RpcClient;
-use rocketmq_transport::api::v1::RpcClientImpl;
-use rocketmq_transport::api::v1::RpcRequest;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::RpcClient;
+use rocketmq_transport::api::RpcClientImpl;
+use rocketmq_transport::api::RpcRequest;
+use rocketmq_transport::api::SessionView;
 use tracing::info;
 use tracing::warn;
 
@@ -72,17 +72,17 @@ pub(crate) struct ConsumerManageProcessorContext<MS: BrokerStorePort> {
     pub(crate) forward_timeout: u64,
 }
 
-impl<MS> RequestProcessorV2 for ConsumerManageProcessor<MS>
+impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
 where
     MS: BrokerStorePort + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl<MS: BrokerStorePort> ConsumerManageProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -114,15 +114,6 @@ where
             use_server_side_reset_offset: context.use_server_side_reset_offset,
             forward_timeout: context.forward_timeout,
         }
-    }
-
-    pub(crate) async fn process_legacy(
-        &self,
-        request_source: CheetahString,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let processor = self.clone();
-        processor.process_command(request_source, request).await
     }
 }
 
@@ -620,12 +611,12 @@ mod tests {
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     use super::*;
     use crate::broker_runtime::BrokerMessageStore;
@@ -682,11 +673,11 @@ mod tests {
         })
     }
 
-    async fn dispatch_v2(
+    async fn dispatch_request(
         processor: ConsumerManageProcessor<BrokerMessageStore>,
         command: RemotingCommand,
     ) -> EmbeddedDispatchOutcome {
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             Vec::new(),
             Arc::new(TransportSecurity::secure_enforced(
@@ -695,25 +686,25 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        EmbeddedRequestHarnessV2::new(
+        EmbeddedRequestHarness::new(
             dispatcher,
-            crate::test_task_group("consumer-manage-v2"),
-            Principal::new("consumer-manage-v2-test"),
+            crate::test_task_group("consumer-manage"),
+            Principal::new("consumer-manage-test"),
         )
         .dispatch(None, command)
         .await
-        .expect("consumer manager V2 dispatch should complete")
+        .expect("consumer manager dispatch should complete")
     }
 
     #[tokio::test]
-    async fn consumer_manage_v2_maps_header_errors_into_a_response_plan() {
-        let mut runtime = new_test_runtime("consumer-manage-v2").await;
+    async fn consumer_manage_maps_header_errors_into_a_response_plan() {
+        let mut runtime = new_test_runtime("consumer-manage").await;
         let processor = consumer_processor_for_test(&mut runtime);
         let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, EmptyHeader {})
             .set_opaque(4_204);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
-            panic!("consumer manager V2 must return an inline response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+            panic!("consumer manager must return an inline response plan");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::InvalidParameter);

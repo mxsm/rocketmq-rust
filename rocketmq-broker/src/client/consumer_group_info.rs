@@ -23,7 +23,7 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::SessionId;
 use tracing::info;
 use tracing::warn;
 
@@ -114,7 +114,7 @@ impl ConsumerGroupInfo {
         Arc::clone(&self.subscription_table)
     }
 
-    /// Returns whether the group has no live V2 sessions.
+    /// Returns whether the group has no live sessions.
     pub fn channels_is_empty(&self) -> bool {
         self.session_info_table.is_empty()
     }

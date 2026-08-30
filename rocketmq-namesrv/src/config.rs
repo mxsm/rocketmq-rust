@@ -25,9 +25,7 @@ use rocketmq_protocol::protocol::body::broker_body::register_broker_body::Regist
 use serde::Deserialize;
 use serde_json::Value;
 
-pub const REMOVED_ROUTE_MANAGER_CONFIG_KEY: &str = "useRouteInfoManagerV2";
 pub const DEFAULT_NAMESRV_LISTEN_PORT: u32 = 9876;
-const REMOVED_ROUTE_MANAGER_CONFIG_FIELD: &str = "use_route_info_manager_v2";
 
 const MAX_THREAD_COUNT: i32 = 4096;
 const MAX_QUEUE_CAPACITY: i32 = 10_000_000;
@@ -1144,7 +1142,6 @@ impl NamesrvConfig {
 
     fn apply_updates(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         for (key, value) in properties {
-            reject_removed_route_manager_key(key.as_str())?;
             let config_key = NamesrvConfigKey::from_java_name(key.as_str()).ok_or_else(|| {
                 RocketMQError::nameserver_config_invalid(format!("unknown configuration key '{key}'"))
             })?;
@@ -1458,16 +1455,6 @@ fn invalid_value(key: &str, reason: &str) -> RocketMQError {
     RocketMQError::nameserver_config_invalid(format!("invalid value for '{key}': {reason}"))
 }
 
-pub fn reject_removed_route_manager_key(key: &str) -> RocketMQResult<()> {
-    let key = key.trim();
-    if key == REMOVED_ROUTE_MANAGER_CONFIG_KEY || key == REMOVED_ROUTE_MANAGER_CONFIG_FIELD {
-        return Err(RocketMQError::nameserver_config_invalid(format!(
-            "'{key}' was removed; NameServer now always uses the canonical route manager"
-        )));
-    }
-    Ok(())
-}
-
 pub fn reject_removed_transport_client_key(key: &str) -> RocketMQResult<()> {
     const REMOVED_KEYS: &[&str] = &[
         "clientWorkerThreads",
@@ -1507,7 +1494,6 @@ pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
             .or_else(|| line.split_once(':'))
             .map(|(key, _)| key.trim().trim_matches('"').trim_matches('\''));
         if let Some(key) = candidate {
-            reject_removed_route_manager_key(key)?;
             reject_removed_transport_client_key(key)?;
         }
     }
@@ -1871,27 +1857,11 @@ mod tests {
     }
 
     #[test]
-    fn removed_route_manager_switch_is_a_typed_config_error() {
-        let mut config = NamesrvConfig::default();
-        let error = config
-            .update(HashMap::from([(
-                CheetahString::from_static_str(REMOVED_ROUTE_MANAGER_CONFIG_KEY),
-                CheetahString::from_static_str("false"),
-            )]))
-            .expect_err("removed switch must fail");
-
-        assert!(matches!(
-            error,
-            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
-    }
-
-    #[test]
     fn source_validation_ignores_comments_and_values() {
         validate_namesrv_config_source(
             r#"
-# useRouteInfoManagerV2 = false
-productEnvName = "useRouteInfoManagerV2"
+# clientWorkerThreads = 4
+productEnvName = "clientWorkerThreads"
 "#,
         )
         .expect("comments and values must not be interpreted as keys");

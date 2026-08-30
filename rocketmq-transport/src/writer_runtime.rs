@@ -698,8 +698,8 @@ struct ActiveWriteStart<'a> {
 }
 
 #[cfg(test)]
-#[path = "writer_runtime/issue_9754_tests.rs"]
-mod tests;
+#[path = "../tests/unit/writer_runtime/queue_failure_semantics.rs"]
+mod queue_failure_semantics_tests;
 
 #[cfg(test)]
 mod queue_regression_tests {

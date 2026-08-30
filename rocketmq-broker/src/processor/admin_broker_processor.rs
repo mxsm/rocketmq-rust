@@ -49,14 +49,14 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::apply_error_to_response;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
-use rocketmq_transport::api::v2::EmbeddedCaller;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::apply_error_to_response;
+use rocketmq_transport::api::request_code_not_supported_with_remark;
+use rocketmq_transport::api::EmbeddedCaller;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::SessionView;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -68,6 +68,9 @@ mod batch_mq_handler;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod broker_stats_handler;
+#[cfg(test)]
+#[path = "../../tests/unit/processor/admin_broker_concurrency.rs"]
+mod concurrency_tests;
 mod consumer_request_handler;
 mod create_acl_request_handler;
 mod create_user_request_handler;
@@ -91,8 +94,6 @@ mod update_broker_ha_handler;
 mod update_cold_data_flow_ctr_group_config;
 mod update_global_white_addrs_config_request_handler;
 mod update_user_request_handler;
-#[cfg(test)]
-mod v2_concurrency_tests;
 
 pub struct AdminBrokerProcessor<MS: BrokerAdminStore> {
     command_factory: RemotingCommandFactory,
@@ -127,7 +128,7 @@ pub struct AdminBrokerProcessor<MS: BrokerAdminStore> {
 }
 
 impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome>
@@ -149,12 +150,12 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     }
 }
 
-impl<MS> RequestProcessorV2 for AdminBrokerProcessor<MS>
+impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
 where
     MS: BrokerAdminStore + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
@@ -821,27 +822,16 @@ fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -
 mod tests {
     use std::net::SocketAddr;
 
+    use super::get_legacy_acl_cmd_response;
+    use super::map_auth_admin_error_response;
+    use super::trusted_admin_metadata;
+    use super::AdminOriginFact;
+    use super::AdminRequestCaller;
+    use super::AdminSessionFact;
     use rocketmq_error::RocketMQError;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_store::LocalFileMessageStore;
-    use rocketmq_transport::api::v2::RequestProcessorV2;
-
-    use super::get_legacy_acl_cmd_response;
-    use super::map_auth_admin_error_response;
-    use super::trusted_admin_metadata;
-    use super::AdminBrokerProcessor;
-    use super::AdminOriginFact;
-    use super::AdminRequestCaller;
-    use super::AdminSessionFact;
-
-    #[test]
-    fn admin_broker_processor_formally_implements_v2() {
-        fn assert_v2<T: RequestProcessorV2>() {}
-
-        assert_v2::<AdminBrokerProcessor<LocalFileMessageStore>>();
-    }
 
     #[test]
     fn admin_request_metadata_accepts_only_matching_trusted_facts() {

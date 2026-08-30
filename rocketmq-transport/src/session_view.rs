@@ -34,10 +34,6 @@ impl SessionId {
         Self(owner_id)
     }
 
-    #[allow(
-        dead_code,
-        reason = "REQ-06 validates request/session ownership before dispatcher integration"
-    )]
     pub(crate) const fn owner_id(self) -> u64 {
         self.0
     }
@@ -49,7 +45,7 @@ impl SessionId {
 /// [`SessionView::Network`]. Raw PROXY TLVs are deliberately not exposed.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ProxyInfoSnapshot;
+/// use rocketmq_transport::api::ProxyInfoSnapshot;
 ///
 /// fn cannot_read_raw_tlv_field(proxy: &ProxyInfoSnapshot) {
 ///     let _ = proxy.tlvs;
@@ -57,7 +53,7 @@ impl SessionId {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ProxyInfoSnapshot;
+/// use rocketmq_transport::api::ProxyInfoSnapshot;
 ///
 /// fn cannot_read_raw_tlvs(proxy: &ProxyInfoSnapshot) {
 ///     let _ = proxy.tlvs();
@@ -97,7 +93,7 @@ impl ProxyInfoSnapshot {
 /// sender, connection, writer, task group, or cancellation capability.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionStateView;
+/// use rocketmq_transport::api::SessionStateView;
 ///
 /// fn cannot_close(state: &SessionStateView) {
 ///     state.close();
@@ -105,7 +101,7 @@ impl ProxyInfoSnapshot {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionStateView;
+/// use rocketmq_transport::api::SessionStateView;
 ///
 /// fn cannot_write(state: &SessionStateView) {
 ///     state.write();
@@ -113,7 +109,7 @@ impl ProxyInfoSnapshot {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionStateView;
+/// use rocketmq_transport::api::SessionStateView;
 ///
 /// fn cannot_cancel(state: &SessionStateView) {
 ///     state.cancel();
@@ -121,7 +117,7 @@ impl ProxyInfoSnapshot {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionStateView;
+/// use rocketmq_transport::api::SessionStateView;
 ///
 /// fn cannot_get_a_task_group(state: &SessionStateView) {
 ///     let _ = state.task_group();
@@ -129,7 +125,7 @@ impl ProxyInfoSnapshot {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionStateView;
+/// use rocketmq_transport::api::SessionStateView;
 ///
 /// fn cannot_get_a_cancellation_token(state: &SessionStateView) {
 ///     let _ = state.cancellation_token();
@@ -137,7 +133,7 @@ impl ProxyInfoSnapshot {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionStateView;
+/// use rocketmq_transport::api::SessionStateView;
 ///
 /// fn cannot_get_a_connection_state_handle(state: &SessionStateView) {
 ///     let _ = state.connection_state_handle();
@@ -202,13 +198,13 @@ impl SessionStateView {
     }
 }
 
-/// Immutable session metadata available to V2 request processing.
+/// Immutable session metadata available to  request processing.
 ///
 /// Network values are captured when the canonical transport session is
 /// established. Embedded sessions intentionally have no socket addresses.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionView;
+/// use rocketmq_transport::api::SessionView;
 ///
 /// fn cannot_close(view: &SessionView) {
 ///     view.close();
@@ -216,7 +212,7 @@ impl SessionStateView {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionView;
+/// use rocketmq_transport::api::SessionView;
 ///
 /// fn cannot_write(view: &SessionView) {
 ///     view.write();
@@ -224,7 +220,7 @@ impl SessionStateView {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionView;
+/// use rocketmq_transport::api::SessionView;
 ///
 /// fn cannot_cancel(view: &SessionView) {
 ///     view.cancel();
@@ -232,7 +228,7 @@ impl SessionStateView {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionView;
+/// use rocketmq_transport::api::SessionView;
 ///
 /// fn cannot_get_a_task_group(view: &SessionView) {
 ///     let _ = view.task_group();
@@ -240,7 +236,7 @@ impl SessionStateView {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionView;
+/// use rocketmq_transport::api::SessionView;
 ///
 /// fn cannot_get_a_cancellation_token(view: &SessionView) {
 ///     let _ = view.cancellation_token();
@@ -248,7 +244,7 @@ impl SessionStateView {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionView;
+/// use rocketmq_transport::api::SessionView;
 ///
 /// fn cannot_get_a_connection(view: &SessionView) {
 ///     let _ = view.connection();
@@ -256,31 +252,31 @@ impl SessionStateView {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::SessionHandle;
+/// use rocketmq_transport::api::SessionHandle;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::Channel;
+/// use rocketmq_transport::api::Channel;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::Connection;
+/// use rocketmq_transport::api::Connection;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ConnectionStateHandle;
+/// use rocketmq_transport::api::ConnectionStateHandle;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::OperationContext;
+/// use rocketmq_transport::api::OperationContext;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::TaskGroup;
+/// use rocketmq_transport::api::TaskGroup;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::CancellationToken;
+/// use rocketmq_transport::api::CancellationToken;
 /// ```
 #[derive(Clone)]
 #[non_exhaustive]
@@ -371,10 +367,6 @@ impl EmbeddedSessionRecord {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "REQ-04 retains the embedded view for the REQ-06 request builder"
-    )]
     pub(crate) fn view(&self) -> SessionView {
         self.view.clone()
     }

@@ -28,8 +28,8 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::SessionStateView;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionStateView;
 
 use crate::config::ExpiryIndexMode;
 use crate::route::types::BrokerGeneration;
@@ -61,10 +61,10 @@ pub struct BrokerLiveInfo {
     /// Channel ID for the broker connection
     pub channel_id: CheetahString,
 
-    /// Stable transport session identity, when registered through V2 ingress.
+    /// Stable transport session identity, when registered through remoting ingress.
     pub session_id: Option<SessionId>,
 
-    /// Read-only lifecycle observation for the registered V2 session.
+    /// Read-only lifecycle observation for the registered session.
     pub session_state: Option<SessionStateView>,
 
     /// Broker name captured at registration for O(1) expiry cleanup.
@@ -109,7 +109,7 @@ impl BrokerLiveInfo {
         self
     }
 
-    /// Attach the narrow V2 session facts used for lifecycle cleanup.
+    /// Attach the narrow session facts used for lifecycle cleanup.
     pub(crate) fn with_session(mut self, session: BrokerSession) -> Self {
         self.session_id = Some(session.id);
         self.session_state = session.state;
@@ -382,7 +382,7 @@ impl BrokerLiveTable {
         }
     }
 
-    /// Update a broker heartbeat only when it belongs to the current V2 session.
+    /// Update a broker heartbeat only when it belongs to the current session.
     ///
     /// The live-table read guard serializes this identity check with replacement
     /// registration on the same broker key. A delayed heartbeat from a retired
@@ -570,7 +570,7 @@ impl BrokerLiveTable {
         None
     }
 
-    /// Retrieve broker address information by the stable V2 session identity.
+    /// Retrieve broker address information by the stable session identity.
     pub fn get_broker_info_by_session_id(&self, session_id: SessionId) -> Option<Arc<BrokerAddrInfo>> {
         let broker_addr_info = self.by_session.get(&session_id)?.clone();
         self.inner

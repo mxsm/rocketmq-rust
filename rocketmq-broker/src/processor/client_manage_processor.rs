@@ -34,14 +34,14 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::SessionCloseReason;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::SessionCloseReason;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionView;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -86,17 +86,17 @@ enum RegisteredClient {
     Session(ClientSessionInfo),
 }
 
-impl<MS> RequestProcessorV2 for ClientManageProcessor<MS>
+impl<MS> RequestProcessor for ClientManageProcessor<MS>
 where
     MS: BrokerStorePort + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl<MS: BrokerStorePort> ClientManageProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -151,7 +151,7 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!("ClientManageProcessor received V2 request code: {:?}", request_code);
+        info!("ClientManageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::HeartBeat => {
                 let heartbeat = decode_heartbeat(request)?;
@@ -492,7 +492,7 @@ where
             }
             debug!(
                 changed_group_count = changed_groups.len(),
-                "V2 consumer session registrations applied"
+                "consumer session registrations applied"
             );
         }
         let mut response_command = self.command_factory.create_success_response_command();

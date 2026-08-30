@@ -161,7 +161,7 @@ impl MQClientAPIImpl {
         &self,
         addr: &CheetahString,
         request: RemotingCommand,
-        deadline: rocketmq_transport::api::v1::RequestDeadline,
+        deadline: rocketmq_transport::api::RequestDeadline,
         permit: rocketmq_runtime::ResourcePermit,
     ) -> rocketmq_error::RocketMQResult<()> {
         self.remoting_client

@@ -379,3 +379,7 @@ fn config_error(key: &'static str, reason: &'static str) -> RocketMQError {
         reason: reason.to_owned(),
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/proxy_protocol.rs"]
+mod tests;

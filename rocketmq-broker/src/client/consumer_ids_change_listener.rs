@@ -15,7 +15,7 @@
 use std::any::Any;
 
 use cheetah_string::CheetahString;
-use rocketmq_transport::api::v2::SessionId;
+use rocketmq_transport::api::SessionId;
 
 use crate::client::consumer_group_event::ConsumerGroupEvent;
 
@@ -49,7 +49,7 @@ pub trait ConsumerIdsChangeListener {
     /// * `args` - Additional arguments or context provided with the event.
     fn handle(&self, event: ConsumerGroupEvent, group: &str, args: &[&dyn Any]);
 
-    /// Handles a V2 consumer membership change using stable identities instead of raw channels.
+    /// Handles a consumer membership change using stable identities instead of raw channels.
     ///
     /// The default implementation preserves compatibility for existing listeners. Implementors
     /// that trigger rebalance or server push can opt in without receiving a `Channel` or request

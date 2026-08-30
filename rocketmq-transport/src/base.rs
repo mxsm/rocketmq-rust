@@ -16,4 +16,5 @@ pub mod channel_event_listener;
 pub mod connection_net_event;
 pub mod pending_request_table;
 #[cfg(test)]
+#[path = "../tests/unit/base/pending_request_table.rs"]
 mod pending_request_table_tests;

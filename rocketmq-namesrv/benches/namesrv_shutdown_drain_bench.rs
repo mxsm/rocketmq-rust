@@ -28,7 +28,7 @@ use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::bootstrap::NameServerShutdownReport;
 use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::ServerConfig;
 
 #[derive(Debug)]
 struct NameSrvShutdownOutput {

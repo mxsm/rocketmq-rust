@@ -44,11 +44,11 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::SessionView;
 use tracing::warn;
 
 const WAIT_TIMEOUT_SECONDS: u64 = 5;
@@ -283,7 +283,7 @@ impl ControllerRequestProcessor {
     }
 }
 
-impl RequestProcessorV2 for ControllerRequestProcessor {
+impl RequestProcessor for ControllerRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
         let owner_id = request.original_identity().request_id().owner_id();
         let channel_identity = match request.session() {

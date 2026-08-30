@@ -22,7 +22,7 @@ use futures::StreamExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
-use rocketmq_transport::api::v1::ClientMetadata;
+use rocketmq_transport::api::ClientMetadata;
 use tracing::info;
 use tracing::warn;
 

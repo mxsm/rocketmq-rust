@@ -28,9 +28,9 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::request_type::RequestType;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::common::time_utils::current_nano;
-use rocketmq_transport::api::v1::NetworkUtil;
-use rocketmq_transport::api::v1::SocksProxyConfig;
-use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::NetworkUtil;
+use rocketmq_transport::api::SocksProxyConfig;
+use rocketmq_transport::api::TlsConfig;
 
 use crate::base::access_channel::AccessChannel;
 

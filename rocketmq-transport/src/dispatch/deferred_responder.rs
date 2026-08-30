@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Affine ownership of one deferred V2 response.
+//! Affine ownership of one deferred response.
 
 use std::error::Error;
 use std::fmt;
@@ -266,7 +266,7 @@ pub(crate) struct DeferredResponseSeed {
     control: RequestControlView,
     resume: Option<DeferredResumeContext>,
     session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
-    observation: Option<crate::telemetry::V2RequestObservation>,
+    observation: Option<crate::telemetry::RequestObservation>,
 }
 
 #[derive(Clone)]
@@ -313,7 +313,7 @@ impl DeferredResponseSeed {
         self
     }
 
-    pub(crate) fn with_observation(mut self, observation: crate::telemetry::V2RequestObservation) -> Self {
+    pub(crate) fn with_observation(mut self, observation: crate::telemetry::RequestObservation) -> Self {
         self.observation = Some(observation);
         self
     }
@@ -345,7 +345,7 @@ impl DeferredResponseSeed {
 /// token, or arbitrary write API. Dropping it abandons only this response.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::DeferredResponder;
+/// use rocketmq_transport::api::DeferredResponder;
 ///
 /// fn responders_are_affine(responder: &DeferredResponder) {
 ///     let _: DeferredResponder = responder.clone();
@@ -357,11 +357,10 @@ pub struct DeferredResponder {
     sink: Option<ResponseSink>,
     state: Arc<ResponseState>,
     session_id: SessionId,
-    #[allow(dead_code, reason = "DEF-04 consumes the retained canonical request control")]
     control: RequestControlView,
     resume: Option<DeferredResumeContext>,
     session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
-    observation: Option<crate::telemetry::V2RequestObservation>,
+    observation: Option<crate::telemetry::RequestObservation>,
     active: bool,
 }
 
@@ -384,17 +383,14 @@ impl DeferredResponder {
         self.state.terminal_reason()
     }
 
-    #[allow(dead_code, reason = "DEF-04 consumes this private registry transition")]
     pub(crate) fn register(&self) -> Result<(), DeferredResponseError> {
         self.state.register().map_err(DeferredResponseError::from_state)
     }
 
-    #[allow(dead_code, reason = "DEF-04 consumes this private resume-claim transition")]
     pub(crate) fn claim(&self) -> Result<(), DeferredResponseError> {
         self.state.claim().map_err(DeferredResponseError::from_state)
     }
 
-    #[allow(dead_code, reason = "DEF-04 consumes the retained canonical request control")]
     pub(crate) const fn control(&self) -> &RequestControlView {
         &self.control
     }
@@ -410,7 +406,7 @@ impl DeferredResponder {
     pub(crate) fn request_span(&self) -> tracing::Span {
         self.observation
             .as_ref()
-            .map_or_else(tracing::Span::none, crate::telemetry::V2RequestObservation::span)
+            .map_or_else(tracing::Span::none, crate::telemetry::RequestObservation::span)
     }
 
     pub(crate) fn take_session_cleanup(&mut self) -> Option<super::DeferredSessionCleanupRegistration> {
@@ -515,7 +511,7 @@ impl DeferredResponder {
                     .map_err(DeferredResponseError::from_state)?;
                 if let Some(observation) = &self.observation {
                     observation.complete_failure_without_kind(
-                        crate::runtime::processor_v2::ResponseObservationModeV2::Deferred,
+                        crate::runtime::processor::ResponseObservationMode::Deferred,
                         Some(response_code),
                         Some(plan_kind),
                         Some(WriteProgress::NotStarted),
@@ -536,7 +532,7 @@ impl DeferredResponder {
                 claim.complete().map_err(DeferredResponseError::from_state)?;
                 if let Some(observation) = &self.observation {
                     observation.complete_reply(
-                        crate::runtime::processor_v2::ResponseObservationModeV2::Deferred,
+                        crate::runtime::processor::ResponseObservationMode::Deferred,
                         response_code,
                         plan_kind,
                         write_started.elapsed(),
@@ -551,7 +547,7 @@ impl DeferredResponder {
                 claim.fail(progress).map_err(DeferredResponseError::from_state)?;
                 if let Some(observation) = &self.observation {
                     observation.complete_reply(
-                        crate::runtime::processor_v2::ResponseObservationModeV2::Deferred,
+                        crate::runtime::processor::ResponseObservationMode::Deferred,
                         response_code,
                         plan_kind,
                         write_started.elapsed(),
@@ -634,5 +630,5 @@ pub(crate) fn deferred_state_allocations() -> usize {
 }
 
 #[cfg(test)]
-#[path = "deferred_responder/tests.rs"]
+#[path = "../../tests/unit/dispatch/deferred_responder.rs"]
 mod tests;

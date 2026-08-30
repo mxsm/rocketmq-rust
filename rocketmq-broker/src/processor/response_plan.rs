@@ -27,13 +27,13 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::FileRangeTransferHandle;
 use rocketmq_store::SelectMappedBufferResult;
-use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::v1::FileRegionLease;
-use rocketmq_transport::api::v2::FileRegion;
-use rocketmq_transport::api::v2::FileRegionSequence;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::ResponsePlanError;
+use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
+use rocketmq_transport::api::FileRegion;
+use rocketmq_transport::api::FileRegionLease;
+use rocketmq_transport::api::FileRegionSequence;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::ResponsePlanError;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -83,7 +83,7 @@ impl FileRegionLease for StoreFileRegionLease {
 }
 
 impl BrokerResponseParts {
-    /// Splits a response command into the body-free head and affine byte owner required by the V2
+    /// Splits a response command into the body-free head and affine byte owner required by the
     /// response contract. This prevents each leaf from open-coding body extraction or
     /// accidentally placing a body-bearing head in a [`ResponsePlan`].
     pub(crate) fn from_command(mut command: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
@@ -144,7 +144,7 @@ impl BrokerResponseParts {
     }
 }
 
-/// Converts an ordinary Broker leaf result into its immediate V2 outcome while preserving the
+/// Converts an ordinary Broker leaf result into its immediate outcome while preserving the
 /// Broker-owned wire factory for typed request-header failures.
 pub(crate) fn immediate_outcome_from_command_result(
     command_factory: &RemotingCommandFactory,
@@ -285,5 +285,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "response_plan/tests.rs"]
+#[path = "../../tests/unit/processor/response_plan/tests.rs"]
 mod tests;

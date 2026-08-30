@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
-use rocketmq_transport::api::v1::ProxyProtocolConfig;
+use rocketmq_transport::api::ProxyProtocolConfig;
 use serde::Deserialize;
 use serde::Serialize;
 

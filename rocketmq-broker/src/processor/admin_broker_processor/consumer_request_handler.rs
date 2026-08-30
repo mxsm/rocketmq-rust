@@ -52,8 +52,8 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::ServerRequestCommand;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::ServerRequestCommand;
 use tracing::warn;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -1101,9 +1101,7 @@ mod tests {
     #[tokio::test]
     async fn get_all_message_request_mode_returns_configured_modes() {
         let mut runtime = new_test_runtime("message-mode").await;
-        let _ = runtime
-            .init_v2_processor_checked()
-            .expect("initialize V2 request processors");
+        let _ = runtime.init_processor_checked().expect("initialize request processors");
         let admin = runtime.admin_runtime_for_test();
         admin
             .query_assignment_processor()

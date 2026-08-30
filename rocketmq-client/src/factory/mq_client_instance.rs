@@ -72,9 +72,9 @@ use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
-use rocketmq_transport::api::v1::ConnectionNetEvent;
-use rocketmq_transport::api::v1::RPCHook;
-use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::ConnectionNetEvent;
+use rocketmq_transport::api::RPCHook;
+use rocketmq_transport::api::TransportClientConfig;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -911,7 +911,7 @@ impl MQClientInstance {
                     let targets = endpoints
                         .iter()
                         .filter_map(|endpoint| {
-                            rocketmq_transport::api::v1::ConnectTarget::new(
+                            rocketmq_transport::api::ConnectTarget::new(
                                 endpoint.socket_addr(),
                                 endpoint.authority().as_str(),
                             )

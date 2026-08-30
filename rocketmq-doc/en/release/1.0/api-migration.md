@@ -92,7 +92,7 @@ Use `reconcile_cached_connection` when application logic needs the typed cache
 result:
 
 ```rust,ignore
-use rocketmq_transport::api::v1::CachedConnectionState;
+use rocketmq_transport::api::CachedConnectionState;
 
 match client.reconcile_cached_connection(&address) {
     CachedConnectionState::Healthy => {}

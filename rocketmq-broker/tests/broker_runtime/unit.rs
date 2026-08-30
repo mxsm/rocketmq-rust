@@ -147,12 +147,12 @@ use rocketmq_store::HAService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TransportClient;
-use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v2::AdmissionController;
-use rocketmq_transport::api::v2::AdmissionLimits;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::TransportClient;
+use rocketmq_transport::api::TransportClientConfig;
 use rocketmq_transport::test_support::Connection;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -1548,24 +1548,21 @@ fn controller_test_ports_available_rejects_non_primary_loopback_conflict() {
     assert!(!controller_test_ports_available(&[port], &(0..=0)));
 }
 
-async fn process_broker_request(
-    processor: &DefaultServerProcessorV2,
-    request: &mut RemotingCommand,
-) -> RemotingCommand {
+async fn process_broker_request(processor: &DefaultServerProcessor, request: &mut RemotingCommand) -> RemotingCommand {
     dispatch_broker_request(processor, request)
         .await
-        .expect("canonical V2 dispatch should succeed")
-        .expect("canonical V2 dispatch should return a response")
+        .expect("canonical dispatch should succeed")
+        .expect("canonical dispatch should return a response")
 }
 
 async fn dispatch_broker_request(
-    processor: &DefaultServerProcessorV2,
+    processor: &DefaultServerProcessor,
     request: &mut RemotingCommand,
 ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
     let mut processor = processor.clone();
     processor.set_auth_disabled_by_validated_config();
-    let (mut client, server) = crate::processor::v2_leaf_test_support::start_v2_leaf_server(
-        "broker-runtime-v2-fixture",
+    let (mut client, server) = crate::processor::processor_test_support::start_processor_server(
+        "broker-runtime-fixture",
         processor,
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
     )
@@ -1573,18 +1570,18 @@ async fn dispatch_broker_request(
     client
         .send_command(request.clone())
         .await
-        .expect("send request through the canonical V2 server");
+        .expect("send request through the canonical server");
     let response = server
         .receive_one_then_finish_and_collect(client)
         .await
         .into_iter()
         .next()
-        .expect("canonical V2 server should return a response");
+        .expect("canonical server should return a response");
     Ok(Some(response))
 }
 
 async fn send_message_through_broker_processor(
-    processor: &DefaultServerProcessorV2,
+    processor: &DefaultServerProcessor,
     topic: CheetahString,
     body: Bytes,
 ) -> SendMessageResponseHeader {
@@ -3185,8 +3182,8 @@ async fn initialize_message_store_opens_rocksdb_owner_for_rocksdb_store_type() {
 async fn phase3_broker_production_request_codes_dispatch_to_expected_processors() {
     let mut runtime = new_phase3_test_runtime("phase3-dispatch").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     for request_code in [
         RequestCode::SendMessage,
@@ -3246,8 +3243,8 @@ async fn phase3_broker_production_request_codes_dispatch_to_expected_processors(
 async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pipeline() {
     let mut runtime = new_phase3_test_runtime("pull-session-client-lookup").await;
     let (mut processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     processor.set_auth_disabled_by_validated_config();
     let pull_processor = runtime
         .composition
@@ -3257,48 +3254,47 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
         .cloned()
         .expect("request pipeline should retain the test Pull processor handle");
     let registration = runtime.composition.state.consumer_manager().client_registration();
-    let session_registry = runtime.v2_session_registry_for_test();
+    let session_registry = runtime.session_registry_for_test();
     let mut session_events = session_registry.subscribe();
-    let (mut old_client, server) = crate::processor::v2_leaf_test_support::start_v2_leaf_server_with_session_registry(
-        "pull-session-client-lookup",
-        processor,
-        Arc::new(AdmissionController::new(AdmissionLimits::default())),
-        session_registry,
-    )
-    .await;
+    let (mut old_client, server) =
+        crate::processor::processor_test_support::start_processor_server_with_session_registry(
+            "pull-session-client-lookup",
+            processor,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            session_registry,
+        )
+        .await;
     old_client
         .send_command(RemotingCommand::new_request(RequestCode::GetBrokerConfig, Bytes::new()))
         .await
-        .expect("activate initial V2 session");
+        .expect("activate initial session");
     let session_id = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let rocketmq_transport::api::v2::V2SessionEvent::Connected(view) =
-                session_events.recv().await.expect("receive initial V2 session event")
+            if let rocketmq_transport::api::SessionEvent::Connected(view) =
+                session_events.recv().await.expect("receive initial session event")
             {
                 break view.id();
             }
         }
     })
     .await
-    .expect("initial V2 session should connect");
+    .expect("initial session should connect");
     let mut replacement_client = server.connect().await;
     replacement_client
         .send_command(RemotingCommand::new_request(RequestCode::GetBrokerConfig, Bytes::new()))
         .await
-        .expect("activate replacement V2 session");
+        .expect("activate replacement session");
     let replacement_session_id = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let rocketmq_transport::api::v2::V2SessionEvent::Connected(view) = session_events
-                .recv()
-                .await
-                .expect("receive replacement V2 session event")
+            if let rocketmq_transport::api::SessionEvent::Connected(view) =
+                session_events.recv().await.expect("receive replacement session event")
             {
                 break view.id();
             }
         }
     })
     .await
-    .expect("replacement V2 session should connect");
+    .expect("replacement session should connect");
     let group = CheetahString::from_static_str("pull-session-group");
 
     assert!(registration.register_consumer_session(
@@ -3383,8 +3379,8 @@ async fn pull_processor_uses_the_live_consumer_session_registry_installed_by_pip
 async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
     let mut runtime = new_phase3_lifecycle_test_runtime("shared-deferred-lifecycle").await;
     let _ = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let initial_admission = runtime
         .composition
         .data_plane
@@ -3505,15 +3501,15 @@ async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
 }
 
 #[tokio::test]
-async fn broker_normal_fast_and_embedded_routes_share_the_canonical_v2_dispatcher() {
-    let mut runtime = new_phase3_lifecycle_test_runtime("canonical-v2-route-identity").await;
+async fn broker_normal_fast_and_embedded_routes_share_the_canonical_dispatcher() {
+    let mut runtime = new_phase3_lifecycle_test_runtime("canonical-route-identity").await;
     runtime
         .start_basic_service()
         .await
-        .expect("start canonical V2 Broker listeners");
+        .expect("start canonical Broker listeners");
     let identity = runtime
-        .v2_dispatcher_identity_snapshot_for_test()
-        .expect("V2 startup should record dispatcher ownership");
+        .dispatcher_identity_snapshot_for_test()
+        .expect("startup should record dispatcher ownership");
 
     assert!(identity.normal_is_canonical);
     assert!(identity.fast_is_canonical);
@@ -3530,8 +3526,8 @@ async fn broker_normal_fast_and_embedded_routes_share_the_canonical_v2_dispatche
 async fn initialized_broker_shutdown_unbinds_deferred_replay_store_before_exclusive_store_access() {
     let mut runtime = new_phase3_lifecycle_test_runtime("deferred-replay-store-shutdown").await;
     let _ = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let store_root = runtime
         .composition
         .state
@@ -3577,8 +3573,8 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
 
     let mut runtime = new_phase3_lifecycle_test_runtime("deferred-producer-install-transaction").await;
     let _ = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     {
         let deferred = runtime
             .composition
@@ -3746,8 +3742,8 @@ async fn phase3_send_message_processor_writes_to_local_store() {
         .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let send_header = SendMessageRequestHeader {
         producer_group: CheetahString::from_static_str("phase3-producer"),
         topic: topic.clone(),
@@ -3836,8 +3832,8 @@ async fn phase3_consumer_send_msg_back_writes_retry_delay_message() {
         .wrote_offset;
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let send_back_header = ConsumerSendMsgBackRequestHeader {
         offset: commit_log_offset,
         group: group.clone(),
@@ -3900,8 +3896,8 @@ async fn phase3_topic_config_admin_processor_returns_decodable_bodies() {
         .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3), 0);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let mut all_config_request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
     let all_config_response = process_broker_request(&processor, &mut all_config_request).await;
     assert_eq!(ResponseCode::from(all_config_response.code()), ResponseCode::Success);
@@ -3939,8 +3935,8 @@ async fn phase3_topic_config_admin_processor_returns_decodable_bodies() {
 async fn phase4_broker_consumer_request_codes_dispatch_to_expected_processors() {
     let mut runtime = new_phase3_test_runtime("phase4-dispatch").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     for (request_code, expected_processor) in [
         (RequestCode::PullMessage, "Pull"),
@@ -4009,8 +4005,8 @@ async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
         .update_subscription_group_config(&mut group_config);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let update_header = UpdateConsumerOffsetRequestHeader {
         consumer_group: group.clone(),
         topic: topic.clone(),
@@ -4044,8 +4040,8 @@ async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
 async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
     let mut runtime = new_phase3_test_runtime("g8-definition-only-unsupported").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     for request_code in [
         RequestCode::QueryBrokerOffset,
@@ -4085,8 +4081,8 @@ async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
 async fn add_remove_broker_without_container_returns_request_code_not_supported() {
     let mut runtime = new_phase3_test_runtime("container-add-remove-unsupported").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     let mut add_request = RemotingCommand::create_request_command(
         RequestCode::AddBroker,
@@ -4129,8 +4125,8 @@ async fn add_remove_broker_without_container_returns_request_code_not_supported(
 async fn phase5_broker_admin_request_codes_dispatch_to_admin_processor() {
     let mut runtime = new_phase3_test_runtime("phase5-dispatch").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     for request_code in [
         RequestCode::UpdateAndCreateTopic,
@@ -4199,8 +4195,8 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
     let mut runtime = new_phase3_test_runtime("phase5-subscription-group").await;
     let group = CheetahString::from_static_str("phase5-admin-group");
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     let group_config = SubscriptionGroupConfig::new(group.clone());
     let mut create_request = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
@@ -4292,8 +4288,8 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
         .update_subscription_group_config(&mut group_config);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     let mut config_request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
     let config_response = process_broker_request(&processor, &mut config_request).await;
@@ -4391,8 +4387,8 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
 async fn phase6_store_delay_timer_request_codes_dispatch_to_expected_processors() {
     let mut runtime = new_phase3_test_runtime("phase6-dispatch").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     for request_code in [RequestCode::QueryMessage, RequestCode::ViewMessageById] {
         assert_eq!(
@@ -4440,8 +4436,8 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
         .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let send_response_header =
         send_message_through_broker_processor(&processor, topic.clone(), Bytes::from_static(b"phase6-message-body"))
             .await;
@@ -4562,8 +4558,8 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
     runtime.runtime_state_mut().set_timer_message_store(timer_message_store);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     let mut metrics_request = RemotingCommand::create_remoting_command(RequestCode::GetTimerMetrics);
     let metrics_response = process_broker_request(&processor, &mut metrics_request).await;
@@ -4635,8 +4631,8 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
 async fn phase7_broker_auth_request_codes_dispatch_to_admin_processor() {
     let mut runtime = new_phase3_test_runtime("phase7-auth-dispatch").await;
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     for request_code in [
         RequestCode::AuthCreateUser,
@@ -4665,8 +4661,8 @@ async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
     let mut runtime = new_phase3_test_runtime("phase7-auth-user").await;
     let username = CheetahString::from_static_str("phase7-user");
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
 
     let user_info = UserInfo {
         username: None,
@@ -4762,8 +4758,8 @@ async fn init_processor_routes_lite_subscription_ctl_requests_to_lite_processor(
     assert!(runtime.initialize().await.is_ok());
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
         .set_body(Bytes::from_static(b""));
     let response = dispatch_broker_request(&processor, &mut request)
@@ -4784,8 +4780,8 @@ async fn get_broker_lite_info_returns_registry_aggregates() {
     seed_lite_bound_group(&mut runtime, "group-c");
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
     let mut response = dispatch_broker_request(&processor, &mut request)
         .await
@@ -4833,8 +4829,8 @@ async fn get_broker_lite_info_reports_pop_lite_order_info_count() {
     let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     runtime.composition.state.lite_event_dispatcher().do_full_dispatch(
         &CheetahString::from_static_str("client-1"),
         &CheetahString::from_static_str("group-a"),
@@ -4886,8 +4882,8 @@ async fn get_parent_topic_info_returns_group_and_lite_counts() {
     set_parent_topic_lite_expiration(&mut runtime, 600);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetParentTopicInfoRequestHeader {
         topic: CheetahString::from_static_str("parent-topic"),
         rpc: None,
@@ -4929,8 +4925,8 @@ async fn get_parent_topic_info_rejects_non_lite_parent_topic() {
     set_parent_topic_message_type(&mut runtime, "NORMAL");
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetParentTopicInfoRequestHeader {
         topic: CheetahString::from_static_str("parent-topic"),
         rpc: None,
@@ -4954,8 +4950,8 @@ async fn get_lite_topic_info_returns_subscribers_for_matching_lite_topic() {
     seed_lite_topic_publish_route(&mut runtime, &[CheetahString::from_static_str("other-broker")]);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteTopicInfoRequestHeader {
         parent_topic: CheetahString::from_static_str("parent-topic"),
         lite_topic: CheetahString::from_static_str("child-b"),
@@ -5005,8 +5001,8 @@ async fn get_lite_topic_info_marks_current_broker_when_sharding_route_points_loc
     seed_lite_topic_publish_route(&mut runtime, &[broker_name]);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteTopicInfoRequestHeader {
         parent_topic: CheetahString::from_static_str("parent-topic"),
         lite_topic: CheetahString::from_static_str("child-b"),
@@ -5038,8 +5034,8 @@ async fn get_lite_topic_info_rejects_non_lite_parent_topic() {
     set_parent_topic_message_type(&mut runtime, "NORMAL");
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteTopicInfoRequestHeader {
         parent_topic: CheetahString::from_static_str("parent-topic"),
         lite_topic: CheetahString::from_static_str("child-b"),
@@ -5062,8 +5058,8 @@ async fn get_lite_client_info_returns_topics_for_bound_client() {
     seed_lite_query_state(&mut runtime);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteClientInfoRequestHeader {
         parent_topic: Some(CheetahString::from_static_str("parent-topic")),
         group: Some(CheetahString::from_static_str("group-a")),
@@ -5112,8 +5108,8 @@ async fn get_lite_client_info_rejects_non_lite_parent_topic() {
     set_parent_topic_message_type(&mut runtime, "NORMAL");
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteClientInfoRequestHeader {
         parent_topic: Some(CheetahString::from_static_str("parent-topic")),
         group: Some(CheetahString::from_static_str("group-a")),
@@ -5140,8 +5136,8 @@ async fn get_lite_group_info_returns_offset_wrapper_for_specific_lite_topic() {
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-b", 0);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteGroupInfoRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         lite_topic: CheetahString::from_static_str("child-b"),
@@ -5187,8 +5183,8 @@ async fn get_lite_group_info_returns_topk_aggregates_for_group() {
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-b", 0);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteGroupInfoRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         lite_topic: CheetahString::from_static_str(""),
@@ -5236,8 +5232,8 @@ async fn get_lite_group_info_uses_offset_table_entries_not_present_in_registry()
     seed_lmq_consumer_offset(&mut runtime, "group-a", "child-c", 5);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = GetLiteGroupInfoRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         lite_topic: CheetahString::from_static_str(""),
@@ -5285,8 +5281,8 @@ async fn trigger_lite_dispatch_enqueues_events_for_target_client() {
     seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = TriggerLiteDispatchRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         client_id: Some(CheetahString::from_static_str("client-1")),
@@ -5324,8 +5320,8 @@ async fn trigger_lite_dispatch_without_client_id_enqueues_events_for_group_subsc
     seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = TriggerLiteDispatchRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         client_id: None,
@@ -5371,8 +5367,8 @@ async fn trigger_lite_dispatch_respects_broker_max_client_event_count_fallback()
         .expect("lite dispatch test configuration should remain valid");
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = TriggerLiteDispatchRequestHeader {
         group: CheetahString::from_static_str("group-a"),
         client_id: Some(CheetahString::from_static_str("client-1")),
@@ -5410,8 +5406,8 @@ async fn pop_lite_message_without_events_returns_polling_timeout() {
     seed_lite_query_state(&mut runtime);
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5500,8 +5496,8 @@ async fn pop_lite_message_returns_dispatched_lmq_payload_and_advances_offset() {
     );
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     let pop_header = PopLiteMessageRequestHeader {
         client_id: CheetahString::from_static_str("client-1"),
         consumer_group: CheetahString::from_static_str("group-a"),
@@ -5564,8 +5560,8 @@ async fn pop_lite_message_blocks_fifo_for_different_attempt_id() {
     let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     runtime.composition.state.lite_event_dispatcher().do_full_dispatch(
         &CheetahString::from_static_str("client-1"),
         &CheetahString::from_static_str("group-a"),
@@ -5646,8 +5642,8 @@ async fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption() 
     let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
 
     let (processor, _) = runtime
-        .init_v2_processor_checked()
-        .expect("initialize canonical V2 processors");
+        .init_processor_checked()
+        .expect("initialize canonical processors");
     runtime.composition.state.lite_event_dispatcher().do_full_dispatch(
         &CheetahString::from_static_str("client-1"),
         &CheetahString::from_static_str("group-a"),

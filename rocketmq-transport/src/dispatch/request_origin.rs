@@ -56,7 +56,7 @@ pub enum RequestOrigin {
 ///
 /// ```compile_fail
 /// use rocketmq_security_api::Principal;
-/// use rocketmq_transport::api::v2::AuthenticationState;
+/// use rocketmq_transport::api::AuthenticationState;
 ///
 /// let _ = AuthenticationState::Authenticated(Principal::new("forged"), ());
 /// ```

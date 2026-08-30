@@ -40,8 +40,8 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionRegistry;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -121,7 +121,7 @@ pub struct RouteInfoManager {
 
     // Runtime and lifecycle components
     name_server_runtime_inner: NameServerRuntimeHandle,
-    session_registry: Arc<V2SessionRegistry>,
+    session_registry: Arc<SessionRegistry>,
     un_register_service: Arc<BatchUnregistrationService>,
     metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     expiry_safety_scan_interval: u64,
@@ -140,7 +140,7 @@ impl RouteInfoManager {
     /// Create a route manager with mutable source tables and snapshot publication.
     pub(crate) fn new(
         name_server_runtime_inner: NameServerRuntimeHandle,
-        session_registry: Arc<V2SessionRegistry>,
+        session_registry: Arc<SessionRegistry>,
         queue_capacity: usize,
         unregister_batch_size: usize,
         unregister_batch_time: std::time::Duration,
@@ -1927,7 +1927,7 @@ impl RouteInfoManager {
             .update_last_update_timestamp_by_addr_info(&broker_addr_info);
     }
 
-    /// Refresh a broker only when the heartbeat came from its current V2 session.
+    /// Refresh a broker only when the heartbeat came from its current session.
     pub fn update_broker_info_update_timestamp_for_session(
         &self,
         cluster_name: CheetahString,

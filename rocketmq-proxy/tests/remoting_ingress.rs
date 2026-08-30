@@ -53,7 +53,7 @@ use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::api::v2::ProxyProtocolConfig;
+use rocketmq_transport::api::ProxyProtocolConfig;
 use rocketmq_transport::test_support::Connection;
 use std::collections::BTreeMap;
 use tokio::io::AsyncWriteExt;
@@ -423,7 +423,7 @@ accounts:
 }
 
 #[tokio::test]
-async fn v2_heartbeat_replacement_retires_old_session_and_preserves_new_binding() {
+async fn heartbeat_replacement_retires_old_session_and_preserves_new_binding() {
     let _guard = REMOTING_INGRESS_TEST_LOCK.lock().await;
     let sessions = ClientSessionRegistry::default();
     let service_manager = Arc::new(ClusterServiceManager::with_services(
@@ -458,7 +458,7 @@ async fn v2_heartbeat_replacement_retires_old_session_and_preserves_new_binding(
     .with_service_manager(service_manager)
     .with_session_registry(sessions.clone())
     .build()
-    .expect("Proxy V2 session binding runtime should build");
+    .expect("Proxy session binding runtime should build");
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
         runtime
@@ -525,7 +525,7 @@ async fn v2_heartbeat_replacement_retires_old_session_and_preserves_new_binding(
         ResponseCode::Success as i32
     );
 
-    new_client.shutdown().await.expect("close active V2 client session");
+    new_client.shutdown().await.expect("close active client session");
     timeout(Duration::from_secs(3), async {
         loop {
             if sessions.remoting_channel_count() == 0 && sessions.consumer_client_ids("GroupA").is_empty() {
@@ -680,7 +680,7 @@ async fn expect_remoting_eof(connection: &mut Connection) {
         }
     })
     .await
-    .expect("superseded V2 client session should receive EOF");
+    .expect("superseded client session should receive EOF");
 }
 
 fn sign_remoting_command(command: &mut RemotingCommand, access_key: &str, secret_key: &str) {

@@ -183,7 +183,7 @@ impl LiteEventDispatcher {
     ///
     /// An uncommitted reservation restores its records ahead of events that
     /// arrived while the reservation was in flight. Only one reservation may
-    /// exist for a client, so compatibility drains cannot steal a V2 batch.
+    /// exist for a client, so compatibility drains cannot steal a batch.
     pub(crate) fn reserve_pending_events(&self, client_id: &CheetahString) -> Option<LiteEventBatchReservation> {
         let now = current_millis();
         self.scan(now);
@@ -558,5 +558,5 @@ impl Drop for LiteEventBatchTerminal {
 }
 
 #[cfg(test)]
-#[path = "reservation/tests.rs"]
+#[path = "../../../tests/unit/lite/lite_event_dispatcher/reservation.rs"]
 mod tests;

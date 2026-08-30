@@ -665,9 +665,9 @@ mod tests {
     use rocketmq_store::DefaultMappedFile;
     use rocketmq_store::MappedFile;
     use rocketmq_store::SelectMappedBufferResult;
-    use rocketmq_transport::api::v2::HandlerOutcome;
-    use rocketmq_transport::api::v2::ResponseBodyKind;
-    use rocketmq_transport::api::v2::ResponsePlan;
+    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::ResponseBodyKind;
+    use rocketmq_transport::api::ResponsePlan;
 
     fn response_head() -> RemotingCommand {
         RemotingCommand::create_response_command_with_code(ResponseCode::Success)
@@ -697,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn heap_pull_reply_exposes_bytes_at_the_v2_seam() {
+    fn heap_pull_reply_exposes_bytes_at_the_dispatch_seam() {
         let body = Bytes::from_static(b"heap-pull-body");
         let plan = reply_plan(bytes_result(response_head(), body));
 

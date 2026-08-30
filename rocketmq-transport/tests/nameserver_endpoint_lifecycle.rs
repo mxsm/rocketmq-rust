@@ -16,12 +16,12 @@
 
 use std::time::Duration;
 
-use rocketmq_transport::api::v1::ConnectTarget;
-use rocketmq_transport::api::v1::FrameLimits;
-use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::api::v1::SocketOptions;
-use rocketmq_transport::api::v1::TlsConfig;
-use rocketmq_transport::api::v1::TransportTelemetry;
+use rocketmq_transport::api::ConnectTarget;
+use rocketmq_transport::api::FrameLimits;
+use rocketmq_transport::api::RequestDeadline;
+use rocketmq_transport::api::SocketOptions;
+use rocketmq_transport::api::TlsConfig;
+use rocketmq_transport::api::TransportTelemetry;
 use rocketmq_transport::test_support::connect_target_with_config_options_and_telemetry;
 use rocketmq_transport::test_support::connect_with_config_and_telemetry;
 

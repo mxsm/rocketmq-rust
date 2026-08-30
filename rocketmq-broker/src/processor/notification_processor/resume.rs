@@ -14,8 +14,8 @@
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::v2::DeferredWakeReason;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::DeferredWakeReason;
+use rocketmq_transport::api::ResponsePlan;
 
 use super::core::NotificationCoreOutcome;
 use super::NotificationFilterContract;
@@ -23,6 +23,7 @@ use super::NotificationProcessor;
 use crate::long_polling::notification_deferred::service::ResumeNotification;
 
 #[cfg(test)]
+#[path = "../../../tests/unit/processor/notification/resume.rs"]
 mod tests;
 
 impl<MS> NotificationProcessor<MS>

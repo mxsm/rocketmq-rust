@@ -24,7 +24,7 @@ use rocketmq_protocol::protocol::header::check_transaction_state_request_header:
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::api::v1::RpcRequestHeader;
+use rocketmq_transport::api::RpcRequestHeader;
 use tracing::error;
 use tracing::warn;
 

@@ -218,26 +218,32 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     first.record_response_queue_wait(0.125);
     second.record_deferred_terminal("other", "service_stopping");
 
-    let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false);
-    success.complete_response(0);
+    let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false, RequestCodeClass::Other);
+    success.complete(0, RequestOutcome::ReplyEmpty);
     success.complete_cancelled();
     drop(success);
 
-    drop(RequestMetricsGuard::start(first.clone(), 11, 7, true));
+    drop(RequestMetricsGuard::start(
+        first.clone(),
+        11,
+        7,
+        true,
+        RequestCodeClass::Other,
+    ));
 
-    let mut deferred = RequestMetricsGuard::start_v2(first.clone(), 11, 13, true, RequestCodeClass::PullMessage);
-    deferred.record_v2_deferred_registered();
-    deferred.record_v2_deferred_registered();
-    deferred.complete_v2(0, RequestOutcome::DeferredResumed);
-    deferred.complete_v2(1, RequestOutcome::Failed);
+    let mut deferred = RequestMetricsGuard::start(first.clone(), 11, 13, true, RequestCodeClass::PullMessage);
+    deferred.record_deferred_registered();
+    deferred.record_deferred_registered();
+    deferred.complete(0, RequestOutcome::DeferredResumed);
+    deferred.complete(1, RequestOutcome::Failed);
     drop(deferred);
 
-    let mut failure = RequestMetricsGuard::start(first, 13, 11, false);
+    let mut failure = RequestMetricsGuard::start(first, 13, 11, false, RequestCodeClass::Other);
     failure.complete_process_request_failed(1);
-    failure.complete_response(0);
+    failure.complete(0, RequestOutcome::ReplyEmpty);
     drop(failure);
 
-    let mut isolated = RequestMetricsGuard::start(second, 20, 17, false);
+    let mut isolated = RequestMetricsGuard::start(second, 20, 17, false, RequestCodeClass::Other);
     isolated.complete_write_channel_failed(2);
     drop(isolated);
 
@@ -308,6 +314,14 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
         assert_eq!(matching.len(), 1, "request outcome {outcome}");
         assert_eq!(matching[0].value, 1, "request outcome {outcome}");
     }
+    let failed = request_outcomes
+        .iter()
+        .find(|point| {
+            point.attributes.get("code") == Some(&CapturedValue::String("other".to_owned()))
+                && point.attributes.get("outcome") == Some(&CapturedValue::String("failed".to_owned()))
+        })
+        .expect("dropped and explicitly failed requests should use the failed outcome");
+    assert_eq!(failed.value, 2);
     let response_outcomes = first_points
         .iter()
         .filter(|point| point.metric == TRANSPORT_RESPONSE_TOTAL)
@@ -367,7 +381,7 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("request_code") == Some(&CapturedValue::I64(11))
             && point.attributes.get("response_code") == Some(&CapturedValue::I64(-1))
-            && point.attributes.get("result") == Some(&CapturedValue::String("cancelled".to_owned()))
+            && point.attributes.get("result") == Some(&CapturedValue::String("process_request_failed".to_owned()))
     }));
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("result") == Some(&CapturedValue::String("process_request_failed".to_owned()))
@@ -391,8 +405,8 @@ fn noop_handle_never_reads_global_meter_provider() {
     opentelemetry::global::set_meter_provider(PanicOnMeterRead);
 
     let metrics = RemotingMetrics::from_handle(&TelemetryHandle::noop());
-    let mut guard = RequestMetricsGuard::start(metrics.clone(), 10, 128, false);
-    guard.complete_response(0);
+    let mut guard = RequestMetricsGuard::start(metrics.clone(), 10, 128, false, RequestCodeClass::Other);
+    guard.complete(0, RequestOutcome::ReplyEmpty);
     metrics.record_outbound_attempted_plaintext_bytes(256);
     metrics.record_outbound_accepted_plaintext_bytes(256);
     metrics.record_outbound_written_plaintext_bytes(256);

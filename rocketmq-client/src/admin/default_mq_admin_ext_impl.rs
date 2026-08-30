@@ -225,9 +225,9 @@ use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsDat
 use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
 #[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::RPCHook;
 #[cfg(feature = "admin-full")]
-use rocketmq_transport::api::v1::RpcRequestHeader;
+use rocketmq_transport::api::RpcRequestHeader;
 #[cfg(feature = "admin-full")]
 use tracing::info;
 #[cfg(feature = "admin-full")]

@@ -356,5 +356,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "deferred_expiry/acceptance_tests.rs"]
+#[path = "../../tests/unit/dispatch/deferred_expiry.rs"]
 mod acceptance_tests;

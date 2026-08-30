@@ -32,12 +32,12 @@ use rocketmq_security_api::combine_layered_authorization;
 use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::LayerRequirement;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::ResponseWriteObservationV2;
-use rocketmq_transport::api::v2::ResponseWriteOutcomeV2;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseObservation;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::ResponseWriteOutcome;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
@@ -67,7 +67,7 @@ pub enum NameServerRequestProcessorWrapper {
     DefaultRequestProcessor(Arc<DefaultRequestProcessor>),
 }
 
-impl RequestProcessorV2 for NameServerRequestProcessorWrapper {
+impl RequestProcessor for NameServerRequestProcessorWrapper {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let response = match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
@@ -369,7 +369,7 @@ impl NameServerRequestProcessor {
     }
 }
 
-impl RequestProcessorV2 for NameServerRequestProcessor {
+impl RequestProcessor for NameServerRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let auth_context = RemotingAuthContext::from_request(request)?;
         let original_code = request.original_identity().original_code();
@@ -387,12 +387,15 @@ impl RequestProcessorV2 for NameServerRequestProcessor {
         response_outcome(response)
     }
 
-    fn observe_response_write(&self, observation: ResponseWriteObservationV2) {
+    fn observe_response(&self, observation: ResponseObservation) {
+        let Some(observation) = observation.write_projection() else {
+            return;
+        };
         if observation.original_code() == RequestCode::GetRouteinfoByTopic as i32 {
             self.metrics.record_route_response_write(
                 observation.write_elapsed(),
                 observation.end_to_end_elapsed(),
-                matches!(observation.outcome(), ResponseWriteOutcomeV2::Written(_)),
+                matches!(observation.outcome(), ResponseWriteOutcome::Written(_)),
             );
         }
     }
@@ -417,7 +420,7 @@ async fn processor_response(
 pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
     let Some(response) = response else {
         return Err(RocketMQError::invariant_violated(
-            "NameServer V2 processor returned no response without a protocol marker",
+            "NameServer processor returned no response without a protocol marker",
         ));
     };
     let plan = ResponsePlan::from_command(response)
@@ -498,7 +501,7 @@ mod tests {
     }
 
     fn auth_context() -> RemotingAuthContext {
-        RemotingAuthContext::network("127.0.0.1", "namesrv-v2-test-session")
+        RemotingAuthContext::network("127.0.0.1", "namesrv-test-session")
     }
 
     #[test]

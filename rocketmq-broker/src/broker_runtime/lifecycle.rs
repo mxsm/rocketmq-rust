@@ -1163,7 +1163,7 @@ impl BrokerRuntime {
             && self.composition.state.ack_message_processor.is_some()
             && self.composition.state.notification_processor.is_some()
             && self.composition.state.query_assignment_processor.is_some()
-            && self.composition.request_pipeline.canonical_v2_dispatcher().is_some()
+            && self.composition.request_pipeline.canonical_dispatcher().is_some()
             && self.composition.request_pipeline.processor_wiring_complete;
         let security_ready = (!live_broker_config.authentication_enabled && !live_broker_config.authorization_enabled)
             || self.composition.request_pipeline.auth_runtime.is_some();

@@ -165,6 +165,7 @@ struct DeferredTerminalObserver {
 }
 
 impl DeferredTerminalObserver {
+    #[cfg(test)]
     fn noop() -> Self {
         Self {
             telemetry: TransportTelemetry::noop(),
@@ -187,7 +188,7 @@ impl DeferredTerminalObserver {
 
 /// One atomic owner for a deferred response lifecycle.
 ///
-/// This state is allocated only when a later stage creates a deferred
+/// This state is allocated when request processing creates a deferred
 /// responder. Inline responses continue to use their stack-owned slot.
 pub(crate) struct ResponseState {
     state: AtomicU8,
@@ -237,9 +238,9 @@ pub(crate) enum ResponseStateError {
 ///
 /// A newly created claim proves that canonical socket I/O has not started.
 /// Before entering any seam that might begin socket I/O, the owner must either
-/// call [`Self::mark_possibly_partial`] or delegate terminal ownership to the
-/// canonical transport guard. Dropping an unfinished, non-delegated claim
-/// records the most conservative progress reached by the owner.
+/// record possibly partial progress or delegate terminal ownership to the
+/// canonical transport guard. Dropping an unfinished, non-delegated claim records
+/// the most conservative progress reached by the owner.
 #[must_use]
 pub(crate) struct ResponseSendClaim {
     state: Arc<ResponseState>,
@@ -264,6 +265,7 @@ impl DeferredTransportDropHandle {
 
 impl ResponseState {
     /// Creates the deferred-only state in `Open`.
+    #[cfg(test)]
     pub(crate) fn open() -> Self {
         Self {
             state: AtomicU8::new(OPEN),
@@ -342,6 +344,7 @@ impl ResponseState {
     }
 
     /// Closes a response that has not begun delivery.
+    #[cfg(test)]
     pub(crate) fn close(&self) -> Result<(), ResponseStateError> {
         self.stop_with_reason(DeferredTerminalReason::SessionClosed, ResponseTransition::Close, |_| {})
     }
@@ -425,6 +428,7 @@ impl ResponseSendClaim {
     /// Marks that zero socket output can no longer be proven.
     ///
     /// This progress change is monotonic and cannot be downgraded.
+    #[cfg(test)]
     pub(crate) fn mark_possibly_partial(&mut self) {
         self.drop_progress = WriteProgress::PossiblyPartial;
     }
@@ -560,5 +564,5 @@ fn decode_terminal_reason(state: u8) -> Option<DeferredTerminalReason> {
 }
 
 #[cfg(test)]
-#[path = "deferred_response/tests.rs"]
+#[path = "../../tests/unit/dispatch/deferred_response.rs"]
 mod tests;

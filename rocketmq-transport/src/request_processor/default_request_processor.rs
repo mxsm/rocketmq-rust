@@ -15,13 +15,13 @@
 use crate::dispatch::HandlerOutcome;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::ResponsePlan;
-use crate::runtime::processor_v2::RequestProcessorV2;
+use crate::runtime::processor::RequestProcessor;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 #[derive(Clone)]
 pub struct DefaultRequestProcessor;
 
-impl RequestProcessorV2 for DefaultRequestProcessor {
+impl RequestProcessor for DefaultRequestProcessor {
     #[inline]
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let response = RemotingCommand::create_response_command_with_code(request.command().code());

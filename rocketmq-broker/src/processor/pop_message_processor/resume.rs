@@ -29,8 +29,8 @@ use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_transport::api::v2::DeferredWakeReason;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::DeferredWakeReason;
+use rocketmq_transport::api::ResponsePlan;
 
 use super::PopMessageProcessor;
 use crate::long_polling::pop_deferred::service::ResumePop;
@@ -93,7 +93,7 @@ impl<'a> PopStoreReadRequest<'a> {
     }
 }
 
-/// Store reread result before the initial V1 path decides whether to suspend.
+/// Store reread result before the initial legacy path decides whether to suspend.
 pub(super) enum PopStoreReadOutcome {
     Found(BrokerResponseParts),
     Empty { head: RemotingCommand, rest_num: i64 },
@@ -380,5 +380,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "resume/tests.rs"]
+#[path = "../../../tests/unit/processor/pop_message/resume.rs"]
 mod tests;

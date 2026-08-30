@@ -30,14 +30,14 @@ use super::WriteProgress;
 use crate::admission::AdmissionError;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
 
-/// Terminal result of one channel-free embedded V2 dispatch.
+/// Terminal result of one channel-free embedded dispatch.
 ///
 /// Each variant owns the corresponding affine handler state. The result is
 /// intentionally not cloneable, so a response plan or deferred proof cannot
 /// be completed through more than one path.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+/// use rocketmq_transport::api::EmbeddedDispatchOutcome;
 ///
 /// fn outcomes_are_affine(outcome: &EmbeddedDispatchOutcome) {
 ///     let _: EmbeddedDispatchOutcome = outcome.clone();
@@ -68,7 +68,7 @@ pub enum EmbeddedDispatchOutcome {
     },
 }
 
-/// Stable category for a channel-free embedded V2 dispatch failure.
+/// Stable category for a channel-free embedded dispatch failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum EmbeddedDispatchErrorKind {
@@ -107,7 +107,7 @@ pub enum EmbeddedDispatchErrorKind {
     },
 }
 
-/// Typed, redacted failure from channel-free embedded V2 dispatch.
+/// Typed, redacted failure from channel-free embedded dispatch.
 ///
 /// The error preserves the concrete internal source for diagnostics without
 /// retaining the request command, body, principal, or security decision.
@@ -243,7 +243,7 @@ impl fmt::Debug for EmbeddedDispatchError {
 
 impl fmt::Display for EmbeddedDispatchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "embedded V2 dispatch failed: {:?}", self.kind)
+        write!(formatter, "embedded dispatch failed: {:?}", self.kind)
     }
 }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Exhaustive V2 handler outcomes and inline response-contract state.
+//! Exhaustive  handler outcomes and inline response-contract state.
 
 use std::fmt;
 
@@ -28,7 +28,7 @@ use super::TakeDeferredResponderError;
 
 mod oneway;
 
-/// The one terminal contract outcome returned by a V2 request handler.
+/// The one terminal contract outcome returned by a request handler.
 ///
 /// Each variant owns an affine capability or response payload. A handler must
 /// either return a standard response plan, prove that trusted deferred storage
@@ -36,7 +36,7 @@ mod oneway;
 /// There is deliberately no direct-write bypass variant.
 ///
 /// ```
-/// use rocketmq_transport::api::v2::HandlerOutcome;
+/// use rocketmq_transport::api::HandlerOutcome;
 ///
 /// fn inspect(outcome: HandlerOutcome) {
 ///     match outcome {
@@ -54,7 +54,7 @@ mod oneway;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::HandlerOutcome;
+/// use rocketmq_transport::api::HandlerOutcome;
 ///
 /// fn outcomes_are_affine(outcome: &HandlerOutcome) {
 ///     let _: HandlerOutcome = outcome.clone();
@@ -62,7 +62,7 @@ mod oneway;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::HandlerOutcome;
+/// use rocketmq_transport::api::HandlerOutcome;
 ///
 /// fn no_direct_write_bypass_exists() -> HandlerOutcome {
 ///     HandlerOutcome::AlreadyWritten
@@ -129,11 +129,11 @@ impl From<ProtocolNoResponseError> for RocketMQError {
 
 /// Request-bound proof that the protocol permits no direct response frame.
 ///
-/// Construct markers with [`crate::api::v2::RemotingRequest::protocol_no_response`].
+/// Construct markers with [`crate::api::RemotingRequest::protocol_no_response`].
 /// The marker is affine so it cannot complete multiple handler contracts.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ProtocolNoResponse;
+/// use rocketmq_transport::api::ProtocolNoResponse;
 ///
 /// fn markers_are_affine(marker: &ProtocolNoResponse) {
 ///     let _: ProtocolNoResponse = marker.clone();
@@ -141,7 +141,7 @@ impl From<ProtocolNoResponseError> for RocketMQError {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::{ProtocolNoResponse, ProtocolNoResponseReason, RequestId};
+/// use rocketmq_transport::api::{ProtocolNoResponse, ProtocolNoResponseReason, RequestId};
 ///
 /// fn cannot_forge(request_id: RequestId) -> ProtocolNoResponse {
 ///     ProtocolNoResponse {
@@ -273,6 +273,7 @@ impl InlineResponseSlot {
         matches!(self.state, InlineResponseState::OpenWithDeferred)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_deferred_taken(
         &mut self,
         original: OriginalRequestIdentity,

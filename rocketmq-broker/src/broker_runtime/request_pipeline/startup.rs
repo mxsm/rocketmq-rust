@@ -16,13 +16,13 @@
 
 use super::super::*;
 
-/// Coarse transport gate for the prepared Broker V2 graph.
+/// Coarse transport gate for the prepared Broker graph.
 ///
 /// This decision only continues to the Broker-owned AuthRuntime check. It is
 /// deliberately not a substitute for Broker authentication or ACL policy.
-struct BrokerV2IngressPolicy;
+struct BrokerIngressPolicy;
 
-impl rocketmq_security_api::IngressPolicy for BrokerV2IngressPolicy {
+impl rocketmq_security_api::IngressPolicy for BrokerIngressPolicy {
     fn evaluate_ingress(
         &self,
         _request: rocketmq_security_api::SecurityRequestView<'_>,
@@ -31,10 +31,10 @@ impl rocketmq_security_api::IngressPolicy for BrokerV2IngressPolicy {
     }
 }
 
-fn prepared_v2_transport_security() -> Arc<rocketmq_transport::api::v1::TransportSecurity> {
+fn prepared_transport_security() -> Arc<rocketmq_transport::api::TransportSecurity> {
     Arc::new(
-        rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None)
-            .with_ingress_policy(Arc::new(BrokerV2IngressPolicy)),
+        rocketmq_transport::api::TransportSecurity::development_insecure_loopback(None, None)
+            .with_ingress_policy(Arc::new(BrokerIngressPolicy)),
     )
 }
 
@@ -58,7 +58,7 @@ impl BrokerRuntime {
             });
         }
         self.initialize_deferred_lifecycle()?;
-        let (mut prepared_v2_processor, _fast_request_processor) = self.init_v2_processor_checked()?;
+        let (mut prepared_processor, _fast_request_processor) = self.init_processor_checked()?;
         self.initialize_consumer_lag_observability();
         let service_context =
             self.composition
@@ -77,23 +77,23 @@ impl BrokerRuntime {
                 component: "authorized_dispatcher",
                 detail: "shared Broker admission boundary was not initialized".to_owned(),
             })?;
-        let prepared_v2_transport_security = prepared_v2_transport_security();
+        let prepared_transport_security = prepared_transport_security();
         let broker_config = self.composition.state.broker_config();
         if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
-            prepared_v2_processor.set_auth_disabled_by_validated_config();
+            prepared_processor.set_auth_disabled_by_validated_config();
         }
-        if !prepared_v2_processor.is_auth_configured() {
+        if !prepared_processor.is_auth_configured() {
             return Err(BrokerStartupError::Initialization {
-                component: "broker_v2_auth",
-                detail: "prepared Broker V2 dispatcher requires an explicit AuthRuntime or validated disabled state"
+                component: "broker_auth",
+                detail: "prepared Broker dispatcher requires an explicit AuthRuntime or validated disabled state"
                     .to_owned(),
             });
         }
-        let prepared_v2_dispatcher = Arc::new(
-            rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2::try_new_with_telemetry_and_budget(
-                prepared_v2_processor,
+        let prepared_dispatcher = Arc::new(
+            rocketmq_transport::api::AuthorizedCommandDispatcher::try_new_with_telemetry_and_budget(
+                prepared_processor,
                 Vec::new(),
-                prepared_v2_transport_security,
+                prepared_transport_security,
                 Arc::clone(&admission),
                 self.composition.state.transport_telemetry.clone(),
                 self.composition.state.resource_budget(),
@@ -105,18 +105,18 @@ impl BrokerRuntime {
         );
         self.composition
             .request_pipeline
-            .publish_canonical_v2_dispatcher(prepared_v2_dispatcher)
+            .publish_canonical_dispatcher(prepared_dispatcher)
             .map_err(|error| BrokerStartupError::Initialization {
-                component: "broker_v2_dispatcher",
-                detail: format!("canonical V2 dispatcher publication failed: {error:?}"),
+                component: "broker_dispatcher",
+                detail: format!("canonical dispatcher publication failed: {error:?}"),
             })?;
-        let canonical_v2_dispatcher = self
+        let canonical_dispatcher = self
             .composition
             .request_pipeline
-            .canonical_v2_dispatcher()
+            .canonical_dispatcher()
             .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "broker_v2_dispatcher",
-                detail: "canonical V2 dispatcher was not visible after successful publication".to_owned(),
+                component: "broker_dispatcher",
+                detail: "canonical dispatcher was not visible after successful publication".to_owned(),
             })?;
         self.lifecycle
             .startup_journal
@@ -134,30 +134,30 @@ impl BrokerRuntime {
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.composition.state.broker_config();
-        let normal_dispatcher = Arc::clone(&canonical_v2_dispatcher);
-        let fast_dispatcher = Arc::clone(&canonical_v2_dispatcher);
+        let normal_dispatcher = Arc::clone(&canonical_dispatcher);
+        let fast_dispatcher = Arc::clone(&canonical_dispatcher);
         #[cfg(test)]
         {
             let embedded_proxy_dispatcher = self
                 .composition
                 .request_pipeline
-                .canonical_v2_dispatcher()
-                .expect("canonical V2 dispatcher was published above");
-            self.composition.request_pipeline.record_v2_dispatcher_identity(
-                &canonical_v2_dispatcher,
+                .canonical_dispatcher()
+                .expect("canonical dispatcher was published above");
+            self.composition.request_pipeline.record_dispatcher_identity(
+                &canonical_dispatcher,
                 &normal_dispatcher,
                 &fast_dispatcher,
                 &embedded_proxy_dispatcher,
             );
         }
-        let v2_session_registry = self.composition.request_pipeline.v2_session_registry();
-        let server = TransportServerV2::new_with_authorized_dispatcher(
+        let session_registry = self.composition.request_pipeline.session_registry();
+        let server = TransportServer::new_with_authorized_dispatcher(
             Arc::new(broker_config.broker_server_config.clone()),
             service_context.component("broker.remoting-server.normal"),
             normal_dispatcher,
         )
         .with_telemetry(self.composition.state.transport_telemetry.clone())
-        .with_session_registry(Arc::clone(&v2_session_registry));
+        .with_session_registry(Arc::clone(&session_registry));
         // Start the normal Broker remoting server.
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (normal_report_tx, normal_report_rx) = oneshot::channel();
@@ -181,13 +181,13 @@ impl BrokerRuntime {
         // Start the fast Broker remoting server.
         let mut fast_server_config = broker_config.broker_server_config.clone();
         fast_server_config.listen_port = broker_config.broker_server_config.listen_port - 2;
-        let fast_server = TransportServerV2::new_with_authorized_dispatcher(
+        let fast_server = TransportServer::new_with_authorized_dispatcher(
             Arc::new(fast_server_config),
             service_context.component("broker.remoting-server.fast"),
             fast_dispatcher,
         )
         .with_telemetry(self.composition.state.transport_telemetry.clone())
-        .with_session_registry(v2_session_registry);
+        .with_session_registry(session_registry);
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (fast_report_tx, fast_report_rx) = oneshot::channel();
         let (fast_startup_tx, fast_startup_rx) = oneshot::channel();
@@ -314,17 +314,17 @@ mod tests {
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use rocketmq_security_api::Principal;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::HandlerOutcome;
-    use rocketmq_transport::api::v2::RemotingRequest;
-    use rocketmq_transport::api::v2::RequestProcessorV2;
-    use rocketmq_transport::api::v2::ResponsePlan;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponsePlan;
 
-    use super::prepared_v2_transport_security;
-    use crate::processor::v2::BrokerRequestProcessorV2;
+    use super::prepared_transport_security;
+    use crate::processor::dispatcher::BrokerRequestProcessor;
 
     const STARTUP_PROBE_CODE: i32 = 98_520;
 
@@ -333,7 +333,7 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
-    impl RequestProcessorV2 for StartupProbe {
+    impl RequestProcessor for StartupProbe {
         async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(
@@ -343,13 +343,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepared_v2_security_continues_to_broker_acl_and_acl_remains_fail_closed() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-prepared-v2-security-test"))
-            .expect("prepared V2 security test runtime");
-        let service = owner.root_context().component("broker-prepared-v2-security");
+    async fn prepared_security_continues_to_broker_acl_and_acl_remains_fail_closed() {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-prepared-security-test"))
+            .expect("prepared security test runtime");
+        let service = owner.root_context().component("broker-prepared-security");
 
         let allowed_calls = Arc::new(AtomicUsize::new(0));
-        let mut explicitly_disabled = BrokerRequestProcessorV2::new();
+        let mut explicitly_disabled = BrokerRequestProcessor::new();
         explicitly_disabled.set_auth_disabled_by_validated_config();
         explicitly_disabled.register_processor(
             STARTUP_PROBE_CODE,
@@ -357,13 +357,13 @@ mod tests {
                 calls: Arc::clone(&allowed_calls),
             },
         );
-        let allowed = AuthorizedCommandDispatcherV2::new(
+        let allowed = AuthorizedCommandDispatcher::new(
             explicitly_disabled,
             Vec::new(),
-            prepared_v2_transport_security(),
+            prepared_transport_security(),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         )
-        .dispatch_embedded_v2(
+        .dispatch_embedded(
             service.task_group(),
             Principal::new("broker-proxy"),
             None,
@@ -378,20 +378,20 @@ mod tests {
         assert_eq!(allowed_calls.load(Ordering::SeqCst), 1);
 
         let denied_calls = Arc::new(AtomicUsize::new(0));
-        let mut unconfigured = BrokerRequestProcessorV2::new();
+        let mut unconfigured = BrokerRequestProcessor::new();
         unconfigured.register_processor(
             STARTUP_PROBE_CODE,
             StartupProbe {
                 calls: Arc::clone(&denied_calls),
             },
         );
-        let denied = AuthorizedCommandDispatcherV2::new(
+        let denied = AuthorizedCommandDispatcher::new(
             unconfigured,
             Vec::new(),
-            prepared_v2_transport_security(),
+            prepared_transport_security(),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         )
-        .dispatch_embedded_v2(
+        .dispatch_embedded(
             service.task_group(),
             Principal::new("broker-proxy"),
             None,

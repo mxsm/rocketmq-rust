@@ -26,9 +26,9 @@ mod linux_bench {
     use rocketmq_runtime::BlockingExecutor;
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
-    use rocketmq_transport::api::v1::FileRegion;
-    use rocketmq_transport::api::v1::FileTransferMode;
-    use rocketmq_transport::api::v1::RequestDeadline;
+    use rocketmq_transport::api::FileRegion;
+    use rocketmq_transport::api::FileTransferMode;
+    use rocketmq_transport::api::RequestDeadline;
     use rocketmq_transport::benchmark_support::Connection;
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;

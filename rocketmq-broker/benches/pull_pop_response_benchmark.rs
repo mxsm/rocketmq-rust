@@ -25,7 +25,7 @@ use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::benchmark_support::ResponsePlanPreparationHarness;
 
 fn pull_head() -> RemotingCommand {

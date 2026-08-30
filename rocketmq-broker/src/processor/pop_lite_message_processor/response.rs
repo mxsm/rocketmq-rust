@@ -20,7 +20,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::ResponsePlan;
 
 use super::core::PopLiteCoreResult;
 use super::PopLiteMessageProcessor;

@@ -19,7 +19,7 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_transport::api::v1::ClientMetadata;
+use rocketmq_transport::api::ClientMetadata;
 use tracing::warn;
 
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;

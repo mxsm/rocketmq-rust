@@ -60,16 +60,16 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::LayerRequirement;
 use rocketmq_security_api::Principal;
 #[cfg(test)]
-use rocketmq_transport::api::v1::ClientShutdownReport;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
-use rocketmq_transport::api::v1::NetworkUtil;
-use rocketmq_transport::api::v1::RemotingClient;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v1::TransportSecurity;
-use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::api::v2::TransportServerV2;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::ClientShutdownReport;
+use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::NetworkUtil;
+use rocketmq_transport::api::RemotingClient;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::SessionRegistry;
+use rocketmq_transport::api::TransportClientConfig;
+use rocketmq_transport::api::TransportSecurity;
+use rocketmq_transport::api::TransportServer;
+use rocketmq_transport::api::TransportTelemetry;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::debug;
@@ -139,7 +139,7 @@ struct NameServerRuntime {
     scheduled_tasks: Option<ScheduledTaskGroup>,
     shutdown_tx: Option<watch::Sender<bool>>,
     shutdown_rx: Option<watch::Receiver<bool>>,
-    server_inner: Option<TransportServerV2<NameServerRequestProcessor>>,
+    server_inner: Option<TransportServer<NameServerRequestProcessor>>,
     /// Server task group for graceful shutdown
     server_task_group: Option<TaskGroup>,
     server_report_rx: Option<oneshot::Receiver<Option<ShutdownReport>>>,
@@ -593,7 +593,7 @@ impl NameServerRuntime {
             .service_context
             .as_ref()
             .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let mut server = TransportServerV2::new_with_telemetry(
+        let mut server = TransportServer::new_with_telemetry(
             config,
             context.component("namesrv.remoting-server"),
             self.init_processors(),
@@ -1258,7 +1258,7 @@ impl Builder {
             }
         });
         let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
-        let session_registry = Arc::new(V2SessionRegistry::new());
+        let session_registry = Arc::new(SessionRegistry::new());
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
@@ -1356,7 +1356,7 @@ pub(crate) struct NameServerRuntimeInner {
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
-    session_registry: Arc<V2SessionRegistry>,
+    session_registry: Arc<SessionRegistry>,
     #[cfg(feature = "embedded-controller")]
     controller_manager: OnceLock<Arc<ControllerManager>>,
     #[cfg(feature = "embedded-controller")]
@@ -1984,19 +1984,19 @@ mod tests {
     use rocketmq_security_api::SecurityBootstrapConfig;
     use rocketmq_security_api::SecurityBootstrapOutcome;
     use rocketmq_security_api::SecurityBootstrapProfile;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::ConnectionState;
-    use rocketmq_transport::api::v1::RPCHook;
-    use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v1::TlsMode;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::SessionId;
-    use rocketmq_transport::api::v2::V2SessionEvent;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::ConnectionState;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::RPCHook;
+    use rocketmq_transport::api::ServerConfig;
+    use rocketmq_transport::api::SessionEvent;
+    use rocketmq_transport::api::SessionId;
+    use rocketmq_transport::api::TlsMode;
     use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::Connection;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
     use rocketmq_transport::test_support::LocalChannelHarness;
     use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::oneshot;
@@ -2078,7 +2078,7 @@ mod tests {
 
     struct LayeredDispatchFixture {
         service: ChildServiceContext,
-        dispatcher: Arc<AuthorizedCommandDispatcherV2<NameServerRequestProcessor>>,
+        dispatcher: Arc<AuthorizedCommandDispatcher<NameServerRequestProcessor>>,
         auth_runtime: Option<Arc<AuthRuntime>>,
         bootstrap: NameServerBootstrap,
     }
@@ -2105,7 +2105,7 @@ mod tests {
             AdmissionController::try_new_with_budget(AdmissionLimits::default(), &service.process_budget())
                 .expect("test admission limits should be valid"),
         );
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             Vec::new(),
             transport_security,
@@ -2133,8 +2133,8 @@ mod tests {
     async fn dispatch_layered_request(
         fixture: &LayeredDispatchFixture,
         request: RemotingCommand,
-    ) -> rocketmq_transport::api::v2::ResponsePlan {
-        let harness = EmbeddedRequestHarnessV2::new(
+    ) -> rocketmq_transport::api::ResponsePlan {
+        let harness = EmbeddedRequestHarness::new(
             Arc::clone(&fixture.dispatcher),
             fixture.service.task_group().clone(),
             Principal::new("namesrv-layered-test"),
@@ -2421,27 +2421,6 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
-    }
-
-    #[tokio::test]
-    async fn runtime_config_rejects_removed_route_manager_switch_with_typed_error() {
-        let bootstrap = build_default_bootstrap();
-        let runtime = bootstrap.runtime_inner();
-        let before = runtime.config_snapshot();
-
-        let error = runtime
-            .update_runtime_config(HashMap::from([(
-                CheetahString::from_static_str("useRouteInfoManagerV2"),
-                CheetahString::from_static_str("false"),
-            )]))
-            .await
-            .expect_err("removed route manager switch must fail");
-
-        assert!(matches!(
-            error,
-            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
     }
 
@@ -4486,7 +4465,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_server_routes_a_real_topic_request_and_response() {
+    async fn server_routes_a_real_topic_request_and_response() {
         let server_config = namesrv_server_config();
         let addr = format!("127.0.0.1:{}", server_config.listen_port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -4513,23 +4492,23 @@ mod tests {
             }
         })
         .await
-        .expect("V2 NameServer should accept a real TCP connection");
+        .expect("NameServer should accept a real TCP connection");
         let mut client = Connection::new(stream);
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
-            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("missing-v2-topic"), Some(true)),
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("missing-topic"), Some(true)),
         )
         .set_opaque(0x72a1);
         request.make_custom_header_to_net();
         client
             .send_command(request)
             .await
-            .expect("real V2 NameServer request should be written");
+            .expect("real NameServer request should be written");
         let response = tokio::time::timeout(Duration::from_secs(2), client.receive_command())
             .await
-            .expect("real V2 NameServer response deadline")
-            .expect("real V2 NameServer connection should remain open")
-            .expect("real V2 NameServer response frame should decode");
+            .expect("real NameServer response deadline")
+            .expect("real NameServer connection should remain open")
+            .expect("real NameServer response frame should decode");
 
         assert_eq!(response.opaque(), 0x72a1);
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
@@ -4538,14 +4517,14 @@ mod tests {
         let _ = shutdown_tx.send(());
         let report = tokio::time::timeout(Duration::from_secs(5), server_task)
             .await
-            .expect("V2 NameServer should stop before the deadline")
-            .expect("V2 NameServer task should not panic")
-            .expect("V2 NameServer should return a shutdown report");
+            .expect("NameServer should stop before the deadline")
+            .expect("NameServer task should not panic")
+            .expect("NameServer should return a shutdown report");
         assert!(report.is_healthy(), "{report:?}");
     }
 
     #[tokio::test]
-    async fn v2_broker_registration_disconnect_keeps_replacement_then_cleans_routes() {
+    async fn broker_registration_disconnect_keeps_replacement_then_cleans_routes() {
         let server_config = namesrv_server_config();
         let addr = format!("127.0.0.1:{}", server_config.listen_port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -4575,7 +4554,7 @@ mod tests {
                 }
             })
             .await
-            .expect("V2 NameServer should accept broker connections");
+            .expect("NameServer should accept broker connections");
             Connection::new(stream)
         }
 
@@ -4583,29 +4562,29 @@ mod tests {
             client
                 .send_command(request)
                 .await
-                .expect("real V2 broker registration should be written");
+                .expect("real broker registration should be written");
             let response = tokio::time::timeout(Duration::from_secs(2), client.receive_command())
                 .await
-                .expect("real V2 broker registration response deadline")
-                .expect("real V2 broker connection should remain open")
-                .expect("real V2 broker registration response should decode");
+                .expect("real broker registration response deadline")
+                .expect("real broker connection should remain open")
+                .expect("real broker registration response should decode");
             assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         }
 
-        async fn next_connected(receiver: &mut tokio::sync::broadcast::Receiver<V2SessionEvent>) -> SessionId {
+        async fn next_connected(receiver: &mut tokio::sync::broadcast::Receiver<SessionEvent>) -> SessionId {
             loop {
-                if let V2SessionEvent::Connected(session) = receiver.recv().await.expect("session connected event") {
+                if let SessionEvent::Connected(session) = receiver.recv().await.expect("session connected event") {
                     return session.id();
                 }
             }
         }
 
         async fn wait_for_disconnect(
-            receiver: &mut tokio::sync::broadcast::Receiver<V2SessionEvent>,
+            receiver: &mut tokio::sync::broadcast::Receiver<SessionEvent>,
             expected: SessionId,
         ) {
             loop {
-                if let V2SessionEvent::Disconnected(session_id) =
+                if let SessionEvent::Disconnected(session_id) =
                     receiver.recv().await.expect("session disconnected event")
                 {
                     if session_id == expected {
@@ -4615,12 +4594,12 @@ mod tests {
             }
         }
 
-        let cluster_name = CheetahString::from_static_str("v2-disconnect-cluster");
-        let broker_name = CheetahString::from_static_str("v2-disconnect-broker");
+        let cluster_name = CheetahString::from_static_str("disconnect-cluster");
+        let broker_name = CheetahString::from_static_str("disconnect-broker");
         let broker_addr = CheetahString::from_static_str("10.0.0.7:10911");
         let ha_server_addr = CheetahString::from_static_str("10.0.0.7:10912");
-        let zone_name = CheetahString::from_static_str("zone-v2");
-        let topic_name = CheetahString::from_static_str("v2-disconnect-topic");
+        let zone_name = CheetahString::from_static_str("disconnect-zone");
+        let topic_name = CheetahString::from_static_str("disconnect-topic");
         let registration = || {
             register_broker_request(
                 &cluster_name,
@@ -4630,7 +4609,7 @@ mod tests {
                 &ha_server_addr,
                 &zone_name,
                 false,
-                topic_config_wrapper(&[("v2-disconnect-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+                topic_config_wrapper(&[("disconnect-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
                 Vec::new(),
             )
         };
@@ -4639,7 +4618,7 @@ mod tests {
         send_registration(&mut first, registration().set_opaque(0x72b1)).await;
         let first_session = tokio::time::timeout(Duration::from_secs(2), next_connected(&mut session_events))
             .await
-            .expect("first V2 broker session should publish connect");
+            .expect("first broker session should publish connect");
         assert!(runtime
             .route_info_manager()
             .pickup_topic_route_data(&topic_name)
@@ -4649,9 +4628,9 @@ mod tests {
         send_registration(&mut replacement, registration().set_opaque(0x72b2)).await;
         let replacement_session = tokio::time::timeout(Duration::from_secs(2), next_connected(&mut session_events))
             .await
-            .expect("replacement V2 broker session should publish connect");
+            .expect("replacement broker session should publish connect");
         assert_ne!(first_session, replacement_session);
-        wait_until("housekeeping should observe both V2 sessions", || {
+        wait_until("housekeeping should observe both sessions", || {
             runtime.broker_housekeeping_service().active_session_count() == 2
         })
         .await;
@@ -4662,8 +4641,8 @@ mod tests {
             wait_for_disconnect(&mut session_events, first_session),
         )
         .await
-        .expect("old V2 session should publish disconnect");
-        wait_until("housekeeping should process the old V2 session disconnect", || {
+        .expect("old session should publish disconnect");
+        wait_until("housekeeping should process the old session disconnect", || {
             runtime.broker_housekeeping_service().active_session_count() == 1
         })
         .await;
@@ -4681,11 +4660,10 @@ mod tests {
             wait_for_disconnect(&mut session_events, replacement_session),
         )
         .await
-        .expect("replacement V2 session should publish disconnect");
-        wait_until(
-            "housekeeping should process the replacement V2 session disconnect",
-            || runtime.broker_housekeeping_service().active_session_count() == 0,
-        )
+        .expect("replacement session should publish disconnect");
+        wait_until("housekeeping should process the replacement session disconnect", || {
+            runtime.broker_housekeeping_service().active_session_count() == 0
+        })
         .await;
         wait_until("replacement disconnect route cleanup", || {
             runtime
@@ -4699,9 +4677,9 @@ mod tests {
         let _ = shutdown_tx.send(());
         let report = tokio::time::timeout(Duration::from_secs(5), server_task)
             .await
-            .expect("V2 NameServer should stop before the deadline")
-            .expect("V2 NameServer task should not panic")
-            .expect("V2 NameServer should return a shutdown report");
+            .expect("NameServer should stop before the deadline")
+            .expect("NameServer task should not panic")
+            .expect("NameServer should return a shutdown report");
         assert!(report.is_healthy(), "{report:?}");
     }
 
@@ -4798,7 +4776,7 @@ mod tests {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage);
 
         let response = processor
-            .process_request_inner_v2(None, RequestCode::SendMessage, &mut request)
+            .process_request_inner(None, RequestCode::SendMessage, &mut request)
             .await
             .expect("request should be handled")
             .expect("processor should return a response");
@@ -4864,7 +4842,6 @@ mod tests {
             properties.get("connectTimeoutMillis").map(|value| value.as_str()),
             Some(connect_timeout_millis.as_str())
         );
-        assert!(!properties.contains_key("useRouteInfoManagerV2"));
         assert_eq!(
             properties.get("tls.server.mode").map(|value| value.as_str()),
             Some("permissive")
@@ -5006,7 +4983,7 @@ mod tests {
         let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let result = processor
-            .process_request_inner_v2(None, RequestCode::UpdateNamesrvConfig, &mut request)
+            .process_request_inner(None, RequestCode::UpdateNamesrvConfig, &mut request)
             .await;
 
         assert!(result.is_err());

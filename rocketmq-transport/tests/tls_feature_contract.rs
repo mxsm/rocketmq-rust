@@ -14,13 +14,13 @@
 
 #![cfg(feature = "test-support")]
 
-use rocketmq_transport::api::v1::TlsConfig;
-use rocketmq_transport::api::v1::TlsMode;
-use rocketmq_transport::api::v1::TlsServerRuntime;
+use rocketmq_transport::api::TlsConfig;
+use rocketmq_transport::api::TlsMode;
+use rocketmq_transport::api::TlsServerRuntime;
 
 #[test]
 fn resolved_nameserver_preserves_fqdn_for_tls_server_identity() {
-    let target = rocketmq_transport::api::v1::ConnectTarget::new(
+    let target = rocketmq_transport::api::ConnectTarget::new(
         "10.0.0.7:9876".parse().unwrap(),
         "namesrv.default.svc.cluster.local:9876",
     )

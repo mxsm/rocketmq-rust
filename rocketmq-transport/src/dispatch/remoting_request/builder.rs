@@ -30,11 +30,7 @@ use crate::server::SessionHandle;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::session_view::SessionView;
 
-/// Trusted-only construction error for a V2 request aggregate.
-#[allow(
-    dead_code,
-    reason = "REQ-06 exposes typed build failures to later dispatcher wiring without public construction"
-)]
+/// Trusted-only construction error for a request aggregate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum RemotingRequestBuildError {
     #[error("response commands cannot build inbound remoting requests")]
@@ -64,19 +60,11 @@ pub(crate) enum RemotingRequestBuildError {
 /// provenance similarly binds one [`EmbeddedSessionRecord`] to the actual
 /// dispatch parent task group. The fields remain private so callers cannot
 /// combine a view from one session with state or cancellation from another.
-#[allow(
-    dead_code,
-    reason = "REQ-06 prepares sealed lifecycle provenance for later dispatcher wiring"
-)]
 pub(crate) struct RequestLifecycleProvenance {
     session: SessionView,
     parent_task_group: TaskGroup,
 }
 
-#[allow(
-    dead_code,
-    reason = "REQ-06 prepares sealed lifecycle provenance construction for later dispatcher wiring"
-)]
 impl RequestLifecycleProvenance {
     /// Derives network request lifecycle facts from one canonical session.
     pub(crate) fn from_network_session(session: &SessionHandle) -> Self {
@@ -123,10 +111,6 @@ impl RequestLifecycleProvenance {
 }
 
 /// Crate-private assembly point for trusted ingress request facts.
-#[allow(
-    dead_code,
-    reason = "REQ-06 prepares trusted assembly before later dispatcher wiring"
-)]
 pub(crate) struct RemotingRequestBuilder {
     original: OriginalRequestIdentity,
     meta: RequestMeta,
@@ -138,10 +122,6 @@ pub(crate) struct RemotingRequestBuilder {
     command: RemotingCommand,
 }
 
-#[allow(
-    dead_code,
-    reason = "REQ-06 prepares trusted assembly operations before later dispatcher wiring"
-)]
 impl RemotingRequestBuilder {
     pub(crate) fn new(
         original: OriginalRequestIdentity,

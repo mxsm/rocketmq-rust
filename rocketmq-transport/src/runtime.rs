@@ -23,7 +23,7 @@ use std::sync::Arc;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 pub mod config;
-pub(crate) mod processor_v2;
+pub(crate) mod processor;
 
 /// Defines hooks for intercepting RPC requests and responses.
 ///

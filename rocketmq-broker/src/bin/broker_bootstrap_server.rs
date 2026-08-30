@@ -46,7 +46,7 @@ use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_store::MessageStoreConfig;
 #[cfg(test)]
-use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::ServerConfig;
 use tracing::info;
 use tracing::warn;
 
@@ -809,7 +809,7 @@ storePathCommitLog = "{}"
         assert!(broker_config.broker_server_config.tls_config.enable);
         assert_eq!(
             broker_config.broker_server_config.tls_config.server.mode,
-            rocketmq_transport::api::v1::TlsMode::Enforcing
+            rocketmq_transport::api::TlsMode::Enforcing
         );
         assert_eq!(
             broker_config

@@ -15,8 +15,8 @@
 #![allow(unused_variables)]
 
 pub(crate) mod capability;
+mod handler;
 mod resume;
-mod v2;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -158,10 +158,11 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         }))
     }
 
-    /// Installs the Broker-owned BRK-03 deferred POP service.
+    /// Installs the Broker-owned deferred POP service.
     ///
-    /// BRK-06 owns the service lifecycle and installs it once during Broker composition. Until
-    /// then, V2 requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`.
+    /// Broker composition owns the service lifecycle and installs it once.
+    /// Requests that need suspension fail closed with `SERVICE_NOT_AVAILABLE`
+    /// until installation completes.
     pub(crate) fn install_pop_deferred_service(
         &self,
         service: Arc<PopDeferredService>,

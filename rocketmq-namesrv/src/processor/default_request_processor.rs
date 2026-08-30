@@ -55,10 +55,10 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::SessionView;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::SessionView;
 use tracing::debug;
 use tracing::warn;
 
@@ -73,7 +73,7 @@ pub struct DefaultRequestProcessor {
     command_factory: RemotingCommandFactory,
 }
 
-impl RequestProcessorV2 for DefaultRequestProcessor {
+impl RequestProcessor for DefaultRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let response = self.handle_request(request).await?;
         crate::processor::response_outcome(response)
@@ -109,13 +109,12 @@ impl DefaultRequestProcessor {
             "Name server DefaultRequestProcessor Received request code: {:?}",
             request_code
         );
-        self.process_request_inner_v2(broker_session, request_code, request)
-            .await
+        self.process_request_inner(broker_session, request_code, request).await
     }
 }
 
 impl DefaultRequestProcessor {
-    pub(crate) async fn process_request_inner_v2(
+    pub(crate) async fn process_request_inner(
         &self,
         broker_session: Option<BrokerSession>,
         request_code: RequestCode,

@@ -65,7 +65,7 @@ pub struct PreparedResponseBenchmarkResult {
 }
 
 /// Feature-gated adapter for benchmarking canonical response preparation
-/// without exposing binding or frame-encoding authority on the V2 API.
+/// without exposing binding or frame-encoding authority on the API.
 pub struct ResponsePlanPreparationHarness {
     sequence: AtomicU64,
 }

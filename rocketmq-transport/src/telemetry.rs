@@ -32,16 +32,16 @@ use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseErrorKind;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::WriteProgress;
-use crate::runtime::processor_v2::ResponseMetadataV2;
-use crate::runtime::processor_v2::ResponseObservationModeV2;
-use crate::runtime::processor_v2::ResponseObservationOutcomeV2;
-use crate::runtime::processor_v2::ResponseObservationV2;
+use crate::runtime::processor::ResponseMetadata;
+use crate::runtime::processor::ResponseObservation;
+use crate::runtime::processor::ResponseObservationMode;
+use crate::runtime::processor::ResponseObservationOutcome;
 
 #[cfg(feature = "observability")]
 const NO_RESPONSE_CODE: i32 = -1;
 
 #[cfg(any(test, feature = "observability", feature = "observability-traces"))]
-fn v2_request_span(
+fn request_span(
     identity: OriginalRequestIdentity,
     code_class: TransportRequestCodeClass,
     origin: &RequestOrigin,
@@ -49,7 +49,7 @@ fn v2_request_span(
     deadline: Option<crate::deadline::RequestDeadline>,
 ) -> tracing::Span {
     tracing::info_span!(
-        "RocketMQ REMOTING V2 REQUEST",
+        "RocketMQ REMOTING  REQUEST",
         rocketmq.request.owner_id = identity.request_id().owner_id(),
         rocketmq.request.sequence = identity.request_id().sequence(),
         rocketmq.request.original_code = identity.original_code(),
@@ -159,13 +159,13 @@ impl TransportRequestCodeClass {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum V2BoundaryRejectionReason {
+pub(crate) enum BoundaryRejectionReason {
     DeadlineExpired,
     SecurityDenied,
     AdmissionRejected,
 }
 
-impl V2BoundaryRejectionReason {
+impl BoundaryRejectionReason {
     const fn as_str(self) -> &'static str {
         match self {
             Self::DeadlineExpired => "deadline_expired",
@@ -175,24 +175,24 @@ impl V2BoundaryRejectionReason {
     }
 }
 
-type V2ResponseObservationCallback = Box<dyn FnOnce(ResponseObservationV2) + Send + 'static>;
+type ResponseObservationCallback = Box<dyn FnOnce(ResponseObservation) + Send + 'static>;
 
 #[derive(Default)]
-struct V2ResponseObservationCallbackState {
-    callback: Option<V2ResponseObservationCallback>,
-    pending: Option<ResponseObservationV2>,
+struct ResponseObservationCallbackState {
+    callback: Option<ResponseObservationCallback>,
+    pending: Option<ResponseObservation>,
     delivered: bool,
 }
 
 #[derive(Default)]
-struct V2DeferredMetricState {
+struct DeferredMetricState {
     armed: bool,
     retained_bytes: usize,
 }
 
-struct V2RequestObservationInner {
+struct RequestObservationInner {
     telemetry: TransportTelemetry,
-    callback: Mutex<V2ResponseObservationCallbackState>,
+    callback: Mutex<ResponseObservationCallbackState>,
     span: tracing::Span,
     original: OriginalRequestIdentity,
     started: Instant,
@@ -200,10 +200,10 @@ struct V2RequestObservationInner {
     request_metrics: Mutex<TransportRequestMetricsGuard>,
     terminal: AtomicBool,
     deferred_registration_recorded: AtomicBool,
-    deferred_metrics: Mutex<V2DeferredMetricState>,
+    deferred_metrics: Mutex<DeferredMetricState>,
 }
 
-impl Drop for V2RequestObservationInner {
+impl Drop for RequestObservationInner {
     fn drop(&mut self) {
         if self.terminal.swap(true, Ordering::AcqRel) {
             return;
@@ -211,20 +211,20 @@ impl Drop for V2RequestObservationInner {
         let deferred_metrics = self.deferred_metrics.get_mut();
         if deferred_metrics.armed {
             deferred_metrics.armed = false;
-            self.telemetry.adjust_v2_deferred(
+            self.telemetry.adjust_deferred(
                 self.code_class,
                 -1,
                 -retained_bytes_delta(deferred_metrics.retained_bytes),
             );
             deferred_metrics.retained_bytes = 0;
         }
-        let metadata = ResponseMetadataV2::new(
+        let metadata = ResponseMetadata::new(
             self.original.request_id(),
             self.original.original_code(),
             None,
             None,
-            ResponseObservationModeV2::NoResponse,
-            ResponseObservationOutcomeV2::Failed {
+            ResponseObservationMode::NoResponse,
+            ResponseObservationOutcome::Failed {
                 kind: None,
                 progress: Some(WriteProgress::NotStarted),
             },
@@ -232,11 +232,11 @@ impl Drop for V2RequestObservationInner {
         self.request_metrics
             .get_mut()
             .complete_process_request_failed(metadata.response_code().unwrap_or(-1));
-        self.telemetry.record_v2_request_lifecycle();
-        self.telemetry.record_v2_response(metadata);
+        self.telemetry.record_request_lifecycle();
+        self.telemetry.record_response(metadata);
         self.span.record("outcome", "failed");
         self.span.record("write_progress", WriteProgress::NotStarted.as_str());
-        let observation = ResponseObservationV2::new(metadata, None, self.started.elapsed());
+        let observation = ResponseObservation::new(metadata, None, self.started.elapsed());
         if let Some((callback, observation)) = take_or_defer_response_observation(self.callback.get_mut(), observation)
         {
             self.span.in_scope(|| callback(observation));
@@ -246,11 +246,11 @@ impl Drop for V2RequestObservationInner {
 
 /// Shared observation owner retained across inline dispatch and deferred resume.
 #[derive(Clone)]
-pub(crate) struct V2RequestObservation {
-    inner: Arc<V2RequestObservationInner>,
+pub(crate) struct RequestObservation {
+    inner: Arc<RequestObservationInner>,
 }
 
-impl V2RequestObservation {
+impl RequestObservation {
     fn new(
         telemetry: TransportTelemetry,
         original: OriginalRequestIdentity,
@@ -261,13 +261,13 @@ impl V2RequestObservation {
         request_bytes: u64,
     ) -> Self {
         let code_class = TransportRequestCodeClass::from_code(original.original_code());
-        let span = telemetry.v2_request_span(original, code_class, origin, authentication, deadline);
-        let request_metrics = telemetry.v2_request_guard(original.original_code(), request_bytes);
-        telemetry.record_v2_span_started();
+        let span = telemetry.request_span(original, code_class, origin, authentication, deadline);
+        let request_metrics = telemetry.request_guard(original.original_code(), request_bytes);
+        telemetry.record_span_started();
         Self {
-            inner: Arc::new(V2RequestObservationInner {
+            inner: Arc::new(RequestObservationInner {
                 telemetry,
-                callback: Mutex::new(V2ResponseObservationCallbackState::default()),
+                callback: Mutex::new(ResponseObservationCallbackState::default()),
                 span,
                 original,
                 started,
@@ -275,7 +275,7 @@ impl V2RequestObservation {
                 request_metrics: Mutex::new(request_metrics),
                 terminal: AtomicBool::new(false),
                 deferred_registration_recorded: AtomicBool::new(false),
-                deferred_metrics: Mutex::new(V2DeferredMetricState::default()),
+                deferred_metrics: Mutex::new(DeferredMetricState::default()),
             }),
         }
     }
@@ -284,14 +284,14 @@ impl V2RequestObservation {
         self.inner.span.clone()
     }
 
-    pub(crate) fn bind_response_observer(&self, callback: impl FnOnce(ResponseObservationV2) + Send + 'static) {
+    pub(crate) fn bind_response_observer(&self, callback: impl FnOnce(ResponseObservation) + Send + 'static) {
         let delivery = {
             let mut state = self.inner.callback.lock();
             if state.delivered || state.callback.is_some() {
                 None
             } else if let Some(observation) = state.pending.take() {
                 state.delivered = true;
-                Some((Box::new(callback) as V2ResponseObservationCallback, observation))
+                Some((Box::new(callback) as ResponseObservationCallback, observation))
             } else {
                 state.callback = Some(Box::new(callback));
                 None
@@ -319,7 +319,7 @@ impl V2RequestObservation {
         deferred_metrics.retained_bytes = retained_bytes;
         self.inner
             .telemetry
-            .adjust_v2_deferred(self.inner.code_class, 1, retained_bytes_delta(retained_bytes));
+            .adjust_deferred(self.inner.code_class, 1, retained_bytes_delta(retained_bytes));
     }
 
     pub(crate) fn record_deferred_registered(&self) {
@@ -332,27 +332,27 @@ impl V2RequestObservation {
             return;
         }
         self.inner.request_metrics.lock().record_deferred_registered();
-        self.inner.telemetry.record_v2_request_lifecycle();
-        self.inner.telemetry.record_v2_deferred_registration();
+        self.inner.telemetry.record_request_lifecycle();
+        self.inner.telemetry.record_deferred_registration();
     }
 
     pub(crate) fn complete_reply(
         &self,
-        mode: ResponseObservationModeV2,
+        mode: ResponseObservationMode,
         response_code: i32,
         plan_kind: ResponseBodyKind,
         write_elapsed: Duration,
         result: Result<ResponseReceipt, (ResponseErrorKind, Option<WriteProgress>)>,
     ) {
         let outcome = match result {
-            Ok(receipt) => ResponseObservationOutcomeV2::Written(receipt),
-            Err((kind, progress)) => ResponseObservationOutcomeV2::Failed {
+            Ok(receipt) => ResponseObservationOutcome::Written(receipt),
+            Err((kind, progress)) => ResponseObservationOutcome::Failed {
                 kind: Some(kind),
                 progress,
             },
         };
         self.complete(
-            ResponseMetadataV2::new(
+            ResponseMetadata::new(
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 Some(response_code),
@@ -366,22 +366,22 @@ impl V2RequestObservation {
 
     pub(crate) fn complete_boundary_rejection(
         &self,
-        reason: V2BoundaryRejectionReason,
+        reason: BoundaryRejectionReason,
         response_code: Option<i32>,
         plan_kind: Option<ResponseBodyKind>,
         write_elapsed: Option<Duration>,
-        outcome: ResponseObservationOutcomeV2,
+        outcome: ResponseObservationOutcome,
     ) {
         self.complete_with_rejection(
-            ResponseMetadataV2::new(
+            ResponseMetadata::new(
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 response_code,
                 plan_kind,
                 if response_code.is_some() {
-                    ResponseObservationModeV2::Inline
+                    ResponseObservationMode::Inline
                 } else {
-                    ResponseObservationModeV2::NoResponse
+                    ResponseObservationMode::NoResponse
                 },
                 outcome,
             ),
@@ -390,14 +390,14 @@ impl V2RequestObservation {
         );
     }
 
-    pub(crate) fn complete_no_response(&self, outcome: ResponseObservationOutcomeV2) {
+    pub(crate) fn complete_no_response(&self, outcome: ResponseObservationOutcome) {
         self.complete(
-            ResponseMetadataV2::new(
+            ResponseMetadata::new(
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 None,
                 None,
-                ResponseObservationModeV2::NoResponse,
+                ResponseObservationMode::NoResponse,
                 outcome,
             ),
             None,
@@ -406,26 +406,26 @@ impl V2RequestObservation {
 
     pub(crate) fn complete_failure_without_kind(
         &self,
-        mode: ResponseObservationModeV2,
+        mode: ResponseObservationMode,
         response_code: Option<i32>,
         plan_kind: Option<ResponseBodyKind>,
         progress: Option<WriteProgress>,
     ) {
         self.complete(
-            ResponseMetadataV2::new(
+            ResponseMetadata::new(
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 response_code,
                 plan_kind,
                 mode,
-                ResponseObservationOutcomeV2::Failed { kind: None, progress },
+                ResponseObservationOutcome::Failed { kind: None, progress },
             ),
             None,
         );
     }
 
     pub(crate) fn complete_cancelled(&self, reason: DeferredTerminalReason) {
-        self.complete_no_response(ResponseObservationOutcomeV2::Cancelled(reason));
+        self.complete_no_response(ResponseObservationOutcome::Cancelled(reason));
     }
 
     pub(crate) fn complete_request_failed(&self, response_code: i32) {
@@ -442,24 +442,24 @@ impl V2RequestObservation {
             .complete_write_channel_failed(response_code);
     }
 
-    fn complete(&self, metadata: ResponseMetadataV2, write_elapsed: Option<Duration>) {
+    fn complete(&self, metadata: ResponseMetadata, write_elapsed: Option<Duration>) {
         self.complete_inner(metadata, write_elapsed, None);
     }
 
     fn complete_with_rejection(
         &self,
-        metadata: ResponseMetadataV2,
+        metadata: ResponseMetadata,
         write_elapsed: Option<Duration>,
-        reason: V2BoundaryRejectionReason,
+        reason: BoundaryRejectionReason,
     ) {
         self.complete_inner(metadata, write_elapsed, Some(reason));
     }
 
     fn complete_inner(
         &self,
-        metadata: ResponseMetadataV2,
+        metadata: ResponseMetadata,
         write_elapsed: Option<Duration>,
-        rejection: Option<V2BoundaryRejectionReason>,
+        rejection: Option<BoundaryRejectionReason>,
     ) {
         if self
             .inner
@@ -467,13 +467,13 @@ impl V2RequestObservation {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            self.inner.telemetry.record_v2_response_duplicate(self.inner.code_class);
+            self.inner.telemetry.record_response_duplicate(self.inner.code_class);
             return;
         }
         let mut deferred_metrics = self.inner.deferred_metrics.lock();
         if deferred_metrics.armed {
             deferred_metrics.armed = false;
-            self.inner.telemetry.adjust_v2_deferred(
+            self.inner.telemetry.adjust_deferred(
                 self.inner.code_class,
                 -1,
                 -retained_bytes_delta(deferred_metrics.retained_bytes),
@@ -485,11 +485,11 @@ impl V2RequestObservation {
         if rejection.is_some() {
             request_metrics.complete_process_request_failed(metadata.response_code().unwrap_or(-1));
         } else {
-            complete_v2_request_metrics(&mut request_metrics, metadata);
+            complete_request_metrics(&mut request_metrics, metadata);
         }
         drop(request_metrics);
-        self.inner.telemetry.record_v2_request_lifecycle();
-        self.inner.telemetry.record_v2_response(metadata);
+        self.inner.telemetry.record_request_lifecycle();
+        self.inner.telemetry.record_response(metadata);
         self.inner.span.record(
             "outcome",
             rejection.map_or_else(|| observation_outcome_label(metadata.outcome()), |_| "rejected"),
@@ -498,12 +498,12 @@ impl V2RequestObservation {
             self.inner.span.record("response_plan_kind", plan_kind.as_str());
         }
         match metadata.outcome() {
-            ResponseObservationOutcomeV2::Written(receipt) => {
+            ResponseObservationOutcome::Written(receipt) => {
                 self.inner
                     .span
                     .record("response_disposition", receipt.disposition().as_str());
             }
-            ResponseObservationOutcomeV2::Failed { kind, progress } => {
+            ResponseObservationOutcome::Failed { kind, progress } => {
                 if rejection.is_none() {
                     if let Some(kind) = kind {
                         self.inner.span.record("error_kind", kind.as_str());
@@ -513,19 +513,19 @@ impl V2RequestObservation {
                     self.inner.span.record("write_progress", progress.as_str());
                 }
             }
-            ResponseObservationOutcomeV2::Cancelled(reason) => {
+            ResponseObservationOutcome::Cancelled(reason) => {
                 self.inner.span.record("error_kind", reason.as_str());
                 self.inner
                     .span
                     .record("write_progress", WriteProgress::NotStarted.as_str());
             }
-            ResponseObservationOutcomeV2::Oneway | ResponseObservationOutcomeV2::ProtocolNoResponse => {}
+            ResponseObservationOutcome::Oneway | ResponseObservationOutcome::ProtocolNoResponse => {}
         }
         if let Some(reason) = rejection {
             self.inner.span.record("error_kind", reason.as_str());
-            self.inner.telemetry.record_v2_boundary_rejection(reason, metadata);
+            self.inner.telemetry.record_boundary_rejection(reason, metadata);
         }
-        let observation = ResponseObservationV2::new(metadata, write_elapsed, self.inner.started.elapsed());
+        let observation = ResponseObservation::new(metadata, write_elapsed, self.inner.started.elapsed());
         let delivery = {
             let mut callback = self.inner.callback.lock();
             take_or_defer_response_observation(&mut callback, observation)
@@ -537,9 +537,9 @@ impl V2RequestObservation {
 }
 
 fn take_or_defer_response_observation(
-    state: &mut V2ResponseObservationCallbackState,
-    observation: ResponseObservationV2,
-) -> Option<(V2ResponseObservationCallback, ResponseObservationV2)> {
+    state: &mut ResponseObservationCallbackState,
+    observation: ResponseObservation,
+) -> Option<(ResponseObservationCallback, ResponseObservation)> {
     if state.delivered {
         return None;
     }
@@ -551,24 +551,24 @@ fn take_or_defer_response_observation(
     Some((callback, observation))
 }
 
-fn complete_v2_request_metrics(metrics: &mut TransportRequestMetricsGuard, metadata: ResponseMetadataV2) {
+fn complete_request_metrics(metrics: &mut TransportRequestMetricsGuard, metadata: ResponseMetadata) {
     match metadata.outcome() {
-        ResponseObservationOutcomeV2::Written(_) if metadata.mode() == ResponseObservationModeV2::Deferred => {
+        ResponseObservationOutcome::Written(_) if metadata.mode() == ResponseObservationMode::Deferred => {
             metrics.complete_deferred_resumed(metadata.response_code().unwrap_or(-1));
         }
-        ResponseObservationOutcomeV2::Written(_) => {
+        ResponseObservationOutcome::Written(_) => {
             if let (Some(response_code), Some(body_kind)) = (metadata.response_code(), metadata.plan_kind()) {
-                metrics.complete_v2_reply(response_code, body_kind);
+                metrics.complete_reply(response_code, body_kind);
             } else {
                 metrics.complete_process_request_failed(metadata.response_code().unwrap_or(-1));
             }
         }
-        ResponseObservationOutcomeV2::Oneway => metrics.complete_oneway(),
-        ResponseObservationOutcomeV2::ProtocolNoResponse => {
+        ResponseObservationOutcome::Oneway => metrics.complete_oneway(),
+        ResponseObservationOutcome::ProtocolNoResponse => {
             metrics.complete_protocol_no_response();
         }
-        ResponseObservationOutcomeV2::Cancelled(_) => metrics.complete_cancelled(),
-        ResponseObservationOutcomeV2::Failed { .. } => {
+        ResponseObservationOutcome::Cancelled(_) => metrics.complete_cancelled(),
+        ResponseObservationOutcome::Failed { .. } => {
             metrics.complete_process_request_failed(metadata.response_code().unwrap_or(-1));
         }
     }
@@ -578,36 +578,36 @@ fn retained_bytes_delta(retained_bytes: usize) -> i64 {
     retained_bytes.min(i64::MAX as usize) as i64
 }
 
-const fn observation_outcome_label(outcome: ResponseObservationOutcomeV2) -> &'static str {
+const fn observation_outcome_label(outcome: ResponseObservationOutcome) -> &'static str {
     match outcome {
-        ResponseObservationOutcomeV2::Written(_) => "written",
-        ResponseObservationOutcomeV2::Oneway => "oneway",
-        ResponseObservationOutcomeV2::ProtocolNoResponse => "protocol_no_response",
-        ResponseObservationOutcomeV2::Cancelled(_) => "cancelled",
-        ResponseObservationOutcomeV2::Failed { .. } => "failed",
+        ResponseObservationOutcome::Written(_) => "written",
+        ResponseObservationOutcome::Oneway => "oneway",
+        ResponseObservationOutcome::ProtocolNoResponse => "protocol_no_response",
+        ResponseObservationOutcome::Cancelled(_) => "cancelled",
+        ResponseObservationOutcome::Failed { .. } => "failed",
     }
 }
 
 #[cfg(test)]
-const fn response_mode_label(mode: ResponseObservationModeV2) -> &'static str {
+const fn response_mode_label(mode: ResponseObservationMode) -> &'static str {
     match mode {
-        ResponseObservationModeV2::Inline => "inline",
-        ResponseObservationModeV2::Deferred => "deferred",
-        ResponseObservationModeV2::NoResponse => "no_response",
+        ResponseObservationMode::Inline => "inline",
+        ResponseObservationMode::Deferred => "deferred",
+        ResponseObservationMode::NoResponse => "no_response",
     }
 }
 
 #[cfg(test)]
-const fn response_result_label(outcome: ResponseObservationOutcomeV2) -> &'static str {
+const fn response_result_label(outcome: ResponseObservationOutcome) -> &'static str {
     match outcome {
-        ResponseObservationOutcomeV2::Written(receipt) => match receipt.disposition() {
+        ResponseObservationOutcome::Written(receipt) => match receipt.disposition() {
             ResponseDisposition::TransportWritten => "transport_written",
             ResponseDisposition::InProcessAccepted => "in_process_accepted",
         },
-        ResponseObservationOutcomeV2::Oneway => "oneway",
-        ResponseObservationOutcomeV2::ProtocolNoResponse => "protocol_no_response",
-        ResponseObservationOutcomeV2::Cancelled(_) => "cancelled",
-        ResponseObservationOutcomeV2::Failed { .. } => "failed",
+        ResponseObservationOutcome::Oneway => "oneway",
+        ResponseObservationOutcome::ProtocolNoResponse => "protocol_no_response",
+        ResponseObservationOutcome::Cancelled(_) => "cancelled",
+        ResponseObservationOutcome::Failed { .. } => "failed",
     }
 }
 
@@ -622,21 +622,21 @@ type DeferredMetricAdjustmentCapture = std::sync::Arc<parking_lot::Mutex<Vec<(i6
 #[cfg(test)]
 type DeferredRegistrationCapture = std::sync::Arc<std::sync::atomic::AtomicUsize>;
 #[cfg(test)]
-type V2BoundaryRejectionCapture = (&'static str, &'static str, &'static str, &'static str, &'static str);
+type BoundaryRejectionCapture = (&'static str, &'static str, &'static str, &'static str, &'static str);
 #[cfg(test)]
 #[derive(Default)]
-pub(crate) struct V2BoundaryMetricCapture {
+pub(crate) struct BoundaryMetricCapture {
     spans: std::sync::atomic::AtomicUsize,
     requests: std::sync::atomic::AtomicUsize,
     request_durations: std::sync::atomic::AtomicUsize,
     responses: std::sync::atomic::AtomicUsize,
     response_queue_waits: std::sync::atomic::AtomicUsize,
     response_events: parking_lot::Mutex<Vec<(&'static str, &'static str)>>,
-    rejections: parking_lot::Mutex<Vec<V2BoundaryRejectionCapture>>,
+    rejections: parking_lot::Mutex<Vec<BoundaryRejectionCapture>>,
 }
 
 #[cfg(test)]
-impl V2BoundaryMetricCapture {
+impl BoundaryMetricCapture {
     pub(crate) fn snapshot(&self) -> (usize, usize, usize, usize) {
         (
             self.spans.load(std::sync::atomic::Ordering::SeqCst),
@@ -646,7 +646,7 @@ impl V2BoundaryMetricCapture {
         )
     }
 
-    pub(crate) fn rejections(&self) -> Vec<V2BoundaryRejectionCapture> {
+    pub(crate) fn rejections(&self) -> Vec<BoundaryRejectionCapture> {
         self.rejections.lock().clone()
     }
 
@@ -677,7 +677,7 @@ pub struct TransportTelemetry {
     #[cfg(test)]
     deferred_registrations: Option<DeferredRegistrationCapture>,
     #[cfg(test)]
-    v2_boundary_metrics: Option<std::sync::Arc<V2BoundaryMetricCapture>>,
+    boundary_metrics: Option<std::sync::Arc<BoundaryMetricCapture>>,
 }
 
 impl TransportTelemetry {
@@ -708,7 +708,7 @@ impl TransportTelemetry {
             #[cfg(test)]
             deferred_registrations: None,
             #[cfg(test)]
-            v2_boundary_metrics: None,
+            boundary_metrics: None,
         }
     }
 
@@ -727,7 +727,7 @@ impl TransportTelemetry {
             deferred_state_constructions: None,
             deferred_metric_adjustments: None,
             deferred_registrations: None,
-            v2_boundary_metrics: None,
+            boundary_metrics: None,
         };
         (telemetry, capture)
     }
@@ -747,7 +747,7 @@ impl TransportTelemetry {
             deferred_state_constructions: None,
             deferred_metric_adjustments: None,
             deferred_registrations: None,
-            v2_boundary_metrics: None,
+            boundary_metrics: None,
         };
         (telemetry, capture)
     }
@@ -767,14 +767,14 @@ impl TransportTelemetry {
             deferred_state_constructions: Some(std::sync::Arc::clone(&capture)),
             deferred_metric_adjustments: None,
             deferred_registrations: None,
-            v2_boundary_metrics: None,
+            boundary_metrics: None,
         };
         (telemetry, capture)
     }
 
     #[cfg(test)]
-    pub(crate) fn with_v2_deferred_metric_capture(
-    ) -> (Self, DeferredMetricAdjustmentCapture, DeferredRegistrationCapture) {
+    pub(crate) fn with_deferred_metric_capture() -> (Self, DeferredMetricAdjustmentCapture, DeferredRegistrationCapture)
+    {
         let adjustments = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
         let registrations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let telemetry = Self {
@@ -789,14 +789,14 @@ impl TransportTelemetry {
             deferred_state_constructions: None,
             deferred_metric_adjustments: Some(std::sync::Arc::clone(&adjustments)),
             deferred_registrations: Some(std::sync::Arc::clone(&registrations)),
-            v2_boundary_metrics: None,
+            boundary_metrics: None,
         };
         (telemetry, adjustments, registrations)
     }
 
     #[cfg(test)]
-    pub(crate) fn with_v2_boundary_metric_capture() -> (Self, std::sync::Arc<V2BoundaryMetricCapture>) {
-        let capture = std::sync::Arc::new(V2BoundaryMetricCapture::default());
+    pub(crate) fn with_boundary_metric_capture() -> (Self, std::sync::Arc<BoundaryMetricCapture>) {
+        let capture = std::sync::Arc::new(BoundaryMetricCapture::default());
         let telemetry = Self {
             #[cfg(feature = "observability")]
             remoting: Default::default(),
@@ -809,7 +809,7 @@ impl TransportTelemetry {
             deferred_state_constructions: None,
             deferred_metric_adjustments: None,
             deferred_registrations: None,
-            v2_boundary_metrics: Some(std::sync::Arc::clone(&capture)),
+            boundary_metrics: Some(std::sync::Arc::clone(&capture)),
         };
         (telemetry, capture)
     }
@@ -822,7 +822,7 @@ impl TransportTelemetry {
         }
     }
 
-    pub(crate) fn begin_v2_observation(
+    pub(crate) fn begin_observation(
         &self,
         original: OriginalRequestIdentity,
         started: Instant,
@@ -830,8 +830,8 @@ impl TransportTelemetry {
         authentication: &AuthenticationState,
         deadline: Option<crate::deadline::RequestDeadline>,
         request_bytes: u64,
-    ) -> V2RequestObservation {
-        V2RequestObservation::new(
+    ) -> RequestObservation {
+        RequestObservation::new(
             self.clone(),
             original,
             started,
@@ -842,7 +842,7 @@ impl TransportTelemetry {
         )
     }
 
-    fn v2_request_span(
+    fn request_span(
         &self,
         original: OriginalRequestIdentity,
         code_class: TransportRequestCodeClass,
@@ -856,7 +856,7 @@ impl TransportTelemetry {
             .as_ref()
             .is_some_and(|handle| handle.is_active() && handle.trace_policy().enabled)
         {
-            return v2_request_span(original, code_class, origin, authentication, deadline);
+            return request_span(original, code_class, origin, authentication, deadline);
         }
 
         let _ = (original, code_class, origin, authentication, deadline);
@@ -865,7 +865,7 @@ impl TransportTelemetry {
 
     pub(crate) fn record_response_queue_wait(&self, duration: Duration) {
         #[cfg(test)]
-        if let Some(capture) = &self.v2_boundary_metrics {
+        if let Some(capture) = &self.boundary_metrics {
             capture
                 .response_queue_waits
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -878,7 +878,7 @@ impl TransportTelemetry {
         let _ = duration;
     }
 
-    fn adjust_v2_deferred(&self, code: TransportRequestCodeClass, inflight_delta: i64, retained_bytes_delta: i64) {
+    fn adjust_deferred(&self, code: TransportRequestCodeClass, inflight_delta: i64, retained_bytes_delta: i64) {
         #[cfg(test)]
         if let Some(capture) = &self.deferred_metric_adjustments {
             capture.lock().push((inflight_delta, retained_bytes_delta));
@@ -893,7 +893,7 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    fn record_v2_deferred_registration(&self) {
+    fn record_deferred_registration(&self) {
         #[cfg(test)]
         if let Some(capture) = &self.deferred_registrations {
             capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -901,17 +901,17 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    fn record_v2_span_started(&self) {
+    fn record_span_started(&self) {
         #[cfg(test)]
-        if let Some(capture) = &self.v2_boundary_metrics {
+        if let Some(capture) = &self.boundary_metrics {
             capture.spans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
     #[inline]
-    fn record_v2_request_lifecycle(&self) {
+    fn record_request_lifecycle(&self) {
         #[cfg(test)]
-        if let Some(capture) = &self.v2_boundary_metrics {
+        if let Some(capture) = &self.boundary_metrics {
             capture.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             capture
                 .request_durations
@@ -919,7 +919,7 @@ impl TransportTelemetry {
         }
     }
 
-    fn record_v2_response_duplicate(&self, code: TransportRequestCodeClass) {
+    fn record_response_duplicate(&self, code: TransportRequestCodeClass) {
         #[cfg(feature = "observability")]
         self.remoting.record_response_duplicate(observable_code_class(code));
 
@@ -927,9 +927,9 @@ impl TransportTelemetry {
         let _ = code;
     }
 
-    pub(crate) fn record_v2_response(&self, metadata: ResponseMetadataV2) {
+    pub(crate) fn record_response(&self, metadata: ResponseMetadata) {
         #[cfg(test)]
-        if let Some(capture) = &self.v2_boundary_metrics {
+        if let Some(capture) = &self.boundary_metrics {
             capture.responses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             capture.response_events.lock().push((
                 response_mode_label(metadata.mode()),
@@ -944,18 +944,18 @@ impl TransportTelemetry {
             use rocketmq_observability::metrics::remoting::ResponseResult;
 
             let mode = match metadata.mode() {
-                ResponseObservationModeV2::Inline => ResponseMode::Inline,
-                ResponseObservationModeV2::Deferred => ResponseMode::Deferred,
-                ResponseObservationModeV2::NoResponse => ResponseMode::NoResponse,
+                ResponseObservationMode::Inline => ResponseMode::Inline,
+                ResponseObservationMode::Deferred => ResponseMode::Deferred,
+                ResponseObservationMode::NoResponse => ResponseMode::NoResponse,
             };
             let result = match metadata.outcome() {
-                ResponseObservationOutcomeV2::Written(receipt) => match receipt.disposition() {
+                ResponseObservationOutcome::Written(receipt) => match receipt.disposition() {
                     ResponseDisposition::TransportWritten => ResponseResult::TransportWritten,
                     ResponseDisposition::InProcessAccepted => ResponseResult::InProcessAccepted,
                 },
-                ResponseObservationOutcomeV2::Oneway => ResponseResult::Oneway,
-                ResponseObservationOutcomeV2::ProtocolNoResponse => ResponseResult::ProtocolNoResponse,
-                ResponseObservationOutcomeV2::Cancelled(reason) => {
+                ResponseObservationOutcome::Oneway => ResponseResult::Oneway,
+                ResponseObservationOutcome::ProtocolNoResponse => ResponseResult::ProtocolNoResponse,
+                ResponseObservationOutcome::Cancelled(reason) => {
                     let reason = match reason {
                         DeferredTerminalReason::Explicit => ResponseAbandonedReason::Explicit,
                         DeferredTerminalReason::ReceiverDropped => ResponseAbandonedReason::ReceiverDropped,
@@ -970,7 +970,7 @@ impl TransportTelemetry {
                     self.remoting.record_response_abandoned(reason);
                     ResponseResult::Cancelled
                 }
-                ResponseObservationOutcomeV2::Failed { .. } => ResponseResult::Failed,
+                ResponseObservationOutcome::Failed { .. } => ResponseResult::Failed,
             };
             self.remoting.record_response(mode, result);
         }
@@ -980,9 +980,9 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    fn record_v2_boundary_rejection(&self, reason: V2BoundaryRejectionReason, metadata: ResponseMetadataV2) {
+    fn record_boundary_rejection(&self, reason: BoundaryRejectionReason, metadata: ResponseMetadata) {
         #[cfg(test)]
-        if let Some(capture) = &self.v2_boundary_metrics {
+        if let Some(capture) = &self.boundary_metrics {
             capture.rejections.lock().push((
                 reason.as_str(),
                 "failed",
@@ -1088,12 +1088,12 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    pub(crate) fn v2_request_guard(&self, request_code: i32, request_bytes: u64) -> TransportRequestMetricsGuard {
+    pub(crate) fn request_guard(&self, request_code: i32, request_bytes: u64) -> TransportRequestMetricsGuard {
         #[cfg(feature = "observability")]
         {
             let code_class = TransportRequestCodeClass::from_code(request_code);
             TransportRequestMetricsGuard {
-                inner: rocketmq_observability::metrics::remoting::RequestMetricsGuard::start_v2(
+                inner: rocketmq_observability::metrics::remoting::RequestMetricsGuard::start(
                     self.remoting.clone(),
                     request_code,
                     request_bytes,
@@ -1168,9 +1168,9 @@ impl TransportRequestMetricsGuard {
     }
 
     #[inline]
-    pub(crate) fn complete_v2_reply(&mut self, response_code: i32, body_kind: ResponseBodyKind) {
+    pub(crate) fn complete_reply(&mut self, response_code: i32, body_kind: ResponseBodyKind) {
         #[cfg(feature = "observability")]
-        self.inner.complete_v2(
+        self.inner.complete(
             response_code,
             match body_kind {
                 ResponseBodyKind::Empty => rocketmq_observability::metrics::remoting::RequestOutcome::ReplyEmpty,
@@ -1189,13 +1189,13 @@ impl TransportRequestMetricsGuard {
     #[inline]
     pub(crate) fn record_deferred_registered(&mut self) {
         #[cfg(feature = "observability")]
-        self.inner.record_v2_deferred_registered();
+        self.inner.record_deferred_registered();
     }
 
     #[inline]
     pub(crate) fn complete_deferred_resumed(&mut self, response_code: i32) {
         #[cfg(feature = "observability")]
-        self.inner.complete_v2(
+        self.inner.complete(
             response_code,
             rocketmq_observability::metrics::remoting::RequestOutcome::DeferredResumed,
         );
@@ -1207,7 +1207,7 @@ impl TransportRequestMetricsGuard {
     #[inline]
     pub(crate) fn complete_protocol_no_response(&mut self) {
         #[cfg(feature = "observability")]
-        self.inner.complete_v2(
+        self.inner.complete(
             NO_RESPONSE_CODE,
             rocketmq_observability::metrics::remoting::RequestOutcome::ProtocolNoResponse,
         );
@@ -1258,7 +1258,7 @@ mod tests {
     use tracing::Metadata;
     use tracing::Subscriber;
 
-    use super::v2_request_span;
+    use super::request_span;
     use super::TransportGoAwayOutcome;
     use super::TransportNameServerFailoverReason;
     use super::TransportRequestCodeClass;
@@ -1266,7 +1266,7 @@ mod tests {
     use crate::dispatch::AuthenticationState;
     use crate::dispatch::DeferredTerminalReason;
     use crate::dispatch::RequestOrigin;
-    use crate::runtime::processor_v2::ResponseObservationOutcomeV2;
+    use crate::runtime::processor::ResponseObservationOutcome;
 
     struct FieldCapture<'a> {
         fields: &'a mut BTreeMap<String, String>,
@@ -1339,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_span_uses_only_trusted_classifications_and_redacted_terminal_fields() {
+    fn request_span_uses_only_trusted_classifications_and_redacted_terminal_fields() {
         let identity = crate::dispatch::OriginalRequestIdentity::capture(
             83,
             &AtomicU64::new(5),
@@ -1356,7 +1356,7 @@ mod tests {
         };
 
         tracing::subscriber::with_default(subscriber, || {
-            let span = v2_request_span(
+            let span = request_span(
                 identity,
                 TransportRequestCodeClass::Other,
                 &origin,
@@ -1368,7 +1368,7 @@ mod tests {
             span.record("write_progress", "not_started");
         });
 
-        let fields = fields.lock().expect("captured V2 request span fields");
+        let fields = fields.lock().expect("captured request span fields");
         assert_eq!(
             fields.get("rocketmq.request.origin_kind").map(String::as_str),
             Some("network")
@@ -1414,7 +1414,7 @@ mod tests {
         .expect("test request identity");
         let observed = Arc::new(Mutex::new(Vec::new()));
         let callback_observed = Arc::clone(&observed);
-        let observation = TransportTelemetry::noop().begin_v2_observation(
+        let observation = TransportTelemetry::noop().begin_observation(
             identity,
             std::time::Instant::now(),
             &RequestOrigin::Network {
@@ -1432,13 +1432,13 @@ mod tests {
         observation.record_deferred_registered();
         assert!(observed.lock().expect("observation capture").is_empty());
 
-        observation.complete_no_response(ResponseObservationOutcomeV2::ProtocolNoResponse);
+        observation.complete_no_response(ResponseObservationOutcome::ProtocolNoResponse);
         observation.complete_cancelled(DeferredTerminalReason::Abandoned);
         let observed = observed.lock().expect("observation capture");
         assert_eq!(observed.len(), 1);
         assert_eq!(
             observed[0].metadata().outcome(),
-            ResponseObservationOutcomeV2::ProtocolNoResponse
+            ResponseObservationOutcome::ProtocolNoResponse
         );
     }
 
@@ -1450,7 +1450,7 @@ mod tests {
             &RemotingCommand::create_remoting_command(12).set_opaque(19),
         )
         .expect("test request identity");
-        let observation = TransportTelemetry::noop().begin_v2_observation(
+        let observation = TransportTelemetry::noop().begin_observation(
             identity,
             std::time::Instant::now(),
             &RequestOrigin::Network {
@@ -1460,7 +1460,7 @@ mod tests {
             None,
             0,
         );
-        observation.complete_no_response(ResponseObservationOutcomeV2::ProtocolNoResponse);
+        observation.complete_no_response(ResponseObservationOutcome::ProtocolNoResponse);
 
         let observed = Arc::new(Mutex::new(Vec::new()));
         let callback_observed = Arc::clone(&observed);
@@ -1473,7 +1473,7 @@ mod tests {
         assert_eq!(observed.len(), 1);
         assert_eq!(
             observed[0].metadata().outcome(),
-            ResponseObservationOutcomeV2::ProtocolNoResponse
+            ResponseObservationOutcome::ProtocolNoResponse
         );
     }
 }

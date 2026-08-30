@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_transport::api::v2::DeferredId;
+use rocketmq_transport::api::DeferredId;
 
 use super::deadline::PopLiteWaitDeadline;
 

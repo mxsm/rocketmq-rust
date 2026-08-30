@@ -35,8 +35,8 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MessageFilter;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::RpcClient;
-use rocketmq_transport::api::v1::RpcRequest;
+use rocketmq_transport::api::RpcClient;
+use rocketmq_transport::api::RpcRequest;
 use serde::Serialize;
 use std::time::Duration;
 

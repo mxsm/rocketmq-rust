@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::v2::RequestControlView;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::ResponsePlanError;
+use rocketmq_transport::api::RequestControlView;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::ResponsePlanError;
 use tokio::sync::OwnedSemaphorePermit;
 
 use crate::latency::broker_fast_failure::BrokerFastFailure;
@@ -250,13 +250,13 @@ impl FastFailureRunGuard {
         })
     }
 
-    /// Completes a V2 run without transferring response ownership through the
+    /// Completes a run without transferring response ownership through the
     /// legacy fast-failure response channel.
     ///
-    /// The V2 handler outcome remains affine and is delivered only by the
+    /// The handler outcome remains affine and is delivered only by the
     /// canonical dispatcher. Fast failure owns scheduling/accounting here,
     /// not the response plan.
-    pub(super) fn complete_v2(mut self) {
+    pub(super) fn finish(mut self) {
         self.service.complete(self.queue_kind, &self.task, None);
         self.response_rx.take();
         self.settled = true;
@@ -380,4 +380,5 @@ fn rejection_from_result(
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/processor/fast_failure_dispatch.rs"]
 mod tests;

@@ -27,10 +27,10 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::api::v2::SessionCloseReason;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::SessionView;
-use rocketmq_transport::api::v2::V2SessionLifecycleListener;
+use rocketmq_transport::api::SessionCloseReason;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionLifecycleListener;
+use rocketmq_transport::api::SessionView;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
@@ -194,7 +194,7 @@ impl ClientHousekeepingService {
     }
 }
 
-impl V2SessionLifecycleListener for ClientHousekeepingService {
+impl SessionLifecycleListener for ClientHousekeepingService {
     fn on_session_connected(&self, _session: &SessionView) {
         self.broker_stats_manager.inc_channel_connect_num()
     }
@@ -229,14 +229,14 @@ mod tests {
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::FlushDiskType;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v2::V2SessionRegistry;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::SessionRegistry;
     use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_session_info::ClientSessionInfo;
-    use crate::processor::v2_leaf_test_support::start_v2_leaf_server_with_session_registry;
+    use crate::processor::processor_test_support::start_processor_server_with_session_registry;
 
     use super::*;
 
@@ -335,7 +335,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), client.receive_command())
             .await
             .expect("V2 producer heartbeat should complete")
-            .expect("V2 session should remain connected")
+            .expect("session should remain connected")
             .expect("receive V2 producer heartbeat response")
     }
 
@@ -370,28 +370,28 @@ mod tests {
         (root, runtime)
     }
 
-    async fn wait_until_session_absent(registry: &V2SessionRegistry, session_id: SessionId) {
+    async fn wait_until_session_absent(registry: &SessionRegistry, session_id: SessionId) {
         tokio::time::timeout(Duration::from_secs(5), async {
             while registry.contains(session_id) {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("retired V2 session should unregister promptly");
+        .expect("retired session should unregister promptly");
     }
 
     #[tokio::test]
     async fn replacement_closes_old_generation_without_removing_the_new_binding() {
         let (_root, mut runtime) = initialized_runtime("replacement").await;
         let (mut processor, _) = runtime
-            .init_v2_processor_checked()
-            .expect("initialize canonical V2 Broker processor");
+            .init_processor_checked()
+            .expect("initialize canonical Broker processor");
         processor.set_auth_disabled_by_validated_config();
-        let registry = runtime.v2_session_registry_for_test();
+        let registry = runtime.session_registry_for_test();
         let producer = runtime.runtime_state_mut().producer_manager().clone_shared_state();
         let group = CheetahString::from_static_str("replacement-producer-group");
         let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-        let (mut old_client, server) = start_v2_leaf_server_with_session_registry(
+        let (mut old_client, server) = start_processor_server_with_session_registry(
             "broker-session-replacement",
             processor,
             controller,
@@ -446,14 +446,14 @@ mod tests {
     async fn empty_membership_replacement_still_closes_old_generation() {
         let (_root, mut runtime) = initialized_runtime("empty-membership-replacement").await;
         let (mut processor, _) = runtime
-            .init_v2_processor_checked()
-            .expect("initialize canonical V2 Broker processor");
+            .init_processor_checked()
+            .expect("initialize canonical Broker processor");
         processor.set_auth_disabled_by_validated_config();
-        let registry = runtime.v2_session_registry_for_test();
+        let registry = runtime.session_registry_for_test();
         let producer = runtime.runtime_state_mut().producer_manager().clone_shared_state();
         let group = CheetahString::from_static_str("empty-replacement-producer-group");
         let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-        let (mut old_client, server) = start_v2_leaf_server_with_session_registry(
+        let (mut old_client, server) = start_processor_server_with_session_registry(
             "broker-empty-session-replacement",
             processor,
             controller,
@@ -505,14 +505,14 @@ mod tests {
     async fn expired_session_cannot_rebind_before_retirement_closes_transport() {
         let (_root, mut runtime) = initialized_runtime("expiry-rebind-race").await;
         let (mut processor, _) = runtime
-            .init_v2_processor_checked()
-            .expect("initialize canonical V2 Broker processor");
+            .init_processor_checked()
+            .expect("initialize canonical Broker processor");
         processor.set_auth_disabled_by_validated_config();
-        let registry = runtime.v2_session_registry_for_test();
+        let registry = runtime.session_registry_for_test();
         let producer = runtime.runtime_state_mut().producer_manager().clone_shared_state();
         let group = CheetahString::from_static_str("expiry-rebind-producer-group");
         let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-        let (mut client, server) = start_v2_leaf_server_with_session_registry(
+        let (mut client, server) = start_processor_server_with_session_registry(
             "broker-session-expiry-rebind",
             processor,
             controller,
@@ -562,10 +562,10 @@ mod tests {
     async fn identity_conflict_is_rejected_and_expiry_deduplicates_typed_close() {
         let (_root, mut runtime) = initialized_runtime("expiry").await;
         let (mut processor, _) = runtime
-            .init_v2_processor_checked()
-            .expect("initialize canonical V2 Broker processor");
+            .init_processor_checked()
+            .expect("initialize canonical Broker processor");
         processor.set_auth_disabled_by_validated_config();
-        let registry = runtime.v2_session_registry_for_test();
+        let registry = runtime.session_registry_for_test();
         let housekeeping = runtime.client_housekeeping_service_for_test();
         let producer = runtime.runtime_state_mut().producer_manager().clone_shared_state();
         let consumer = runtime.runtime_state_mut().consumer_manager().clone_shared_state();
@@ -573,7 +573,7 @@ mod tests {
         let rejected_group = CheetahString::from_static_str("identity-conflict-group");
         let consumer_group = CheetahString::from_static_str("expiry-consumer-group");
         let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-        let (mut client, server) = start_v2_leaf_server_with_session_registry(
+        let (mut client, server) = start_processor_server_with_session_registry(
             "broker-session-expiry",
             processor,
             controller,

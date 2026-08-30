@@ -24,7 +24,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::RPCHook;
 use std::time::Instant;
 use tracing::warn;
 

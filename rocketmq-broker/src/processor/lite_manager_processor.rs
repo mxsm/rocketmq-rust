@@ -48,10 +48,10 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -290,14 +290,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
 }
 
 impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
-    pub(crate) async fn process_legacy(
-        &self,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_command(request).await
-    }
-
-    /// V2 leaf business contract: it only builds a response command and never uses a transport handle.
+    /// processor business contract: it only builds a response command and never uses a transport handle.
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
@@ -322,14 +315,14 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: BrokerReadWriteStore + 'static> RequestProcessorV2 for LiteManagerProcessor<MS> {
+impl<MS: BrokerReadWriteStore + 'static> RequestProcessor for LiteManagerProcessor<MS> {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -340,7 +333,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
             &command_factory,
             result,
             original_opaque,
-            "LiteManagerProcessor V2 command dispatch completed without a response",
+            "LiteManagerProcessor command dispatch completed without a response",
         )
     }
 }
@@ -984,15 +977,15 @@ mod tests {
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::HandlerOutcome;
-    use rocketmq_transport::api::v2::RemotingRequest;
-    use rocketmq_transport::api::v2::RequestProcessorV2;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     use super::LiteManagerContext;
     use super::LiteManagerOffsetCapability;
@@ -1017,7 +1010,7 @@ mod tests {
         inner: Arc<tokio::sync::Mutex<LiteManagerProcessor<BrokerMessageStore>>>,
     }
 
-    impl RequestProcessorV2 for SharedLiteManagerProcessor {
+    impl RequestProcessor for SharedLiteManagerProcessor {
         async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
             self.inner.lock().await.process(request).await
         }
@@ -1075,11 +1068,11 @@ mod tests {
         ))
     }
 
-    async fn dispatch_v2(
+    async fn dispatch_request(
         processor: LiteManagerProcessor<BrokerMessageStore>,
         command: RemotingCommand,
     ) -> EmbeddedDispatchOutcome {
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             SharedLiteManagerProcessor {
                 inner: Arc::new(tokio::sync::Mutex::new(processor)),
             },
@@ -1090,14 +1083,14 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        EmbeddedRequestHarnessV2::new(
+        EmbeddedRequestHarness::new(
             dispatcher,
-            crate::test_task_group("lite-manager-v2"),
-            Principal::new("lite-manager-v2-test"),
+            crate::test_task_group("lite-manager"),
+            Principal::new("lite-manager-test"),
         )
         .dispatch(None, command)
         .await
-        .expect("Lite manager V2 dispatch should complete")
+        .expect("Lite manager dispatch should complete")
     }
 
     #[test]
@@ -1122,14 +1115,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lite_manager_v2_returns_broker_info_as_an_owned_body_plan() {
-        let mut runtime = new_test_runtime("v2-broker-info").await;
+    async fn lite_manager_returns_broker_info_as_an_owned_body_plan() {
+        let mut runtime = new_test_runtime("broker-info").await;
         let processor = lite_manager_processor_for_test(&mut runtime);
         let request =
             RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {}).set_opaque(8_808);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_v2(processor, request).await else {
-            panic!("Lite manager V2 must return an inline response plan");
+        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+            panic!("Lite manager must return an inline response plan");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);

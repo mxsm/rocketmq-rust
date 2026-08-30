@@ -79,10 +79,10 @@ use rocketmq_store::StorePorts;
 #[cfg(all(test, feature = "rocksdb_store"))]
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::api::v1::ServerConfig;
-use rocketmq_transport::api::v1::TransportClientConfig;
-use rocketmq_transport::api::v2::TransportServerV2;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::SessionRegistry;
+use rocketmq_transport::api::TransportClientConfig;
+use rocketmq_transport::api::TransportServer;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -167,6 +167,8 @@ use crate::processor::client_manage_processor::ClientManageProcessorContext;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessorContext;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+use crate::processor::dispatcher::BrokerProcessorType;
+use crate::processor::dispatcher::BrokerRequestProcessor;
 use crate::processor::end_transaction_processor::EndTransactionPolicy;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::end_transaction_processor::EndTransactionProcessorContext;
@@ -224,8 +226,6 @@ use crate::processor::send_message_processor::capability::SendMessageProcessorCo
 use crate::processor::send_message_processor::capability::SendMessageStoreCapability;
 use crate::processor::send_message_processor::capability::SendMessageTopicCapability;
 use crate::processor::send_message_processor::SendMessageProcessor;
-use crate::processor::v2::BrokerProcessorTypeV2;
-use crate::processor::v2::BrokerRequestProcessorV2;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveMasterAddress;
 use crate::slave::slave_synchronize::SlaveSynchronize;
@@ -279,12 +279,11 @@ use shutdown_report::BrokerShutdownProgress;
 
 pub(crate) type BrokerMessageStore = StorePorts;
 
-pub(crate) type DefaultServerProcessorV2 = BrokerRequestProcessorV2<
-    BrokerProcessorTypeV2<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,
+pub(crate) type DefaultServerProcessor = BrokerRequestProcessor<
+    BrokerProcessorType<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,
 >;
 
-pub(crate) type DefaultBrokerDispatcherV2 =
-    rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2<DefaultServerProcessorV2>;
+pub(crate) type DefaultBrokerDispatcher = rocketmq_transport::api::AuthorizedCommandDispatcher<DefaultServerProcessor>;
 
 type BrokerScheduledTasks = ScheduledTaskManager;
 
@@ -374,7 +373,7 @@ impl BrokerBlockingShutdownError {
 
 async fn await_remoting_server_startup(
     listener: &'static str,
-    receiver: oneshot::Receiver<Result<SocketAddr, rocketmq_transport::api::v1::ServerStartError>>,
+    receiver: oneshot::Receiver<Result<SocketAddr, rocketmq_transport::api::ServerStartError>>,
     timeout: Duration,
 ) -> Result<SocketAddr, BrokerStartupError> {
     let startup = tokio::time::timeout(timeout, receiver)
@@ -764,7 +763,7 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     broker_fast_failure: BrokerFastFailure,
     log_filter_control: Option<Arc<crate::broker::log_filter_control::BrokerLogFilterControl>>,
     telemetry_handle: TelemetryHandle,
-    transport_telemetry: rocketmq_transport::api::v1::TransportTelemetry,
+    transport_telemetry: rocketmq_transport::api::TransportTelemetry,
     store_telemetry: rocketmq_store::StoreTelemetry,
     broker_metrics_manager: Option<Arc<crate::metrics::broker_metrics_manager::BrokerMetricsManager>>,
     pop_metrics_manager: Option<Arc<crate::metrics::pop_metrics_manager::PopMetricsManager>>,

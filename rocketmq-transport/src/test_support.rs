@@ -27,8 +27,8 @@ use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::session_view::SessionId;
 
-mod embedded_v2;
-pub use embedded_v2::EmbeddedRequestHarnessV2;
+mod embedded;
+pub use embedded::EmbeddedRequestHarness;
 
 pub use crate::client::connect_target_with_config_options_and_telemetry;
 pub use crate::client::connect_with_config;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Owned V2 response heads and body storage.
+//! Owned  response heads and body storage.
 
 mod binding;
 
@@ -39,7 +39,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// response ownership or file-region leases.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_clone(plan: &ResponsePlan) {
 ///     let _: ResponsePlan = plan.clone();
@@ -47,7 +47,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_construct_with_fields() {
 ///     let _ = ResponsePlan {
@@ -60,7 +60,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_read_the_body(plan: &ResponsePlan) {
 ///     let _ = plan.body();
@@ -68,7 +68,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_read_the_head(plan: &ResponsePlan) {
 ///     let _ = plan.head();
@@ -76,7 +76,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_read_contiguous_body_bytes(plan: &ResponsePlan) {
 ///     let _ = plan.bytes();
@@ -84,7 +84,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_read_body_segments(plan: &ResponsePlan) {
 ///     let _ = plan.segments();
@@ -92,7 +92,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_read_file_regions(plan: &ResponsePlan) {
 ///     let _ = plan.file_regions();
@@ -100,15 +100,11 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponseBody;
+/// use rocketmq_transport::api::ResponseBody;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::FileRegionLease;
-/// ```
-///
-/// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_encode_an_arbitrary_complete_frame(plan: ResponsePlan) {
 ///     let _ = plan.into_bytes();
@@ -117,7 +113,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 ///
 /// ```compile_fail
 /// use bytes::Bytes;
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_accept_a_pre_encoded_frame(frame: Bytes) {
 ///     let _ = ResponsePlan::encoded(frame);
@@ -125,7 +121,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::ResponseBodyKind;
+/// use rocketmq_transport::api::ResponseBodyKind;
 ///
 /// fn encoded_is_not_a_public_body_kind(kind: ResponseBodyKind) {
 ///     assert_eq!(kind, ResponseBodyKind::Encoded);
@@ -133,8 +129,8 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::OriginalRequestIdentity;
-/// use rocketmq_transport::api::v2::ResponsePlan;
+/// use rocketmq_transport::api::OriginalRequestIdentity;
+/// use rocketmq_transport::api::ResponsePlan;
 ///
 /// fn cannot_bind_a_plan_outside_the_transport(plan: ResponsePlan, identity: OriginalRequestIdentity) {
 ///     let _ = plan.bind(identity);
@@ -142,7 +138,7 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::BoundResponsePlan;
+/// use rocketmq_transport::api::BoundResponsePlan;
 /// ```
 ///
 pub struct ResponsePlan {
@@ -292,7 +288,7 @@ impl ResponsePlan {
     }
 
     /// Converts this affine plan into the zero-encoding representation used by
-    /// an in-process V2 consumer.
+    /// an in-process  consumer.
     ///
     /// The response head and every body owner move without cloning,
     /// concatenating segments, reading file regions, or constructing a
@@ -307,19 +303,11 @@ impl ResponsePlan {
         EmbeddedResponse { head: self.head, body }
     }
 
-    #[allow(
-        dead_code,
-        reason = "RSP-05 local delivery rebuilds this trusted wrapper before later dispatcher wiring"
-    )]
     pub(crate) fn from_bound_parts(head: RemotingCommand, body: ResponseBody) -> Self {
         let (body_len, body_part_count) = body.metadata();
         Self::new(head, body, body_len, body_part_count)
     }
 
-    #[allow(
-        dead_code,
-        reason = "DSP-03 body-free hook projection is consumed by the not-yet-wired private dispatcher"
-    )]
     pub(crate) fn with_body_free_hook_head<T>(
         &mut self,
         apply: impl FnOnce(&mut RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
@@ -328,12 +316,12 @@ impl ResponsePlan {
         let result = apply(&mut self.head);
         if self.head.take_body().is_some() {
             return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook attached a response body through the body-free V2 projection",
+                "RPC hook attached a response body through the body-free projection",
             ));
         }
         if self.head.is_oneway_rpc() {
             return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook marked a V2 response plan head as one-way",
+                "RPC hook marked a response plan head as one-way",
             ));
         }
         result
@@ -384,7 +372,7 @@ impl fmt::Debug for ResponsePlan {
     }
 }
 
-/// Affine response delivered to an in-process V2 consumer without wire
+/// Affine response delivered to an in-process  consumer without wire
 /// encoding or legacy command materialization.
 #[must_use]
 pub struct EmbeddedResponse {
@@ -426,7 +414,7 @@ impl fmt::Debug for EmbeddedResponse {
     }
 }
 
-/// Exact body owner transferred to an in-process V2 consumer.
+/// Exact body owner transferred to an in-process  consumer.
 #[must_use]
 pub enum EmbeddedResponseBody {
     /// The response has no body.
@@ -489,7 +477,7 @@ impl ResponseBodyKind {
 
 /// Internal storage owned by a [`ResponsePlan`].
 ///
-/// This type remains crate-private so V2 processors can choose an explicit
+/// This type remains crate-private so  processors can choose an explicit
 /// constructor without recovering the stored bytes, file leases, or an
 /// arbitrary encoded frame.
 pub(crate) enum ResponseBody {
@@ -500,7 +488,6 @@ pub(crate) enum ResponseBody {
 }
 
 impl ResponseBody {
-    #[allow(dead_code, reason = "RSP-05 trusted local rewrapping preserves cached plan metadata")]
     fn metadata(&self) -> (usize, usize) {
         match self {
             Self::Empty => (0, 0),

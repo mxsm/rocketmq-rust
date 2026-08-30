@@ -23,7 +23,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::api::v1::TransportClient;
+use rocketmq_transport::api::TransportClient;
 use tokio::sync::mpsc;
 use tracing::info;
 use tracing::warn;

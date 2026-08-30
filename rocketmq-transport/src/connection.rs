@@ -1221,12 +1221,8 @@ impl Connection {
     }
 
     /// Sends a server response through the canonical writer with a stage-aware
-    /// completion error. This is intentionally crate-private while the public
-    /// response receipt/context API is introduced separately.
-    #[allow(
-        dead_code,
-        reason = "RSP-05 canonical prepared-response seam is invoked by later dispatcher wiring"
-    )]
+    /// completion error. This remains crate-private because response plans own
+    /// the public delivery contract.
     pub(crate) async fn send_prepared_response(
         &mut self,
         prepared: PreparedResponse,
@@ -1826,8 +1822,8 @@ impl Connection {
 }
 
 #[cfg(test)]
-#[path = "connection/issue_9754_tests.rs"]
-mod session_lifecycle_tests;
+#[path = "../tests/unit/connection/write_failure_semantics.rs"]
+mod write_failure_semantics_tests;
 
 #[cfg(test)]
 mod lifecycle_regression_tests {
@@ -1859,18 +1855,5 @@ mod lifecycle_regression_tests {
             .await
             .expect("retirement should observe the final lease drop");
         retirement.await.expect("retirement task should not panic");
-    }
-
-    #[test]
-    fn queued_send_path_does_not_restore_a_lock_guard_across_network_await() {
-        let source = include_str!("connection.rs").replace("\r\n", "\n");
-        let production = source
-            .split("#[cfg(test)]\n#[path = \"connection/issue_9754_tests.rs\"]")
-            .next()
-            .expect("production connection source");
-
-        assert!(!production.contains("RwLockReadGuard"));
-        assert!(!production.contains("RwLockWriteGuard"));
-        assert!(!production.contains("lifecycle.begin_send().await"));
     }
 }

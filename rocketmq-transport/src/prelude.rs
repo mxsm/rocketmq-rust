@@ -14,11 +14,11 @@
 
 //! Minimal imports for Transport composition roots.
 
-pub use crate::api::v1::OneShotTransportClient;
-pub use crate::api::v1::RemotingClient;
-pub use crate::api::v1::RequestDeadline;
-pub use crate::api::v1::ServerConfig;
-pub use crate::api::v1::TransportClient;
-pub use crate::api::v1::TransportClientConfig;
-pub use crate::api::v2::RequestProcessorV2;
-pub use crate::api::v2::TransportServerV2 as TransportServer;
+pub use crate::api::OneShotTransportClient;
+pub use crate::api::RemotingClient;
+pub use crate::api::RequestDeadline;
+pub use crate::api::RequestProcessor;
+pub use crate::api::ServerConfig;
+pub use crate::api::TransportClient;
+pub use crate::api::TransportClientConfig;
+pub use crate::api::TransportServer;

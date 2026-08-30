@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use rocketmq_observability::metrics::namesrv::NameServerConnectionEvent;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::V2SessionEvent;
+use rocketmq_transport::api::SessionEvent;
+use rocketmq_transport::api::SessionId;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tracing::warn;
@@ -39,7 +39,7 @@ impl BrokerHousekeepingService {
     /// Runs until the NameServer lifecycle requests shutdown or the registry is dropped.
     pub(crate) async fn run(
         self: Arc<Self>,
-        mut events: broadcast::Receiver<V2SessionEvent>,
+        mut events: broadcast::Receiver<SessionEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) {
         loop {
@@ -60,19 +60,19 @@ impl BrokerHousekeepingService {
         }
     }
 
-    fn on_event(&self, event: V2SessionEvent) {
+    fn on_event(&self, event: SessionEvent) {
         let Some(runtime) = self.name_server_runtime_inner.upgrade() else {
             return;
         };
         match event {
-            V2SessionEvent::Connected(session) => {
+            SessionEvent::Connected(session) => {
                 if self.active_sessions.insert(session.id()) {
                     runtime
                         .namesrv_metrics()
                         .record_connection_event(NameServerConnectionEvent::Admitted, self.active_sessions.len());
                 }
             }
-            V2SessionEvent::Disconnected(session_id) => {
+            SessionEvent::Disconnected(session_id) => {
                 if self.active_sessions.remove(&session_id).is_some() {
                     runtime
                         .namesrv_metrics()

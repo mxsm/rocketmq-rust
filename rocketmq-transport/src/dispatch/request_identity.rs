@@ -38,7 +38,7 @@ fn reserve_checked(counter: &AtomicU64) -> Option<u64> {
 
 /// Reserves a process-local owner for one real network or embedded session.
 ///
-/// Zero is never allocated, and `u64::MAX` remains reserved for synthetic V1
+/// Zero is never allocated, and `u64::MAX` remains reserved for synthetic
 /// response receipts. Once exhausted, the process-local allocator never wraps.
 pub(crate) fn reserve_session_owner() -> Option<u64> {
     reserve_checked(&NEXT_SESSION_OWNER)
@@ -52,7 +52,7 @@ pub(crate) fn reserve_session_owner() -> Option<u64> {
 /// of the command cannot change these facts.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::OriginalRequestIdentity;
+/// use rocketmq_transport::api::OriginalRequestIdentity;
 ///
 /// fn fields_are_private(identity: OriginalRequestIdentity) {
 ///     let _ = identity.original_code;
@@ -108,26 +108,16 @@ impl OriginalRequestIdentity {
         self.one_way
     }
 
-    #[allow(
-        dead_code,
-        reason = "REQ-06 validates the private ingress language before dispatcher integration"
-    )]
+    #[cfg(test)]
     pub(crate) const fn original_language(self) -> LanguageCode {
         self.original_language
     }
 
-    #[allow(
-        dead_code,
-        reason = "REQ-06 validates the private ingress version before dispatcher integration"
-    )]
+    #[cfg(test)]
     pub(crate) const fn original_version(self) -> i32 {
         self.original_version
     }
 
-    #[allow(
-        dead_code,
-        reason = "REQ-06 validates captured command facts before dispatcher integration"
-    )]
     pub(crate) fn matches_command(self, command: &RemotingCommand) -> bool {
         self.original_code == command.code()
             && self.original_opaque == command.opaque()

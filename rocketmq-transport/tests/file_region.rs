@@ -15,7 +15,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use rocketmq_transport::api::v1::FileRegion;
+use rocketmq_transport::api::FileRegion;
 
 #[test]
 fn file_region_rejects_zero_length_overflow_and_past_eof() {

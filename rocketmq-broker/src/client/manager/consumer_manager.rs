@@ -34,9 +34,9 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::api::v2::ServerPushCommand;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::ServerPushCommand;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionRegistry;
 use tracing::warn;
 
 use crate::client::client_session_info::ClientSessionInfo;
@@ -128,17 +128,17 @@ pub struct ConsumerManager {
     consumer_compensation_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
     /// Topic -> Set<Group> reverse index for fast topic-to-group lookup
     topic_group_table: Arc<DashMap<CheetahString, HashSet<CheetahString>>>,
-    /// Canonical V2 session -> all consumer groups registered by that session.
+    /// Canonical session -> all consumer groups registered by that session.
     session_to_groups: Arc<DashMap<SessionId, HashSet<CheetahString>>>,
-    /// Latest canonical V2 session for each consumer client identity.
+    /// Latest canonical session for each consumer client identity.
     client_session_table: Arc<DashMap<CheetahString, SessionId>>,
-    /// Immutable client identity claimed by each live V2 session.
+    /// Immutable client identity claimed by each live session.
     session_client_table: Arc<DashMap<SessionId, CheetahString>>,
     /// Exact-generation typed transport authority for live consumer sessions.
     session_transport_table: Arc<DashMap<SessionId, ClientSessionTransport>>,
     /// Weak composition-root resolver used only while applying a session heartbeat.
-    v2_session_registry: Arc<OnceLock<Weak<V2SessionRegistry>>>,
-    /// Consumer-id change notification policy captured for each V2 group registration.
+    session_registry: Arc<OnceLock<Weak<SessionRegistry>>>,
+    /// Consumer-id change notification policy captured for each group registration.
     session_notify_table: Arc<DashMap<(CheetahString, SessionId), bool>>,
     /// Per-group ordered side-effect queues. Group state transitions enqueue before releasing
     /// their group guard, and exactly one lock-free callback drainer preserves that order.
@@ -328,7 +328,7 @@ pub(crate) struct ConsumerAssignmentView {
     consumer_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
 }
 
-/// Live read-only mapping from a canonical V2 session and consumer group to
+/// Live read-only mapping from a canonical session and consumer group to
 /// the client identity most recently registered by heartbeat.
 #[derive(Clone)]
 pub(crate) struct ConsumerSessionRegistry {
@@ -439,7 +439,7 @@ impl ConsumerManager {
             client_session_table: Arc::clone(&self.client_session_table),
             session_client_table: Arc::clone(&self.session_client_table),
             session_transport_table: Arc::clone(&self.session_transport_table),
-            v2_session_registry: Arc::clone(&self.v2_session_registry),
+            session_registry: Arc::clone(&self.session_registry),
             session_notify_table: Arc::clone(&self.session_notify_table),
             session_callback_queues: Arc::clone(&self.session_callback_queues),
             #[cfg(test)]
@@ -484,7 +484,7 @@ impl ConsumerManager {
             client_session_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             session_client_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             session_transport_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            v2_session_registry: Arc::new(OnceLock::new()),
+            session_registry: Arc::new(OnceLock::new()),
             session_notify_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             session_callback_queues: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             #[cfg(test)]
@@ -532,7 +532,7 @@ impl ConsumerManager {
             client_session_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             session_client_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             session_transport_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            v2_session_registry: Arc::new(OnceLock::new()),
+            session_registry: Arc::new(OnceLock::new()),
             session_notify_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             session_callback_queues: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             #[cfg(test)]
@@ -550,8 +550,8 @@ impl ConsumerManager {
 }
 
 impl ConsumerManager {
-    pub(crate) fn install_v2_session_registry(&self, registry: &Arc<V2SessionRegistry>) -> bool {
-        self.v2_session_registry.set(Arc::downgrade(registry)).is_ok()
+    pub(crate) fn install_session_registry(&self, registry: &Arc<SessionRegistry>) -> bool {
+        self.session_registry.set(Arc::downgrade(registry)).is_ok()
     }
 
     pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Weak<BrokerStatsManager>) {
@@ -798,7 +798,7 @@ impl ConsumerManager {
         self.session_client_table
             .insert(client.session_id(), client.client_id().clone());
         let transport = self
-            .v2_session_registry
+            .session_registry
             .get()
             .and_then(Weak::upgrade)
             .and_then(|registry| {
@@ -911,7 +911,7 @@ impl ConsumerManager {
     }
 
     fn session_retirement(&self, session_id: SessionId) -> Option<ClientSessionRetirement> {
-        let registry = self.v2_session_registry.get()?.clone();
+        let registry = self.session_registry.get()?.clone();
         self.session_transport_table
             .get(&session_id)
             .map(|transport| transport.retirement(registry))
@@ -1307,7 +1307,7 @@ impl ConsumerManager {
                 self.session_client_table
                     .remove_if(&client.session_id(), |_, current| current == client.client_id());
                 if let Some((_, transport)) = self.session_transport_table.remove(&client.session_id()) {
-                    if let Some(registry) = self.v2_session_registry.get().cloned() {
+                    if let Some(registry) = self.session_registry.get().cloned() {
                         self.session_transition_locks.mark_retiring(
                             &transition,
                             client.client_id(),

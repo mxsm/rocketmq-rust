@@ -46,6 +46,8 @@ pub(crate) use service::PopRequestData;
 pub(crate) use service::PopRetainedEstimate;
 
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/pop_deferred/acceptance_tests.rs"]
 mod acceptance_tests;
 #[cfg(test)]
+#[path = "../../tests/unit/long_polling/pop_deferred/core.rs"]
 mod core_tests;

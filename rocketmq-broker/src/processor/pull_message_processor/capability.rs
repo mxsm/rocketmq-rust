@@ -41,7 +41,7 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 #[cfg(test)]
 use rocketmq_store::StorePorts;
-use rocketmq_transport::api::v1::RpcClientImpl;
+use rocketmq_transport::api::RpcClientImpl;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::client::manager::consumer_manager::ConsumerManager;

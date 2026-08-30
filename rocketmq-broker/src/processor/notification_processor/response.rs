@@ -35,7 +35,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notification_v1_wake_compatibility_response_composer_preserves_opaque_and_header() {
+    fn notification_wake_response_composer_preserves_opaque_and_header() {
         let mut response = compose_notification_response(&application_remoting_command_factory(), false, false, 9833);
         response.make_custom_header_to_net();
         let header = response

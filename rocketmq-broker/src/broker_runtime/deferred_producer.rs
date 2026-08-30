@@ -27,8 +27,8 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
-use rocketmq_transport::api::v2::DeferredWakeReason;
+use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
 
 use crate::deferred_generation_handoff::DeferredGenerationHandoff;
@@ -51,6 +51,7 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 
 #[cfg(test)]
+#[path = "../../tests/unit/broker_runtime/deferred_producer/e2e.rs"]
 mod e2e_tests;
 mod workers;
 
@@ -647,7 +648,7 @@ where
 
     fn spawn_pop_claim(
         &self,
-        claim: rocketmq_transport::api::v2::ClaimedDeferred<crate::long_polling::pop_deferred::service::ResumePop>,
+        claim: rocketmq_transport::api::ClaimedDeferred<crate::long_polling::pop_deferred::service::ResumePop>,
     ) {
         let service = Arc::clone(&self.pop);
         let processor = self.pop_processor.clone();
@@ -663,7 +664,7 @@ where
 
     fn spawn_pull_claim(
         &self,
-        claim: rocketmq_transport::api::v2::ClaimedDeferred<crate::long_polling::pull_deferred::ResumePull>,
+        claim: rocketmq_transport::api::ClaimedDeferred<crate::long_polling::pull_deferred::ResumePull>,
     ) {
         let service = Arc::clone(&self.pull);
         let processor = self.pull_processor.clone();
@@ -679,7 +680,7 @@ where
 
     fn spawn_notification_claim(
         &self,
-        claim: rocketmq_transport::api::v2::ClaimedDeferred<
+        claim: rocketmq_transport::api::ClaimedDeferred<
             crate::long_polling::notification_deferred::service::ResumeNotification,
         >,
     ) {
@@ -697,9 +698,7 @@ where
 
     fn spawn_pop_lite_timeout_claim(
         &self,
-        claim: rocketmq_transport::api::v2::ClaimedDeferred<
-            crate::long_polling::pop_lite_deferred::data::ResumePopLite,
-        >,
+        claim: rocketmq_transport::api::ClaimedDeferred<crate::long_polling::pop_lite_deferred::data::ResumePopLite>,
     ) {
         let service = Arc::clone(&self.pop_lite);
         let processor = self.pop_lite_processor.clone();

@@ -69,7 +69,6 @@ use crate::dispatch::DeferredSessionCleanupReport;
 use crate::dispatch::NetworkResponsePlanContext;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
-use crate::dispatch::ResponseSink;
 use crate::file_region::FileTransferMode;
 use crate::proxy_protocol::read_proxy_protocol;
 use crate::proxy_protocol::ProxyProtocolConfig;
@@ -563,10 +562,6 @@ impl SessionHandle {
         &self.request_operation
     }
 
-    #[allow(
-        dead_code,
-        reason = "REQ-04 retains the canonical session view for the REQ-06 request builder"
-    )]
     pub(crate) fn session_view(&self) -> SessionView {
         self.send.session_view.clone()
     }
@@ -623,19 +618,11 @@ impl SessionHandle {
         self
     }
 
-    #[allow(
-        dead_code,
-        reason = "RSP-05 private response plan context is installed by later dispatcher wiring"
-    )]
     pub(crate) fn with_response_plan_context(mut self, context: NetworkResponsePlanContext) -> Self {
         self.response_plan_context = Some(context);
         self
     }
 
-    #[allow(
-        dead_code,
-        reason = "RSP-05 private response plan context is consumed by later dispatcher wiring"
-    )]
     pub(crate) fn response_plan_context(&self) -> Option<&NetworkResponsePlanContext> {
         self.response_plan_context.as_ref()
     }
@@ -826,11 +813,11 @@ pub(crate) trait AuthorizedFrameRoute: Send + Sync + 'static {
     fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> impl Future<Output = usize> + Send;
 }
 
-struct CompatibilityFrameRoute<H> {
+struct HandlerFrameRoute<H> {
     handler: Arc<H>,
 }
 
-impl<H> AuthorizedFrameRoute for CompatibilityFrameRoute<H>
+impl<H> AuthorizedFrameRoute for HandlerFrameRoute<H>
 where
     H: ConnectionHandler,
 {
@@ -856,23 +843,22 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
     ) -> bool {
-        let original = session.original_request_identity();
-        let class = AdmissionClass::for_request_code(
-            original.map_or_else(|| command.code(), OriginalRequestIdentity::original_code),
-        );
+        let Some(original) = session.original_request_identity() else {
+            return false;
+        };
+        let class = AdmissionClass::for_request_code(original.original_code());
         let ordering = self.handler.request_ordering(&command);
         let request_handler = Arc::clone(&self.handler);
         let request_session = session.clone().with_response_class(class);
-        let response = ResponseSink::Network(Arc::new(session.clone().with_response_class(class)));
         authorized_session
-            .dispatch(
+            .dispatch_handler(
                 context,
                 original,
                 command,
                 retained_bytes,
                 partial_frame_permit,
                 ordering,
-                response,
+                session.clone().with_response_class(class),
                 move |request_operation, command| async move {
                     request_handler
                         .command(request_session.with_operation_context(request_operation), command)
@@ -1095,15 +1081,12 @@ impl TransportListener {
         self
     }
 
-    #[allow(
-        dead_code,
-        reason = "preserved low-level ConnectionHandler compatibility entry point"
-    )]
+    #[allow(dead_code, reason = "used by the feature-gated low-level session server")]
     pub async fn run<H>(self, handler: Arc<H>) -> RocketMQResult<()>
     where
         H: ConnectionHandler,
     {
-        self.run_route(Arc::new(CompatibilityFrameRoute { handler })).await
+        self.run_route(Arc::new(HandlerFrameRoute { handler })).await
     }
 
     pub(crate) async fn run_authorized<R>(self, route: Arc<R>) -> RocketMQResult<()>
@@ -1327,7 +1310,7 @@ async fn run_framed_session_with_request_sequence<H>(
         request_identity_exhausted,
         #[cfg(test)]
         None,
-        Arc::new(CompatibilityFrameRoute { handler }),
+        Arc::new(HandlerFrameRoute { handler }),
     )
     .await;
 }
@@ -1599,7 +1582,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     close_completion.complete(&report);
 }
 
-/// Runs an already-connected client or compatibility socket through the canonical framed session
+/// Runs an already-connected socket through the canonical framed session
 /// reader and bounded writer runtime.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_connected_session<H>(
@@ -1632,7 +1615,7 @@ pub async fn run_connected_session<H>(
     .await;
 }
 
-/// Runs an already-connected client socket through a statically selected V2
+/// Runs an already-connected client socket through a statically selected
 /// route and its existing authorization boundary.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_connected_session_authorized<R>(
@@ -1650,7 +1633,7 @@ pub(crate) async fn run_connected_session_authorized<R>(
     let Some(session_id) = reserve_session_owner() else {
         tracing::error!(
             reason = "owner_exhausted",
-            "connected V2 transport session rejected because request owner allocation is exhausted"
+            "connected transport session rejected because request owner allocation is exhausted"
         );
         return;
     };

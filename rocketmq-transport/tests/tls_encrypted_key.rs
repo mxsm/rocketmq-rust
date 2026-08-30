@@ -18,7 +18,7 @@ use std::fs;
 
 use pkcs8::LineEnding;
 use pkcs8::PrivateKeyInfoRef;
-use rocketmq_transport::api::v1::PrivateKeyLoader;
+use rocketmq_transport::api::PrivateKeyLoader;
 
 #[test]
 fn encrypted_pkcs8_key_requires_the_correct_password_without_leaking_it() {

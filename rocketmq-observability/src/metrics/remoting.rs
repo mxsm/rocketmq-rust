@@ -89,8 +89,6 @@ pub enum RequestOutcome {
     Cancelled,
     /// Processing or delivery failed.
     Failed,
-    /// A V1 processor produced a legacy reply.
-    LegacyReply,
 }
 
 impl RequestOutcome {
@@ -108,7 +106,6 @@ impl RequestOutcome {
             Self::ProtocolNoResponse => "protocol_no_response",
             Self::Cancelled => "cancelled",
             Self::Failed => "failed",
-            Self::LegacyReply => "legacy_reply",
         }
     }
 }
@@ -217,11 +214,11 @@ fn duration_millis_u64(duration: Duration) -> u64 {
 /// Records the metrics for one remoting request against one explicit telemetry runtime.
 ///
 /// The guard records request duration and a classified outcome when the request reaches a terminal
-/// state. A V2 deferred request may additionally record one `deferred_registered` lifecycle event
+/// state. A deferred request may additionally record one `deferred_registered` lifecycle event
 /// and one terminal `deferred_resumed`, `cancelled`, or `failed` outcome. Concurrent terminalization
 /// may change exporter observation order, but each lifecycle event is recorded at most once. The
-/// transport decoder records exact inbound frame bytes separately. Dropping an unfinished V1 guard
-/// records cancellation; dropping an unfinished V2 guard records failure.
+/// transport decoder records exact inbound frame bytes separately. Dropping an unfinished guard
+/// records failure.
 pub struct RequestMetricsGuard {
     metrics: RemotingMetrics,
     start: Instant,
@@ -229,13 +226,18 @@ pub struct RequestMetricsGuard {
     is_long_polling: bool,
     rpc_recorded: bool,
     deferred_registered_recorded: bool,
-    fallback: RequestOutcome,
     code_class: RequestCodeClass,
 }
 
 impl RequestMetricsGuard {
     #[inline]
-    pub fn start(metrics: RemotingMetrics, request_code: i32, _request_bytes: u64, is_long_polling: bool) -> Self {
+    pub fn start(
+        metrics: RemotingMetrics,
+        request_code: i32,
+        _request_bytes: u64,
+        is_long_polling: bool,
+        code_class: RequestCodeClass,
+    ) -> Self {
         Self {
             metrics,
             start: Instant::now(),
@@ -243,34 +245,13 @@ impl RequestMetricsGuard {
             is_long_polling,
             rpc_recorded: false,
             deferred_registered_recorded: false,
-            fallback: RequestOutcome::Cancelled,
-            code_class: RequestCodeClass::Other,
+            code_class,
         }
     }
 
-    /// Starts a V2 request guard with its trusted static request-code class.
+    /// Completes a request with one terminal classified outcome.
     #[inline]
-    pub fn start_v2(
-        metrics: RemotingMetrics,
-        request_code: i32,
-        request_bytes: u64,
-        is_long_polling: bool,
-        code_class: RequestCodeClass,
-    ) -> Self {
-        let mut guard = Self::start(metrics, request_code, request_bytes, is_long_polling);
-        guard.fallback = RequestOutcome::Failed;
-        guard.code_class = code_class;
-        guard
-    }
-
-    #[inline]
-    pub fn complete_response(&mut self, response_code: i32) {
-        self.record_terminal(response_code, RESULT_SUCCESS, RequestOutcome::LegacyReply);
-    }
-
-    /// Completes a V2 request with one terminal classified outcome.
-    #[inline]
-    pub fn complete_v2(&mut self, response_code: i32, outcome: RequestOutcome) {
+    pub fn complete(&mut self, response_code: i32, outcome: RequestOutcome) {
         let result = if outcome == RequestOutcome::Failed {
             RESULT_PROCESS_REQUEST_FAILED
         } else {
@@ -287,7 +268,7 @@ impl RequestMetricsGuard {
     /// may be observed first; both events remain at-most-once. Response metrics
     /// remain terminal-only and are not recorded by this method.
     #[inline]
-    pub fn record_v2_deferred_registered(&mut self) {
+    pub fn record_deferred_registered(&mut self) {
         if self.deferred_registered_recorded {
             return;
         }
@@ -343,16 +324,7 @@ impl Drop for RequestMetricsGuard {
         self.metrics
             .record_request_latency(duration_millis_u64(self.start.elapsed()));
         if !self.rpc_recorded {
-            let fallback = self.fallback;
-            self.record_terminal(
-                NO_RESPONSE_CODE,
-                if fallback == RequestOutcome::Cancelled {
-                    RESULT_CANCELED
-                } else {
-                    RESULT_PROCESS_REQUEST_FAILED
-                },
-                fallback,
-            );
+            self.record_terminal(NO_RESPONSE_CODE, RESULT_PROCESS_REQUEST_FAILED, RequestOutcome::Failed);
         }
     }
 }
@@ -374,9 +346,6 @@ impl RemotingMetrics {
     pub fn from_handle(_telemetry: &crate::TelemetryHandle) -> Self {
         Self::noop()
     }
-
-    #[inline]
-    pub fn record_requests_total(&self, _count: u64) {}
 
     /// Records one request lifecycle event and duration using fixed labels.
     #[inline]
@@ -504,24 +473,6 @@ impl RemotingMetrics {
     #[inline]
     fn is_active(&self) -> bool {
         self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
-    }
-
-    #[inline]
-    pub fn record_requests_total(&self, count: u64) {
-        if self.is_active() {
-            if let Some(instruments) = &self.instruments {
-                instruments.requests_total.add(
-                    count,
-                    &[
-                        opentelemetry::KeyValue::new(crate::semantic::labels::CODE, RequestCodeClass::Other.as_str()),
-                        opentelemetry::KeyValue::new(
-                            crate::semantic::labels::OUTCOME,
-                            RequestOutcome::LegacyReply.as_str(),
-                        ),
-                    ],
-                );
-            }
-        }
     }
 
     /// Records one request lifecycle event and duration using fixed labels.
@@ -751,7 +702,7 @@ impl RemotingMetricInstruments {
 
         let request_duration_seconds = meter
             .f64_histogram(TRANSPORT_REQUEST_DURATION_SECONDS)
-            .with_description("V2 remoting request duration by fixed code class and terminal outcome")
+            .with_description("remoting request duration by fixed code class and terminal outcome")
             .with_unit("s")
             .build();
 
@@ -763,13 +714,13 @@ impl RemotingMetricInstruments {
 
         let deferred_inflight = meter
             .i64_up_down_counter(TRANSPORT_DEFERRED_INFLIGHT)
-            .with_description("V2 deferred responses currently retained by the transport")
+            .with_description("deferred responses currently retained by the transport")
             .with_unit("{request}")
             .build();
 
         let deferred_retained_bytes = meter
             .i64_up_down_counter(TRANSPORT_DEFERRED_RETAINED_BYTES)
-            .with_description("Estimated bytes retained by V2 deferred responses")
+            .with_description("Estimated bytes retained by deferred responses")
             .with_unit("By")
             .build();
 
@@ -781,13 +732,13 @@ impl RemotingMetricInstruments {
 
         let response_duplicate_total = meter
             .u64_counter(TRANSPORT_RESPONSE_DUPLICATE_TOTAL)
-            .with_description("Duplicate V2 response terminal attempts")
+            .with_description("Duplicate response terminal attempts")
             .with_unit("{response}")
             .build();
 
         let response_abandoned_total = meter
             .u64_counter(TRANSPORT_RESPONSE_ABANDONED_TOTAL)
-            .with_description("V2 responses terminated without response delivery")
+            .with_description("responses terminated without response delivery")
             .with_unit("{response}")
             .build();
 
@@ -866,19 +817,25 @@ mod tests {
     fn noop_request_metrics_guard_accepts_each_terminal_outcome_once() {
         let metrics = RemotingMetrics::from_handle(&crate::TelemetryHandle::noop());
 
-        let mut success = RequestMetricsGuard::start(metrics.clone(), 10, 128, false);
-        success.complete_response(0);
+        let mut success = RequestMetricsGuard::start(metrics.clone(), 10, 128, false, RequestCodeClass::Other);
+        success.complete(0, RequestOutcome::ReplyEmpty);
         success.complete_cancelled();
 
-        let mut process_failure = RequestMetricsGuard::start(metrics.clone(), 12, 32, true);
+        let mut process_failure = RequestMetricsGuard::start(metrics.clone(), 12, 32, true, RequestCodeClass::Other);
         process_failure.complete_process_request_failed(1);
-        process_failure.complete_response(0);
+        process_failure.complete(0, RequestOutcome::ReplyEmpty);
 
-        let mut write_failure = RequestMetricsGuard::start(metrics.clone(), 13, 16, false);
+        let mut write_failure = RequestMetricsGuard::start(metrics.clone(), 13, 16, false, RequestCodeClass::Other);
         write_failure.complete_write_channel_failed(2);
         write_failure.complete_oneway();
 
-        drop(RequestMetricsGuard::start(metrics, 14, 8, false));
+        drop(RequestMetricsGuard::start(
+            metrics,
+            14,
+            8,
+            false,
+            RequestCodeClass::Other,
+        ));
     }
 
     #[cfg(feature = "otel-metrics")]
@@ -890,7 +847,6 @@ mod tests {
         let meter = provider.meter("remoting-metrics-test");
         let metrics = RemotingMetrics::new(&meter);
 
-        metrics.record_requests_total(1);
         metrics.record_classified_request(RequestCodeClass::PullMessage, RequestOutcome::ReplyBytes, 0.003);
         metrics.record_response(ResponseMode::Inline, ResponseResult::TransportWritten);
         metrics.adjust_deferred(RequestCodeClass::PullMessage, 1, 512);

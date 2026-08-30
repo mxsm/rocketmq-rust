@@ -22,8 +22,8 @@ use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
-use rocketmq_transport::api::v2::DeferredResumeRetainedSize;
-use rocketmq_transport::api::v2::DeferredWakeReason;
+use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
 
 use super::BrokerDeferredProducer;
@@ -804,7 +804,7 @@ mod replay_tests {
 pub(super) fn submit_pop<MS>(
     service: Arc<PopDeferredService>,
     processor: Weak<PopMessageProcessor<MS>>,
-    claim: rocketmq_transport::api::v2::ClaimedDeferred<crate::long_polling::pop_deferred::service::ResumePop>,
+    claim: rocketmq_transport::api::ClaimedDeferred<crate::long_polling::pop_deferred::service::ResumePop>,
 ) where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
@@ -820,7 +820,7 @@ pub(super) fn submit_pop<MS>(
 pub(super) fn submit_pull<MS>(
     service: Arc<PullDeferredService>,
     processor: Weak<PullMessageProcessor<MS>>,
-    claim: rocketmq_transport::api::v2::ClaimedDeferred<crate::long_polling::pull_deferred::ResumePull>,
+    claim: rocketmq_transport::api::ClaimedDeferred<crate::long_polling::pull_deferred::ResumePull>,
 ) where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
@@ -836,7 +836,7 @@ pub(super) fn submit_pull<MS>(
 pub(super) fn submit_notification<MS>(
     service: Arc<NotificationDeferredService>,
     processor: Weak<NotificationProcessor<MS>>,
-    claim: rocketmq_transport::api::v2::ClaimedDeferred<
+    claim: rocketmq_transport::api::ClaimedDeferred<
         crate::long_polling::notification_deferred::service::ResumeNotification,
     >,
 ) where

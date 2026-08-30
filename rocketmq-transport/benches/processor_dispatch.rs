@@ -24,15 +24,15 @@ use criterion::Throughput;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_security_api::Principal;
-use rocketmq_transport::api::v2::AdmissionController;
-use rocketmq_transport::api::v2::AdmissionLimits;
-use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestProcessorV2;
-use rocketmq_transport::api::v2::ResponsePlan;
-use rocketmq_transport::api::v2::TransportSecurity;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::AuthorizedCommandDispatcher;
+use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::TransportSecurity;
 
 #[path = "support/criterion_profile.rs"]
 mod criterion_profile;
@@ -42,7 +42,7 @@ use criterion_profile::apply_remoting_command_baseline_profile;
 #[derive(Clone, Copy)]
 struct InlineReplyProcessor;
 
-impl RequestProcessorV2 for InlineReplyProcessor {
+impl RequestProcessor for InlineReplyProcessor {
     async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(0)))
     }
@@ -61,9 +61,9 @@ fn benchmark_processor_dispatch(criterion: &mut Criterion) {
         .build()
         .expect("processor-dispatch benchmark runtime");
     let (runtime_context, service, dispatcher) = runtime.block_on(async {
-        let runtime_context = RuntimeContext::from_current("remoting-v2-processor-dispatch-benchmark");
+        let runtime_context = RuntimeContext::from_current("remoting-processor-dispatch-benchmark");
         let service = runtime_context.service_context("dispatcher");
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             InlineReplyProcessor,
             Vec::new(),
             Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
@@ -101,7 +101,7 @@ fn benchmark_processor_dispatch(criterion: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new("canonical_v2_embedded_inline", body_bytes),
+            BenchmarkId::new("canonical_embedded_inline", body_bytes),
             &body_bytes,
             |bencher, body_bytes| {
                 bencher.to_async(&runtime).iter_batched(
@@ -112,7 +112,7 @@ fn benchmark_processor_dispatch(criterion: &mut Criterion) {
                         let principal = principal.clone();
                         async move {
                             let outcome = dispatcher
-                                .dispatch_embedded_v2(&task_group, principal, None, command)
+                                .dispatch_embedded(&task_group, principal, None, command)
                                 .await
                                 .expect("canonical embedded dispatch");
                             match outcome {

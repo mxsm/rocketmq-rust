@@ -51,5 +51,5 @@ pub(crate) fn take_pop_body_segments(get_message_result: GetMessageResult) -> Ve
 }
 
 #[cfg(test)]
-#[path = "pop/tests.rs"]
+#[path = "../../../tests/unit/processor/response_plan/pop.rs"]
 mod tests;

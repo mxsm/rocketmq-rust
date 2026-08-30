@@ -28,8 +28,8 @@ use rocketmq_protocol::protocol::body::producer_info::ProducerInfo;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::api::v2::SessionId;
-use rocketmq_transport::api::v2::V2SessionRegistry;
+use rocketmq_transport::api::SessionId;
+use rocketmq_transport::api::SessionRegistry;
 use tracing::info;
 use tracing::warn;
 
@@ -64,18 +64,18 @@ pub(crate) struct ProducerSessionBatch {
 ///
 /// All operations are thread-safe through lock-free or internally synchronized data structures.
 pub struct ProducerManager {
-    /// Group name -> (stable V2 session -> client identity) mapping.
+    /// Group name -> (stable session -> client identity) mapping.
     group_session_table: Arc<DashMap<ProducerGroupName, DashMap<SessionId, ClientSessionInfo>>>,
-    /// Latest canonical V2 session for each producer client identity.
+    /// Latest canonical session for each producer client identity.
     client_session_table: Arc<DashMap<CheetahString, SessionId>>,
-    /// Immutable client identity claimed by each live V2 session.
+    /// Immutable client identity claimed by each live session.
     session_client_table: Arc<DashMap<SessionId, CheetahString>>,
-    /// Reverse lookup used to remove all producer groups owned by a V2 session.
+    /// Reverse lookup used to remove all producer groups owned by a session.
     session_to_groups: Arc<DashMap<SessionId, HashSet<ProducerGroupName>>>,
     /// Exact-generation typed transport authority for live producer sessions.
     session_transport_table: Arc<DashMap<SessionId, ClientSessionTransport>>,
     /// Weak composition-root resolver used only while applying a session heartbeat.
-    v2_session_registry: Arc<OnceLock<Weak<V2SessionRegistry>>>,
+    session_registry: Arc<OnceLock<Weak<SessionRegistry>>>,
     /// Striped serialization for canonical client-session multi-index transitions.
     session_transition_locks: Arc<ClientSessionTransitionLocks>,
     /// Counter for round-robin session selection.
@@ -161,7 +161,7 @@ impl ProducerClientRegistration {
             "session activity check requires the matching transition guard"
         );
         self.manager
-            .v2_session_registry
+            .session_registry
             .get()
             .and_then(Weak::upgrade)
             .is_some_and(|registry| registry.contains(session_id))
@@ -250,10 +250,7 @@ pub(crate) struct ProducerReplySessionRegistry {
 }
 
 impl ProducerReplySessionRegistry {
-    pub(crate) fn find_request_sender(
-        &self,
-        client_id: &str,
-    ) -> Option<rocketmq_transport::api::v2::ServerRequestSender> {
+    pub(crate) fn find_request_sender(&self, client_id: &str) -> Option<rocketmq_transport::api::ServerRequestSender> {
         let session_id = *self.client_session_table.get(client_id)?.value();
         self.session_transport_table
             .get(&session_id)
@@ -308,7 +305,7 @@ impl ProducerManager {
             session_client_table: Arc::clone(&self.session_client_table),
             session_to_groups: Arc::clone(&self.session_to_groups),
             session_transport_table: Arc::clone(&self.session_transport_table),
-            v2_session_registry: Arc::clone(&self.v2_session_registry),
+            session_registry: Arc::clone(&self.session_registry),
             session_transition_locks: Arc::clone(&self.session_transition_locks),
             positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
             producer_change_listener_vec: Arc::clone(&self.producer_change_listener_vec),
@@ -346,7 +343,7 @@ impl ProducerManager {
             session_client_table: Arc::new(DashMap::new()),
             session_to_groups: Arc::new(DashMap::new()),
             session_transport_table: Arc::new(DashMap::new()),
-            v2_session_registry: Arc::new(OnceLock::new()),
+            session_registry: Arc::new(OnceLock::new()),
             session_transition_locks,
             positive_atomic_counter: Arc::new(AtomicI32::new(0)),
             producer_change_listener_vec: Arc::new(ArcSwap::from_pointee(Vec::new())),
@@ -363,8 +360,8 @@ impl ProducerManager {
         self.broker_stats_manager = Some(broker_stats_manager);
     }
 
-    pub(crate) fn install_v2_session_registry(&self, registry: &Arc<V2SessionRegistry>) -> bool {
-        self.v2_session_registry.set(Arc::downgrade(registry)).is_ok()
+    pub(crate) fn install_session_registry(&self, registry: &Arc<SessionRegistry>) -> bool {
+        self.session_registry.set(Arc::downgrade(registry)).is_ok()
     }
 
     /// Assigns the broker configuration.
@@ -499,7 +496,7 @@ impl ProducerManager {
         self.session_client_table
             .insert(client.session_id(), client.client_id().clone());
         let transport = self
-            .v2_session_registry
+            .session_registry
             .get()
             .and_then(Weak::upgrade)
             .and_then(|registry| {
@@ -544,7 +541,7 @@ impl ProducerManager {
     }
 
     fn session_retirement(&self, session_id: SessionId) -> Option<ClientSessionRetirement> {
-        let registry = self.v2_session_registry.get()?.clone();
+        let registry = self.session_registry.get()?.clone();
         self.session_transport_table
             .get(&session_id)
             .map(|transport| transport.retirement(registry))
@@ -685,7 +682,7 @@ impl ProducerManager {
                         .session_transport_table
                         .remove(&session_id)
                         .and_then(|(_, transport)| {
-                            self.v2_session_registry
+                            self.session_registry
                                 .get()
                                 .cloned()
                                 .map(|registry| transport.retirement(registry))

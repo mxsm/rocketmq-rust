@@ -34,12 +34,12 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::api::v1::AdmissionController;
-use rocketmq_transport::api::v1::AdmissionLimits;
-use rocketmq_transport::api::v1::FrameLimits;
-use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::api::v1::ResourceLimit;
-use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::FrameLimits;
+use rocketmq_transport::api::RequestDeadline;
+use rocketmq_transport::api::ResourceLimit;
+use rocketmq_transport::api::TlsConfig;
 use rocketmq_transport::benchmark_support::connect_with_config;
 use rocketmq_transport::benchmark_support::SessionProcessor;
 use rocketmq_transport::benchmark_support::SessionTransportServer;
@@ -298,7 +298,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn observation(snapshot: rocketmq_transport::api::v1::ResourceSnapshot) -> ResourceObservation {
+fn observation(snapshot: rocketmq_transport::api::ResourceSnapshot) -> ResourceObservation {
     ResourceObservation {
         current_count: snapshot.current_count,
         current_bytes: snapshot.current_bytes,

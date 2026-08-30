@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::v2::DeferredWakeReason;
-use rocketmq_transport::api::v2::ResponsePlan;
+use rocketmq_transport::api::DeferredWakeReason;
+use rocketmq_transport::api::ResponsePlan;
 
 use super::core::PopLiteCoreResult;
 use super::response::PopLiteResponseKind;

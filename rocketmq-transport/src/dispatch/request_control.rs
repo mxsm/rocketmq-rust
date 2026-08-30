@@ -59,7 +59,7 @@ use crate::session_view::SessionView;
 /// value is recomputed or mutable after construction.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestMeta;
+/// use rocketmq_transport::api::RequestMeta;
 ///
 /// fn cannot_read_the_ingress_timestamp_field(meta: &RequestMeta) {
 ///     let _ = meta.received_at;
@@ -67,7 +67,7 @@ use crate::session_view::SessionView;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestMeta;
+/// use rocketmq_transport::api::RequestMeta;
 ///
 /// fn cannot_read_the_deadline_field(meta: &RequestMeta) {
 ///     let _ = meta.deadline;
@@ -75,7 +75,7 @@ use crate::session_view::SessionView;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestMeta;
+/// use rocketmq_transport::api::RequestMeta;
 ///
 /// fn cannot_extend_a_request(meta: &RequestMeta) {
 ///     meta.set_deadline(None);
@@ -89,10 +89,6 @@ pub struct RequestMeta {
 
 impl RequestMeta {
     /// Captures request metadata at the trusted ingress boundary.
-    #[allow(
-        dead_code,
-        reason = "REQ-05 retains this crate-private constructor for the REQ-06 request builder"
-    )]
     pub(crate) const fn new(received_at: Instant, deadline: Option<RequestDeadline>) -> Self {
         Self { received_at, deadline }
     }
@@ -117,7 +113,7 @@ impl RequestMeta {
 /// cancellation token, operation context, or cancellation capability.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestControlView;
+/// use rocketmq_transport::api::RequestControlView;
 ///
 /// fn cannot_cancel_a_request(control: &RequestControlView) {
 ///     control.cancel();
@@ -125,7 +121,7 @@ impl RequestMeta {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestControlView;
+/// use rocketmq_transport::api::RequestControlView;
 ///
 /// fn cannot_get_a_cancellation_token(control: &RequestControlView) {
 ///     let _ = control.cancellation_token();
@@ -133,7 +129,7 @@ impl RequestMeta {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestControlView;
+/// use rocketmq_transport::api::RequestControlView;
 ///
 /// fn cannot_get_an_operation_context(control: &RequestControlView) {
 ///     let _ = control.operation_context();
@@ -141,7 +137,7 @@ impl RequestMeta {
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v2::RequestControlView;
+/// use rocketmq_transport::api::RequestControlView;
 ///
 /// fn cannot_get_the_parent_cancellation_owner(control: &RequestControlView) {
 ///     control.task_group().cancel();
@@ -160,10 +156,6 @@ impl RequestControlView {
     ///
     /// The deadline is copied directly from [`RequestMeta`] so every request
     /// layer observes the same absolute expiry instant and original budget.
-    #[allow(
-        dead_code,
-        reason = "REQ-05 retains this crate-private constructor for the REQ-06 request builder"
-    )]
     pub(crate) fn from_meta(meta: &RequestMeta, session: SessionStateView, parent_task_group: &TaskGroup) -> Self {
         Self {
             deadline: meta.deadline(),

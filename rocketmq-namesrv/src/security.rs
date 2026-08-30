@@ -23,7 +23,7 @@ use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::api::TransportSecurity;
 
 /// Low-cardinality authorization classes for every NameServer request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

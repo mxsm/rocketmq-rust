@@ -45,11 +45,11 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
-use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::v2::HandlerOutcome;
-use rocketmq_transport::api::v2::RemotingRequest;
-use rocketmq_transport::api::v2::RequestOrigin;
-use rocketmq_transport::api::v2::RequestProcessorV2;
+use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RequestOrigin;
+use rocketmq_transport::api::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -208,17 +208,17 @@ impl<MS: BrokerWriteStore> Clone for RecallMessageProcessor<MS> {
     }
 }
 
-impl<MS> RequestProcessorV2 for RecallMessageProcessor<MS>
+impl<MS> RequestProcessor for RecallMessageProcessor<MS>
 where
     MS: BrokerWriteStore + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        self.process_v2_shared(request).await
+        self.process_shared(request).await
     }
 }
 
 impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
-    pub(crate) async fn process_v2_shared(
+    pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -230,7 +230,7 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
             &command_factory,
             result,
             original_opaque,
-            "RecallMessageProcessor V2 command dispatch completed without a response",
+            "RecallMessageProcessor command dispatch completed without a response",
         )
     }
 }
@@ -251,7 +251,7 @@ impl<MS> RecallMessageProcessor<MS>
 where
     MS: BrokerWriteStore,
 {
-    /// V2 leaf business contract; it uses only trusted origin metadata to construct the message birth address.
+    /// processor business contract; it uses only trusted origin metadata to construct the message birth address.
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
@@ -282,15 +282,6 @@ where
                 Ok(Some(response))
             }
         }
-    }
-
-    pub(crate) async fn process_legacy(
-        &self,
-        remote_address: std::net::SocketAddr,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let processor = self.clone();
-        processor.process_command(request, remote_address).await
     }
 
     async fn process_recall_message(
@@ -664,14 +655,14 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
-    use rocketmq_transport::api::v1::AdmissionController;
-    use rocketmq_transport::api::v1::AdmissionLimits;
-    use rocketmq_transport::api::v1::TransportSecurity;
-    use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
-    use rocketmq_transport::api::v2::EmbeddedCaller;
-    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::v2::ResponseBodyKind;
-    use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::api::AuthorizedCommandDispatcher;
+    use rocketmq_transport::api::EmbeddedCaller;
+    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::ResponseBodyKind;
+    use rocketmq_transport::api::TransportSecurity;
+    use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
     struct AllowEmbeddedPolicy;
 
@@ -681,7 +672,7 @@ mod tests {
         }
     }
 
-    fn v2_test_processor() -> RecallMessageProcessor<StorePorts> {
+    fn test_processor() -> RecallMessageProcessor<StorePorts> {
         let broker_config = BrokerConfig::default();
         let message_store_config = MessageStoreConfig::default();
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -690,7 +681,7 @@ mod tests {
             true,
             None,
         ));
-        let stats_context = crate::test_service_context("recall-message-v2-stats");
+        let stats_context = crate::test_service_context("recall-message-stats");
         let broker_stats_manager = Arc::new(BrokerStatsManager::new(
             Arc::new(StoreRuntimeConfig::default()),
             stats_context.task_group().clone(),
@@ -800,12 +791,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_embedded_recall_fails_closed_before_business_processing() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("recall-message-v2-test"))
-            .expect("RecallMessage V2 test runtime");
-        let context = owner.root_context().component("recall-message-v2-test.request");
-        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new(
-            v2_test_processor(),
+    async fn embedded_recall_fails_closed_before_business_processing() {
+        let owner = RuntimeOwner::new(RuntimeConfig::server_default("recall-message-test"))
+            .expect("RecallMessage test runtime");
+        let context = owner.root_context().component("recall-message-test.request");
+        let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
+            test_processor(),
             Vec::new(),
             Arc::new(TransportSecurity::secure_enforced(
                 Some(Arc::new(AllowEmbeddedPolicy)),
@@ -813,10 +804,10 @@ mod tests {
             )),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));
-        let harness = EmbeddedRequestHarnessV2::new(
+        let harness = EmbeddedRequestHarness::new(
             dispatcher,
             context.task_group().clone(),
-            Principal::new("recall-message-v2-test"),
+            Principal::new("recall-message-test"),
         );
 
         let outcome = harness
