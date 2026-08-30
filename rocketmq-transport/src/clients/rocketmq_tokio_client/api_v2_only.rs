@@ -28,12 +28,11 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestUsage;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
-use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
+use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::GoAwayPolicy;
 use crate::runtime::config::client_config::TransportClientConfig;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
@@ -43,79 +42,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::CachedConnectionState;
 use super::TransportClient;
-
-/// Builds a persistent endpoint client without exposing positional optional capabilities.
-pub struct TransportClientBuilder<PR> {
-    config: Arc<TransportClientConfig>,
-    processor: PR,
-    service_context: ChildServiceContext,
-    connection_events: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    transport_security: Option<Arc<TransportSecurity>>,
-    telemetry: TransportTelemetry,
-    frame_limits: FrameLimits,
-    go_away_policy: GoAwayPolicy,
-}
-
-impl<PR> TransportClientBuilder<PR>
-where
-    PR: RequestProcessor + Sync + Clone + 'static,
-{
-    pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
-        self.connection_events = Some(events);
-        self
-    }
-
-    pub fn transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
-        self.transport_security = Some(transport_security);
-        self
-    }
-
-    pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
-        self.telemetry = telemetry;
-        self
-    }
-
-    /// Applies one validated frame profile to every connection created by this client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the frame limits are internally inconsistent or
-    /// exceed the supported protocol envelope.
-    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
-        frame_limits.validate()?;
-        self.frame_limits = frame_limits;
-        Ok(self)
-    }
-
-    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
-    #[must_use]
-    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
-        self.go_away_policy = policy;
-        self
-    }
-
-    /// Builds the legacy-processor transport client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the transport configuration, admission limits,
-    /// frame limits, or owned runtime composition is invalid.
-    pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
-        let mut client = TransportClient::build_inner(
-            self.config,
-            self.processor,
-            self.connection_events,
-            self.service_context,
-            self.telemetry,
-            self.frame_limits,
-            self.go_away_policy,
-        )?;
-        if let Some(transport_security) = self.transport_security {
-            client = client.with_transport_security(transport_security);
-        }
-        Ok(client)
-    }
-}
 
 /// Builds a persistent endpoint client with an explicit V2 inbound processor.
 pub struct TransportClientV2Builder<PR> {
@@ -190,6 +116,9 @@ where
     }
 }
 
+/// Canonical V2 transport client builder.
+pub type TransportClientBuilder<PR> = TransportClientV2Builder<PR>;
+
 /// Nameserver-aware remoting client.
 ///
 /// This type composes the canonical persistent [`TransportClient`]. It never
@@ -201,23 +130,16 @@ pub struct RemotingClient<PR = DefaultRequestProcessor> {
 
 impl<PR> RemotingClient<PR>
 where
-    PR: RequestProcessor + Sync + Clone + 'static,
+    PR: RequestProcessorV2 + Sync + Clone + 'static,
 {
     pub fn builder(
         config: Arc<TransportClientConfig>,
         processor: PR,
         service_context: ChildServiceContext,
-    ) -> RemotingClientBuilder<PR> {
-        RemotingClientBuilder {
-            transport: TransportClient::builder(config, processor, service_context),
-        }
+    ) -> RemotingClientV2Builder<PR> {
+        Self::builder_v2(config, processor, service_context)
     }
-}
 
-impl<PR> RemotingClient<PR>
-where
-    PR: RequestProcessorV2 + Sync + Clone + 'static,
-{
     pub fn builder_v2(
         config: Arc<TransportClientConfig>,
         processor: PR,
@@ -270,59 +192,8 @@ impl<PR> Deref for RemotingClient<PR> {
     }
 }
 
-pub struct RemotingClientBuilder<PR> {
-    transport: TransportClientBuilder<PR>,
-}
-
-impl<PR> RemotingClientBuilder<PR>
-where
-    PR: RequestProcessor + Sync + Clone + 'static,
-{
-    pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
-        self.transport = self.transport.connection_events(events);
-        self
-    }
-
-    pub fn transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
-        self.transport = self.transport.transport_security(transport_security);
-        self
-    }
-
-    pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
-        self.transport = self.transport.telemetry(telemetry);
-        self
-    }
-
-    /// Applies one validated frame profile to every connection created by this client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the frame limits are internally inconsistent or
-    /// exceed the supported protocol envelope.
-    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
-        self.transport = self.transport.frame_limits(frame_limits)?;
-        Ok(self)
-    }
-
-    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
-    #[must_use]
-    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
-        self.transport = self.transport.go_away_policy(policy);
-        self
-    }
-
-    /// Builds the legacy-processor nameserver-aware remoting client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the underlying V2 transport configuration,
-    /// admission limits, frame limits, or owned runtime composition is invalid.
-    pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
-        Ok(RemotingClient {
-            transport: Arc::new(self.transport.build()?),
-        })
-    }
-}
+/// Canonical V2 nameserver-aware client builder.
+pub type RemotingClientBuilder<PR> = RemotingClientV2Builder<PR>;
 
 pub struct RemotingClientV2Builder<PR> {
     transport: TransportClientV2Builder<PR>,
@@ -449,26 +320,15 @@ impl ClientShutdownReport {
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
     pub fn builder(
         tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,
         service_context: ChildServiceContext,
-    ) -> TransportClientBuilder<PR> {
-        TransportClientBuilder {
-            config: tokio_client_config,
-            processor,
-            service_context,
-            connection_events: None,
-            transport_security: None,
-            telemetry: TransportTelemetry::noop(),
-            frame_limits: FrameLimits::java_compatibility(),
-            go_away_policy: GoAwayPolicy::default(),
-        }
+    ) -> TransportClientV2Builder<PR> {
+        Self::builder_v2(tokio_client_config, processor, service_context)
     }
-}
 
-impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
     pub fn builder_v2(
         tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,
@@ -712,19 +572,5 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 
     pub fn close_clients(&self, addrs: Vec<String>) {
         self.close_clients_inner(addrs);
-    }
-}
-
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
-    /// Retained V1 compatibility facade for request processors fixed at construction.
-    ///
-    /// Use [`TransportClient::builder`] or [`RemotingClient::builder`] and
-    /// propagate the fallible `build()?` result instead.
-    #[deprecated(
-        since = "1.0.0",
-        note = "request processors are fixed at construction; use TransportClient::builder(...).build()? or RemotingClient::builder(...).build()?"
-    )]
-    pub fn register_processor(&self, processor: impl RequestProcessor + Sync) {
-        self.register_processor_inner(processor);
     }
 }

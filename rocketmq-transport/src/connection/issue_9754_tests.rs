@@ -364,7 +364,7 @@ async fn typed_response_admission_saturation_is_not_started_before_lane_enqueue(
 }
 
 #[tokio::test]
-async fn queued_legacy_response_apis_record_queue_wait_but_generic_commands_do_not() {
+async fn queued_response_api_records_queue_wait_but_generic_commands_do_not() {
     let controller = AdmissionController::new(AdmissionLimits::default());
     let admission = controller
         .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
@@ -407,14 +407,9 @@ async fn queued_legacy_response_apis_record_queue_wait_but_generic_commands_do_n
     connection
         .send_response(RemotingCommand::create_response_command_with_code(0))
         .await
-        .expect("owned legacy response write");
-    let mut borrowed = RemotingCommand::create_response_command_with_code(0);
-    connection
-        .send_response_ref(&mut borrowed)
-        .await
-        .expect("borrowed legacy response write");
+        .expect("owned response write");
 
-    assert_eq!(capture.response_queue_waits(), 2);
+    assert_eq!(capture.response_queue_waits(), 1);
     drop(connection);
     writer.await.expect("writer exits after the last queue handle drops");
 }
@@ -580,36 +575,6 @@ async fn typed_response_write_and_flush_failures_are_possibly_partial_with_a_typ
             assert_eq!(writes.load(Ordering::Acquire), 2);
         }
     }
-}
-
-#[tokio::test]
-async fn typed_borrowed_response_late_transport_failure_preserves_source_after_body_take() {
-    let writes = Arc::new(AtomicUsize::new(0));
-    let mut connection = Connection::new_with_plaintext_stream(FailingResponseTransport {
-        writes: Arc::clone(&writes),
-        phase: DirectFailurePhase::PartialThenError,
-    });
-    let mut command = RemotingCommand::create_remoting_command(7).set_body(b"borrowed-body".to_vec());
-
-    let error = connection
-        .send_response_ref(&mut command)
-        .await
-        .expect_err("injected late transport failure");
-
-    assert!(
-        command.body().is_none(),
-        "borrowed response body must be taken before the late write failure"
-    );
-    let ResponseError::Transport { progress, source } = &error else {
-        panic!("late transport failure must retain typed response completion")
-    };
-    assert_eq!(*progress, WriteProgress::PossiblyPartial);
-    let RocketMQError::Shared(shared) = source else {
-        panic!("late transport failure must preserve the writer source")
-    };
-    assert!(matches!(shared.as_error(), RocketMQError::IO(_)));
-    assert!(Error::source(&error).is_some());
-    assert_eq!(writes.load(Ordering::Acquire), 2);
 }
 
 #[tokio::test]

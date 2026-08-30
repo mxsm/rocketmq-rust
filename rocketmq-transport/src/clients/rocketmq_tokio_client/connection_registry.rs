@@ -381,8 +381,8 @@ mod tests {
 
     use super::*;
     use crate::clients::rocketmq_tokio_client::TransportClient;
-    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
     use crate::deadline::RequestDeadline;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
     use crate::runtime::config::client_config::TransportClientConfig;
 
     #[test]

@@ -380,16 +380,11 @@ const METRIC_LABELS_60: &[&str] = &[
 ];
 
 const METRIC_LABELS_61: &[&str] = &[
-    labels::PROCESSOR,
-    labels::REQUEST_CODE,
-];
-
-const METRIC_LABELS_62: &[&str] = &[
     labels::MODE,
     labels::RESULT,
 ];
 
-const METRIC_LABELS_63: &[&str] = &[
+const METRIC_LABELS_62: &[&str] = &[
     labels::CODE,
 ];
 
@@ -1903,13 +1898,6 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Observability,
     },
     MetricDescriptor {
-        name: metrics::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL,
-        kind: MetricKind::Counter,
-        unit: "{request}",
-        labels: METRIC_LABELS_61,
-        source: MetricSource::Remoting,
-    },
-    MetricDescriptor {
         name: metrics::TRANSPORT_REQUEST_DURATION_SECONDS,
         kind: MetricKind::Histogram,
         unit: "s",
@@ -1920,21 +1908,21 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::TRANSPORT_RESPONSE_TOTAL,
         kind: MetricKind::Counter,
         unit: "{response}",
-        labels: METRIC_LABELS_62,
+        labels: METRIC_LABELS_61,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
         name: metrics::TRANSPORT_DEFERRED_INFLIGHT,
         kind: MetricKind::UpDownCounter,
         unit: "{request}",
-        labels: METRIC_LABELS_63,
+        labels: METRIC_LABELS_62,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
         name: metrics::TRANSPORT_DEFERRED_RETAINED_BYTES,
         kind: MetricKind::UpDownCounter,
         unit: "By",
-        labels: METRIC_LABELS_63,
+        labels: METRIC_LABELS_62,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
@@ -1948,7 +1936,7 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         name: metrics::TRANSPORT_RESPONSE_DUPLICATE_TOTAL,
         kind: MetricKind::Counter,
         unit: "{response}",
-        labels: METRIC_LABELS_63,
+        labels: METRIC_LABELS_62,
         source: MetricSource::Remoting,
     },
     MetricDescriptor {

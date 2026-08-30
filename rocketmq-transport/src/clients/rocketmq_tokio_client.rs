@@ -32,20 +32,17 @@ use tracing::warn;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::clients::client::ClientInboundOwner;
-use crate::clients::client::LegacyClientInboundOwner;
 use crate::clients::client::V2ClientInboundOwner;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
-use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 use crate::codec::remoting_command_codec::FrameLimits;
-use crate::remoting::inner::RemotingGeneralHandler;
+use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 #[cfg(test)]
 use crate::runtime::config::client_config::ConnectConfig;
 use crate::runtime::config::client_config::GoAwayPolicy;
 #[cfg(test)]
 use crate::runtime::config::client_config::MaintenanceConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::processor_v2::RequestProcessorV2;
 #[cfg(test)]
 use crate::runtime::RPCHook;
@@ -54,6 +51,7 @@ use crate::telemetry::TransportTelemetry;
 #[cfg(test)]
 use crate::tls::TlsConfig;
 
+#[path = "rocketmq_tokio_client/api_v2_only.rs"]
 mod api;
 mod compatibility;
 mod connect_flight;
@@ -274,7 +272,7 @@ impl<PR> Clone for TransportClient<PR> {
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
     #[cfg(test)]
     pub(crate) fn build_for_test(
         config: Arc<TransportClientConfig>,
@@ -286,39 +284,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             .expect("test transport client configuration must be valid")
     }
 
-    fn build_inner(
-        tokio_client_config: Arc<TransportClientConfig>,
-        processor: PR,
-        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        service_context: ChildServiceContext,
-        telemetry: TransportTelemetry,
-        frame_limits: FrameLimits,
-        go_away_policy: GoAwayPolicy,
-    ) -> RocketMQResult<Self> {
-        frame_limits.validate()?;
-        let process_budget = service_context.process_budget();
-        let pending_requests = PendingRequestTable::try_with_limits_and_budget(
-            crate::base::pending_request_table::PendingRequestLimits {
-                max_count: 512,
-                ..Default::default()
-            },
-            &process_budget,
-        )?;
-        let handler =
-            RemotingGeneralHandler::new_with_telemetry(processor, vec![], pending_requests, telemetry.clone());
-        Self::build_with_inbound_owner(
-            tokio_client_config,
-            Arc::new(LegacyClientInboundOwner::new(handler)),
-            tx,
-            service_context,
-            telemetry,
-            frame_limits,
-            go_away_policy,
-        )
-    }
-}
-
-impl<PR: RequestProcessorV2 + Sync + Clone + 'static> TransportClient<PR> {
     fn build_inner_v2(
         tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,

@@ -31,7 +31,6 @@ use crate::metrics::remoting::TRANSPORT_DEFERRED_INFLIGHT;
 use crate::metrics::remoting::TRANSPORT_DEFERRED_RETAINED_BYTES;
 use crate::metrics::remoting::TRANSPORT_DEFERRED_TERMINAL_TOTAL;
 use crate::metrics::remoting::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
-use crate::metrics::remoting::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUEST_DURATION_SECONDS;
 use crate::metrics::remoting::TRANSPORT_REQUEST_LATENCY;
@@ -208,8 +207,6 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     let second = RemotingMetrics::new(&second_provider.meter("rocketmq-transport"));
     first.record_inbound_decoded_plaintext_bytes(21);
     second.record_inbound_decoded_plaintext_bytes(17);
-    first.record_legacy_processor_request("broker-send", 10);
-    first.record_legacy_processor_request("broker-send", 10);
     first.record_deferred_terminal("pull_message", "owner_deadline");
     first.record_deferred_terminal("pull_message", "owner_deadline");
     first.record_response(ResponseMode::Inline, ResponseResult::TransportWritten);
@@ -219,7 +216,6 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     first.adjust_deferred(RequestCodeClass::PullMessage, 1, 512);
     first.adjust_deferred(RequestCodeClass::PullMessage, -1, -512);
     first.record_response_queue_wait(0.125);
-    second.record_legacy_processor_request("namesrv-route", 20);
     second.record_deferred_terminal("other", "service_stopping");
 
     let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false);
@@ -228,11 +224,6 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     drop(success);
 
     drop(RequestMetricsGuard::start(first.clone(), 11, 7, true));
-
-    let mut legacy_ambiguous_none = RequestMetricsGuard::start(first.clone(), 12, 9, false);
-    legacy_ambiguous_none.complete_legacy_ambiguous_none();
-    legacy_ambiguous_none.complete_cancelled();
-    drop(legacy_ambiguous_none);
 
     let mut deferred = RequestMetricsGuard::start_v2(first.clone(), 11, 13, true, RequestCodeClass::PullMessage);
     deferred.record_v2_deferred_registered();
@@ -255,17 +246,17 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
 
     let first_points = first_exporter.points();
     let second_points = second_exporter.points();
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 6);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 5);
     assert_eq!(
         metric_value(&first_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
         21
     );
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 5);
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_DURATION_SECONDS), 6);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 4);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_DURATION_SECONDS), 5);
     assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS), 1);
     assert_eq!(signed_metric_value(&first_points, TRANSPORT_DEFERRED_INFLIGHT), 0);
     assert_eq!(signed_metric_value(&first_points, TRANSPORT_DEFERRED_RETAINED_BYTES), 0);
-    assert_eq!(metric_value(&first_points, RPC_LATENCY), 5);
+    assert_eq!(metric_value(&first_points, RPC_LATENCY), 4);
     assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_TOTAL), 2);
     assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_DUPLICATE_TOTAL), 1);
     assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_ABANDONED_TOTAL), 1);
@@ -362,41 +353,11 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
         ])
     );
 
-    let first_legacy = first_points
-        .iter()
-        .filter(|point| point.metric == TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL)
-        .collect::<Vec<_>>();
-    assert_eq!(first_legacy.len(), 1);
-    assert_eq!(first_legacy[0].value, 2);
-    assert_eq!(
-        first_legacy[0].attributes,
-        BTreeMap::from([
-            ("processor".to_owned(), CapturedValue::String("broker-send".to_owned()),),
-            ("request_code".to_owned(), CapturedValue::I64(10)),
-        ])
-    );
-    let second_legacy = second_points
-        .iter()
-        .filter(|point| point.metric == TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL)
-        .collect::<Vec<_>>();
-    assert_eq!(second_legacy.len(), 1);
-    assert_eq!(second_legacy[0].value, 1);
-    assert_eq!(
-        second_legacy[0].attributes,
-        BTreeMap::from([
-            (
-                "processor".to_owned(),
-                CapturedValue::String("namesrv-route".to_owned()),
-            ),
-            ("request_code".to_owned(), CapturedValue::I64(20)),
-        ])
-    );
-
     let first_rpc = first_points
         .iter()
         .filter(|point| point.metric == RPC_LATENCY)
         .collect::<Vec<_>>();
-    assert_eq!(first_rpc.len(), 5);
+    assert_eq!(first_rpc.len(), 4);
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("request_code") == Some(&CapturedValue::I64(10))
             && point.attributes.get("response_code") == Some(&CapturedValue::I64(0))
@@ -408,16 +369,6 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
             && point.attributes.get("response_code") == Some(&CapturedValue::I64(-1))
             && point.attributes.get("result") == Some(&CapturedValue::String("cancelled".to_owned()))
     }));
-    let legacy_ambiguous_none = first_rpc
-        .iter()
-        .filter(|point| {
-            point.attributes.get("request_code") == Some(&CapturedValue::I64(12))
-                && point.attributes.get("response_code") == Some(&CapturedValue::I64(-1))
-                && point.attributes.get("result") == Some(&CapturedValue::String("legacy_ambiguous_none".to_owned()))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(legacy_ambiguous_none.len(), 1);
-    assert_eq!(legacy_ambiguous_none[0].value, 1);
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("result") == Some(&CapturedValue::String("process_request_failed".to_owned()))
     }));

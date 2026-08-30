@@ -18,7 +18,6 @@ use tracing::info;
 use tracing::warn;
 
 use super::TransportClient;
-use crate::runtime::processor::RequestProcessor;
 
 /// The result of reconciling one direct cached transport session.
 ///
@@ -56,11 +55,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             }
         }
     }
-
-    pub(super) fn register_processor_inner(&self, processor: impl RequestProcessor + Sync) {
-        let _ = &processor;
-        warn!("dynamic request processor registration is not supported by TransportClient after construction");
-    }
 }
 
 #[cfg(test)]
@@ -72,7 +66,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
     use crate::runtime::config::client_config::TransportClientConfig;
 
     #[tokio::test]

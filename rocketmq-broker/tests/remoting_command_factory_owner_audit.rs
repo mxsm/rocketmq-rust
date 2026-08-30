@@ -49,12 +49,18 @@ fn collect_rust_files(root: &Path, files: &mut Vec<std::path::PathBuf>) {
     for entry in fs::read_dir(root).expect("audit directory should be readable") {
         let path = entry.expect("audit entry should be readable").path();
         if path.is_dir() {
-            if path.file_name().is_some_and(|name| name == "admin_broker_processor") {
+            if path
+                .file_name()
+                .is_some_and(|name| matches!(name.to_str(), Some("admin_broker_processor" | "tests")))
+            {
                 continue;
             }
             collect_rust_files(&path, files);
         } else if path.extension().is_some_and(|extension| extension == "rs") {
-            if path.file_name().is_some_and(|name| name == "admin_broker_processor.rs") {
+            if path.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy();
+                name == "admin_broker_processor.rs" || name == "tests.rs" || name.ends_with("_tests.rs")
+            }) {
                 continue;
             }
             files.push(path);

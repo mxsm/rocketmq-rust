@@ -345,18 +345,6 @@ impl InlineResponseSlot {
             InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
         }
     }
-
-    /// Consumes the affine inline reply state when an original one-way request
-    /// discards an owned legacy response before plan validation.
-    pub(crate) fn resolve_legacy_oneway_reply(&mut self) -> Result<(), HandlerOutcomeContractError> {
-        let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
-        drop(self.deferred_seed.take());
-        match state {
-            InlineResponseState::Open | InlineResponseState::OpenWithDeferred => Ok(()),
-            InlineResponseState::DeferredTaken => Err(HandlerOutcomeContractError::ReplyAfterDeferredTaken),
-            InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
-        }
-    }
 }
 
 fn validate_marker(

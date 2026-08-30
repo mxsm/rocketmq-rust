@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Minimal imports for Transport composition roots.
+use rocketmq_runtime::ChildServiceContext;
 
-pub use crate::api::v1::OneShotTransportClient;
-pub use crate::api::v1::RemotingClient;
-pub use crate::api::v1::RequestDeadline;
-pub use crate::api::v1::ServerConfig;
-pub use crate::api::v1::TransportClient;
-pub use crate::api::v1::TransportClientConfig;
-pub use crate::api::v2::RequestProcessorV2;
-pub use crate::api::v2::TransportServerV2 as TransportServer;
+pub(super) fn new_remoting_server_context(context: &ChildServiceContext) -> ChildServiceContext {
+    context.component("rocketmq.remoting.server")
+}

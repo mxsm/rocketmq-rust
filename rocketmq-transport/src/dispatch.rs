@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "dispatch/authorized_dispatcher_v2.rs"]
 mod authorized_dispatcher;
 mod deferred_admission;
 mod deferred_expiry;
@@ -26,8 +27,6 @@ pub(crate) mod deferred_resume;
 mod deferred_session_cleanup;
 mod embedded_dispatch;
 mod handler_outcome;
-mod legacy_processor_adapter;
-mod legacy_session_execution;
 mod remoting_request;
 mod request_context;
 mod request_control;
@@ -36,8 +35,8 @@ mod request_origin;
 mod response;
 mod response_plan;
 mod response_sink;
+mod v2_processor_adapter;
 
-pub use authorized_dispatcher::AuthorizedCommandDispatcher;
 pub use authorized_dispatcher::AuthorizedCommandDispatcherV2;
 pub use authorized_dispatcher::AuthorizedDispatchBoundary;
 pub(crate) use authorized_dispatcher::AuthorizedDispatchSession;
@@ -110,14 +109,13 @@ pub(crate) use deferred_response::ResponseStateError;
     reason = "DEF-01 exposes private state diagnostics to later deferred runtime stages"
 )]
 pub(crate) use deferred_response::ResponseStateSnapshot;
-#[cfg(test)]
-pub(crate) use deferred_session_cleanup::DeferredSessionCleanupCloseOutcome;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupOwner;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupRegistration;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupReport;
-pub(crate) use deferred_session_cleanup::LegacySessionCleanupCapability;
-pub use deferred_session_cleanup::LegacySessionCleanupEnrollment;
-pub use deferred_session_cleanup::LegacySessionCleanupInstallError;
+#[cfg(test)]
+pub(crate) use deferred_session_cleanup::SessionCleanupCapability;
+#[cfg(test)]
+pub(crate) use deferred_session_cleanup::SessionCleanupEnrollment;
 pub use embedded_dispatch::EmbeddedDispatchError;
 pub use embedded_dispatch::EmbeddedDispatchErrorKind;
 pub use embedded_dispatch::EmbeddedDispatchOutcome;
@@ -131,31 +129,6 @@ pub(crate) use handler_outcome::InlineResponseSlot;
 pub use handler_outcome::ProtocolNoResponse;
 pub use handler_outcome::ProtocolNoResponseError;
 pub use handler_outcome::ProtocolNoResponseReason;
-#[cfg(test)]
-pub(crate) use legacy_processor_adapter::bridge_construction_counts;
-pub(crate) use legacy_processor_adapter::DispatchMetricsGuard;
-pub(crate) use legacy_processor_adapter::DispatchProcessor;
-pub(crate) use legacy_processor_adapter::DispatchProcessorError;
-pub(crate) use legacy_processor_adapter::EmbeddedProcessorResolveError;
-pub(crate) use legacy_processor_adapter::EmbeddedResolvedOutcome;
-pub(crate) use legacy_processor_adapter::ExplicitV2Processor;
-pub(crate) use legacy_processor_adapter::InternalFailureOrigin;
-pub(crate) use legacy_processor_adapter::InternalProcessorCandidate;
-pub(crate) use legacy_processor_adapter::InternalProcessorOutcome;
-pub(crate) use legacy_processor_adapter::LegacyNetworkSession;
-pub(crate) use legacy_processor_adapter::LegacyProcessorAdapter;
-pub(crate) use legacy_processor_adapter::LegacyProcessorAdapterError;
-pub(crate) use legacy_processor_adapter::LegacyReplyCandidate;
-#[allow(
-    unused_imports,
-    reason = "DSP-05 exposes the sealed legacy bridge to later coexistence routing"
-)]
-pub(crate) use legacy_processor_adapter::LegacyRequestBridge;
-pub(crate) use legacy_processor_adapter::V2NetworkSession;
-pub(crate) use legacy_session_execution::LegacySessionExecutionCapability;
-pub use legacy_session_execution::LegacySessionExecutionEnrollment;
-pub(crate) use legacy_session_execution::LegacySessionExecutionSeed;
-pub use legacy_session_execution::LegacySessionExecutionSubmitError;
 pub use remoting_request::IngressRequestView;
 pub use remoting_request::RemotingRequest;
 pub use request_context::RequestContext;
@@ -175,24 +148,13 @@ pub use response::ResponseErrorKind;
 pub use response::ResponseReceipt;
 pub use response::ResponseTerminalState;
 pub use response::WriteProgress;
-pub(crate) use response_plan::materialize_embedded_v2_compatibility_response;
 #[allow(
     unused_imports,
     reason = "later private response stages name the RSP-03 binding capability through dispatch"
 )]
 pub(crate) use response_plan::BoundResponsePlan;
-pub use response_plan::EmbeddedV2CompatibilityMaterializationError;
-pub use response_plan::EmbeddedV2CompatibilityMaterializationErrorKind;
-#[allow(
-    unused_imports,
-    reason = "RSP-06 exposes the private legacy materialization failure to later embedded wiring"
-)]
-pub(crate) use response_plan::LegacyLocalMaterializationError;
-#[allow(
-    unused_imports,
-    reason = "RSP-06 exposes the private bounded legacy materialization profile to later embedded wiring"
-)]
-pub(crate) use response_plan::LegacyMaterializationLimits;
+pub use response_plan::EmbeddedResponse;
+pub use response_plan::EmbeddedResponseBody;
 #[allow(
     unused_imports,
     reason = "later private response stages handle the RSP-03 binding failure through dispatch"
@@ -216,3 +178,13 @@ pub(crate) use response_sink::NetworkResponsePlanContext;
 pub use response_sink::ResponseSink;
 pub use response_sink::ResponseSinkError;
 pub(crate) use response_sink::ResponseTransportDropHandle;
+pub(crate) use v2_processor_adapter::DispatchMetricsGuard;
+pub(crate) use v2_processor_adapter::DispatchProcessor;
+pub(crate) use v2_processor_adapter::DispatchProcessorError;
+pub(crate) use v2_processor_adapter::EmbeddedProcessorResolveError;
+pub(crate) use v2_processor_adapter::EmbeddedResolvedOutcome;
+pub(crate) use v2_processor_adapter::ExplicitV2Processor;
+pub(crate) use v2_processor_adapter::InternalFailureOrigin;
+pub(crate) use v2_processor_adapter::InternalProcessorCandidate;
+pub(crate) use v2_processor_adapter::InternalProcessorOutcome;
+pub(crate) use v2_processor_adapter::V2NetworkSession;

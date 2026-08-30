@@ -25,8 +25,6 @@ use rocketmq_runtime::TaskGroup;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::runtime::connection_handler_context::ConnectionHandlerContext;
-use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::session_view::SessionId;
 
 mod embedded_v2;
@@ -39,7 +37,6 @@ pub use crate::client::connect_with_config_options_and_telemetry;
 pub use crate::codec::remoting_command_codec::RemotingCommandCodec;
 pub use crate::connection::transport_io_snapshot;
 pub use crate::connection::Connection;
-pub use crate::local::LocalRequestHarness;
 pub use crate::server::run_connected_session;
 pub use crate::server::run_connected_session_with_io_policy;
 pub use crate::server::ConnectionHandler;
@@ -70,94 +67,53 @@ pub fn session_id_for_test(owner_id: u64) -> SessionId {
     SessionId::from_session_owner(owner_id)
 }
 
-/// Test-only owner for exercising legacy session-close cleanup through the
-/// same opaque context capability used by admitted network requests.
-pub struct LegacySessionCleanupHarness {
-    owner: crate::dispatch::DeferredSessionCleanupOwner,
+/// Owns both ends of a loopback connection for downstream channel lifecycle
+/// tests without constructing a processor or handler context.
+pub struct LocalChannelHarness {
+    channel: Channel,
+    _peer: Connection,
 }
 
-/// Test-only canonical session owner for claimed legacy execution.
-///
-/// The harness uses the real session executor, admission scope, cleanup
-/// coordinator, and cancellation path while leaving its task-group lifecycle
-/// with the caller.
-pub struct LegacySessionExecutionHarness {
-    owner: crate::dispatch::DeferredSessionCleanupOwner,
-    executor: crate::session_executor::SessionExecutor,
-    _admission: crate::admission::AdmissionController,
-}
+impl LocalChannelHarness {
+    /// Creates a connected loopback channel owned by `parent_task_group`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the loopback socket cannot be created or the
+    /// channel task cannot be registered with its lifecycle owner.
+    pub async fn new(parent_task_group: TaskGroup) -> RocketMQResult<Self> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let server_addr = listener.local_addr()?;
+        let (client_stream, (server_stream, _)) =
+            tokio::try_join!(tokio::net::TcpStream::connect(server_addr), listener.accept())?;
 
-impl LegacySessionExecutionHarness {
-    #[must_use]
-    pub fn new(owner_id: u64, task_group: &TaskGroup) -> Self {
-        let admission = crate::admission::AdmissionController::new(crate::admission::AdmissionLimits::default());
-        let scope = admission
-            .prepare_scope(
-                crate::admission::AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST)).with_session(owner_id),
-            )
-            .expect("legacy session execution test admission scope");
-        let executor = crate::session_executor::SessionExecutor::try_new(task_group, scope)
-            .expect("legacy session execution test owner");
-        Self {
-            owner: crate::dispatch::DeferredSessionCleanupOwner::new(session_id_for_test(owner_id)),
-            executor,
-            _admission: admission,
-        }
-    }
+        let local_address = server_stream.local_addr()?;
+        let remote_address = server_stream.peer_addr()?;
+        debug_assert_eq!(local_address, client_stream.peer_addr()?);
+        debug_assert_eq!(remote_address, client_stream.local_addr()?);
 
-    #[must_use]
-    pub fn context(&self, channel: Channel, retained_bytes: usize, request_code: i32) -> ConnectionHandlerContext {
-        let seed = crate::dispatch::LegacySessionExecutionSeed::new(
-            self.owner.registration(),
-            self.executor.deferred_resume_executor(),
-            retained_bytes,
-            crate::admission::AdmissionClass::for_request_code(request_code),
-            crate::request_ordering::RequestOrdering::Concurrent,
-        );
-        Arc::new(ConnectionHandlerContextWrapper::new_with_legacy_session_execution(
-            channel, seed,
-        ))
-    }
-
-    pub fn set_first_poll_gate(&self, entered: Arc<tokio::sync::Notify>, release: Arc<tokio::sync::Notify>) {
-        self.executor.set_legacy_execution_first_poll_gate(entered, release);
-    }
-
-    pub fn set_insert_checkpoint(&self, checkpoint: impl Fn(bool) + Send + Sync + 'static) {
-        self.owner.set_insert_checkpoint(Arc::new(checkpoint));
-    }
-
-    pub fn close(&self) {
-        self.executor.begin_close();
-        let _ = self.owner.close();
-    }
-}
-
-impl LegacySessionCleanupHarness {
-    #[must_use]
-    pub fn new(owner_id: u64) -> Self {
-        Self {
-            owner: crate::dispatch::DeferredSessionCleanupOwner::new(session_id_for_test(owner_id)),
-        }
-    }
-
-    #[must_use]
-    pub fn context(&self, channel: Channel) -> ConnectionHandlerContext {
-        Arc::new(ConnectionHandlerContextWrapper::new_with_legacy_session_cleanup(
+        let channel = TestChannelBuilder::new(Connection::new(server_stream), parent_task_group)
+            .addresses(local_address, remote_address)
+            .build()?;
+        Ok(Self {
             channel,
-            self.owner.registration(),
-        ))
+            _peer: Connection::new(client_stream),
+        })
     }
 
-    /// Installs a deterministic checkpoint immediately before the canonical
-    /// cleanup enrollment publishes its caller-owned node. The callback runs
-    /// while enrollment still owns the cleanup coordinator gate.
-    pub fn set_insert_checkpoint(&self, checkpoint: impl Fn(bool) + Send + Sync + 'static) {
-        self.owner.set_insert_checkpoint(Arc::new(checkpoint));
+    #[must_use]
+    pub fn channel(&self) -> Channel {
+        self.channel.clone()
     }
 
-    pub fn close(&self) {
-        let _ = self.owner.close();
+    #[must_use]
+    pub fn local_address(&self) -> SocketAddr {
+        self.channel.local_address()
+    }
+
+    #[must_use]
+    pub fn remote_address(&self) -> SocketAddr {
+        self.channel.remote_address()
     }
 }
 

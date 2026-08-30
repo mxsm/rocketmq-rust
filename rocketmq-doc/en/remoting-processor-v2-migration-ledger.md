@@ -4,8 +4,8 @@ This ledger records the final MIG-07 inventory for removing production
 dependencies on the V1 `RequestProcessor` contract,
 `ConnectionHandlerContext`, and raw `Channel` parameters. It is an
 implementation and review aid, not a source fingerprint, generated baseline,
-or release gate. It describes the completed ownership model and the remaining
-explicitly frozen Transport compatibility surface.
+or release gate. It describes the completed ownership model and records the
+Transport compatibility surface removed by FIN-05.
 
 ## Status and ownership model
 
@@ -13,7 +13,7 @@ explicitly frozen Transport compatibility surface.
 |---|---|
 | `V2 production` | The live application route uses a typed V2 processor, typed response outcome, and explicit session/capability ownership. |
 | `V2 infrastructure` | V2 transport, deferred-response, capability, or lifecycle infrastructure and its tests; not itself an application route. |
-| `Frozen compatibility` | Transport-only V1 code retained deliberately for compatibility coverage or a bounded migration window. It must not be selected by an application production composition root. |
+| `Historical frozen compatibility` | Transport-only V1 code that was retained during MIG-07 and removed by FIN-05. It is a historical classification, not an available composition choice. |
 | `Removed` | A production V1 leaf, aggregate adapter, raw-channel manager, or legacy long-poll ownership seam has been deleted. |
 
 Migration ownership remains grouped by the implementation batches defined by
@@ -27,17 +27,17 @@ the connection-handler-context plan:
 - `MIG-07`: final production V1 removal, typed server callbacks, and
   compatibility cleanup.
 
-MIG-07 is complete when every application production consumer listed below is
-`V2 production`, all non-Transport V1 ownership seams are `Removed`, and the
-only remaining V1 inventory is the explicitly listed Transport compatibility
+MIG-07 is complete: every application production consumer listed below is
+`V2 production`, all non-Transport V1 ownership seams are `Removed`, and
+FIN-05 has removed the previously frozen Transport processor compatibility
 surface.
 
 This cutover is an intentional source-breaking API migration. Application
 composition roots do not preserve V1 registration or lifecycle shims because
-doing so would retain the production authority this stage removes. The frozen
-Transport-only compatibility API is deprecated with concrete V2 replacements
-until FIN-05 removes it. Downstream source consumers must migrate to the typed
-V2 contracts before adopting the release that contains MIG-07, and that release
+doing so would retain the production authority this stage removes. The former
+Transport-only compatibility API and its tests were removed by FIN-05.
+Downstream source consumers must migrate to the typed V2 contracts before
+adopting this release, and the release
 must be classified and communicated as breaking by the release process.
 Wire-level RocketMQ framing, request codes, headers, and valid-input response
 semantics are unchanged. Controller heartbeat leases are now bounded
@@ -57,7 +57,7 @@ limit at startup; deployments with a larger
 | Broker | V2 aggregate/router, V2 leaves, typed deferred services, and typed client callback capabilities | `V2 production` | Production route is V2; legacy leaves, aggregate adapters, long-poll owners, and raw-channel manager tables are removed. |
 | Auth | Typed request/session/auth provenance | `V2 production` | The production remoting path derives provenance from the typed V2 request and no longer recovers identity by downcasting a raw context or channel. XCT-01 owns the later single-security-boundary consolidation. |
 | Proxy | V2 request ingress, typed server callbacks, and atomic session binding | `V2 production` | Proxy ingress uses V2 dispatch; heartbeat admission and session binding are atomic and generation-safe. |
-| Proxy-local | V2 compatibility boundary for local broker calls | `V2 production` | Local query/send/recall/transaction/pop/pull/ack/offset paths use V2 compatibility; the old `ProcessRemoting` actor and wrappers are removed. |
+| Proxy-local | Affine V2 embedded-response boundary for local broker calls | `V2 production` | Local query/send/recall/transaction/pop/pull/ack/offset paths consume `EmbeddedResponse` directly; segments retain their owners and no V2 outcome is reconstructed as a legacy command. The old `ProcessRemoting` and `ProcessRemotingV2Compatibility` actor variants and wrappers are removed. |
 
 ## Typed capability and lifecycle boundaries
 
@@ -94,28 +94,25 @@ These boundaries preserve real response delivery, callback correlation,
 disconnect failure, and deadline behavior without restoring V1 write authority
 through an extension or downcast.
 
-## Transport frozen compatibility inventory
+## Transport FIN-05 removal record
 
-The following items remain intentionally available only as compatibility
-coverage or a future FIN-05 removal unit. They are not production application
-consumers and must not be expanded or used as a migration shortcut:
+The following items formed the frozen MIG-07 compatibility unit. FIN-05 removed
+them together, so no partial legacy processor authority remains:
 
-| Compatibility item | State and rule |
+| Former compatibility item | FIN-05 state |
 |---|---|
-| `rocketmq-transport` V1 `RequestProcessor` and `ConnectionHandlerContext` types | `Frozen compatibility`; preserve only the public/legacy contract needed by existing compatibility callers and tests. |
-| `RemotingGeneralHandler<RP>` and the V1 `TransportServer<RP>` launch/connection path | `Frozen compatibility`; no application composition root may select it after the V2 cutover. |
-| V1 `AuthorizedDispatcher` bridge and `LegacyProcessorAdapter` | `Frozen compatibility`; do not add new callers; remove during FIN-05 after compatibility users are retired. |
-| Transport V1 server/adapter tests | `Frozen compatibility`; they verify the compatibility surface and are not evidence of a production V1 route. |
+| `rocketmq-transport` V1 `RequestProcessor` and processor-facing `ConnectionHandlerContext` types | `Removed`; V2 processors own `RemotingRequest` and return `HandlerOutcome`. |
+| `RemotingGeneralHandler<RP>` and the V1 `TransportServer<RP>` processor launch/connection path | `Removed`; `TransportServerV2` is the processor server boundary. |
+| V1 `AuthorizedCommandDispatcher` bridge, `LegacyRequestBridge`, and `LegacyProcessorAdapter` | `Removed`; no dispatcher can reconstruct legacy processor authority. |
+| Transport V1 processor/adapter tests and local materialization fixtures | `Removed` or rewritten as V2 contract/wire tests; historical ADR text remains documentation only. |
 
 No V1 compatibility item is retained in Broker, Client, Namesrv, Controller,
-Auth, Proxy, or Proxy-local production ownership. FIN-05 may remove the
-Transport inventory as a separate compatibility cleanup without changing the
-V2 application contract.
+Auth, Proxy, Proxy-local, or Transport processor ownership. Removing this unit
+does not change the V2 application contract or RocketMQ wire format.
 
-## V1 deprecation and migration map
+## Source-breaking migration map
 
-The remaining `api::v1` processor surface emits specific deprecation guidance;
-it is not a second production composition choice. Migrate each capability as a
+The left-hand surfaces are no longer exported. Migrate each capability as a
 design change rather than mechanically renaming a parameter:
 
 | Deprecated V1 surface | V2 replacement |
@@ -173,8 +170,7 @@ intermediate dual implementation:
 - Auth and Proxy context/channel downcasts used to recover source identity.
 
 The old names remain useful in historical migration notes, but a match in a
-production path is not an accepted compatibility exception unless it is one of
-the four Transport items listed above.
+production path is not an accepted compatibility exception.
 
 ## Historical responsibilities and exclusions
 
@@ -204,8 +200,9 @@ converted:
 ## Re-scan and acceptance checklist
 
 Run these simple path-based searches manually while reviewing the final tree.
-Classify every match as V2 infrastructure, frozen Transport compatibility,
-test fixture, or ordinary same-name business code. Do not save hashes, create
+Classify every match as V2 infrastructure, historical documentation, a V2 test
+fixture, or ordinary same-name business code. A production match for the
+removed processor compatibility types is a defect. Do not save hashes, create
 a fingerprint file, or turn these searches into a custom gate.
 
 ```powershell
@@ -220,7 +217,7 @@ rg -n --glob '*.rs' `
   rocketmq-broker/src/processor rocketmq-broker/src/long_polling
 
 rg -n --glob '*.rs' `
-  'process_remoting(_with_timeout)?\(|LocalBrokerCommand::ProcessRemoting\b' `
+  'process_remoting(_with_timeout)?\(|process_remoting_v2_compatibility|LocalBrokerCommand::ProcessRemoting(V2Compatibility)?\b' `
   rocketmq-proxy-local/src
 ```
 
@@ -232,9 +229,9 @@ rg -n --glob '*.rs' `
   generation-safe.
 - [x] Broker legacy leaves, long-poll owners, raw-channel callback managers,
   and V1 aggregate adapters are removed.
-- [x] Only the explicitly listed Transport V1 compatibility inventory remains.
+- [x] FIN-05 removed the complete frozen Transport V1 processor compatibility inventory.
 - [x] Historical fixtures and same-name business methods have an explicit
   classification.
 - [x] No fingerprint, baseline, source hash, or custom gate is introduced.
-- [ ] FIN-05 removes the frozen Transport compatibility inventory after its
-  compatibility callers and tests are retired.
+- [x] Compatibility callers and tests were retired before the source-breaking
+  FIN-05 removal.

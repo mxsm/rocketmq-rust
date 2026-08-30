@@ -68,7 +68,7 @@ use rocketmq_transport::api::v1::TlsClientConfig;
 use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::api::v1::TlsMode;
 use rocketmq_transport::benchmark_support::transport_io_snapshot;
-use rocketmq_transport::benchmark_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::benchmark_support::SessionProcessor;
 use rocketmq_transport::benchmark_support::SessionTransportServer;
 use rocketmq_transport::benchmark_support::SessionTransportServerConfig;
 use serde::Deserialize;
@@ -383,7 +383,7 @@ struct DelayedAckProcessor {
     data_delay: Duration,
 }
 
-impl RequestProcessor for DelayedAckProcessor {
+impl SessionProcessor for DelayedAckProcessor {
     fn process(
         &self,
         request: RemotingCommand,

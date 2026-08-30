@@ -24,16 +24,16 @@ use rocketmq_transport::api::v1::RemotingClient;
 use rocketmq_transport::api::v1::RemotingDeserializable;
 use rocketmq_transport::api::v1::RemotingSerializable;
 use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::api::v1::RequestProcessor;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::ServerStartError;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportServer;
+use rocketmq_transport::api::v2::RequestProcessorV2;
 
 fn assert_serialization_contract<T: RemotingSerializable + RemotingDeserializable>() {}
 
-fn assert_processor_contract<T: RequestProcessor>() {}
+fn assert_processor_contract<T: RequestProcessorV2>() {}
 
 fn assert_server_start_error_contract<T: Clone + std::fmt::Debug + std::error::Error>() {}
 
@@ -866,6 +866,14 @@ fn validate_public_api_v2_boundary(boundary: &PublicBoundary) -> Result<(), Stri
         },
         PublicUse {
             module_path: String::new(),
+            use_tree: "crate::dispatch::EmbeddedResponse".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
+            use_tree: "crate::dispatch::EmbeddedResponseBody".to_owned(),
+        },
+        PublicUse {
+            module_path: String::new(),
             use_tree: "crate::dispatch::HandlerOutcome".to_owned(),
         },
         PublicUse {
@@ -1153,7 +1161,6 @@ fn public_api_v2_rejects_unapproved_public_surface() {
         "pub use crate::net::channel::Channel;",
         "pub use crate::dispatch::ResponseError;",
         "pub use crate::dispatch::ResponseSink;",
-        "pub use crate::runtime::connection_handler_context::ConnectionHandlerContext;",
         "pub use rocketmq_runtime::OperationContext;",
         "pub use crate::deadline::{RequestDeadline,RequestId};",
         "pub use crate::deadline::*;",

@@ -437,37 +437,10 @@ async fn send_network_plan(
     }
 }
 
-pub(super) async fn complete_network_legacy(
-    session: Arc<SessionHandle>,
-    command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    receipt: ResponseReceipt,
-) -> Result<ResponseReceipt, ResponseError> {
-    let Some(context) = session.response_plan_context() else {
-        return Err(ResponseError::SessionClosed);
-    };
-    let mut claim = context.slot().claim().await?;
-    claim.observe_transport_drop(context.transport_drop_handle());
-    if let Some(stop) = current_stop(context.control()) {
-        return Err(claim.finish_stop(stop));
-    }
-
-    let mut connection = session.connection();
-    match connection.send_response(command).await {
-        Ok(()) => {
-            claim.finish(ResponseTerminalState::Completed);
-            Ok(receipt)
-        }
-        Err(error) => {
-            claim.finish(terminal_for_error(&error));
-            Err(error)
-        }
-    }
-}
-
 async fn send_local_plan(sink: LocalResponseSink, bound: BoundResponsePlan) -> Result<ResponseReceipt, ResponseError> {
     let state = match &sink.mode {
         LocalResponseMode::Plan(state) => Arc::clone(state),
-        LocalResponseMode::Legacy(_) => return Err(ResponseError::SessionClosed),
+        LocalResponseMode::Command(_) => return Err(ResponseError::SessionClosed),
     };
     let claim = state.slot.claim().await?;
     #[cfg(test)]
@@ -483,27 +456,6 @@ async fn send_local_plan(sink: LocalResponseSink, bound: BoundResponsePlan) -> R
     let plan = ResponsePlan::from_bound_parts(head, body);
     claim.commit_local_handoff(&state, plan)?;
     Ok(ResponseReceipt::new(request_id, ResponseDisposition::InProcessAccepted))
-}
-
-pub(super) async fn complete_local_legacy(
-    sink: LocalResponseSink,
-    command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    receipt: ResponseReceipt,
-) -> Result<ResponseReceipt, ResponseError> {
-    let state = match &sink.mode {
-        LocalResponseMode::Plan(state) => Arc::clone(state),
-        LocalResponseMode::Legacy(_) => return Err(ResponseError::SessionClosed),
-    };
-    let claim = state.slot.claim().await?;
-    if let Some(stop) = current_stop(&state.control) {
-        return Err(claim.finish_stop(stop));
-    }
-
-    let plan = ResponsePlan::from_legacy_command(command).map_err(|error| ResponseError::Encode {
-        source: rocketmq_error::RocketMQError::response_process_failed("legacy_response_plan", error.to_string()),
-    })?;
-    claim.commit_local_handoff(&state, plan)?;
-    Ok(receipt)
 }
 
 #[derive(Clone, Copy)]

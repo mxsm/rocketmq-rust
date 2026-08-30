@@ -116,6 +116,16 @@ harness = false
 required-features = ["test-support"]
 
 [[bench]]
+name = "processor_dispatch"
+harness = false
+required-features = ["test-support"]
+
+[[bench]]
+name = "response_plan"
+harness = false
+required-features = ["test-support"]
+
+[[bench]]
 name = "session_client"
 harness = false
 required-features = ["test-support"]

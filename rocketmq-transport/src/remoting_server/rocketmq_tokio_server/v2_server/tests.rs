@@ -34,7 +34,6 @@ use rocketmq_security_api::SecurityRequestView;
 use tokio::net::TcpStream;
 
 use super::*;
-use crate::dispatch::bridge_construction_counts;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredClaimErrorKind;
 use crate::dispatch::DeferredParts;
@@ -339,7 +338,7 @@ impl RequestProcessorV2 for NetworkDeferredCleanupProcessor {
 }
 
 #[tokio::test]
-async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without_legacy_state() {
+async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses() {
     let runtime = V2TestRuntime::new("transport-v2-tcp");
     let state = Arc::new(ProcessorState::default());
     let security_calls = Arc::new(AtomicUsize::new(0));
@@ -395,13 +394,6 @@ async fn real_tcp_v2_routes_requests_once_and_drops_unexpected_responses_without
         [1],
         "the unexpected RESPONSE must not consume a request identity"
     );
-    let session = state
-        .session
-        .lock()
-        .expect("session capture lock")
-        .expect("V2 session id");
-    assert_eq!(bridge_construction_counts(session), (0, 0));
-
     client
         .send_command(RemotingCommand::create_remoting_command(703).set_opaque(4_003))
         .await

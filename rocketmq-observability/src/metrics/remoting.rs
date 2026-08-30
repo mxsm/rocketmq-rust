@@ -17,7 +17,6 @@ pub use crate::semantic::metrics::TRANSPORT_DEFERRED_INFLIGHT;
 pub use crate::semantic::metrics::TRANSPORT_DEFERRED_RETAINED_BYTES;
 pub use crate::semantic::metrics::TRANSPORT_DEFERRED_TERMINAL_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
-pub use crate::semantic::metrics::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_LISTENER_LATENCY;
 pub use crate::semantic::metrics::TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES;
@@ -38,7 +37,6 @@ const NO_RESPONSE_CODE: i32 = -1;
 const RESULT_ONEWAY: &str = "oneway";
 const RESULT_SUCCESS: &str = "success";
 const RESULT_CANCELED: &str = "cancelled";
-const RESULT_LEGACY_AMBIGUOUS_NONE: &str = "legacy_ambiguous_none";
 const RESULT_PROCESS_REQUEST_FAILED: &str = "process_request_failed";
 const RESULT_WRITE_CHANNEL_FAILED: &str = "write_channel_failed";
 
@@ -93,8 +91,6 @@ pub enum RequestOutcome {
     Failed,
     /// A V1 processor produced a legacy reply.
     LegacyReply,
-    /// A V1 processor returned the legacy ambiguous `None` outcome.
-    LegacyAmbiguousNone,
 }
 
 impl RequestOutcome {
@@ -113,7 +109,6 @@ impl RequestOutcome {
             Self::Cancelled => "cancelled",
             Self::Failed => "failed",
             Self::LegacyReply => "legacy_reply",
-            Self::LegacyAmbiguousNone => "legacy_ambiguous_none",
         }
     }
 }
@@ -315,15 +310,6 @@ impl RequestMetricsGuard {
     }
 
     #[inline]
-    pub fn complete_legacy_ambiguous_none(&mut self) {
-        self.record_terminal(
-            NO_RESPONSE_CODE,
-            RESULT_LEGACY_AMBIGUOUS_NONE,
-            RequestOutcome::LegacyAmbiguousNone,
-        );
-    }
-
-    #[inline]
     pub fn complete_process_request_failed(&mut self, response_code: i32) {
         self.record_terminal(response_code, RESULT_PROCESS_REQUEST_FAILED, RequestOutcome::Failed);
     }
@@ -442,9 +428,6 @@ impl RemotingMetrics {
     pub fn record_lifecycle_listener_latency(&self, _latency_ms: u64, _event: &'static str) {}
 
     #[inline]
-    pub fn record_legacy_processor_request(&self, _processor: &'static str, _request_code: i32) {}
-
-    #[inline]
     pub fn record_rpc_latency(
         &self,
         _latency_ms: u64,
@@ -482,7 +465,6 @@ struct RemotingMetricInstruments {
     lifecycle_events: opentelemetry::metrics::Counter<u64>,
     deferred_terminals: opentelemetry::metrics::Counter<u64>,
     lifecycle_listener_latency: opentelemetry::metrics::Histogram<u64>,
-    legacy_processor_requests: opentelemetry::metrics::Counter<u64>,
     rpc_latency: opentelemetry::metrics::Histogram<u64>,
 }
 
@@ -727,22 +709,6 @@ impl RemotingMetrics {
     }
 
     #[inline]
-    pub fn record_legacy_processor_request(&self, processor: &'static str, request_code: i32) {
-        if !self.is_active() {
-            return;
-        }
-        if let Some(instruments) = &self.instruments {
-            instruments.legacy_processor_requests.add(
-                1,
-                &[
-                    opentelemetry::KeyValue::new(crate::semantic::labels::PROCESSOR, processor),
-                    opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_CODE, i64::from(request_code)),
-                ],
-            );
-        }
-    }
-
-    #[inline]
     pub fn record_rpc_latency(
         &self,
         latency_ms: u64,
@@ -864,12 +830,6 @@ impl RemotingMetricInstruments {
             .with_unit("ms")
             .build();
 
-        let legacy_processor_requests = meter
-            .u64_counter(TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL)
-            .with_description("Requests admitted through the V1 processor compatibility adapter")
-            .with_unit("{request}")
-            .build();
-
         let rpc_latency = meter
             .u64_histogram(RPC_LATENCY)
             .with_description("Rpc latency")
@@ -893,7 +853,6 @@ impl RemotingMetricInstruments {
             lifecycle_events,
             deferred_terminals,
             lifecycle_listener_latency,
-            legacy_processor_requests,
             rpc_latency,
         }
     }
@@ -910,10 +869,6 @@ mod tests {
         let mut success = RequestMetricsGuard::start(metrics.clone(), 10, 128, false);
         success.complete_response(0);
         success.complete_cancelled();
-
-        let mut legacy_ambiguous_none = RequestMetricsGuard::start(metrics.clone(), 11, 64, true);
-        legacy_ambiguous_none.complete_legacy_ambiguous_none();
-        legacy_ambiguous_none.complete_cancelled();
 
         let mut process_failure = RequestMetricsGuard::start(metrics.clone(), 12, 32, true);
         process_failure.complete_process_request_failed(1);
@@ -951,7 +906,6 @@ mod tests {
         metrics.record_lifecycle_event("connected", "queued");
         metrics.record_deferred_terminal("pull_message", "owner_deadline");
         metrics.record_lifecycle_listener_latency(2, "connected");
-        metrics.record_legacy_processor_request("test-processor", 10);
         metrics.record_rpc_latency(5, 10, 0, false, RESULT_SUCCESS);
     }
 }

@@ -12,4 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "remoting_server/rocketmq_tokio_server_v2.rs"]
 pub mod rocketmq_tokio_server;

@@ -50,13 +50,12 @@ mod file_region_writer;
 mod hook_registry;
 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
 mod linux;
-#[cfg(any(test, feature = "test-support"))]
-mod local;
 mod net;
 pub mod prelude;
 mod proxy_protocol;
 mod public_api;
 mod public_api_v2;
+#[path = "remoting_v2.rs"]
 mod remoting;
 mod remoting_server;
 mod request_ordering;

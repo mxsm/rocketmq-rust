@@ -438,6 +438,16 @@ mod tests {
         .expect("Notification request seals one deferred registration");
 
         let _ = service.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while {
+                let snapshot = service.snapshot();
+                snapshot.admission().waiting_count() != 0 || snapshot.index().live() != 0
+            } {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Notification deferred owners are released after dispatcher commit");
         let snapshot = service.snapshot();
         assert_eq!(snapshot.admission().waiting_count(), 0);
         assert_eq!(snapshot.index().live(), 0);

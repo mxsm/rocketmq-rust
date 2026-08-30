@@ -166,6 +166,10 @@ harness = false
 name    = "topic_config_lookup_benchmark"
 harness = false
 
+[[bench]]
+name    = "pull_pop_response_benchmark"
+harness = false
+
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.186"
 

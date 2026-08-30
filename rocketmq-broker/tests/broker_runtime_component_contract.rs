@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "512"]
+
 const BROKER_RUNTIME: &str = include_str!("../src/broker_runtime.rs");
 const COMPOSITION: &str = include_str!("../src/broker_runtime/composition.rs");
 const CONTROL_PLANE: &str = include_str!("../src/broker_runtime/control_plane.rs");

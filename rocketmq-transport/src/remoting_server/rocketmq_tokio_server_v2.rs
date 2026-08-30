@@ -14,32 +14,26 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
-#[cfg(all(test, not(doctest)))]
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::ServerConfig;
-use crate::dispatch::AuthorizedCommandDispatcher;
 use crate::file_region::FileTransferMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::SharedRocketMQError;
-use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskId;
 use rocketmq_security_api::Principal;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -47,35 +41,12 @@ use tracing::warn;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::admission::ResourceLimit;
-use crate::base::channel_event_listener::ChannelEventListener;
-use crate::base::connection_net_event::ConnectionNetEvent;
-use crate::base::tokio_event::TokioEvent;
-use crate::net::channel::Channel;
-use crate::net::channel::ChannelInner;
 use crate::proxy_protocol::ProxyProtocolConfig;
-use crate::runtime::connection_handler_context::ConnectionHandlerContext;
-use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::server::TransportListener;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsServerRuntime;
-
-mod builder;
-mod capabilities;
-mod connection_handler;
-mod connection_listener;
-mod launch;
-mod lifecycle_events;
-mod shutdown;
-mod v2_server;
-
-pub use v2_server::TransportServerV2;
-
-#[cfg(all(test, not(doctest)))]
-use connection_handler::TestRequestHook;
-use lifecycle_events::LifecycleEventConfig;
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;
@@ -150,22 +121,11 @@ impl std::error::Error for ServerStartError {
     }
 }
 
-pub struct TransportServer<RP> {
-    config: Arc<ServerConfig>,
-    rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
-    service_context: ChildServiceContext,
-    transport_security: Option<Arc<TransportSecurity>>,
-    transport_principal: Option<Principal>,
-    admission: Option<Arc<AdmissionController>>,
-    authorized_dispatcher: Option<Arc<AuthorizedCommandDispatcher<RP>>>,
-    telemetry: TransportTelemetry,
-    lifecycle_event_config: LifecycleEventConfig,
-    frame_limits: FrameLimits,
-    proxy_protocol: ProxyProtocolConfig,
-    #[cfg(all(test, not(doctest)))]
-    test_request_hook: Option<TestRequestHook>,
-    _phantom_data: std::marker::PhantomData<RP>,
-}
+#[path = "rocketmq_tokio_server/connection_handler_v2_only.rs"]
+mod connection_handler;
+#[path = "rocketmq_tokio_server/shutdown_v2.rs"]
+mod shutdown;
+#[path = "rocketmq_tokio_server/v2_server.rs"]
+mod v2_server;
 
-#[cfg(all(test, not(doctest)))]
-mod tests;
+pub use v2_server::TransportServerV2;

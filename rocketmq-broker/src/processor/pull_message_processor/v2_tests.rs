@@ -384,6 +384,13 @@ async fn v2_arc_held_suspension_requires_injected_service_and_retains_one_sealed
     assert!(service.admission_snapshot().retained_bytes() > 0);
 
     let _ = service.shutdown();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while service.admission_snapshot().waiting_count() != 0 || service.index_snapshot().live() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Pull deferred owners are released after dispatcher commit");
     assert_eq!(service.index_snapshot().live(), 0);
     assert_eq!(service.admission_snapshot().waiting_count(), 0);
     assert_eq!(service.admission_snapshot().retained_bytes(), 0);

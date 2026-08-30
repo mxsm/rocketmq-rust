@@ -15,11 +15,6 @@
 //! Owned V2 response heads and body storage.
 
 mod binding;
-#[allow(
-    dead_code,
-    reason = "RSP-06 defines the private terminal compatibility seam wired by a later embedded adapter stage"
-)]
-mod materializer;
 
 use std::fmt;
 
@@ -30,11 +25,6 @@ use crate::file_region::FileRegionSequence;
 
 pub(crate) use binding::BoundResponsePlan;
 pub(crate) use binding::ResponseBindingError;
-pub(crate) use materializer::materialize_embedded_v2_compatibility_response;
-pub use materializer::EmbeddedV2CompatibilityMaterializationError;
-pub use materializer::EmbeddedV2CompatibilityMaterializationErrorKind;
-pub(crate) use materializer::LegacyLocalMaterializationError;
-pub(crate) use materializer::LegacyMaterializationLimits;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -155,13 +145,6 @@ const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 /// use rocketmq_transport::api::v2::BoundResponsePlan;
 /// ```
 ///
-/// ```compile_fail
-/// use rocketmq_transport::api::v2::LegacyMaterializationLimits;
-/// ```
-///
-/// ```compile_fail
-/// use rocketmq_transport::prelude::LegacyLocalMaterializationError;
-/// ```
 pub struct ResponsePlan {
     head: RemotingCommand,
     body: ResponseBody,
@@ -227,10 +210,6 @@ impl ResponsePlan {
             Some(body) => Self::bytes(command, body),
             None => Self::command(command),
         }
-    }
-
-    pub(crate) fn from_legacy_command(command: RemotingCommand) -> Result<Self, ResponsePlanError> {
-        Self::from_command(command)
     }
 
     /// Creates a response from ordered body-only byte segments.
@@ -312,6 +291,22 @@ impl ResponsePlan {
         self.body_part_count
     }
 
+    /// Converts this affine plan into the zero-encoding representation used by
+    /// an in-process V2 consumer.
+    ///
+    /// The response head and every body owner move without cloning,
+    /// concatenating segments, reading file regions, or constructing a
+    /// transport channel.
+    pub fn into_embedded_response(self) -> EmbeddedResponse {
+        let body = match self.body {
+            ResponseBody::Empty => EmbeddedResponseBody::Empty,
+            ResponseBody::Bytes(body) => EmbeddedResponseBody::Bytes(body),
+            ResponseBody::Segments(segments) => EmbeddedResponseBody::Segments(segments),
+            ResponseBody::FileRegions(regions) => EmbeddedResponseBody::FileRegions(regions),
+        };
+        EmbeddedResponse { head: self.head, body }
+    }
+
     #[allow(
         dead_code,
         reason = "RSP-05 local delivery rebuilds this trusted wrapper before later dispatcher wiring"
@@ -342,10 +337,6 @@ impl ResponsePlan {
             ));
         }
         result
-    }
-
-    fn into_materialization_parts(self) -> (RemotingCommand, ResponseBody, usize, usize) {
-        (self.head, self.body, self.body_len, self.body_part_count)
     }
 
     #[cfg(test)]
@@ -389,6 +380,83 @@ impl fmt::Debug for ResponsePlan {
             .field("body_kind", &self.body_kind())
             .field("body_len", &self.body_len())
             .field("body_part_count", &self.body_part_count())
+            .finish()
+    }
+}
+
+/// Affine response delivered to an in-process V2 consumer without wire
+/// encoding or legacy command materialization.
+#[must_use]
+pub struct EmbeddedResponse {
+    head: RemotingCommand,
+    body: EmbeddedResponseBody,
+}
+
+impl EmbeddedResponse {
+    /// Returns the validated, body-free response head.
+    #[must_use]
+    pub const fn head(&self) -> &RemotingCommand {
+        &self.head
+    }
+
+    /// Returns the response code from the validated head.
+    #[must_use]
+    pub fn response_code(&self) -> i32 {
+        self.head.code()
+    }
+
+    /// Returns the owned body without flattening segments or reading files.
+    pub const fn body(&self) -> &EmbeddedResponseBody {
+        &self.body
+    }
+
+    /// Moves the body-free head and exact body owner to the local consumer.
+    pub fn into_parts(self) -> (RemotingCommand, EmbeddedResponseBody) {
+        (self.head, self.body)
+    }
+}
+
+impl fmt::Debug for EmbeddedResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EmbeddedResponse")
+            .field("response_code", &self.response_code())
+            .field("body_kind", &self.body.kind())
+            .finish()
+    }
+}
+
+/// Exact body owner transferred to an in-process V2 consumer.
+#[must_use]
+pub enum EmbeddedResponseBody {
+    /// The response has no body.
+    Empty,
+    /// One contiguous body allocation.
+    Bytes(Bytes),
+    /// Ordered body-only segments, preserved without concatenation.
+    Segments(Vec<Bytes>),
+    /// Validated file regions with their storage leases intact.
+    FileRegions(FileRegionSequence),
+}
+
+impl EmbeddedResponseBody {
+    /// Returns the stable storage category of this body owner.
+    #[must_use]
+    pub const fn kind(&self) -> ResponseBodyKind {
+        match self {
+            Self::Empty => ResponseBodyKind::Empty,
+            Self::Bytes(_) => ResponseBodyKind::Bytes,
+            Self::Segments(_) => ResponseBodyKind::Segments,
+            Self::FileRegions(_) => ResponseBodyKind::FileRegions,
+        }
+    }
+}
+
+impl fmt::Debug for EmbeddedResponseBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("EmbeddedResponseBody")
+            .field(&self.kind())
             .finish()
     }
 }
@@ -520,6 +588,37 @@ mod tests {
         RemotingCommand::create_response_command_with_code(7)
     }
 
+    #[test]
+    fn embedded_response_moves_bytes_and_segments_without_materializing_a_command_body() {
+        let bytes = Bytes::from_static(b"embedded-bytes");
+        let bytes_ptr = bytes.as_ptr();
+        let response = ResponsePlan::bytes(response_head(), bytes)
+            .expect("valid bytes response")
+            .into_embedded_response();
+        assert_eq!(response.response_code(), 7);
+        assert!(response.head().body().is_none());
+        let (_, EmbeddedResponseBody::Bytes(body)) = response.into_parts() else {
+            panic!("bytes response must preserve its body owner")
+        };
+        assert_eq!(body.as_ptr(), bytes_ptr);
+
+        let segments = vec![Bytes::from_static(b"first"), Bytes::from_static(b"second")];
+        let vector_ptr = segments.as_ptr();
+        let segment_ptrs = segments.iter().map(|segment| segment.as_ptr()).collect::<Vec<_>>();
+        let response = ResponsePlan::segments(response_head(), segments)
+            .expect("valid segmented response")
+            .into_embedded_response();
+        assert_eq!(response.body().kind(), ResponseBodyKind::Segments);
+        let (_, EmbeddedResponseBody::Segments(segments)) = response.into_parts() else {
+            panic!("segmented response must preserve its body owners")
+        };
+        assert_eq!(segments.as_ptr(), vector_ptr);
+        assert_eq!(
+            segments.iter().map(|segment| segment.as_ptr()).collect::<Vec<_>>(),
+            segment_ptrs
+        );
+    }
+
     fn assert_metadata(plan: &ResponsePlan, kind: ResponseBodyKind, body_len: usize, body_part_count: usize) {
         assert_eq!(plan.response_code(), 7);
         assert_eq!(plan.body_kind(), kind);
@@ -552,25 +651,24 @@ mod tests {
     }
 
     #[test]
-    fn legacy_command_conversion_moves_the_original_bytes_owner() {
-        let body = Bytes::from_static(b"legacy response body");
+    fn command_conversion_moves_the_original_bytes_owner() {
+        let body = Bytes::from_static(b"response body");
         let body_pointer = body.as_ptr();
-        let plan =
-            ResponsePlan::from_legacy_command(response_head().set_body(body)).expect("valid legacy response command");
+        let plan = ResponsePlan::from_command(response_head().set_body(body)).expect("valid response command");
 
         let ResponseBody::Bytes(moved) = plan.test_body() else {
-            panic!("non-empty legacy body must remain contiguous bytes");
+            panic!("non-empty body must remain contiguous bytes");
         };
         assert_eq!(moved.as_ptr(), body_pointer);
-        assert_eq!(moved.as_ref(), b"legacy response body");
+        assert_eq!(moved.as_ref(), b"response body");
     }
 
     #[test]
-    fn legacy_command_conversion_rejects_a_malformed_head_before_encoding() {
+    fn command_conversion_rejects_a_malformed_head_before_encoding() {
         let malformed = RemotingCommand::create_remoting_command(7).set_body(Bytes::from_static(b"body"));
 
         assert!(matches!(
-            ResponsePlan::from_legacy_command(malformed),
+            ResponsePlan::from_command(malformed),
             Err(ResponsePlanError::RequestHead)
         ));
     }

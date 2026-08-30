@@ -105,9 +105,7 @@ where
         request: &mut RemotingRequest,
         outcome: InternalProcessorOutcome,
     ) -> Result<EmbeddedResolvedOutcome, EmbeddedProcessorResolveError> {
-        let InternalProcessorOutcome::V2(outcome) = outcome else {
-            return Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted.into());
-        };
+        let InternalProcessorOutcome::V2(outcome) = outcome;
         if request.original_identity().is_one_way() {
             return match outcome {
                 HandlerOutcome::Reply(plan) => {

@@ -69,6 +69,8 @@ pub use crate::dispatch::EmbeddedCaller;
 pub use crate::dispatch::EmbeddedDispatchError;
 pub use crate::dispatch::EmbeddedDispatchErrorKind;
 pub use crate::dispatch::EmbeddedDispatchOutcome;
+pub use crate::dispatch::EmbeddedResponse;
+pub use crate::dispatch::EmbeddedResponseBody;
 pub use crate::dispatch::HandlerOutcome;
 pub use crate::dispatch::IngressRequestView;
 pub use crate::dispatch::OriginalRequestIdentity;
@@ -133,14 +135,10 @@ pub use crate::v2_session_registry::V2SessionRegistry;
 /// Persistent endpoint client whose omitted processor parameter is V2-native.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::v1::RequestProcessor;
 /// use rocketmq_transport::api::v2::TransportClient;
 ///
-/// fn v1_registration_is_not_on_the_v2_default(
-///     client: &TransportClient,
-///     processor: impl RequestProcessor + Sync,
-/// ) {
-///     client.register_processor(processor);
+/// fn dynamic_registration_is_not_on_the_v2_default(client: &TransportClient) {
+///     client.register_processor(());
 /// }
 /// ```
 pub use crate::clients::rocketmq_tokio_client::V2TransportClient as TransportClient;

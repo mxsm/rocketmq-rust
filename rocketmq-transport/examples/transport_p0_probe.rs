@@ -41,7 +41,7 @@ use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::ResourceLimit;
 use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::benchmark_support::connect_with_config;
-use rocketmq_transport::benchmark_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::benchmark_support::SessionProcessor;
 use rocketmq_transport::benchmark_support::SessionTransportServer;
 use rocketmq_transport::benchmark_support::SessionTransportServerConfig;
 use serde::Serialize;
@@ -88,7 +88,7 @@ struct ProbeReport {
 
 struct EchoProcessor;
 
-impl RequestProcessor for EchoProcessor {
+impl SessionProcessor for EchoProcessor {
     fn process(
         &self,
         request: RemotingCommand,

@@ -14,7 +14,6 @@
 
 use std::fmt;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -22,7 +21,6 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Instant;
 
-use parking_lot::Mutex;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeResult;
@@ -103,8 +101,6 @@ struct SessionExecutorInner {
     task_counts: Arc<SessionTaskCounts>,
     #[cfg(test)]
     close_resume_operation_before_spawn: AtomicBool,
-    #[cfg(any(test, feature = "test-support"))]
-    legacy_execution_first_poll_gate: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl SessionExecutor {
@@ -119,8 +115,6 @@ impl SessionExecutor {
                 task_counts: Arc::new(SessionTaskCounts::default()),
                 #[cfg(test)]
                 close_resume_operation_before_spawn: AtomicBool::new(false),
-                #[cfg(any(test, feature = "test-support"))]
-                legacy_execution_first_poll_gate: Mutex::new(None),
             }),
         })
     }
@@ -228,15 +222,6 @@ impl SessionExecutor {
         self.inner
             .close_resume_operation_before_spawn
             .store(true, Ordering::Release);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn set_legacy_execution_first_poll_gate(
-        &self,
-        entered: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
-    ) {
-        *self.inner.legacy_execution_first_poll_gate.lock() = Some((entered, release));
     }
 
     pub(crate) async fn drain_report_until(&self, deadline: ShutdownDeadline) -> SessionExecutorDrainReport {
@@ -449,75 +434,5 @@ impl DeferredResumeExecutor {
                 job.execute(operation_for_task).await;
             })
             .map_err(|source| DeferredResumeSubmitError::Closing { source, cell })
-    }
-
-    pub(crate) fn legacy_session_executor(
-        &self,
-        retained_bytes: usize,
-        class: AdmissionClass,
-        ordering: RequestOrdering,
-    ) -> LegacySessionExecutor {
-        LegacySessionExecutor {
-            inner: self.inner.clone(),
-            retained_bytes,
-            class,
-            ordering,
-        }
-    }
-}
-
-type LegacySessionFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
-#[derive(Clone)]
-pub(crate) struct LegacySessionExecutor {
-    inner: Weak<SessionExecutorInner>,
-    retained_bytes: usize,
-    class: AdmissionClass,
-    ordering: RequestOrdering,
-}
-
-impl LegacySessionExecutor {
-    pub(crate) fn try_execute(
-        &self,
-        execute: LegacySessionFuture,
-    ) -> Result<(), crate::dispatch::LegacySessionExecutionSubmitError> {
-        let Some(inner) = self.inner.upgrade() else {
-            return Err(crate::dispatch::LegacySessionExecutionSubmitError::SessionClosed);
-        };
-        #[cfg(any(test, feature = "test-support"))]
-        let first_poll_gate = inner.legacy_execution_first_poll_gate.lock().clone();
-        let executor = SessionExecutor { inner };
-        let cell = Arc::new(Mutex::new(Some(execute)));
-        let admitted_cell = Arc::clone(&cell);
-        let rejected_cell = Arc::clone(&cell);
-        let submitted = executor.try_execute(
-            self.retained_bytes,
-            self.class,
-            None,
-            self.ordering,
-            move |_operation| async move {
-                #[cfg(any(test, feature = "test-support"))]
-                if let Some((entered, release)) = first_poll_gate {
-                    entered.notify_one();
-                    release.notified().await;
-                }
-                let execute = admitted_cell.lock().take();
-                if let Some(execute) = execute {
-                    execute.await;
-                }
-            },
-            move |_operation, _error| async move {
-                drop(rejected_cell.lock().take());
-            },
-        );
-        match submitted {
-            Ok(_) => Ok(()),
-            Err(SessionDispatchError::Admission { .. }) => {
-                Err(crate::dispatch::LegacySessionExecutionSubmitError::Admission)
-            }
-            Err(SessionDispatchError::Closing(_)) => {
-                Err(crate::dispatch::LegacySessionExecutionSubmitError::SessionClosed)
-            }
-        }
     }
 }

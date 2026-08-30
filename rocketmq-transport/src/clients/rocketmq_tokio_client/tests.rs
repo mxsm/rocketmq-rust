@@ -25,9 +25,9 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
 use super::*;
-use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
+use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::TransportClientConfig;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;

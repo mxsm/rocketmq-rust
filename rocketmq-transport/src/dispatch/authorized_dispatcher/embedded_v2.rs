@@ -57,6 +57,7 @@ use rocketmq_security_api::Principal;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
 
+#[path = "embedded_v2/terminal.rs"]
 mod terminal;
 use terminal::terminal;
 use terminal::EmbeddedTerminalSender;
@@ -691,7 +692,6 @@ fn map_processor_error(error: crate::dispatch::DispatchProcessorError) -> Embedd
         crate::dispatch::DispatchProcessorError::HandlerContract(error) => {
             EmbeddedDispatchError::handler_contract(error)
         }
-        crate::dispatch::DispatchProcessorError::Legacy(_) => EmbeddedDispatchError::one_way_contract("processor"),
     }
 }
 

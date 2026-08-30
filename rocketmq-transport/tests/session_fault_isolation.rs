@@ -32,13 +32,13 @@ use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::test_support::connect_with_config;
 use rocketmq_transport::test_support::Connection;
-use rocketmq_transport::test_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::test_support::SessionProcessor;
 use rocketmq_transport::test_support::SessionTransportServer;
 use rocketmq_transport::test_support::SessionTransportServerConfig;
 
 struct FaultSelectingProcessor;
 
-impl RequestProcessor for FaultSelectingProcessor {
+impl SessionProcessor for FaultSelectingProcessor {
     fn process(
         &self,
         request: RemotingCommand,

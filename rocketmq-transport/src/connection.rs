@@ -520,11 +520,6 @@ pub struct ConnectionStateHandle {
 }
 
 impl ConnectionStateHandle {
-    pub(crate) fn healthy() -> Self {
-        let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
-        Self { state_tx, state_rx }
-    }
-
     /// Returns the most recently published connection state.
     #[inline]
     pub fn state(&self) -> ConnectionState {
@@ -1301,32 +1296,6 @@ impl Connection {
             .limits
             .encode_command(command)
             .map_err(|source| ResponseError::Encode { source })?;
-        self.send_payload_inner_with_response_observation(
-            OutboundPayload::Frame(frame),
-            class,
-            None,
-            None,
-            None,
-            RequestStopPolicy::All,
-            None,
-            ResponseQueueWaitObservation::Response,
-            "transport-session-writer".to_string(),
-        )
-        .await
-        .map_err(SendFailure::into_response)
-    }
-
-    /// Sends a borrowed server response through the canonical writer with a
-    /// stage-aware completion error.
-    pub(crate) async fn send_response_ref(&mut self, command: &mut RemotingCommand) -> Result<(), ResponseError> {
-        let class = self
-            .response_class()
-            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        let frame = self
-            .limits
-            .encode_command(command.clone())
-            .map_err(|source| ResponseError::Encode { source })?;
-        let _ = command.take_body();
         self.send_payload_inner_with_response_observation(
             OutboundPayload::Frame(frame),
             class,

@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskGroupId;
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
 use tokio_util::sync::CancellationToken;
@@ -44,8 +45,6 @@ use crate::dispatch::ResponseSink;
 use crate::net::channel::ArcChannel;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::runtime::connection_handler_context::ConnectionHandlerContext;
-use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::server::SessionHandle;
 use crate::session_executor::SessionExecutor;
 use crate::session_view::ProxyInfoSnapshot;
@@ -152,6 +151,7 @@ impl RequestMeta {
 pub struct RequestControlView {
     deadline: Option<RequestDeadline>,
     session: SessionStateView,
+    parent_task_group_id: TaskGroupId,
     parent_cancellation: CancellationToken,
 }
 
@@ -168,6 +168,7 @@ impl RequestControlView {
         Self {
             deadline: meta.deadline(),
             session,
+            parent_task_group_id: parent_task_group.id(),
             parent_cancellation: parent_task_group.cancellation_token(),
         }
     }
@@ -175,17 +176,14 @@ impl RequestControlView {
     /// Proves that this control observes the supplied session and task-group
     /// owners rather than merely matching their diagnostic identifiers.
     pub(crate) fn same_lifecycle_owner(&self, session: &SessionStateView, parent_task_group: &TaskGroup) -> bool {
-        self.session.same_canonical_owner(session)
-            // tokio-util 0.7.19 implements token equality with Arc::ptr_eq;
-            // child tokens and independently allocated owners compare unequal.
-            && self.parent_cancellation == parent_task_group.cancellation_token()
+        self.session.same_canonical_owner(session) && self.parent_task_group_id == parent_task_group.id()
     }
 
     #[cfg(test)]
     pub(crate) fn same_lifecycle_view(&self, other: &Self) -> bool {
         self.deadline == other.deadline
             && self.session.same_canonical_owner(&other.session)
-            && self.parent_cancellation == other.parent_cancellation
+            && self.parent_task_group_id == other.parent_task_group_id
     }
 
     /// Returns the canonical ingress deadline, when one was supplied.
@@ -222,6 +220,7 @@ impl RequestControlView {
         Self {
             deadline: None,
             session: self.session.clone(),
+            parent_task_group_id: self.parent_task_group_id,
             parent_cancellation: self.parent_cancellation.clone(),
         }
     }
@@ -322,8 +321,6 @@ fn is_reserved_extension_type_id(type_id: TypeId) -> bool {
         TypeId::of::<Channel>(),
         TypeId::of::<ChannelInner>(),
         TypeId::of::<Connection>(),
-        TypeId::of::<ConnectionHandlerContext>(),
-        TypeId::of::<ConnectionHandlerContextWrapper>(),
         TypeId::of::<ConnectionStateHandle>(),
         TypeId::of::<EmbeddedCaller>(),
         TypeId::of::<IngressRequestView<'static>>(),
@@ -357,7 +354,6 @@ fn is_reserved_extension_type_id(type_id: TypeId) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicU64;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -567,34 +563,6 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 
-    #[tokio::test]
-    async fn lazy_extensions_reject_v1_arc_channel_without_allocating() {
-        let runtime = RuntimeContext::from_current("request-control-v1-arc-channel");
-        let task_group = runtime
-            .service_context("request-control-v1-arc-channel")
-            .task_group()
-            .clone();
-        let (response, _receiver) = ResponseSink::local();
-        let channel = Channel::new(
-            Arc::new(ChannelInner::new_local(response, task_group)),
-            "127.0.0.1:10911".parse().expect("test address must parse"),
-            "127.0.0.1:10912".parse().expect("test address must parse"),
-        );
-        let original: ArcChannel = Arc::new(channel);
-        let mut extensions = LazyExtensions::default();
-
-        let returned = match extensions.try_insert(Arc::clone(&original)) {
-            Err(value) => value,
-            Ok(_) => panic!("legacy V1 ArcChannel capability must be rejected"),
-        };
-
-        assert!(Arc::ptr_eq(&returned, &original));
-        assert!(extensions.values.is_none());
-
-        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
-        assert!(report.is_healthy(), "{}", report.to_json());
-    }
-
     #[test]
     fn lazy_extensions_reserve_legacy_transport_capability_types() {
         assert!(is_reserved_extension_type_id(TypeId::of::<Channel>()));
@@ -602,10 +570,6 @@ mod tests {
         assert!(is_reserved_extension_type_id(TypeId::of::<ChannelInner>()));
         assert!(is_reserved_extension_type_id(TypeId::of::<Connection>()));
         assert!(is_reserved_extension_type_id(TypeId::of::<ConnectionStateHandle>()));
-        assert!(is_reserved_extension_type_id(TypeId::of::<ConnectionHandlerContext>()));
-        assert!(is_reserved_extension_type_id(TypeId::of::<
-            ConnectionHandlerContextWrapper,
-        >()));
         assert!(is_reserved_extension_type_id(TypeId::of::<ResponseSink>()));
         assert!(is_reserved_extension_type_id(TypeId::of::<SessionExecutor>()));
         assert!(is_reserved_extension_type_id(TypeId::of::<SessionHandle>()));

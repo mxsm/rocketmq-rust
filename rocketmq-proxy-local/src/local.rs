@@ -130,6 +130,8 @@ use rocketmq_transport::api::v1::RemotingDeserializable;
 use rocketmq_transport::api::v1::RpcRequestHeader;
 use rocketmq_transport::api::v1::TopicRequestHeader;
 use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::v2::EmbeddedResponse;
+use rocketmq_transport::api::v2::EmbeddedResponseBody;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
@@ -205,11 +207,6 @@ pub(crate) enum LocalBrokerCommand {
         request_id: String,
         reply: oneshot::Sender<ProxyResult<EndTransactionPlan>>,
     },
-    ProcessRemotingV2Compatibility {
-        request: RemotingCommand,
-        timeout: Duration,
-        reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
-    },
     ProcessRemotingV2 {
         request: RemotingCommand,
         timeout: Duration,
@@ -230,12 +227,8 @@ impl QueuedLocalBrokerCommand {
         let Some(deadline_at) = self.deadline_at else {
             return;
         };
-        match &mut self.command {
-            LocalBrokerCommand::ProcessRemotingV2Compatibility { timeout, .. }
-            | LocalBrokerCommand::ProcessRemotingV2 { timeout, .. } => {
-                *timeout = deadline_at.saturating_duration_since(now);
-            }
-            _ => {}
+        if let LocalBrokerCommand::ProcessRemotingV2 { timeout, .. } = &mut self.command {
+            *timeout = deadline_at.saturating_duration_since(now);
         }
     }
 }
@@ -243,9 +236,7 @@ impl QueuedLocalBrokerCommand {
 impl LocalBrokerCommand {
     fn timeout(&self) -> Option<Duration> {
         match self {
-            Self::ProcessRemotingV2Compatibility { timeout, .. } | Self::ProcessRemotingV2 { timeout, .. } => {
-                Some(*timeout)
-            }
+            Self::ProcessRemotingV2 { timeout, .. } => Some(*timeout),
             _ => None,
         }
     }
@@ -323,9 +314,7 @@ impl LocalBrokerCommand {
                 .saturating_add(request.commit_log_message_id.as_ref().map_or(0, String::len))
                 .saturating_add(client_id.as_ref().map_or(0, String::len))
                 .saturating_add(request_id.len()),
-            Self::ProcessRemotingV2Compatibility { request, .. } | Self::ProcessRemotingV2 { request, .. } => {
-                base.saturating_add(request.body().map_or(0, bytes::Bytes::len))
-            }
+            Self::ProcessRemotingV2 { request, .. } => base.saturating_add(request.body().map_or(0, bytes::Bytes::len)),
         }
         .max(1)
     }
@@ -373,9 +362,6 @@ impl LocalBrokerCommand {
                 let _ = reply.send(Err(error));
             }
             Self::EndTransaction { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::ProcessRemotingV2Compatibility { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::ProcessRemotingV2 { reply, .. } => {
@@ -539,41 +525,6 @@ impl LocalBrokerFacadeClient {
         .await
     }
 
-    /// Processes one raw remoting command through Broker V2 and materializes
-    /// the terminal response for the Proxy compatibility adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the local Broker worker is unavailable, V2
-    /// dispatch fails, or bounded compatibility materialization fails.
-    pub async fn process_remoting_v2_compatibility(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
-        self.process_remoting_v2_compatibility_with_timeout(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
-            .await
-    }
-
-    /// Processes one raw remoting command through Broker V2 and materializes
-    /// the terminal response for the Proxy compatibility adapter with an
-    /// explicit timeout.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the local Broker worker is unavailable, V2
-    /// dispatch fails, or bounded compatibility materialization cannot finish
-    /// within `timeout`.
-    pub async fn process_remoting_v2_compatibility_with_timeout(
-        &self,
-        mut request: RemotingCommand,
-        timeout: Duration,
-    ) -> ProxyResult<RemotingCommand> {
-        request.make_custom_header_to_net();
-        self.execute(|reply| LocalBrokerCommand::ProcessRemotingV2Compatibility {
-            request,
-            timeout,
-            reply,
-        })
-        .await
-    }
-
     /// Processes one local remoting command through the Broker V2 dispatcher.
     ///
     /// # Errors
@@ -581,7 +532,7 @@ impl LocalBrokerFacadeClient {
     /// Returns an error when the local Broker worker is unavailable, rejects
     /// the command, or does not complete within the default timeout.
     pub async fn process_remoting_v2(&self, request: RemotingCommand) -> ProxyResult<EmbeddedDispatchOutcome> {
-        self.process_remoting_v2_with_timeout(request, Duration::from_secs(3))
+        self.process_remoting_v2_with_timeout(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
             .await
     }
 
@@ -604,6 +555,19 @@ impl LocalBrokerFacadeClient {
             reply,
         })
         .await
+    }
+
+    async fn process_embedded_response(&self, request: RemotingCommand) -> ProxyResult<EmbeddedResponse> {
+        self.process_embedded_response_with_timeout(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
+            .await
+    }
+
+    async fn process_embedded_response_with_timeout(
+        &self,
+        request: RemotingCommand,
+        timeout: Duration,
+    ) -> ProxyResult<EmbeddedResponse> {
+        embedded_response(self.process_remoting_v2_with_timeout(request, timeout).await?)
     }
 
     pub async fn send_message(
@@ -716,10 +680,6 @@ impl LocalRemotingBackend {
 }
 
 impl ProxyRemotingBackend for LocalRemotingBackend {
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, RemotingCommand> {
-        Box::pin(async move { self.client.process_remoting_v2_compatibility(request).await })
-    }
-
     fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
         Box::pin(async move { self.client.process_remoting_v2(request).await })
     }
@@ -1258,23 +1218,6 @@ async fn handle_local_broker_command(
             };
             let _ = reply.send(result);
         }
-        LocalBrokerCommand::ProcessRemotingV2Compatibility {
-            request,
-            timeout,
-            reply,
-        } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
-            } else {
-                facade
-                    .process_request_v2_compatibility(request, timeout)
-                    .await
-                    .map_err(Into::into)
-            };
-            let _ = reply.send(result);
-        }
         LocalBrokerCommand::ProcessRemotingV2 {
             request,
             timeout,
@@ -1301,6 +1244,32 @@ async fn shutdown_local_broker(facade: &mut ProxyBrokerFacade, deadline: Shutdow
     }
 }
 
+fn embedded_response(outcome: EmbeddedDispatchOutcome) -> ProxyResult<EmbeddedResponse> {
+    match outcome {
+        EmbeddedDispatchOutcome::Reply(plan) => Ok(plan.into_embedded_response()),
+        EmbeddedDispatchOutcome::OneWay { .. } => Err(ProxyError::Transport {
+            message: "local Broker returned one-way completion where a response was required".to_owned(),
+        }),
+        EmbeddedDispatchOutcome::Deferred { .. } => Err(ProxyError::Transport {
+            message: "local Broker returned an unresolved deferred completion".to_owned(),
+        }),
+        EmbeddedDispatchOutcome::NoReply { .. } => Err(ProxyError::Transport {
+            message: "local Broker suppressed a required response".to_owned(),
+        }),
+        _ => Err(ProxyError::Transport {
+            message: "local Broker returned an unsupported embedded completion".to_owned(),
+        }),
+    }
+}
+
+async fn facade_embedded_response(
+    facade: &ProxyBrokerFacade,
+    request: RemotingCommand,
+    timeout: Duration,
+) -> ProxyResult<EmbeddedResponse> {
+    embedded_response(facade.process_request_v2(request, timeout).await?)
+}
+
 async fn query_assignment(
     facade: &ProxyBrokerFacade,
     topic: ResourceIdentity,
@@ -1321,17 +1290,15 @@ async fn query_assignment(
             message: format!("failed to encode local assignment request: {error}"),
         })?,
     );
-    let response = facade
-        .process_request_v2_compatibility(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
-        .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("queryAssignment", &response).into());
     }
 
-    let Some(body) = response.body() else {
+    let Some(body) = embedded_contiguous_body(response.body())? else {
         return Ok(None);
     };
-    let decoded = QueryAssignmentResponseBody::decode(body.as_ref()).map_err(|error| ProxyError::Transport {
+    let decoded = QueryAssignmentResponseBody::decode(body).map_err(|error| ProxyError::Transport {
         message: format!("failed to decode local assignment response: {error}"),
     })?;
     Ok(Some(decoded.message_queue_assignments.into_iter().collect()))
@@ -1365,8 +1332,8 @@ async fn sync_lite_subscription_via_broker(
     body.set_subscription_set(vec![request.broker_dto(client_id)?]);
     let command = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
         .set_body(body.encode()?);
-    let response = client.process_remoting_v2_compatibility(command).await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    let response = client.process_embedded_response(command).await?;
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("syncLiteSubscription", &response).into());
     }
     Ok(())
@@ -1401,9 +1368,7 @@ async fn send_compatible_batch(
 ) -> Vec<SendMessageResultEntry> {
     let result = async {
         let request = build_send_batch_message_request(broker_name, producer_group, &entries)?;
-        let response = facade
-            .process_request_v2_compatibility(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
-            .await?;
+        let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
         build_send_result(entries[0].topic.clone(), broker_name, response)
     }
     .await;
@@ -1472,9 +1437,7 @@ async fn send_message_entry_inner(
 ) -> ProxyResult<SendResult> {
     attach_transaction_producer_group(&mut entry.message, producer_group);
     let request = build_send_message_request(broker_name, producer_group, &entry)?;
-    let response = facade
-        .process_request_v2_compatibility(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
-        .await?;
+    let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
     build_send_result(entry.topic, broker_name, response)
 }
 
@@ -1492,14 +1455,13 @@ async fn recall_message(
     );
     let mut command = RemotingCommand::create_request_command(RequestCode::RecallMessage, header);
     command.make_custom_header_to_net();
-    let response = facade
-        .process_request_v2_compatibility(command, LOCAL_REMOTING_RESPONSE_TIMEOUT)
-        .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    let response = facade_embedded_response(facade, command, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("recallMessage", &response).into());
     }
 
     let header = response
+        .head()
         .decode_command_custom_header::<RecallMessageResponseHeader>()
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to decode local recall response header: {error}"),
@@ -1548,10 +1510,8 @@ async fn end_transaction(
     let mut command = RemotingCommand::create_request_command(RequestCode::EndTransaction, header)
         .set_remark(CheetahString::from(request.trace_context.as_deref().unwrap_or("")));
     command.make_custom_header_to_net();
-    let response = facade
-        .process_request_v2_compatibility(command, LOCAL_REMOTING_RESPONSE_TIMEOUT)
-        .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    let response = facade_embedded_response(facade, command, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("endTransaction", &response).into());
     }
 
@@ -1567,7 +1527,7 @@ async fn receive_message_via_broker(
 ) -> ProxyResult<ReceiveMessagePlan> {
     let header = build_pop_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting_v2_compatibility_with_timeout(
+        .process_embedded_response_with_timeout(
             RemotingCommand::create_request_command(RequestCode::PopMessage, header),
             local_long_poll_timeout(request.long_polling_timeout, caller_deadline),
         )
@@ -1587,7 +1547,7 @@ async fn pull_message_via_broker(
 ) -> ProxyResult<PullMessagePlan> {
     let header = build_pull_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting_v2_compatibility_with_timeout(
+        .process_embedded_response_with_timeout(
             RemotingCommand::create_request_command(RequestCode::PullMessage, header),
             local_long_poll_timeout(request.long_polling_timeout, caller_deadline),
         )
@@ -1638,9 +1598,9 @@ async fn ack_message_via_broker(
 
     for batch_request in built.requests {
         let command = RemotingCommand::new_request(RequestCode::BatchAckMessage, batch_request.body.encode()?);
-        match client.process_remoting_v2_compatibility(command).await {
+        match client.process_embedded_response(command).await {
             Ok(response) => {
-                let status = if ResponseCode::from(response.code()) == ResponseCode::Success {
+                let status = if ResponseCode::from(response.response_code()) == ResponseCode::Success {
                     ProxyStatusMapper::ok_payload()
                 } else {
                     invalid_receipt_handle_status()
@@ -1722,14 +1682,16 @@ async fn ack_message_entry_via_broker(
         }),
     };
     let response = client
-        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(RequestCode::AckMessage, header))
+        .process_embedded_response(RemotingCommand::create_request_command(RequestCode::AckMessage, header))
         .await?;
 
-    Ok(if ResponseCode::from(response.code()) == ResponseCode::Success {
-        ProxyStatusMapper::ok_payload()
-    } else {
-        invalid_receipt_handle_status()
-    })
+    Ok(
+        if ResponseCode::from(response.response_code()) == ResponseCode::Success {
+            ProxyStatusMapper::ok_payload()
+        } else {
+            invalid_receipt_handle_status()
+        },
+    )
 }
 
 async fn forward_message_to_dead_letter_queue_via_broker(
@@ -1757,12 +1719,12 @@ async fn forward_message_to_dead_letter_queue_via_broker(
         }),
     };
     let response = client
-        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
+        .process_embedded_response(RemotingCommand::create_request_command(
             RequestCode::ConsumerSendMsgBack,
             header,
         ))
         .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("forwardMessageToDeadLetterQueue", &response).into());
     }
 
@@ -1802,12 +1764,12 @@ async fn change_invisible_duration_via_broker(
         }),
     };
     let response = client
-        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
+        .process_embedded_response(RemotingCommand::create_request_command(
             RequestCode::ChangeMessageInvisibleTime,
             header,
         ))
         .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Ok(ChangeInvisibleDurationPlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::InvalidReceiptHandle,
@@ -1818,6 +1780,7 @@ async fn change_invisible_duration_via_broker(
     }
 
     let response_header = response
+        .head()
         .decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to decode local changeInvisibleDuration response header: {error}"),
@@ -1847,12 +1810,12 @@ async fn update_offset_via_broker(
 ) -> ProxyResult<UpdateOffsetPlan> {
     let header = build_update_offset_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
+        .process_embedded_response(RemotingCommand::create_request_command(
             RequestCode::UpdateConsumerOffset,
             header,
         ))
         .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("updateOffset", &response).into());
     }
 
@@ -1867,16 +1830,17 @@ async fn get_offset_via_broker(
 ) -> ProxyResult<GetOffsetPlan> {
     let header = build_query_consumer_offset_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting_v2_compatibility(RemotingCommand::create_request_command(
+        .process_embedded_response(RemotingCommand::create_request_command(
             RequestCode::QueryConsumerOffset,
             header,
         ))
         .await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("getOffset", &response).into());
     }
 
     let response_header = response
+        .head()
         .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to decode local getOffset response header: {error}"),
@@ -1951,25 +1915,28 @@ async fn query_offset_via_broker(
             )
         }
     };
-    let response = client.process_remoting_v2_compatibility(command).await?;
-    if ResponseCode::from(response.code()) != ResponseCode::Success {
+    let response = client.process_embedded_response(command).await?;
+    if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("queryOffset", &response).into());
     }
 
     let offset = match request_code {
         RequestCode::GetMinOffset => response
+            .head()
             .decode_command_custom_header::<GetMinOffsetResponseHeader>()
             .map(|header| header.offset)
             .map_err(|error| ProxyError::Transport {
                 message: format!("failed to decode local min offset response header: {error}"),
             })?,
         RequestCode::GetMaxOffset => response
+            .head()
             .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
             .map(|header| header.offset)
             .map_err(|error| ProxyError::Transport {
                 message: format!("failed to decode local max offset response header: {error}"),
             })?,
         RequestCode::SearchOffsetByTimestamp => response
+            .head()
             .decode_command_custom_header::<SearchOffsetResponseHeader>()
             .map(|header| header.offset)
             .map_err(|error| ProxyError::Transport {
@@ -2163,10 +2130,11 @@ fn build_query_consumer_offset_request_header(
 fn build_send_result(
     topic: ResourceIdentity,
     broker_name: &CheetahString,
-    response: RemotingCommand,
+    response: EmbeddedResponse,
 ) -> ProxyResult<SendResult> {
-    let response_code = ResponseCode::from(response.code());
+    let response_code = ResponseCode::from(response.response_code());
     let header = response
+        .head()
         .decode_command_custom_header::<SendMessageResponseHeader>()
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to decode local send response header: {error}"),
@@ -2200,23 +2168,22 @@ fn build_send_result(
 }
 
 fn process_pop_response(
-    mut response: RemotingCommand,
+    response: EmbeddedResponse,
     broker_name: &str,
     topic: &str,
     is_order: bool,
 ) -> ProxyResult<ReceiveMessagePlan> {
-    match ResponseCode::from(response.code()) {
+    match ResponseCode::from(response.response_code()) {
         ResponseCode::Success => {
             let response_header = response
+                .head()
                 .decode_command_custom_header::<PopMessageResponseHeader>()
                 .map_err(|error| ProxyError::Transport {
                     message: format!("failed to decode local pop response header: {error}"),
                 })?;
             let delivery_timestamp_ms = (response_header.pop_time > 0).then_some(response_header.pop_time as i64);
-            let mut messages = response
-                .get_body_mut()
-                .map(|body| MessageDecoder::decodes_batch(body, true, true))
-                .unwrap_or_default();
+            let (_, body) = response.into_parts();
+            let mut messages = decode_embedded_messages(body)?;
             attach_pop_receipt_handles(
                 &mut messages,
                 topic,
@@ -2265,8 +2232,9 @@ fn process_pop_response(
     }
 }
 
-fn process_pull_response(mut response: RemotingCommand) -> ProxyResult<PullMessagePlan> {
+fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessagePlan> {
     let response_header = response
+        .head()
         .decode_command_custom_header::<PullMessageResponseHeader>()
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to decode local pull response header: {error}"),
@@ -2274,20 +2242,20 @@ fn process_pull_response(mut response: RemotingCommand) -> ProxyResult<PullMessa
     let next_offset = response_header.next_begin_offset;
     let min_offset = response_header.min_offset;
     let max_offset = response_header.max_offset;
-    match ResponseCode::from(response.code()) {
-        ResponseCode::Success => Ok(PullMessagePlan {
-            status: ProxyStatusMapper::ok_payload(),
-            next_offset,
-            min_offset,
-            max_offset,
-            messages: response
-                .get_body_mut()
-                .map(|body| MessageDecoder::decodes_batch(body, true, true))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|message| message_ext_to_core(&message))
-                .collect(),
-        }),
+    match ResponseCode::from(response.response_code()) {
+        ResponseCode::Success => {
+            let (_, body) = response.into_parts();
+            Ok(PullMessagePlan {
+                status: ProxyStatusMapper::ok_payload(),
+                next_offset,
+                min_offset,
+                max_offset,
+                messages: decode_embedded_messages(body)?
+                    .into_iter()
+                    .map(|message| message_ext_to_core(&message))
+                    .collect(),
+            })
+        }
         ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
@@ -2577,12 +2545,68 @@ fn transaction_resolution_flag(resolution: TransactionResolution) -> i32 {
     }
 }
 
-fn broker_operation_error(operation: &'static str, response: &RemotingCommand) -> RocketMQError {
+trait BrokerResponseMetadata {
+    fn response_code(&self) -> i32;
+    fn response_remark(&self) -> Option<&str>;
+}
+
+impl BrokerResponseMetadata for RemotingCommand {
+    fn response_code(&self) -> i32 {
+        self.code()
+    }
+
+    fn response_remark(&self) -> Option<&str> {
+        self.remark().map(CheetahString::as_str)
+    }
+}
+
+impl BrokerResponseMetadata for EmbeddedResponse {
+    fn response_code(&self) -> i32 {
+        self.response_code()
+    }
+
+    fn response_remark(&self) -> Option<&str> {
+        self.head().remark().map(CheetahString::as_str)
+    }
+}
+
+fn broker_operation_error(operation: &'static str, response: &impl BrokerResponseMetadata) -> RocketMQError {
     RocketMQError::BrokerOperationFailed {
         operation,
-        code: response.code(),
-        message: response.remark().map(ToString::to_string).unwrap_or_default(),
+        code: response.response_code(),
+        message: response.response_remark().map(ToOwned::to_owned).unwrap_or_default(),
         broker_addr: None,
+    }
+}
+
+fn embedded_contiguous_body(body: &EmbeddedResponseBody) -> ProxyResult<Option<&[u8]>> {
+    match body {
+        EmbeddedResponseBody::Empty => Ok(None),
+        EmbeddedResponseBody::Bytes(body) => Ok(Some(body.as_ref())),
+        EmbeddedResponseBody::Segments(segments) if segments.len() == 1 => Ok(Some(segments[0].as_ref())),
+        EmbeddedResponseBody::Segments(_) => Err(ProxyError::Transport {
+            message: "local Broker returned segmented body for a contiguous metadata response".to_owned(),
+        }),
+        EmbeddedResponseBody::FileRegions(_) => Err(ProxyError::Transport {
+            message: "local Broker returned file regions for a metadata response".to_owned(),
+        }),
+    }
+}
+
+fn decode_embedded_messages(body: EmbeddedResponseBody) -> ProxyResult<Vec<MessageExt>> {
+    match body {
+        EmbeddedResponseBody::Empty => Ok(Vec::new()),
+        EmbeddedResponseBody::Bytes(mut body) => Ok(MessageDecoder::decodes_batch(&mut body, true, true)),
+        EmbeddedResponseBody::Segments(segments) => {
+            let mut messages = Vec::new();
+            for mut segment in segments {
+                messages.extend(MessageDecoder::decodes_batch(&mut segment, true, true));
+            }
+            Ok(messages)
+        }
+        EmbeddedResponseBody::FileRegions(_) => Err(ProxyError::Transport {
+            message: "local Proxy cannot decode message payload from file regions".to_owned(),
+        }),
     }
 }
 
@@ -2663,6 +2687,8 @@ mod tests {
     use rocketmq_proxy_core::SendMessageEntry;
     use rocketmq_proxy_core::TransactionResolution;
     use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::v2::ResponsePlan;
 
     use super::broker_operation_error;
     use super::build_local_proxy_producer_group;
@@ -2983,7 +3009,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_command_backend_enqueues_only_v2_compatibility_dispatch() {
+    async fn raw_command_backend_enqueues_only_v2_dispatch() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
@@ -2995,13 +3021,13 @@ mod tests {
         let backend = LocalRemotingBackend::new(client);
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
 
-        let call = tokio::spawn(async move { backend.process(request).await });
+        let call = tokio::spawn(async move { backend.process_v2(request).await });
         let queued = receiver
             .recv()
             .await
             .expect("raw-command backend must enqueue local work");
         match queued.command {
-            super::LocalBrokerCommand::ProcessRemotingV2Compatibility {
+            super::LocalBrokerCommand::ProcessRemotingV2 {
                 request,
                 timeout,
                 reply,
@@ -3009,9 +3035,13 @@ mod tests {
                 assert_eq!(RequestCode::from(request.code()), RequestCode::GetBrokerConfig);
                 assert_eq!(request.opaque(), 9_852);
                 assert_eq!(timeout, Duration::from_secs(3));
-                let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                    .set_opaque(request.opaque())
-                    .mark_response_type();
+                let response = ResponsePlan::command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque())
+                        .mark_response_type(),
+                )
+                .map(EmbeddedDispatchOutcome::Reply)
+                .expect("valid embedded response");
                 assert!(
                     reply.send(Ok(response)).is_ok(),
                     "backend call must own the reply receiver"
@@ -3021,12 +3051,14 @@ mod tests {
         }
 
         let response = call.await.expect("backend task joins").expect("backend succeeds");
-        assert_eq!(response.opaque(), 9_852);
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let EmbeddedDispatchOutcome::Reply(response) = response else {
+            panic!("backend must return a reply plan")
+        };
+        assert_eq!(ResponseCode::from(response.response_code()), ResponseCode::Success);
     }
 
     #[tokio::test]
-    async fn v2_compatibility_client_api_preserves_timeout_and_identity() {
+    async fn v2_client_api_preserves_timeout_and_identity() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
@@ -3039,15 +3071,12 @@ mod tests {
 
         let call = tokio::spawn(async move {
             client
-                .process_remoting_v2_compatibility_with_timeout(request, Duration::from_millis(275))
+                .process_remoting_v2_with_timeout(request, Duration::from_millis(275))
                 .await
         });
-        let queued = receiver
-            .recv()
-            .await
-            .expect("compatibility API must enqueue local work");
+        let queued = receiver.recv().await.expect("V2 API must enqueue local work");
         match queued.command {
-            super::LocalBrokerCommand::ProcessRemotingV2Compatibility {
+            super::LocalBrokerCommand::ProcessRemotingV2 {
                 request,
                 timeout,
                 reply,
@@ -3055,20 +3084,26 @@ mod tests {
                 assert_eq!(RequestCode::from(request.code()), RequestCode::GetBrokerConfig);
                 assert_eq!(request.opaque(), 9_857);
                 assert_eq!(timeout, Duration::from_millis(275));
-                let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                    .set_opaque(request.opaque())
-                    .mark_response_type();
+                let response = ResponsePlan::command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque())
+                        .mark_response_type(),
+                )
+                .map(EmbeddedDispatchOutcome::Reply)
+                .expect("valid embedded response");
                 assert!(
                     reply.send(Ok(response)).is_ok(),
                     "client call must own the reply receiver"
                 );
             }
-            _ => panic!("compatibility API enqueued an unrelated command"),
+            _ => panic!("V2 API enqueued an unrelated command"),
         }
 
         let response = call.await.expect("client task joins").expect("client call succeeds");
-        assert_eq!(response.opaque(), 9_857);
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let EmbeddedDispatchOutcome::Reply(response) = response else {
+            panic!("client must return a reply plan")
+        };
+        assert_eq!(ResponseCode::from(response.response_code()), ResponseCode::Success);
     }
 
     #[test]

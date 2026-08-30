@@ -13,12 +13,7 @@
 // limitations under the License.
 
 use std::future::Future;
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
-use std::net::SocketAddr;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -36,38 +31,29 @@ use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
 use rocketmq_security_api::SecurityBootstrapProfile;
 
-use super::reserve_session_owner;
-use super::LocalResponseReceiver;
 use super::OriginalRequestIdentity;
 use super::RequestContext;
-use super::RequestTransport;
 use super::ResponseSink;
 use super::ResponseSinkError;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionError;
-use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
-use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::net::channel::Channel;
-use crate::net::channel::ChannelInner;
-use crate::remoting::inner::RemotingGeneralHandler;
 use crate::request_ordering::RequestOrdering;
-use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
 use crate::session_executor::SessionExecutor;
-use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
+#[path = "authorized_dispatcher/embedded_v2.rs"]
 mod embedded_v2;
+#[path = "authorized_dispatcher/v2.rs"]
 mod v2;
 
 pub(crate) use v2::AuthorizedDispatchV2Error;
@@ -160,7 +146,7 @@ impl AuthorizedDispatchBoundary {
 /// Public network dispatcher for the V2 request-processor contract.
 ///
 /// The facade owns one security/admission boundary and one statically
-/// monomorphized V2 processor core. It does not construct a legacy channel;
+/// monomorphized V2 processor core. It does not construct a processor channel;
 /// response correlation remains private to each canonical V2 network session.
 pub struct AuthorizedCommandDispatcherV2<P> {
     boundary: Arc<AuthorizedDispatchBoundary>,
@@ -441,211 +427,6 @@ impl AuthorizedDispatchSession {
     }
 }
 
-/// Shared RPC-hook, typed processor, security, admission, and error-mapping
-/// dispatcher used by network listeners and the embedded Proxy adapter.
-pub struct AuthorizedCommandDispatcher<RP> {
-    boundary: Arc<AuthorizedDispatchBoundary>,
-    handler: Arc<RemotingGeneralHandler<RP>>,
-    network: Arc<AuthorizedDispatcherCore<crate::dispatch::LegacyProcessorAdapter<RP>>>,
-}
-
-impl<RP> AuthorizedCommandDispatcher<RP>
-where
-    RP: RequestProcessor + Sync + Clone + 'static,
-{
-    /// Creates a dispatcher over an explicitly injected process budget.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the pending-request budget cannot be derived.
-    pub fn try_new(
-        request_processor: RP,
-        rpc_hooks: Vec<Arc<dyn RPCHook>>,
-        process_budget: &ResourceBudget,
-        telemetry: TransportTelemetry,
-        security: Arc<TransportSecurity>,
-        admission: Arc<AdmissionController>,
-    ) -> rocketmq_error::RocketMQResult<Self> {
-        let response_table = PendingRequestTable::try_with_limits_and_budget(
-            PendingRequestLimits {
-                max_count: 512,
-                ..Default::default()
-            },
-            process_budget,
-        )
-        .map_err(|error| {
-            rocketmq_error::RocketMQError::response_process_failed(
-                "authorized_dispatcher.pending_requests",
-                error.to_string(),
-            )
-        })?;
-        let boundary = Arc::new(AuthorizedDispatchBoundary::new(security, admission));
-        let network_processor = request_processor.clone();
-        let handler = Arc::new(RemotingGeneralHandler::new_with_telemetry(
-            request_processor,
-            rpc_hooks.clone(),
-            response_table.clone(),
-            telemetry.clone(),
-        ));
-        let adapter = crate::dispatch::LegacyProcessorAdapter::new(
-            network_processor,
-            std::any::type_name::<RP>(),
-            telemetry,
-            response_table,
-        );
-        Ok(Self {
-            boundary,
-            handler,
-            network: Arc::new(AuthorizedDispatcherCore::new_legacy(adapter, rpc_hooks)),
-        })
-    }
-
-    /// Returns the exact security and admission boundary used by this handler.
-    #[must_use]
-    pub fn boundary(&self) -> Arc<AuthorizedDispatchBoundary> {
-        Arc::clone(&self.boundary)
-    }
-
-    pub(crate) fn request_ordering(&self, command: &RemotingCommand) -> RequestOrdering {
-        self.handler.request_processor.request_ordering(command)
-    }
-
-    pub(crate) fn open_network_session(&self) -> crate::dispatch::LegacyNetworkSession {
-        self.network.open_network_session()
-    }
-
-    pub(crate) fn complete_network_response(
-        &self,
-        session: &crate::dispatch::LegacyNetworkSession,
-        response: RemotingCommand,
-    ) {
-        self.network.complete_network_response(session, response);
-    }
-
-    pub(crate) fn close_network_session(&self, session: &crate::dispatch::LegacyNetworkSession) {
-        self.network.close_network_session(session);
-    }
-
-    pub(crate) async fn dispatch_network(
-        &self,
-        authorized_session: &AuthorizedDispatchSession,
-        network_session: crate::dispatch::LegacyNetworkSession,
-        session: crate::server::SessionHandle,
-        context: RequestContext,
-        command: RemotingCommand,
-        received_at: Instant,
-        retained_bytes: usize,
-        partial_frame_permit: Option<PartialFramePermit>,
-        session_cleanup: crate::dispatch::DeferredSessionCleanupRegistration,
-    ) -> Result<DispatchOutcome, AuthorizedDispatchV2Error> {
-        self.network
-            .dispatch_network(
-                authorized_session,
-                network_session,
-                session,
-                context,
-                command,
-                received_at,
-                retained_bytes,
-                partial_frame_permit,
-                Some(session_cleanup),
-            )
-            .await
-    }
-
-    /// Dispatches one embedded command without creating a listener, socket
-    /// pair, transport stream, writer task, or detached task.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed context, runtime, admission, response, cancellation, or
-    /// deadline error.
-    pub async fn dispatch_embedded(
-        self: &Arc<Self>,
-        task_group: &TaskGroup,
-        context: RequestContext,
-        mut command: RemotingCommand,
-    ) -> Result<RemotingCommand, DispatchError> {
-        if context.transport() != RequestTransport::EmbeddedProxy {
-            return Err(DispatchError::InvalidEmbeddedContext);
-        }
-        let (session_id, original_request_identity) = capture_embedded_request_identity(&command)?;
-        let _session_record = EmbeddedSessionRecord::new(session_id);
-        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
-        let scope = AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST)).with_session(session_id);
-        let scope = self
-            .boundary
-            .admission
-            .prepare_scope(scope)
-            .map_err(DispatchError::Admission)?;
-        let session = self.boundary.session(task_group, scope)?;
-        let (response, receiver): (ResponseSink, LocalResponseReceiver) = ResponseSink::local();
-        let local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let remote_address = local_address;
-        let mut channel = Channel::new(
-            Arc::new(ChannelInner::new_local(response.clone(), task_group.clone())),
-            local_address,
-            remote_address,
-        );
-        channel.set_channel_id(format!("embedded-proxy-{session_id}"));
-        let handler_context = Arc::new(ConnectionHandlerContextWrapper::new(channel));
-        let ordering = self.request_ordering(&command);
-        let handler = Arc::clone(&self.handler);
-        let deadline = context.deadline();
-        let cancellation = task_group.cancellation_token();
-
-        session
-            .dispatch(
-                context,
-                Some(original_request_identity),
-                command,
-                retained_bytes,
-                None,
-                ordering,
-                response,
-                move |_operation, command| async move {
-                    handler
-                        .process_message_received(&handler_context, Some(original_request_identity), command)
-                        .await;
-                },
-            )
-            .await?;
-        let result = receiver.receive(&cancellation, deadline).await;
-        let drain_budget = deadline.map_or(Duration::from_secs(3), |deadline| deadline.remaining());
-        session
-            .drain_until(ShutdownDeadline::after(drain_budget))
-            .await
-            .log_if_unhealthy();
-        result.map_err(DispatchError::Response)
-    }
-}
-
-fn capture_embedded_request_identity(
-    command: &RemotingCommand,
-) -> Result<(u64, OriginalRequestIdentity), DispatchError> {
-    capture_embedded_request_identity_with_owner(command, reserve_session_owner())
-}
-
-fn capture_embedded_request_identity_with_owner(
-    command: &RemotingCommand,
-    session_id: Option<u64>,
-) -> Result<(u64, OriginalRequestIdentity), DispatchError> {
-    let session_id = session_id.ok_or_else(|| {
-        DispatchError::Runtime(RuntimeError::LifecycleOperation {
-            operation: "authorized_dispatcher.reserve_embedded_session_owner",
-            message: "process-local session owner namespace exhausted".to_owned(),
-        })
-    })?;
-    let request_sequence = AtomicU64::new(1);
-    let identity = OriginalRequestIdentity::capture(session_id, &request_sequence, command).ok_or_else(|| {
-        DispatchError::Runtime(RuntimeError::LifecycleOperation {
-            operation: "authorized_dispatcher.capture_embedded_request_identity",
-            message: "embedded request identity namespace exhausted".to_owned(),
-        })
-    })?;
-    Ok((session_id, identity))
-}
-
 pub(super) fn admission_response(opaque: i32, error: &AdmissionError) -> RemotingCommand {
     RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemBusy, error.to_string())
         .set_opaque(opaque)
@@ -657,43 +438,4 @@ pub(super) fn deadline_response(opaque: i32) -> RemotingCommand {
         "request deadline exceeded".to_owned(),
     )
     .set_opaque(opaque)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn embedded_sessions_use_distinct_process_owners_even_with_the_same_opaque() {
-        let network_owner = reserve_session_owner().expect("test process owner should be available");
-        let command = RemotingCommand::create_remoting_command(-91_762).set_opaque(77);
-
-        let (_, first) = capture_embedded_request_identity(&command).expect("first embedded identity");
-        let (_, second) = capture_embedded_request_identity(&command).expect("second embedded identity");
-
-        assert_ne!(first.request_id().owner_id(), network_owner);
-        assert_ne!(second.request_id().owner_id(), network_owner);
-        assert_ne!(first.request_id().owner_id(), second.request_id().owner_id());
-        assert_eq!(first.request_id().sequence(), 1);
-        assert_eq!(second.request_id().sequence(), 1);
-        assert_eq!(first.original_opaque(), second.original_opaque());
-        assert_eq!(first.original_code(), -91_762);
-        assert_eq!(second.original_code(), -91_762);
-    }
-
-    #[test]
-    fn embedded_owner_exhaustion_is_a_runtime_lifecycle_failure() {
-        let command = RemotingCommand::create_remoting_command(10).set_opaque(77);
-
-        let error = capture_embedded_request_identity_with_owner(&command, None)
-            .expect_err("an exhausted process owner namespace must fail closed");
-
-        match error {
-            DispatchError::Runtime(RuntimeError::LifecycleOperation { operation, message }) => {
-                assert_eq!(operation, "authorized_dispatcher.reserve_embedded_session_owner");
-                assert_eq!(message, "process-local session owner namespace exhausted");
-            }
-            other => panic!("unexpected embedded exhaustion error: {other:?}"),
-        }
-    }
 }

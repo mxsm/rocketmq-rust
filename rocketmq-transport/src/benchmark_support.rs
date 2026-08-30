@@ -17,6 +17,7 @@
 use std::hint::black_box;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -33,6 +34,8 @@ use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::OriginalRequestIdentity;
+use crate::dispatch::ResponsePlan;
 use crate::hook_registry::HookRegistry;
 use crate::runtime::RPCHook;
 
@@ -48,6 +51,62 @@ pub use crate::server::SessionTransportServer;
 pub use crate::server::SessionTransportServerConfig;
 pub use crate::write_strategy::FrameWriteMode;
 pub use crate::write_strategy::FrameWriter;
+
+/// Metadata returned after exercising the canonical response binding and
+/// structured-frame preparation path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedResponseBenchmarkResult {
+    /// Aggregate body bytes retained by the prepared response.
+    pub body_len: usize,
+    /// Number of independently owned body parts.
+    pub body_part_count: usize,
+    /// Complete encoded frame length reported by canonical preparation.
+    pub encoded_len: usize,
+}
+
+/// Feature-gated adapter for benchmarking canonical response preparation
+/// without exposing binding or frame-encoding authority on the V2 API.
+pub struct ResponsePlanPreparationHarness {
+    sequence: AtomicU64,
+}
+
+impl ResponsePlanPreparationHarness {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            sequence: AtomicU64::new(1),
+        }
+    }
+
+    /// Binds and prepares one response through the production encode path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the synthetic identity space is exhausted or the supplied
+    /// plan violates a canonical binding/preparation invariant.
+    pub fn prepare(&self, plan: ResponsePlan, request_opaque: i32) -> PreparedResponseBenchmarkResult {
+        let request = RemotingCommand::create_remoting_command(39).set_opaque(request_opaque);
+        let original = OriginalRequestIdentity::capture(7, &self.sequence, &request)
+            .expect("benchmark request identity namespace");
+        let bound = plan.bind(original).expect("benchmark response binding");
+        let prepared =
+            crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
+                .expect("benchmark response preparation");
+        let metadata = *prepared.metadata();
+        black_box(prepared.into_parts().1);
+        PreparedResponseBenchmarkResult {
+            body_len: metadata.body_len(),
+            body_part_count: metadata.body_part_count(),
+            encoded_len: metadata.encoded_len(),
+        }
+    }
+}
+
+impl Default for ResponsePlanPreparationHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Same-controller comparison between registry lookup and a prepared session scope.
 pub struct AdmissionHotPathHarness {
