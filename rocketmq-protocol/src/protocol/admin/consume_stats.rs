@@ -346,52 +346,25 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_total_diff() {
+    fn methods_compute_consumer_lag() {
         let mut stats = ConsumeStats::new();
-        let mut map = HashMap::new();
-
-        // queue 1
-        map.insert(create_mq("topic_a", 0), create_offset_wrapper(500, 400, 450));
-        // queue 2
-        map.insert(create_mq("topic_a", 1), create_offset_wrapper(200, 150, 180));
-
-        stats.set_offset_table(map);
-
-        assert_eq!(stats.compute_total_diff(), 150);
-    }
-
-    #[test]
-    fn test_compute_inflight_total_diff() {
-        let mut stats = ConsumeStats::new();
-        let mut map = HashMap::new();
-        map.insert(create_mq("topic_b", 0), create_offset_wrapper(500, 400, 450));
-        map.insert(create_mq("topic_b", 1), create_offset_wrapper(200, 150, 180));
-
-        stats.set_offset_table(map);
-
-        assert_eq!(stats.compute_inflight_total_diff(), 80);
-    }
-
-    #[test]
-    fn test_getters_and_setters() {
-        let mut stats = ConsumeStats::new();
-        stats.set_consume_tps(5.67);
-
-        assert_eq!(stats.get_consume_tps(), 5.67);
+        assert_eq!(stats.get_consume_tps(), 0.0);
         assert!(stats.get_offset_table().is_empty());
-
-        stats
-            .get_offset_table_mut()
-            .insert(create_mq("test", 0), OffsetWrapper::new());
-        assert_eq!(stats.get_offset_table().len(), 1);
-    }
-
-    #[test]
-    fn test_empty_stats_diff() {
-        let stats = ConsumeStats::new();
-
         assert_eq!(stats.compute_total_diff(), 0);
         assert_eq!(stats.compute_inflight_total_diff(), 0);
+
+        stats.set_consume_tps(5.67);
+        let mut map = HashMap::new();
+        map.insert(create_mq("topic_a", 0), create_offset_wrapper(500, 400, 450));
+        stats.set_offset_table(map);
+        stats
+            .get_offset_table_mut()
+            .insert(create_mq("topic_a", 1), create_offset_wrapper(200, 150, 180));
+
+        assert_eq!(stats.get_consume_tps(), 5.67);
+        assert_eq!(stats.get_offset_table().len(), 2);
+        assert_eq!(stats.compute_total_diff(), 150);
+        assert_eq!(stats.compute_inflight_total_diff(), 80);
     }
 
     #[test]
