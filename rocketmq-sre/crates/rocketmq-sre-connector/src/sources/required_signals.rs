@@ -577,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn broker_request_errors_exclude_legacy_ambiguous_none() {
+    fn broker_request_errors_include_every_non_success_result() {
         let manifest: serde_yaml::Value = serde_yaml::from_str(BROKER_MANIFEST).expect("valid broker manifest");
         let request_errors = manifest["signals"]
             .as_sequence()
@@ -587,7 +587,7 @@ mod tests {
             .expect("broker request errors signal");
         const EXPECTED_QUERY: &str = concat!(
             "sum by (request_code, response_code, result) ",
-            "(rate(rocketmq_rpc_latency_milliseconds_count{result!=\"success\",result!=\"legacy_ambiguous_none\"}[5m]))"
+            "(rate(rocketmq_rpc_latency_milliseconds_count{result!=\"success\"}[5m]))"
         );
 
         assert_eq!(request_errors["query"].as_str(), Some(EXPECTED_QUERY));

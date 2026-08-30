@@ -16,39 +16,16 @@
 
 use std::error::Error;
 use std::fmt;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 use rocketmq_error::RocketMQError;
 
-// V1 response writes have no request owner. Keep their receipts in a reserved,
-// process-local namespace rather than deriving an identity from protocol opaque values.
-const LEGACY_V1_RESPONSE_OWNER_ID: u64 = u64::MAX;
-static LEGACY_V1_RESPONSE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-fn reserve_legacy_v1_request_id(sequence: &AtomicU64) -> Result<RequestId, ResponseError> {
-    let sequence = sequence
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sequence| {
-            if sequence == 0 {
-                None
-            } else {
-                sequence.checked_add(1)
-            }
-        })
-        .map_err(|_| ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Closed,
-        })?;
-    Ok(RequestId {
-        owner_id: LEGACY_V1_RESPONSE_OWNER_ID,
-        sequence,
-    })
-}
+const RESERVED_RESPONSE_OWNER_ID: u64 = u64::MAX;
 
 /// Opaque process-local identity for one request allocation.
 ///
 /// Real inbound requests use a process-local session owner and a sequence assigned within that
-/// session. Legacy V1 direct-write receipts use the same type with a reserved synthetic owner. The
-/// values are internal correlation data, not wire identifiers, peer identities, request bodies, or
+/// session. The reserved maximum owner value remains unavailable to callers. These values are
+/// internal correlation data, not wire identifiers, peer identities, request bodies, or
 /// other protocol content.
 ///
 /// ```compile_fail
@@ -67,7 +44,7 @@ pub struct RequestId {
 impl RequestId {
     /// Creates an identity in the namespace reserved for real request sessions.
     pub(crate) const fn real(owner_id: u64, sequence: u64) -> Option<Self> {
-        if owner_id == 0 || owner_id == LEGACY_V1_RESPONSE_OWNER_ID || sequence == 0 || sequence == u64::MAX {
+        if owner_id == 0 || owner_id == RESERVED_RESPONSE_OWNER_ID || sequence == 0 || sequence == u64::MAX {
             None
         } else {
             Some(Self { owner_id, sequence })
@@ -352,18 +329,6 @@ impl ResponseReceipt {
         }
     }
 
-    /// Reserves a synthetic V1 receipt before local completion starts.
-    ///
-    /// The fixed V1 namespace is process-local and intentionally has no request ownership. Its
-    /// sequence never wraps: after exhaustion, the legacy owner remains permanently closed and
-    /// this returns `AlreadyCompleted(Closed)` before any write begins.
-    pub(crate) fn legacy_v1(disposition: ResponseDisposition) -> Result<Self, ResponseError> {
-        Ok(Self {
-            request_id: reserve_legacy_v1_request_id(&LEGACY_V1_RESPONSE_SEQUENCE)?,
-            disposition,
-        })
-    }
-
     /// Returns the response owner that produced this receipt.
     #[must_use]
     pub const fn request_id(&self) -> RequestId {
@@ -548,51 +513,5 @@ mod tests {
             assert!(display.contains("source_code=INVALID_PROPERTY"));
             assert!(debug.contains("source_code: \"INVALID_PROPERTY\""));
         }
-    }
-
-    #[test]
-    fn legacy_v1_receipts_use_a_reserved_owner_and_distinct_sequences() {
-        let first = ResponseReceipt::legacy_v1(ResponseDisposition::TransportWritten)
-            .expect("V1 receipt identity should be available");
-        let second = ResponseReceipt::legacy_v1(ResponseDisposition::TransportWritten)
-            .expect("V1 receipt identity should be available");
-
-        assert_eq!(first.request_id().owner_id(), LEGACY_V1_RESPONSE_OWNER_ID);
-        assert_eq!(second.request_id().owner_id(), LEGACY_V1_RESPONSE_OWNER_ID);
-        assert_ne!(first.request_id(), second.request_id());
-        assert!(second.request_id().sequence() > first.request_id().sequence());
-    }
-
-    #[test]
-    fn legacy_v1_receipt_ids_stop_before_maximum_sequence_wraps() {
-        let sequence = AtomicU64::new(u64::MAX - 1);
-
-        let final_id = reserve_legacy_v1_request_id(&sequence).expect("final safe sequence should be issued");
-        let error = reserve_legacy_v1_request_id(&sequence).expect_err("exhausted V1 owner must stay closed");
-
-        assert_eq!(final_id.owner_id(), LEGACY_V1_RESPONSE_OWNER_ID);
-        assert_eq!(final_id.sequence(), u64::MAX - 1);
-        assert_eq!(sequence.load(Ordering::Relaxed), u64::MAX);
-        assert!(matches!(
-            error,
-            ResponseError::AlreadyCompleted {
-                state: ResponseTerminalState::Closed
-            }
-        ));
-    }
-
-    #[test]
-    fn legacy_v1_receipt_ids_reject_a_wrapped_sequence_cursor() {
-        let sequence = AtomicU64::new(0);
-
-        let error = reserve_legacy_v1_request_id(&sequence).expect_err("wrapped V1 owner must stay closed");
-
-        assert!(matches!(
-            error,
-            ResponseError::AlreadyCompleted {
-                state: ResponseTerminalState::Closed
-            }
-        ));
-        assert_eq!(sequence.load(Ordering::Relaxed), 0);
     }
 }

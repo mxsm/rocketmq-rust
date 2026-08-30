@@ -35,32 +35,12 @@ use crate::ProxyServiceFuture;
 /// an embedded broker or another provider, but Core does not depend on those
 /// implementations.
 pub trait ProxyRemotingBackend: Send + Sync {
-    /// Processes a canonical Remoting command through a facade-owned backend.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed proxy error when the provider cannot process the
-    /// request. The facade is responsible for mapping that error to a wire
-    /// response.
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, RemotingCommand>;
-
     /// Processes a canonical command through the channel-free Broker V2 boundary.
     ///
-    /// Implementations that own an embedded Broker override this method and
-    /// return its affine local dispatch result. Remote cluster backends keep
-    /// using [`Self::process`] because they do not own an in-process Broker
-    /// dispatcher.
-    fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
-        Box::pin(async move {
-            let response = self.process(request).await?;
-            let plan = rocketmq_transport::api::v2::ResponsePlan::from_command(response).map_err(|error| {
-                crate::ProxyError::Transport {
-                    message: format!("backend response could not become a V2 response plan: {error}"),
-                }
-            })?;
-            Ok(EmbeddedDispatchOutcome::Reply(plan))
-        })
-    }
+    /// Local and remote implementations both return the affine V2 result;
+    /// remote providers wrap their response command in a `ResponsePlan`
+    /// without introducing a reverse plan-to-command adapter.
+    fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome>;
 }
 
 /// Stable operations recognized by the Remoting ingress.

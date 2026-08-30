@@ -2043,7 +2043,7 @@ mod tests {
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::RuntimeOwner;
     use rocketmq_transport::test_support::session_id_for_test;
-    use rocketmq_transport::test_support::LocalRequestHarness;
+    use rocketmq_transport::test_support::LocalChannelHarness;
 
     use super::*;
     use crate::bootstrap::Builder;
@@ -2144,7 +2144,7 @@ mod tests {
             .set_name_server_config(config)
             .build();
         let manager = bootstrap.runtime_inner().route_info_manager();
-        let harness = LocalRequestHarness::new(
+        let harness = LocalChannelHarness::new(
             runtime_context
                 .service_context("namesrv-registration-channel")
                 .task_group()

@@ -205,24 +205,6 @@ impl<Event> Default for EventLog<Event> {
 }
 
 impl<Event> EventLog<Event> {
-    pub fn push(&self, event: Event) {
-        self.events
-            .lock()
-            .expect("event log lock should not be poisoned")
-            .push(event);
-        self.changed.notify_waiters();
-    }
-
-    pub fn snapshot(&self) -> Vec<Event>
-    where
-        Event: Clone,
-    {
-        self.events
-            .lock()
-            .expect("event log lock should not be poisoned")
-            .clone()
-    }
-
     /// Waits until a predicate over the recorded event sequence becomes true.
     #[allow(
         dead_code,

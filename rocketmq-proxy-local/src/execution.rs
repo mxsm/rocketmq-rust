@@ -472,18 +472,16 @@ impl LocalBrokerCommand {
             | Self::QueryTopicMessageType { .. }
             | Self::QuerySubscriptionGroup { .. }
             | Self::QueryAssignment { .. } => LocalExecutionClass::Control,
-            Self::ProcessRemotingV2Compatibility { request, .. } | Self::ProcessRemotingV2 { request, .. } => {
-                match RequestCode::from(request.code()) {
-                    RequestCode::PopMessage | RequestCode::PullMessage => LocalExecutionClass::LongPoll,
-                    RequestCode::AckMessage
-                    | RequestCode::BatchAckMessage
-                    | RequestCode::ChangeMessageInvisibleTime
-                    | RequestCode::ConsumerSendMsgBack
-                    | RequestCode::UpdateConsumerOffset
-                    | RequestCode::QueryConsumerOffset => LocalExecutionClass::Control,
-                    _ => LocalExecutionClass::ShortData,
-                }
-            }
+            Self::ProcessRemotingV2 { request, .. } => match RequestCode::from(request.code()) {
+                RequestCode::PopMessage | RequestCode::PullMessage => LocalExecutionClass::LongPoll,
+                RequestCode::AckMessage
+                | RequestCode::BatchAckMessage
+                | RequestCode::ChangeMessageInvisibleTime
+                | RequestCode::ConsumerSendMsgBack
+                | RequestCode::UpdateConsumerOffset
+                | RequestCode::QueryConsumerOffset => LocalExecutionClass::Control,
+                _ => LocalExecutionClass::ShortData,
+            },
             Self::SendMessage { .. } | Self::RecallMessage { .. } | Self::EndTransaction { .. } => {
                 LocalExecutionClass::ShortData
             }
@@ -506,9 +504,7 @@ impl LocalBrokerCommand {
             | Self::EndTransaction {
                 client_id, request_id, ..
             } => LocalOrderingKey::new("producer", [client_id.clone().unwrap_or_else(|| request_id.clone())]),
-            Self::ProcessRemotingV2Compatibility { request, .. } | Self::ProcessRemotingV2 { request, .. } => {
-                remoting_ordering_key(request)
-            }
+            Self::ProcessRemotingV2 { request, .. } => remoting_ordering_key(request),
         }
     }
 }
@@ -640,7 +636,7 @@ mod tests {
     impl LocalCommandHandler for BlockingHandler {
         async fn handle(&self, command: LocalBrokerCommand) {
             let id = match &command {
-                LocalBrokerCommand::ProcessRemotingV2Compatibility { request, .. } => request.opaque(),
+                LocalBrokerCommand::ProcessRemotingV2 { request, .. } => request.opaque(),
                 LocalBrokerCommand::QueryRoute { .. } => -1,
                 _ => -2,
             };
@@ -682,7 +678,7 @@ mod tests {
         )
         .set_opaque(opaque);
         request.make_custom_header_to_net();
-        LocalBrokerCommand::ProcessRemotingV2Compatibility {
+        LocalBrokerCommand::ProcessRemotingV2 {
             request,
             timeout: Duration::from_millis(15_500),
             reply,
@@ -717,7 +713,7 @@ mod tests {
             },
         );
         let (pop_reply, _pop_receiver) = oneshot::channel();
-        let pop = LocalBrokerCommand::ProcessRemotingV2Compatibility {
+        let pop = LocalBrokerCommand::ProcessRemotingV2 {
             request: pop,
             timeout: Duration::from_millis(15_500),
             reply: pop_reply,

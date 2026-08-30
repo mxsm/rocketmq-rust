@@ -17,4 +17,3 @@ pub mod connection_net_event;
 pub mod pending_request_table;
 #[cfg(test)]
 mod pending_request_table_tests;
-pub mod tokio_event;

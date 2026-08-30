@@ -43,8 +43,6 @@ pub use crate::clients::rocketmq_tokio_client::RequestTarget;
 pub use crate::clients::rocketmq_tokio_client::SendReceipt;
 pub use crate::clients::rocketmq_tokio_client::TransportClient;
 pub use crate::clients::rocketmq_tokio_client::TransportClientBuilder;
-pub use crate::clients::LegacyDefaultRequestProcessor;
-pub use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
 pub use crate::codec::remoting_command_codec::FrameLimits;
 pub use crate::common::heartbeat_v2_result::HeartbeatV2Result;
 pub use crate::common::remoting_helper::RemotingHelper;
@@ -65,13 +63,9 @@ pub use crate::discovery::http_tiny_client::HttpResult;
 pub use crate::discovery::http_tiny_client::HttpTinyClient;
 pub use crate::discovery::name_server_update_callback::NameServerUpdateCallback;
 pub use crate::discovery::top_addressing::TopAddressing;
-#[deprecated(since = "1.0.0", note = "Use `api::v2::AuthorizedCommandDispatcherV2` instead")]
-pub use crate::dispatch::AuthorizedCommandDispatcher;
 pub use crate::dispatch::AuthorizedDispatchBoundary;
 pub use crate::dispatch::DispatchError;
 pub use crate::dispatch::DispatchOutcome;
-pub use crate::dispatch::EmbeddedV2CompatibilityMaterializationError;
-pub use crate::dispatch::EmbeddedV2CompatibilityMaterializationErrorKind;
 pub use crate::dispatch::LocalResponseReceiver;
 pub use crate::dispatch::RequestContext;
 pub use crate::dispatch::RequestContextError;
@@ -99,9 +93,10 @@ pub use crate::proxy_protocol::ProxyProtocolConfig;
 pub use crate::proxy_protocol::ProxyProtocolMetadata;
 pub use crate::proxy_protocol::UnknownTlvPolicy;
 pub use crate::remoting_server::rocketmq_tokio_server::ServerStartError;
-pub use crate::remoting_server::rocketmq_tokio_server::TransportServer;
+pub use crate::remoting_server::rocketmq_tokio_server::TransportServerV2 as TransportServer;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;
+pub use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 pub use crate::rpc::client_metadata::ClientMetadata;
 pub use crate::rpc::rpc_client::RpcClient;
 pub use crate::rpc::rpc_client::RpcClientLocal;
@@ -116,21 +111,6 @@ pub use crate::runtime::config::client_config::ConnectConfig;
 pub use crate::runtime::config::client_config::GoAwayPolicy;
 pub use crate::runtime::config::client_config::MaintenanceConfig;
 pub use crate::runtime::config::client_config::TransportClientConfig;
-#[deprecated(since = "1.0.0", note = "Use `api::v2::RemotingRequest` instead")]
-pub use crate::runtime::connection_handler_context::ConnectionHandlerContext;
-#[deprecated(since = "1.0.0", note = "Use `api::v2::RemotingRequest` instead")]
-pub use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-pub use crate::runtime::connection_handler_context::LegacySessionCleanupEnrollment;
-pub use crate::runtime::connection_handler_context::LegacySessionCleanupInstallError;
-pub use crate::runtime::connection_handler_context::LegacySessionExecutionEnrollment;
-pub use crate::runtime::connection_handler_context::LegacySessionExecutionSubmitError;
-#[deprecated(since = "1.0.0", note = "Use `api::v2::LocalRequestProcessorV2` instead")]
-pub use crate::runtime::processor::LocalRequestProcessor;
-pub use crate::runtime::processor::RejectRequestResponse;
-#[deprecated(since = "1.0.0", note = "Use `api::v2::RequestProcessorV2` instead")]
-pub use crate::runtime::processor::RequestProcessor;
-pub use crate::runtime::processor::ResponseWriteObservation;
-pub use crate::runtime::processor::ResponseWriteOutcome;
 pub use crate::runtime::RPCHook;
 pub use crate::runtime::RPCHookArc;
 pub use crate::security::TransportSecurity;
@@ -148,28 +128,6 @@ pub use crate::tls::PrivateKeyLoader;
 pub use crate::tls::TlsServerRuntime;
 pub use rocketmq_protocol::protocol::RemotingDeserializable;
 pub use rocketmq_protocol::protocol::RemotingSerializable;
-
-/// Materializes one V2 response plan for a frozen V1 embedded compatibility
-/// consumer without exposing V2 response storage.
-///
-/// The conversion uses the Java-compatible 16 MiB body envelope, at most 1024
-/// body parts, the supplied absolute deadline and parent task lifecycle, and
-/// the injected blocking lane for leased file regions. This function is
-/// intentionally exported only from [`crate::api::v1`].
-///
-/// # Errors
-///
-/// Returns a typed, redacted error when the lifecycle stops, the fixed limits
-/// are exceeded, a destination allocation fails, or file-region I/O fails.
-pub async fn materialize_embedded_v2_compatibility_response(
-    plan: crate::api::v2::ResponsePlan,
-    deadline: Option<RequestDeadline>,
-    task_group: &rocketmq_runtime::TaskGroup,
-    blocking: &rocketmq_runtime::BlockingExecutor,
-) -> Result<rocketmq_protocol::protocol::remoting_command::RemotingCommand, EmbeddedV2CompatibilityMaterializationError>
-{
-    crate::dispatch::materialize_embedded_v2_compatibility_response(plan, deadline, task_group, blocking).await
-}
 
 pub use crate::error_response::apply_error_to_response;
 pub use crate::error_response::command_from_error;

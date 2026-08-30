@@ -13,10 +13,8 @@
 // limitations under the License.
 
 pub(crate) use client::TransportSession;
-pub use legacy_default_request_processor::LegacyDefaultRequestProcessor;
-
+#[path = "clients/client_v2.rs"]
 mod client;
-mod legacy_default_request_processor;
 pub mod nameserver_endpoint;
 pub(crate) mod nameserver_failover;
 pub(crate) mod nameserver_selector;

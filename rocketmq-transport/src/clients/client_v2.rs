@@ -52,15 +52,10 @@ use crate::deadline::RequestDeadline;
 use crate::error_helpers::remote_error;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::remoting::inner::RemotingGeneralHandler;
-use crate::runtime::connection_handler_context::ConnectionHandlerContext;
-use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::server::AuthorizedFrameRoute;
-use crate::server::ConnectionHandler as TransportConnectionHandler;
 use crate::server::SessionHandle;
 use crate::telemetry::TransportTelemetry;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -134,73 +129,6 @@ pub(crate) trait ClientInboundOwner: Send + Sync + 'static {
             crate::remoting::inner::run_after_rpc_hooks(snapshot, remote_address, request, response)?;
         }
         Ok(())
-    }
-}
-
-pub(crate) struct LegacyClientInboundOwner<P> {
-    handler: Arc<RemotingGeneralHandler<P>>,
-}
-
-impl<P> LegacyClientInboundOwner<P>
-where
-    P: RequestProcessor + Clone + Sync + 'static,
-{
-    pub(crate) fn new(handler: RemotingGeneralHandler<P>) -> Self {
-        Self {
-            handler: Arc::new(handler),
-        }
-    }
-}
-
-impl<P> ClientInboundOwner for LegacyClientInboundOwner<P>
-where
-    P: RequestProcessor + Clone + Sync + 'static,
-{
-    fn pending_requests(&self) -> PendingRequestTable {
-        self.handler.response_table.clone()
-    }
-
-    fn hook_snapshot(&self) -> Option<Arc<crate::hook_registry::HookSnapshot>> {
-        self.handler.hook_snapshot()
-    }
-
-    fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
-        self.handler.register_rpc_hook(hook);
-    }
-
-    fn clear_rpc_hook(&self) {
-        self.handler.clear_rpc_hook();
-    }
-
-    fn run_connected(
-        &self,
-        connection: Connection,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        task_group: TaskGroup,
-        process_budget: ResourceBudget,
-        ready: tokio::sync::oneshot::Sender<(Channel, PendingRequestOwner, SessionHandle)>,
-    ) -> RocketMQResult<Pin<Box<dyn Future<Output = ()> + Send>>> {
-        let handler = Arc::new(ClientInner {
-            cmd_handler: Arc::clone(&self.handler),
-            sessions: dashmap::DashMap::new(),
-            ready: parking_lot::Mutex::new(Some(ready)),
-        });
-        let admission = Arc::new(
-            AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
-                .map_err(|error| remote_error(format!("invalid client transport admission budget: {error}")))?,
-        );
-        Ok(Box::pin(crate::server::run_connected_session(
-            connection,
-            local_addr,
-            remote_addr,
-            task_group,
-            admission,
-            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
-            None,
-            Duration::from_secs(120),
-            handler,
-        )))
     }
 }
 
@@ -396,67 +324,6 @@ impl SessionConnectTarget {
 struct ClientTaskLifecycle {
     task_group: TaskGroup,
     operation: OperationContext,
-}
-
-struct ClientInner<PR> {
-    cmd_handler: Arc<RemotingGeneralHandler<PR>>,
-    sessions: dashmap::DashMap<u64, ConnectionHandlerContext>,
-    ready: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<(Channel, PendingRequestOwner, SessionHandle)>>>,
-}
-
-impl<PR> ClientInner<PR> {
-    fn connect(&self, session: SessionHandle) {
-        let Ok(channel_inner) = ChannelInner::new_transport_session(
-            session.connection(),
-            self.cmd_handler.response_table.clone(),
-            session.task_group().clone(),
-        ) else {
-            return;
-        };
-        let Some(owner) = channel_inner.pending_request_owner().cloned() else {
-            return;
-        };
-        let channel = Channel::new(Arc::new(channel_inner), session.local_addr(), session.remote_addr());
-        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        self.sessions.insert(session.session_id(), context);
-        if let Some(ready) = self.ready.lock().take() {
-            let _ = ready.send((channel, owner, session));
-        }
-    }
-}
-
-impl<PR: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for ClientInner<PR> {
-    fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            self.connect(session);
-        })
-    }
-
-    fn command(
-        &self,
-        session: SessionHandle,
-        command: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let cmd_handler = self.cmd_handler.clone();
-        Box::pin(async move {
-            let Some(context) = self
-                .sessions
-                .get(&session.session_id())
-                .map(|entry| Arc::clone(entry.value()))
-            else {
-                return;
-            };
-            cmd_handler
-                .process_message_received(&context, session.original_request_identity(), command)
-                .await;
-        })
-    }
-
-    fn disconnected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            self.sessions.remove(&session.session_id());
-        })
-    }
 }
 
 fn new_client_connection_task_group_with_service_context(
@@ -1114,7 +981,7 @@ mod lifecycle_tests {
 
     use super::*;
     use crate::base::pending_request_table::PendingRequestTable;
-    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 
     #[tokio::test]
     async fn request_timeout_cancels_only_the_connection_operation() {
@@ -1126,11 +993,14 @@ mod lifecycle_tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let cmd_handler = Arc::new(LegacyClientInboundOwner::new(RemotingGeneralHandler::new(
-            DefaultRequestProcessor,
-            vec![],
-            PendingRequestTable::new(),
-        )));
+        let cmd_handler = Arc::new(
+            V2ClientInboundOwner::new(
+                DefaultRequestProcessor,
+                PendingRequestTable::new(),
+                &service.process_budget(),
+            )
+            .expect("V2 client inbound owner"),
+        );
 
         let mut client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
             &service,
@@ -1186,11 +1056,14 @@ mod lifecycle_tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let cmd_handler = Arc::new(LegacyClientInboundOwner::new(RemotingGeneralHandler::new(
-            DefaultRequestProcessor,
-            vec![],
-            PendingRequestTable::new(),
-        )));
+        let cmd_handler = Arc::new(
+            V2ClientInboundOwner::new(
+                DefaultRequestProcessor,
+                PendingRequestTable::new(),
+                &service.process_budget(),
+            )
+            .expect("V2 client inbound owner"),
+        );
 
         let mut client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
             &service,
@@ -1274,11 +1147,14 @@ mod lifecycle_tests {
             time::sleep(Duration::from_secs(5)).await;
         });
         let response_table = PendingRequestTable::new();
-        let cmd_handler = Arc::new(LegacyClientInboundOwner::new(RemotingGeneralHandler::new(
-            DefaultRequestProcessor,
-            vec![],
-            response_table.clone(),
-        )));
+        let cmd_handler = Arc::new(
+            V2ClientInboundOwner::new(
+                DefaultRequestProcessor,
+                response_table.clone(),
+                &service.process_budget(),
+            )
+            .expect("V2 client inbound owner"),
+        );
 
         let client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
             &service,

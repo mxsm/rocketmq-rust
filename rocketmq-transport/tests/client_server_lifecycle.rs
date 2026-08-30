@@ -44,39 +44,30 @@ use rocketmq_transport::api::v1::AdmissionController;
 use rocketmq_transport::api::v1::AdmissionLimits;
 use rocketmq_transport::api::v1::AdmissionResource;
 use rocketmq_transport::api::v1::AdmissionScope;
-use rocketmq_transport::api::v1::Channel;
-use rocketmq_transport::api::v1::ChannelEventListener;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::FrameLimits;
 use rocketmq_transport::api::v1::OneShotTransportClient;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::ResourceLimit;
-use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TlsClientConfig;
 use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::api::v1::TlsMode;
 use rocketmq_transport::api::v1::TlsServerRuntime;
 use rocketmq_transport::api::v1::TransportSecurity;
-use rocketmq_transport::api::v1::TransportServer;
 #[cfg(feature = "tls")]
 use rocketmq_transport::test_support::transport_io_snapshot;
 use rocketmq_transport::test_support::Connection;
 use rocketmq_transport::test_support::ConnectionHandler;
 use rocketmq_transport::test_support::SessionHandle;
-use rocketmq_transport::test_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::test_support::SessionProcessor;
 use rocketmq_transport::test_support::SessionTransportServer;
 use rocketmq_transport::test_support::SessionTransportServerConfig;
 use rocketmq_transport::test_support::TransportListener;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
-use tokio::sync::oneshot;
 
 struct EchoProcessor;
 
 struct CountingEchoProcessor(AtomicUsize);
 
-impl RequestProcessor for CountingEchoProcessor {
+impl SessionProcessor for CountingEchoProcessor {
     fn process(
         &self,
         request: RemotingCommand,
@@ -88,7 +79,7 @@ impl RequestProcessor for CountingEchoProcessor {
     }
 }
 
-impl RequestProcessor for EchoProcessor {
+impl SessionProcessor for EchoProcessor {
     fn process(
         &self,
         request: RemotingCommand,
@@ -103,7 +94,7 @@ impl RequestProcessor for EchoProcessor {
 
 struct HungProcessor;
 
-impl RequestProcessor for HungProcessor {
+impl SessionProcessor for HungProcessor {
     fn process(
         &self,
         _request: RemotingCommand,
@@ -114,7 +105,7 @@ impl RequestProcessor for HungProcessor {
 
 struct WrongOpaqueProcessor;
 
-impl RequestProcessor for WrongOpaqueProcessor {
+impl SessionProcessor for WrongOpaqueProcessor {
     fn process(
         &self,
         request: RemotingCommand,
@@ -129,12 +120,6 @@ struct ControlledProcessor {
     entered: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
     calls: AtomicUsize,
-}
-
-struct BlockingLifecycleListener {
-    connected: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    disconnected: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
 }
 
 struct AllowAuthenticated;
@@ -154,31 +139,6 @@ impl OutboundSigner for MarkerSigner {
             Secret::new(CheetahString::from_static_str("signed")),
         )]))
     }
-}
-
-impl ChannelEventListener for BlockingLifecycleListener {
-    fn on_channel_connect(&self, _remote_addr: &str, _channel: &Channel) {
-        if let Some(sender) = self.connected.lock().expect("connected callback lock").take() {
-            let _ = sender.send(());
-        }
-        let (released, condition) = self.release.as_ref();
-        let mut released = released.lock().expect("lifecycle callback release lock");
-        while !*released {
-            released = condition.wait(released).expect("lifecycle callback release wait");
-        }
-    }
-
-    fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
-        if let Some(sender) = self.disconnected.lock().expect("disconnected callback lock").take() {
-            let _ = sender.send(());
-        }
-    }
-
-    fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {}
-
-    fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {}
-
-    fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {}
 }
 
 struct SignatureProcessor;
@@ -271,7 +231,7 @@ impl ConnectionHandler for SessionEchoHandler {
     }
 }
 
-impl RequestProcessor for SignatureProcessor {
+impl SessionProcessor for SignatureProcessor {
     fn process(
         &self,
         request: RemotingCommand,
@@ -289,7 +249,7 @@ impl RequestProcessor for SignatureProcessor {
     }
 }
 
-impl RequestProcessor for ControlledProcessor {
+impl SessionProcessor for ControlledProcessor {
     fn process(
         &self,
         request: RemotingCommand,
@@ -303,79 +263,6 @@ impl RequestProcessor for ControlledProcessor {
             Ok(RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque()))
         })
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn production_lifecycle_dispatcher_advances_after_callback_deadline() {
-    let runtime = RuntimeContext::from_current("transport-production-lifecycle-deadline-test");
-    let service = runtime.service_context("transport-production-lifecycle-deadline-server");
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener should bind");
-    let address = listener.local_addr().expect("test listener address");
-    let (connected_tx, connected_rx) = oneshot::channel();
-    let (disconnected_tx, disconnected_rx) = oneshot::channel();
-    let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
-    let lifecycle_listener = Arc::new(BlockingLifecycleListener {
-        connected: std::sync::Mutex::new(Some(connected_tx)),
-        disconnected: std::sync::Mutex::new(Some(disconnected_tx)),
-        release: Arc::clone(&release),
-    });
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let mut server =
-        TransportServer::<DefaultRequestProcessor>::new(Arc::new(ServerConfig::default()), service.clone());
-    let server_task = tokio::spawn(async move {
-        server
-            .try_serve_bound_listener_until(
-                listener,
-                DefaultRequestProcessor,
-                None,
-                Some(lifecycle_listener),
-                async {
-                    let _ = shutdown_rx.await;
-                },
-            )
-            .await
-    });
-
-    let mut client = TcpStream::connect(address).await.expect("client should connect");
-    client
-        .write_all(&[0])
-        .await
-        .expect("client should send plaintext detection byte");
-    tokio::time::timeout(Duration::from_secs(1), connected_rx)
-        .await
-        .expect("connected callback should start")
-        .expect("connected callback signal");
-    drop(client);
-    tokio::time::timeout(Duration::from_secs(1), disconnected_rx)
-        .await
-        .expect("disconnected callback should run before the connected callback is released")
-        .expect("disconnected callback signal");
-
-    {
-        let (released, condition) = release.as_ref();
-        *released.lock().expect("lifecycle callback release lock") = true;
-        condition.notify_all();
-    }
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while service.metadata_io().snapshot().blocking_still_running != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("timed-out lifecycle callback should leave the blocking executor after release");
-
-    let _ = shutdown_tx.send(());
-    let report = tokio::time::timeout(Duration::from_secs(3), server_task)
-        .await
-        .expect("server should stop")
-        .expect("server task should not panic")
-        .expect("server should return a shutdown report");
-    assert!(report.is_healthy(), "{}", report.to_json());
-    assert_eq!(service.metadata_io().snapshot().blocking_still_running, 0);
-    let root_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
-    root_report.assert_no_task_leak().expect("runtime should converge");
 }
 
 #[tokio::test]

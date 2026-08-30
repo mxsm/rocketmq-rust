@@ -79,6 +79,8 @@ pub use message::ProxyMessage;
 pub use message::ProxyMessageExt;
 pub use processor::*;
 pub use receipt_renewal::ReceiptRenewalMetricsSnapshot;
+pub use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+pub use rocketmq_transport::api::v2::ResponsePlan;
 pub use session::build_lite_subscription_sync_request;
 pub use session::ClaimedReceiptHandle;
 pub use session::ClientSession;

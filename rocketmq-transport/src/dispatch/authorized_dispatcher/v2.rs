@@ -34,10 +34,10 @@ use crate::admission::AdmissionError;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::dispatch::legacy_processor_adapter::AdmittedProcessorObserver;
 use crate::dispatch::remoting_request::RemotingRequestBuildError;
 use crate::dispatch::remoting_request::RemotingRequestBuilder;
 use crate::dispatch::remoting_request::RequestLifecycleProvenance;
+use crate::dispatch::v2_processor_adapter::AdmittedProcessorObserver;
 use crate::dispatch::DeferredCommitError;
 use crate::dispatch::DispatchProcessor;
 use crate::dispatch::DispatchProcessorError;
@@ -45,9 +45,6 @@ use crate::dispatch::ExplicitV2Processor;
 use crate::dispatch::HandlerOutcomeContractError;
 use crate::dispatch::InternalProcessorCandidate;
 use crate::dispatch::InternalProcessorOutcome;
-use crate::dispatch::LegacyProcessorAdapter;
-use crate::dispatch::LegacyProcessorAdapterError;
-use crate::dispatch::LegacyReplyCandidate;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestTransport;
@@ -58,7 +55,6 @@ use crate::dispatch::ResponsePlanError;
 use crate::dispatch::ResponseSink;
 use crate::dispatch::WriteProgress;
 use crate::hook_registry::HookRegistry;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::processor_v2::RequestProcessorV2;
 use crate::runtime::RPCHook;
 use crate::server::SessionHandle;
@@ -95,8 +91,6 @@ pub(crate) enum AuthorizedDispatchV2Error {
     #[error(transparent)]
     HandlerContract(#[from] HandlerOutcomeContractError),
     #[error(transparent)]
-    ProcessorAdapter(#[from] LegacyProcessorAdapterError),
-    #[error(transparent)]
     DeferredCommit(#[from] DeferredCommitError),
     #[error("one-way requests cannot complete with {outcome}")]
     OneWayOutcome { outcome: &'static str },
@@ -121,7 +115,6 @@ impl AuthorizedDispatchV2Error {
             Self::ResponsePlan(_) => "response_plan",
             Self::ResponseBinding(_) => "response_binding",
             Self::HandlerContract(_) => "handler_contract",
-            Self::ProcessorAdapter(_) => "processor_adapter",
             Self::DeferredCommit(error) => error.category(),
             Self::OneWayOutcome { .. } => "one_way_outcome",
             Self::Response { .. } => "response",
@@ -208,23 +201,9 @@ where
 impl From<DispatchProcessorError> for AuthorizedDispatchV2Error {
     fn from(error: DispatchProcessorError) -> Self {
         match error {
-            DispatchProcessorError::Legacy(error) => Self::ProcessorAdapter(error),
             DispatchProcessorError::ResponsePlan(error) => Self::ResponsePlan(error),
             DispatchProcessorError::HandlerContract(error) => Self::HandlerContract(error),
         }
-    }
-}
-
-impl<P> AuthorizedDispatcherCore<LegacyProcessorAdapter<P>>
-where
-    P: RequestProcessor + Clone + Sync + 'static,
-{
-    #[allow(
-        dead_code,
-        reason = "DSP-05 keeps legacy construction private until DSP-06 coexistence routing"
-    )]
-    pub(crate) fn new_legacy(processor: LegacyProcessorAdapter<P>, rpc_hooks: Vec<Arc<dyn RPCHook>>) -> Self {
-        Self::from_dispatch_processor(processor, rpc_hooks)
     }
 }
 
@@ -594,38 +573,6 @@ where
                 )
                 .await
             }
-            InternalProcessorOutcome::LegacyReply(reply) => {
-                let response_code = reply.response_code();
-                if failure.is_some() {
-                    metrics.complete_process_request_failed(response_code);
-                }
-                if original.is_one_way() {
-                    drop(reply);
-                    if failure.is_none() {
-                        metrics.complete_oneway();
-                    }
-                    if let Some(failure) = failure {
-                        self.report_failure_category(failure.category());
-                    }
-                    return Ok(());
-                }
-                let plan = match reply {
-                    LegacyReplyCandidate::OwnedCommand(command) => ResponsePlan::from_legacy_command(command)
-                        .map_err(LegacyProcessorAdapterError::MalformedLegacyResponse)?,
-                    LegacyReplyCandidate::ValidatedPlan(plan) => plan,
-                };
-                deliver_and_observe(
-                    processor,
-                    response,
-                    original,
-                    request_started,
-                    plan,
-                    observe_write,
-                    failure.is_some(),
-                    metrics,
-                )
-                .await
-            }
             InternalProcessorOutcome::V2(crate::dispatch::HandlerOutcome::Deferred(registration)) => {
                 if original.is_one_way() {
                     drop(registration);
@@ -643,14 +590,6 @@ where
                 }
                 drop(marker);
                 metrics.complete_protocol_no_response();
-                Ok(())
-            }
-            InternalProcessorOutcome::LegacyAmbiguousNone => {
-                if original.is_one_way() {
-                    metrics.complete_oneway();
-                } else {
-                    metrics.complete_legacy_ambiguous_none(&response);
-                }
                 Ok(())
             }
         }
@@ -788,13 +727,6 @@ where
         .as_ref()
         .err()
         .map(|error| (error.kind(), error.write_progress()));
-    let legacy_outcome = match result.as_ref() {
-        Ok(receipt) => crate::runtime::processor_v2::ResponseObservationOutcomeV2::Written(*receipt),
-        Err(error) => crate::runtime::processor_v2::ResponseObservationOutcomeV2::Failed {
-            kind: Some(error.kind()),
-            progress: error.write_progress(),
-        },
-    };
     if !failure_recorded {
         if failure.is_some() {
             metrics.complete_write_channel_failed(response_code);
@@ -823,7 +755,6 @@ where
             result,
         );
     }
-    metrics.record_legacy_reply(response_code, body_kind, legacy_outcome);
     match failure {
         Some((kind, progress)) => Err(AuthorizedDispatchV2Error::Response { kind, progress }),
         None => Ok(()),

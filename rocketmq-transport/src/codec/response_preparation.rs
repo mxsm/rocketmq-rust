@@ -203,6 +203,9 @@ fn encode_error(source: rocketmq_error::RocketMQError) -> ResponseError {
 mod tests {
     use std::collections::HashMap;
     use std::fs::File;
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
     use std::io::Write;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::AtomicUsize;
@@ -247,6 +250,30 @@ mod tests {
             .into_iter()
             .flat_map(|segment| segment.iter().copied())
             .collect()
+    }
+
+    fn complete_wire(payload: &OutboundPayload) -> Vec<u8> {
+        match payload {
+            OutboundPayload::StructuredFrame(_) => structured_wire(payload),
+            OutboundPayload::FileFrame { head, body } => {
+                let mut wire = head
+                    .segments()
+                    .into_iter()
+                    .flat_map(|segment| segment.iter().copied())
+                    .collect::<Vec<_>>();
+                for region in body.regions() {
+                    let mut file = region.lease().file().try_clone().expect("clone test file lease");
+                    file.seek(SeekFrom::Start(region.offset()))
+                        .expect("seek to file response region");
+                    let mut bytes = vec![0; usize::try_from(region.len()).expect("test region length")];
+                    file.read_exact(&mut bytes).expect("read complete file response region");
+                    wire.extend_from_slice(&bytes);
+                }
+                assert_eq!(wire.len(), head.encoded_len());
+                wire
+            }
+            _ => panic!("expected a structured response payload"),
+        }
     }
 
     #[test]
@@ -325,23 +352,71 @@ mod tests {
     }
 
     #[test]
-    fn json_and_rocketmq_frames_match_the_canonical_wire_oracle() {
+    fn every_body_representation_matches_the_canonical_complete_frame() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let body = Bytes::from_static(b"canonical structured body");
-            let head = response_head(81, -77, serialize_type);
-            let expected = EncodedFrame::from_command(head.clone().set_opaque(377).set_body(body.clone()))
-                .expect("canonical command should encode")
+            let empty_head = response_head(81, -77, serialize_type);
+            let empty_expected = EncodedFrame::from_command(empty_head.clone().set_opaque(377))
+                .expect("canonical empty command should encode")
                 .into_bytes();
-            let plan = ResponsePlan::bytes(head, body).expect("valid response plan");
-            let prepared =
-                prepare_response(bind(plan, 201, 377), FrameLimits::default()).expect("response should prepare");
-            let metadata = *prepared.metadata();
-            let (_, payload) = prepared.into_parts();
-            let actual = structured_wire(&payload);
+            let empty = prepare_response(
+                bind(ResponsePlan::command(empty_head).expect("empty plan"), 201, 377),
+                FrameLimits::default(),
+            )
+            .expect("empty response should prepare");
+            let empty_metadata = *empty.metadata();
+            let (_, empty_payload) = empty.into_parts();
+            assert_eq!(complete_wire(&empty_payload), empty_expected);
+            assert_eq!(empty_payload.encoded_len(), empty_metadata.encoded_len());
 
-            assert_eq!(actual.as_slice(), expected.as_ref(), "{serialize_type:?}");
-            assert_eq!(actual.len(), metadata.encoded_len());
-            assert_eq!(payload.encoded_len(), metadata.encoded_len());
+            let canonical_body = Bytes::from_static(b"left-right");
+            let expected = EncodedFrame::from_command(
+                response_head(82, -77, serialize_type)
+                    .set_opaque(377)
+                    .set_body(canonical_body.clone()),
+            )
+            .expect("canonical body command should encode")
+            .into_bytes();
+            let bytes_plan = ResponsePlan::bytes(response_head(82, -77, serialize_type), canonical_body.clone())
+                .expect("bytes plan");
+            let segments_plan = ResponsePlan::segments(
+                response_head(82, -77, serialize_type),
+                vec![
+                    Bytes::from_static(b"left"),
+                    Bytes::from_static(b"-"),
+                    Bytes::from_static(b"right"),
+                ],
+            )
+            .expect("segments plan");
+
+            let mut file = tempfile::tempfile().expect("temporary file");
+            file.write_all(b"xxleft--rightyy").expect("write file fixture");
+            let file: Arc<dyn FileRegionLease> = Arc::new(file);
+            let file_regions = FileRegionSequence::try_new(vec![
+                FileRegion::try_new(Arc::clone(&file), 2, 4).expect("left file region"),
+                FileRegion::try_new(Arc::clone(&file), 7, 6).expect("separator and right file region"),
+            ])
+            .expect("ordered file regions");
+            let file_plan = ResponsePlan::file_regions(response_head(82, -77, serialize_type), file_regions)
+                .expect("file-region plan");
+
+            for (owner, expected_kind, plan) in [
+                (202, ResponseBodyKind::Bytes, bytes_plan),
+                (203, ResponseBodyKind::Segments, segments_plan),
+                (204, ResponseBodyKind::FileRegions, file_plan),
+            ] {
+                let prepared =
+                    prepare_response(bind(plan, owner, 377), FrameLimits::default()).expect("response should prepare");
+                let metadata = *prepared.metadata();
+                let (_, payload) = prepared.into_parts();
+
+                assert_eq!(metadata.body_kind(), expected_kind);
+                assert_eq!(
+                    complete_wire(&payload),
+                    expected,
+                    "{serialize_type:?} {expected_kind:?}"
+                );
+                assert_eq!(payload.encoded_len(), metadata.encoded_len());
+            }
         }
     }
 

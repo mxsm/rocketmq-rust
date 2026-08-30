@@ -23,9 +23,11 @@ use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageR
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_proxy_core::EmbeddedDispatchOutcome;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyRemotingBackend;
 use rocketmq_proxy_core::ProxyServiceFuture;
+use rocketmq_proxy_core::ResponsePlan;
 
 use crate::cluster::RocketmqClusterClient;
 
@@ -41,13 +43,13 @@ impl ClusterRemotingBackend {
 }
 
 impl ProxyRemotingBackend for ClusterRemotingBackend {
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, RemotingCommand> {
+    fn process_v2(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
         Box::pin(async move {
             let opaque = request.opaque();
             let body = request
                 .body()
                 .ok_or_else(|| ProxyError::invalid_metadata("lock/unlock batch request body is missing"))?;
-            match RequestCode::from(request.code()) {
+            let response = match RequestCode::from(request.code()) {
                 RequestCode::LockBatchMq => {
                     let request_body = LockBatchRequestBody::decode(body.as_ref())?;
                     let response_body = self.client.lock_batch_mq(request_body).await?;
@@ -68,18 +70,23 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
                 | RequestCode::PopMessage
                 | RequestCode::AckMessage
                 | RequestCode::ChangeMessageInvisibleTime => {
-                    let Some(broker_name) = broker_name(&request) else {
-                        return Ok(RemotingCommand::create_response_command_with_code(
-                            ResponseCode::VersionNotSupported,
+                    if let Some(broker_name) = broker_name(&request) {
+                        let timeout_millis = forward_timeout_millis(&request);
+                        self.client.forward_remoting(broker_name, request, timeout_millis).await
+                    } else {
+                        Ok(
+                            RemotingCommand::create_response_command_with_code(ResponseCode::VersionNotSupported)
+                                .set_remark("Request doesn't have field bname")
+                                .set_opaque(opaque),
                         )
-                        .set_remark("Request doesn't have field bname")
-                        .set_opaque(opaque));
-                    };
-                    let timeout_millis = forward_timeout_millis(&request);
-                    self.client.forward_remoting(broker_name, request, timeout_millis).await
+                    }
                 }
-                _ => Err(ProxyError::not_implemented("cluster remoting backend request")),
-            }
+                _ => return Err(ProxyError::not_implemented("cluster remoting backend request")),
+            }?;
+            let plan = ResponsePlan::from_command(response).map_err(|error| ProxyError::Transport {
+                message: format!("cluster backend response could not become a V2 response plan: {error}"),
+            })?;
+            Ok(EmbeddedDispatchOutcome::Reply(plan))
         })
     }
 }

@@ -332,8 +332,7 @@ fn assert_released(service: &PopDeferredService) {
 }
 
 #[tokio::test]
-async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
-    const ORIGINAL_OPAQUE: i32 = 9_821;
+async fn prepared_arrival_and_timeout_reexecute_then_write_one_bound_frame() {
     let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let service = service(controller.as_ref(), 4, 4, 4);
     let barrier = Arc::new(ProcessorBarrier::default());
@@ -346,98 +345,103 @@ async fn prepared_wake_replays_then_observed_resume_writes_one_bound_frame() {
         rollback_registration: false,
     };
     let (mut client, _address, running) = start_server(processor, Arc::clone(&controller)).await;
-    client
-        .send_command(request_command("TopicA", "GroupA", 0, None, ORIGINAL_OPAQUE))
-        .await
-        .expect("send deferred POP request");
-    let registered = registrations.recv().await.expect("observe POP registration");
-    barrier.before_outcome.notified().await;
+    for (original_opaque, wake_reason) in [
+        (9_821, DeferredWakeReason::MessageArrived),
+        (9_822, DeferredWakeReason::Timeout),
+    ] {
+        client
+            .send_command(request_command("TopicA", "GroupA", 0, None, original_opaque))
+            .await
+            .expect("send deferred POP request");
+        let registered = registrations.recv().await.expect("observe POP registration");
+        barrier.before_outcome.notified().await;
 
-    let mut pending_claim = Box::pin(service.claim(registered.id, DeferredWakeReason::MessageArrived));
-    tokio::select! {
-        biased;
-        result = &mut pending_claim => panic!("prepared claim completed before dispatcher commit: {result:?}"),
-        _ = tokio::task::yield_now() => {}
+        let mut pending_claim = Box::pin(service.claim(registered.id, wake_reason));
+        tokio::select! {
+            biased;
+            result = &mut pending_claim => panic!("prepared claim completed before dispatcher commit: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        barrier.release_outcome.notify_one();
+        let claim = pending_claim.await.expect("prepared wake replays after commit");
+        assert_eq!(claim.reason(), wake_reason);
+        assert_eq!(service.index_snapshot().live(), 0);
+        assert_eq!(service.admission_snapshot().waiting_count(), 1);
+
+        let handler_started = Arc::new(Notify::new());
+        let handler_release = Arc::new(Notify::new());
+        let rereads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (receipt_tx, receipt_rx) = oneshot::channel();
+        let service_for_resume = Arc::clone(&service);
+        let started = Arc::clone(&handler_started);
+        let release = Arc::clone(&handler_release);
+        let reread_count = Arc::clone(&rereads);
+        let (observer, mut completion) = PopDeferredWakeupObserver::new();
+        running
+            .action_context
+            .spawn_service("pop-deferred-resume", async move {
+                let result = service_for_resume
+                    .resume_claimed_observed(
+                        claim,
+                        rocketmq_transport::api::v2::DeferredResumeRetainedSize::new(257),
+                        observer,
+                        move |resume, reason| async move {
+                            started.notify_one();
+                            release.notified().await;
+                            assert_eq!(reason, wake_reason);
+                            assert_eq!(resume.request().caller_host().as_str(), registered.caller.to_string());
+                            reread_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                                ResponseCode::PollingTimeout,
+                            ))
+                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        },
+                    )
+                    .await;
+                let _ = receipt_tx.send(result);
+            })
+            .expect("spawn owned POP resume assertion");
+        handler_started.notified().await;
+        let active_resume = service.resource_snapshot();
+        assert_eq!(active_resume.resume_executions, 1);
+        assert_eq!(active_resume.resume_execution_bytes, 257);
+        assert_eq!(
+            service.admission_snapshot().waiting_count(),
+            0,
+            "wait admission is released before execution admission invokes the handler"
+        );
+        tokio::select! {
+            biased;
+            result = &mut completion => panic!("POP wake completion finished before canonical resume/write: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        handler_release.notify_one();
+        receipt_rx
+            .await
+            .expect("resume receipt channel")
+            .expect("accepted POP resume drains through canonical writing");
+        assert_eq!(
+            completion.await.expect("POP wake completion"),
+            crate::long_polling::pop_deferred::service::PopWakeupOutcome::ProcessingCompleted
+        );
+
+        let response = client
+            .receive_command()
+            .await
+            .expect("POP V2 connection remains open until the accepted write drains")
+            .expect("one POP timeout response frame");
+        assert_eq!(response.opaque(), original_opaque);
+        assert_eq!(response.code(), ResponseCode::PollingTimeout as i32);
+        assert_eq!(rereads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let terminal_resume = service.resource_snapshot();
+        assert_eq!(terminal_resume.resume_executions, 0);
+        assert_eq!(terminal_resume.resume_execution_bytes, 0);
+        assert_released(&service);
     }
-    barrier.release_outcome.notify_one();
-    let claim = pending_claim.await.expect("prepared wake replays after commit");
-    assert_eq!(claim.reason(), DeferredWakeReason::MessageArrived);
-    assert_eq!(service.index_snapshot().live(), 0);
-    assert_eq!(service.admission_snapshot().waiting_count(), 1);
-
-    let handler_started = Arc::new(Notify::new());
-    let handler_release = Arc::new(Notify::new());
-    let rereads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (receipt_tx, receipt_rx) = oneshot::channel();
-    let service_for_resume = Arc::clone(&service);
-    let started = Arc::clone(&handler_started);
-    let release = Arc::clone(&handler_release);
-    let reread_count = Arc::clone(&rereads);
-    let (observer, mut completion) = PopDeferredWakeupObserver::new();
-    running
-        .action_context
-        .spawn_service("pop-deferred-resume", async move {
-            let result = service_for_resume
-                .resume_claimed_observed(
-                    claim,
-                    rocketmq_transport::api::v2::DeferredResumeRetainedSize::new(257),
-                    observer,
-                    move |resume, reason| async move {
-                        started.notify_one();
-                        release.notified().await;
-                        assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                        assert_eq!(resume.request().caller_host().as_str(), registered.caller.to_string());
-                        reread_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
-                            ResponseCode::PollingTimeout,
-                        ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-                    },
-                )
-                .await;
-            let _ = receipt_tx.send(result);
-        })
-        .expect("spawn owned POP resume assertion");
-    handler_started.notified().await;
-    let active_resume = service.resource_snapshot();
-    assert_eq!(active_resume.resume_executions, 1);
-    assert_eq!(active_resume.resume_execution_bytes, 257);
-    assert_eq!(
-        service.admission_snapshot().waiting_count(),
-        0,
-        "wait admission is released before execution admission invokes the handler"
-    );
-    tokio::select! {
-        biased;
-        result = &mut completion => panic!("POP wake completion finished before canonical resume/write: {result:?}"),
-        _ = tokio::task::yield_now() => {}
-    }
-    handler_release.notify_one();
-    receipt_rx
-        .await
-        .expect("resume receipt channel")
-        .expect("accepted POP resume drains through canonical writing");
-    assert_eq!(
-        completion.await.expect("POP wake completion"),
-        crate::long_polling::pop_deferred::service::PopWakeupOutcome::ProcessingCompleted
-    );
-
-    let response = client
-        .receive_command()
-        .await
-        .expect("POP V2 connection remains open until the accepted write drains")
-        .expect("one POP timeout response frame");
-    assert_eq!(response.opaque(), ORIGINAL_OPAQUE);
-    assert_eq!(response.code(), ResponseCode::PollingTimeout as i32);
-    assert_eq!(rereads.load(std::sync::atomic::Ordering::SeqCst), 1);
-    let terminal_resume = service.resource_snapshot();
-    assert_eq!(terminal_resume.resume_executions, 0);
-    assert_eq!(terminal_resume.resume_execution_bytes, 0);
-    assert_released(&service);
     running.finish().await;
     assert!(
         client.receive_command().await.is_none(),
-        "owned shutdown reaches EOF after exactly one response frame"
+        "no POP frame follows the arrival and timeout scenario responses"
     );
 }
 

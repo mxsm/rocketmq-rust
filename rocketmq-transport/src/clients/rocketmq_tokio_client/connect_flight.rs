@@ -417,7 +417,7 @@ mod tests {
     use tokio::task::JoinSet;
 
     use super::*;
-    use crate::clients::LegacyDefaultRequestProcessor as DefaultRequestProcessor;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 
     async fn assert_connect_flight_preserves_failure(error: RocketMQError) {
         const WAITERS: usize = 3;

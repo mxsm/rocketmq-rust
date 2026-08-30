@@ -113,7 +113,6 @@ pub mod metrics {
     pub const TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES: &str = "rocketmq_transport_inbound_decoded_plaintext_bytes";
     pub const TRANSPORT_LIFECYCLE_EVENTS_TOTAL: &str = "rocketmq_transport_lifecycle_events_total";
     pub const TRANSPORT_LIFECYCLE_LISTENER_LATENCY: &str = "rocketmq_transport_lifecycle_listener_latency";
-    pub const TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL: &str = "rocketmq_transport_legacy_processor_requests_total";
     pub const TRANSPORT_DEFERRED_TERMINAL_TOTAL: &str = "rocketmq_transport_deferred_terminal_total";
     pub const RPC_LATENCY: &str = "rocketmq_rpc_latency";
     pub const TIERED_STORE_MESSAGES_DISPATCH_TOTAL: &str = "rocketmq_tiered_store_messages_dispatch_total";

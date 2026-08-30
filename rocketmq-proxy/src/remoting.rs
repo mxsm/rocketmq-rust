@@ -873,8 +873,13 @@ where
             RemotingIngressRoute::GetConsumerConnectionList => self.dispatch_get_consumer_connection_list(request),
             RemotingIngressRoute::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
             RemotingIngressRoute::NotifyUnsubscribeLite => self.dispatch_notify_unsubscribe_lite(request).await,
-            RemotingIngressRoute::LockBatchMessageQueue => self.dispatch_lock_batch_mq(request).await,
-            RemotingIngressRoute::UnlockBatchMessageQueue => self.dispatch_unlock_batch_mq(request).await,
+            RemotingIngressRoute::LockBatchMessageQueue | RemotingIngressRoute::UnlockBatchMessageQueue => {
+                unsupported_response(
+                    &self.command_factory,
+                    request.opaque(),
+                    "backend forwarding requires the V2 dispatch boundary",
+                )
+            }
             RemotingIngressRoute::CheckClientConfig => self.dispatch_check_client_config(request).await,
             RemotingIngressRoute::PullMessage => self.dispatch_pull_message(context, request).await,
             RemotingIngressRoute::UpdateConsumerOffset => self.dispatch_update_consumer_offset(context, request).await,
@@ -889,7 +894,11 @@ where
             RemotingIngressRoute::GetProxyDrainState => self.dispatch_get_proxy_drain_state(request),
             RemotingIngressRoute::BeginProxyDrain => self.dispatch_begin_proxy_drain(request),
             RemotingIngressRoute::CancelProxyDrain => self.dispatch_cancel_proxy_drain(request),
-            RemotingIngressRoute::ForwardBackend => self.dispatch_forward_backend(request).await,
+            RemotingIngressRoute::ForwardBackend => unsupported_response(
+                &self.command_factory,
+                request.opaque(),
+                "backend forwarding requires the V2 dispatch boundary",
+            ),
             RemotingIngressRoute::AuthAdminUnsupported => unsupported_response(
                 &self.command_factory,
                 request.opaque(),
@@ -972,19 +981,6 @@ where
         dispatch_command.set_code_ref(request.original_identity().original_code());
         dispatch_command.set_opaque_mut(request.original_identity().original_opaque());
         response_plan(self.dispatch(context, &dispatch_command).await)
-    }
-
-    async fn dispatch_forward_backend(&self, request: &RemotingCommand) -> RemotingCommand {
-        self.dispatch_via_backend(request).await.unwrap_or_else(|| {
-            unsupported_response(
-                &self.command_factory,
-                request.opaque(),
-                format!(
-                    "proxy remoting backend is unavailable for request code {}",
-                    request.code()
-                ),
-            )
-        })
     }
 
     fn dispatch_get_consumer_connection_list(&self, request: &RemotingCommand) -> RemotingCommand {
@@ -1400,26 +1396,6 @@ where
         self.command_factory
             .create_response_command_with_code(ResponseCode::Success)
             .set_opaque(request.opaque())
-    }
-
-    async fn dispatch_lock_batch_mq(&self, request: &RemotingCommand) -> RemotingCommand {
-        self.dispatch_via_backend(request).await.unwrap_or_else(|| {
-            unsupported_response(
-                &self.command_factory,
-                request.opaque(),
-                "cluster remoting backend is unavailable",
-            )
-        })
-    }
-
-    async fn dispatch_unlock_batch_mq(&self, request: &RemotingCommand) -> RemotingCommand {
-        self.dispatch_via_backend(request).await.unwrap_or_else(|| {
-            unsupported_response(
-                &self.command_factory,
-                request.opaque(),
-                "cluster remoting backend is unavailable",
-            )
-        })
     }
 
     async fn dispatch_check_client_config(&self, request: &RemotingCommand) -> RemotingCommand {
@@ -1881,14 +1857,6 @@ where
             .create_response_command_with_code(ResponseCode::Success)
             .set_body(encoded)
             .set_opaque(request.opaque())
-    }
-
-    async fn dispatch_via_backend(&self, request: &RemotingCommand) -> Option<RemotingCommand> {
-        let backend = self.remoting_backend.as_ref()?;
-        Some(match backend.process(request.clone()).await {
-            Ok(response) => response.set_opaque(request.opaque()),
-            Err(error) => proxy_error_response(&self.command_factory, request.opaque(), error),
-        })
     }
 
     fn build_broker_lite_info_response(&self) -> GetBrokerLiteInfoResponseBody {
@@ -2535,11 +2503,13 @@ mod tests {
     use rocketmq_transport::api::v2::RejectRequestDecision;
     use rocketmq_transport::api::v2::RemotingRequest;
     use rocketmq_transport::api::v2::RequestProcessorV2;
+    use rocketmq_transport::api::v2::ResponsePlan;
     use rocketmq_transport::api::v2::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
 
     use super::response_with_header;
     use super::ProxyDrainPhase;
+    use super::ProxyError;
     use super::ProxyRemotingBackend;
     use super::ProxyRemotingDispatcher;
     use super::ProxyRequestProcessor;
@@ -2731,12 +2701,19 @@ mod tests {
     }
 
     impl ProxyRemotingBackend for TestRemotingBackend {
-        fn process(&self, request: RemotingCommand) -> rocketmq_proxy_core::ProxyServiceFuture<'_, RemotingCommand> {
+        fn process_v2(
+            &self,
+            request: RemotingCommand,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
             Box::pin(async move {
                 self.seen_requests.lock().expect("backend mutex poisoned").push(request);
-                Ok(RemotingCommand::create_response_command_with_code(
+                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
+                .map(EmbeddedDispatchOutcome::Reply)
+                .map_err(|error| ProxyError::Transport {
+                    message: format!("test response plan: {error}"),
+                })
             })
         }
     }
@@ -3596,7 +3573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_lock_and_unlock_batch_mq_use_local_backend_passthrough() {
+    async fn legacy_command_dispatch_rejects_lock_and_unlock_backend_passthrough() {
         let backend = Arc::new(TestRemotingBackend::default());
         let dispatcher = ProxyRemotingDispatcher::new(
             Arc::new(ProxyConfig {
@@ -3633,7 +3610,10 @@ mod tests {
                 );
         lock_request.make_custom_header_to_net();
         let lock_response = dispatcher.dispatch(&test_context(), &lock_request).await;
-        assert_eq!(ResponseCode::from(lock_response.code()), ResponseCode::Success);
+        assert_eq!(
+            ResponseCode::from(lock_response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
 
         let mut unlock_request =
             RemotingCommand::create_request_command(RequestCode::UnlockBatchMq, UnlockBatchMqRequestHeader::default())
@@ -3649,22 +3629,16 @@ mod tests {
                 );
         unlock_request.make_custom_header_to_net();
         let unlock_response = dispatcher.dispatch(&test_context(), &unlock_request).await;
-        assert_eq!(ResponseCode::from(unlock_response.code()), ResponseCode::Success);
-
         assert_eq!(
-            backend
-                .seen_requests
-                .lock()
-                .expect("backend mutex poisoned")
-                .iter()
-                .map(RemotingCommand::code)
-                .collect::<Vec<_>>(),
-            vec![RequestCode::LockBatchMq.to_i32(), RequestCode::UnlockBatchMq.to_i32()]
+            ResponseCode::from(unlock_response.code()),
+            ResponseCode::RequestCodeNotSupported
         );
+
+        assert!(backend.seen_requests.lock().expect("backend mutex poisoned").is_empty());
     }
 
     #[tokio::test]
-    async fn dispatch_forward_routes_preserve_the_command_and_call_backend_once() {
+    async fn legacy_command_dispatch_rejects_forward_routes_without_materializing_v2_responses() {
         let backend = Arc::new(TestRemotingBackend::default());
         let dispatcher = ProxyRemotingDispatcher::new(
             Arc::new(ProxyConfig {
@@ -3711,26 +3685,14 @@ mod tests {
                     ),
                 ]));
             let response = dispatcher.dispatch(&test_context(), &request).await;
-            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+            assert_eq!(
+                ResponseCode::from(response.code()),
+                ResponseCode::RequestCodeNotSupported
+            );
             assert_eq!(response.opaque(), opaque);
         }
 
-        let seen = backend.seen_requests.lock().expect("backend mutex poisoned");
-        assert_eq!(seen.len(), codes.len());
-        for (index, request) in seen.iter().enumerate() {
-            assert_eq!(request.code(), codes[index].to_i32());
-            assert_eq!(request.opaque(), 700 + index as i32);
-            assert_eq!(request.version(), 501);
-            assert_eq!(request.serialize_type(), SerializeType::ROCKETMQ);
-            assert_eq!(request.body().map(Bytes::as_ref), Some(b"forward-body".as_slice()));
-            assert_eq!(
-                request
-                    .ext_fields()
-                    .and_then(|fields| fields.get("custom"))
-                    .map(CheetahString::as_str),
-                Some("preserved")
-            );
-        }
+        assert!(backend.seen_requests.lock().expect("backend mutex poisoned").is_empty());
     }
 
     #[tokio::test]

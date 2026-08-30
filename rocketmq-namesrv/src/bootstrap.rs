@@ -1997,7 +1997,7 @@ mod tests {
     use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::Connection;
     use rocketmq_transport::test_support::EmbeddedRequestHarnessV2;
-    use rocketmq_transport::test_support::LocalRequestHarness;
+    use rocketmq_transport::test_support::LocalChannelHarness;
     use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::oneshot;
     use tokio::time::sleep;
@@ -2780,7 +2780,7 @@ mod tests {
 
     async fn process_with_default_processor(
         bootstrap: &NameServerBootstrap,
-        harness: &LocalRequestHarness,
+        harness: &LocalChannelHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let processor =
@@ -2799,7 +2799,7 @@ mod tests {
 
     async fn process_with_client_processor(
         bootstrap: &NameServerBootstrap,
-        _harness: &LocalRequestHarness,
+        _harness: &LocalChannelHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let processor = ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
@@ -2812,7 +2812,7 @@ mod tests {
 
     async fn process_with_name_server_processor(
         bootstrap: &NameServerBootstrap,
-        harness: &LocalRequestHarness,
+        harness: &LocalChannelHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let mut processor = bootstrap.name_server_runtime.init_processors();
@@ -2836,7 +2836,7 @@ mod tests {
     #[tokio::test]
     async fn name_server_processor_records_completed_request() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let mut request = RemotingCommand::create_remoting_command(999_999);
@@ -2937,7 +2937,7 @@ mod tests {
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
         timeout_millis: Option<u64>,
-        harness: &LocalRequestHarness,
+        harness: &LocalChannelHarness,
     ) -> SessionId {
         let (broker_session, session_id) = test_broker_session(harness.remote_address());
         let result = bootstrap
@@ -2972,7 +2972,7 @@ mod tests {
         enable_acting_master: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         register_test_broker_with_harness(
@@ -2994,7 +2994,7 @@ mod tests {
     #[tokio::test]
     async fn aggregate_processor_routes_register_and_route_queries() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
@@ -3043,7 +3043,7 @@ mod tests {
     #[tokio::test]
     async fn namesrv_metadata_processors_return_java_compatible_bodies() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
@@ -3185,7 +3185,7 @@ mod tests {
     #[tokio::test]
     async fn namesrv_topic_admin_processors_complete_contracts() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let cluster_name = CheetahString::from_static_str("phase2-cluster");
@@ -3430,7 +3430,7 @@ mod tests {
     #[tokio::test]
     async fn register_broker_via_default_processor_populates_route_contract() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
@@ -3513,7 +3513,7 @@ mod tests {
     #[tokio::test]
     async fn unregister_broker_via_default_processor_removes_route_contract() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
@@ -3830,7 +3830,7 @@ mod tests {
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("scan-cleanup-topic");
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
 
@@ -3889,7 +3889,7 @@ mod tests {
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
 
@@ -3937,7 +3937,7 @@ mod tests {
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("socket-disconnect-topic");
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
 
@@ -3998,10 +3998,10 @@ mod tests {
         let slave_addr = CheetahString::from_static_str("10.0.0.2:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("duplicate-unregister-topic");
-        let master_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let master_harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
-        let slave_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let slave_harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
 
@@ -4106,10 +4106,10 @@ mod tests {
         let surviving_broker_addr = CheetahString::from_static_str("10.0.0.2:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("channel-destroy-topic");
-        let removed_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let removed_harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
-        let surviving_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let surviving_harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
 
@@ -4202,10 +4202,10 @@ mod tests {
         let slave_addr = CheetahString::from_static_str("10.0.0.2:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("acting-master-cleanup-topic");
-        let master_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let master_harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
-        let slave_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let slave_harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
 
@@ -4828,7 +4828,7 @@ mod tests {
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
@@ -4886,7 +4886,7 @@ mod tests {
         let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_remoting_command_factory(factory)
             .build();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-factory-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-factory-local-harness"))
             .await
             .expect("local harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
@@ -4911,7 +4911,7 @@ mod tests {
         let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_remoting_command_factory(factory)
             .build();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-client-factory-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-client-factory-local-harness"))
             .await
             .expect("local harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -4941,7 +4941,7 @@ mod tests {
         let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_remoting_command_factory(factory)
             .build();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-wrapper-factory-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-wrapper-factory-local-harness"))
             .await
             .expect("local harness should start");
         let mut request = RemotingCommand::create_remoting_command(999_999);
@@ -4974,7 +4974,7 @@ mod tests {
                 SerializeType::ROCKETMQ,
             )))
             .build();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-owner-isolation-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-owner-isolation-local-harness"))
             .await
             .expect("local harness should start");
         let mut json_request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
@@ -5021,7 +5021,7 @@ mod tests {
         let (config, _root) = isolated_namesrv_config(NamesrvConfig::default());
         let bootstrap = build_bootstrap_with_config(config);
         let original_port = bootstrap.name_server_runtime.inner.server_config().listen_port;
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig)
@@ -5060,7 +5060,7 @@ mod tests {
     #[tokio::test]
     async fn update_namesrv_config_rejects_fixed_blacklist_keys() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig)
@@ -5082,7 +5082,7 @@ mod tests {
     #[tokio::test]
     async fn kvconfig_crud_roundtrip_via_default_processor() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let namespace = CheetahString::from_static_str("phase5-namespace");
@@ -5188,7 +5188,7 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let bootstrap = build_bootstrap_with_config(namesrv_config);
-        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+        let harness = LocalChannelHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");

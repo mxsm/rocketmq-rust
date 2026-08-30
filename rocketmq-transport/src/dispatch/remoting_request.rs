@@ -117,7 +117,6 @@ pub struct RemotingRequest {
     control: RequestControlView,
     extensions: LazyExtensions,
     inline_response: InlineResponseSlot,
-    legacy_session_execution: Option<crate::dispatch::LegacySessionExecutionSeed>,
     command: RemotingCommand,
 }
 
@@ -222,24 +221,6 @@ impl RemotingRequest {
         &mut self.command
     }
 
-    /// Returns the mutable command exclusively for the crate-private V1
-    /// compatibility adapter.
-    ///
-    /// Keeping this narrow alias inside the request aggregate makes the
-    /// adapter's use of the historical command contract explicit without
-    /// adding transport capabilities to the public V2 surface.
-    #[allow(
-        dead_code,
-        reason = "DSP-05 legacy access remains private and dormant until DSP-06 routing"
-    )]
-    pub(crate) fn legacy_command_mut(&mut self) -> &mut RemotingCommand {
-        &mut self.command
-    }
-
-    pub(crate) fn take_legacy_session_execution(&mut self) -> Option<crate::dispatch::LegacySessionExecutionSeed> {
-        self.legacy_session_execution.take()
-    }
-
     /// Returns the request-local extension of type `T`, when one was inserted.
     ///
     /// This is allocation-free when no extension has previously been inserted.
@@ -291,12 +272,6 @@ impl RemotingRequest {
         outcome: HandlerOutcome,
     ) -> Result<HandlerOutcome, HandlerOutcomeContractError> {
         self.inline_response.resolve(self.original, outcome)
-    }
-
-    /// Consumes the affine reply state for an original one-way legacy request
-    /// without requiring its discarded command to become a response plan.
-    pub(crate) fn resolve_legacy_oneway_reply(&mut self) -> Result<(), HandlerOutcomeContractError> {
-        self.inline_response.resolve_legacy_oneway_reply()
     }
 
     pub(crate) fn consume_oneway_deferred(

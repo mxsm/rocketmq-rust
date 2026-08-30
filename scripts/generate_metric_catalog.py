@@ -30,7 +30,7 @@ SCHEMA_DIR = ROOT / "rocketmq-observability" / "src" / "metrics" / "catalog" / "
 GENERATED_PATH = ROOT / "rocketmq-observability" / "src" / "metrics" / "catalog" / "generated.rs"
 SEMANTIC_PATH = ROOT / "rocketmq-observability" / "src" / "semantic.rs"
 SCHEMA_VERSION = 1
-PARTITIONS = (("java", 0, 94), ("rust", 94, 129))
+PARTITIONS = (("java", 0, 94), ("rust", 94, 128))
 KIND_NAMES = {"Counter", "Gauge", "Histogram", "ObservableGauge", "UpDownCounter"}
 SOURCE_NAMES = {
     "Broker",

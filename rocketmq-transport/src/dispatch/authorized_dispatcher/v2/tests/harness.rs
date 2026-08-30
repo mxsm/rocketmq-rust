@@ -583,22 +583,6 @@ impl DispatchHarness {
             .expect("V2 requests should drain");
     }
 
-    pub(super) async fn drain_close_and_assert_eof(&mut self) {
-        self.drain_requests().await;
-        self.peer.shutdown().await.expect("close V2 peer write half");
-        let eof = tokio::time::timeout(Duration::from_secs(2), self.peer.receive_command())
-            .await
-            .expect("V2 peer should observe EOF after the ordered sentinel drains");
-        match eof {
-            None => {}
-            Some(Ok(response)) => panic!(
-                "V2 peer received an unexpected frame before EOF: code={}",
-                response.code()
-            ),
-            Some(Err(error)) => panic!("V2 peer failed before EOF: {error}"),
-        }
-    }
-
     pub(super) async fn shutdown(self) {
         self.drain_requests().await;
         drop(self.session);

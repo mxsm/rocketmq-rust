@@ -14,7 +14,6 @@
 
 pub mod remoting_command_codec;
 mod response_preparation;
-mod trusted_encoded_frame;
 
 #[allow(
     unused_imports,

@@ -21,12 +21,8 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Principal;
-use rocketmq_transport::api::v1::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::v1::DefaultRequestProcessor;
 use rocketmq_transport::api::v1::RequestDeadline as V1RequestDeadline;
 use rocketmq_transport::api::v1::RequestId as V1RequestId;
-use rocketmq_transport::api::v1::TransportServer;
-use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::api::v2::AuthenticationState;
 use rocketmq_transport::api::v2::AuthorizedCommandDispatcherV2;
 use rocketmq_transport::api::v2::ClaimedDeferred;
@@ -63,6 +59,8 @@ use rocketmq_transport::api::v2::EmbeddedCaller;
 use rocketmq_transport::api::v2::EmbeddedDispatchError;
 use rocketmq_transport::api::v2::EmbeddedDispatchErrorKind;
 use rocketmq_transport::api::v2::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::v2::EmbeddedResponse;
+use rocketmq_transport::api::v2::EmbeddedResponseBody;
 use rocketmq_transport::api::v2::FileRegion;
 use rocketmq_transport::api::v2::FileRegionSequence;
 use rocketmq_transport::api::v2::HandlerOutcome;
@@ -194,6 +192,11 @@ fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
         let _: ResponseBodyKind = plan.body_kind();
         let _: usize = plan.body_len();
         let _: usize = plan.body_part_count();
+        let response: EmbeddedResponse = plan.into_embedded_response();
+        let _: &RemotingCommand = response.head();
+        let _: i32 = response.response_code();
+        let _: &EmbeddedResponseBody = response.body();
+        let _: (RemotingCommand, EmbeddedResponseBody) = response.into_parts();
     }
 
     let _: fn(RemotingCommand) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::command;
@@ -622,23 +625,6 @@ fn v2_network_dispatcher_and_server_are_public_nameable_facades() {
     let admission = std::sync::Arc::new(rocketmq_transport::api::v1::AdmissionController::new(
         rocketmq_transport::api::v1::AdmissionLimits::default(),
     ));
-
-    let v1_dispatcher: std::sync::Arc<AuthorizedCommandDispatcher<DefaultRequestProcessor>> = std::sync::Arc::new(
-        AuthorizedCommandDispatcher::try_new(
-            DefaultRequestProcessor,
-            Vec::new(),
-            &service_context.process_budget(),
-            TransportTelemetry::noop(),
-            std::sync::Arc::clone(&security),
-            std::sync::Arc::clone(&admission),
-        )
-        .expect("public V1 facade construction"),
-    );
-    let _: std::sync::Arc<rocketmq_transport::api::v1::AuthorizedDispatchBoundary> = v1_dispatcher.boundary();
-    let _: TransportServer<DefaultRequestProcessor> = TransportServer::new(
-        std::sync::Arc::new(rocketmq_transport::api::v1::ServerConfig::default()),
-        service_context.clone(),
-    );
 
     let dispatcher: std::sync::Arc<AuthorizedCommandDispatcherV2<SendProcessor>> = std::sync::Arc::new(
         AuthorizedCommandDispatcherV2::new(SendProcessor, Vec::new(), security, admission),

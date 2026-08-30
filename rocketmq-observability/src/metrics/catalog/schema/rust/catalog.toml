@@ -976,15 +976,6 @@ description = "Dashboard SQL connection pool state"
 
 [[metric]]
 index = 215
-symbol = "TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL"
-kind = "Counter"
-unit = "{request}"
-labels = ["PROCESSOR", "REQUEST_CODE"]
-source = "Remoting"
-description = "Requests admitted through the V1 processor compatibility adapter"
-
-[[metric]]
-index = 216
 symbol = "TRANSPORT_REQUEST_DURATION_SECONDS"
 kind = "Histogram"
 unit = "s"
@@ -992,7 +983,7 @@ labels = ["CODE", "OUTCOME"]
 source = "Remoting"
 
 [[metric]]
-index = 217
+index = 216
 symbol = "TRANSPORT_RESPONSE_TOTAL"
 kind = "Counter"
 unit = "{response}"
@@ -1000,7 +991,7 @@ labels = ["MODE", "RESULT"]
 source = "Remoting"
 
 [[metric]]
-index = 218
+index = 217
 symbol = "TRANSPORT_DEFERRED_INFLIGHT"
 kind = "UpDownCounter"
 unit = "{request}"
@@ -1008,7 +999,7 @@ labels = ["CODE"]
 source = "Remoting"
 
 [[metric]]
-index = 219
+index = 218
 symbol = "TRANSPORT_DEFERRED_RETAINED_BYTES"
 kind = "UpDownCounter"
 unit = "By"
@@ -1016,7 +1007,7 @@ labels = ["CODE"]
 source = "Remoting"
 
 [[metric]]
-index = 220
+index = 219
 symbol = "TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS"
 kind = "Histogram"
 unit = "s"
@@ -1024,7 +1015,7 @@ labels = []
 source = "Remoting"
 
 [[metric]]
-index = 221
+index = 220
 symbol = "TRANSPORT_RESPONSE_DUPLICATE_TOTAL"
 kind = "Counter"
 unit = "{response}"
@@ -1032,7 +1023,7 @@ labels = ["CODE"]
 source = "Remoting"
 
 [[metric]]
-index = 222
+index = 221
 symbol = "TRANSPORT_RESPONSE_ABANDONED_TOTAL"
 kind = "Counter"
 unit = "{response}"

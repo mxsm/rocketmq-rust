@@ -30,7 +30,6 @@ use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Principal;
@@ -43,12 +42,9 @@ use crate::broker_runtime::BrokerRuntime;
 use crate::lifecycle::BrokerReadiness;
 use crate::lifecycle::BrokerStartupError;
 
-const LOCAL_PROXY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
-
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
     local_request_tasks: TaskGroup,
-    compatibility_materialization_blocking: BlockingExecutor,
 }
 
 impl ProxyBrokerFacade {
@@ -153,7 +149,6 @@ impl ProxyBrokerFacade {
     ) -> Self {
         let runtime_context = service_context.component("embedded-broker");
         let local_request_tasks = service_context.component("local-request").task_group().clone();
-        let compatibility_materialization_blocking = service_context.storage_io().clone();
         Self {
             runtime: BrokerRuntime::new_with_validated_config_telemetry_and_factory(
                 Arc::new(validated_config),
@@ -162,7 +157,6 @@ impl ProxyBrokerFacade {
                 command_factory,
             ),
             local_request_tasks,
-            compatibility_materialization_blocking,
         }
     }
 
@@ -212,22 +206,6 @@ impl ProxyBrokerFacade {
         Ok(self.runtime.subscription_group(&CheetahString::from(group)))
     }
 
-    pub async fn process_request(
-        &self,
-        request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::remoting_command::RemotingCommand> {
-        self.process_request_with_timeout(request, LOCAL_PROXY_RESPONSE_TIMEOUT)
-            .await
-    }
-
-    pub async fn process_request_with_timeout(
-        &self,
-        request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-        timeout: Duration,
-    ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::remoting_command::RemotingCommand> {
-        self.process_request_v2_compatibility(request, timeout).await
-    }
-
     /// Dispatches one local Proxy command through the prepared Broker V2 graph.
     ///
     /// The transport boundary fixes the origin to `EmbeddedCaller::BrokerProxy`;
@@ -246,56 +224,6 @@ impl ProxyBrokerFacade {
     ) -> rocketmq_error::RocketMQResult<EmbeddedDispatchOutcome> {
         self.process_request_v2_with_deadline(request, RequestDeadline::after(timeout))
             .await
-    }
-
-    /// Dispatches through Broker V2 and materializes the terminal plan for the
-    /// frozen outer V1 Proxy remoting listener.
-    ///
-    /// This bridge is intentionally limited to the V1 compatibility boundary.
-    /// New V2 callers must consume [`EmbeddedDispatchOutcome`] directly through
-    /// [`Self::process_request_v2`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when V2 dispatch fails, the response violates the
-    /// terminal contract, or bounded response materialization cannot complete
-    /// before `timeout`.
-    pub async fn process_request_v2_compatibility(
-        &self,
-        request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-        timeout: Duration,
-    ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::remoting_command::RemotingCommand> {
-        let opaque = request.opaque();
-        let deadline = RequestDeadline::after(timeout);
-        match self.process_request_v2_with_deadline(request, deadline).await? {
-            EmbeddedDispatchOutcome::Reply(plan) => {
-                let response = rocketmq_transport::api::v1::materialize_embedded_v2_compatibility_response(
-                    plan,
-                    Some(deadline),
-                    &self.local_request_tasks,
-                    &self.compatibility_materialization_blocking,
-                )
-                .await
-                .map_err(|error| embedded_v2_compatibility_materialization_error(error, timeout))?;
-                Ok(response.set_opaque(opaque).mark_response_type())
-            }
-            EmbeddedDispatchOutcome::OneWay { .. } => Ok(
-                rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_response_command_with_code(
-                    rocketmq_protocol::code::response_code::ResponseCode::Success,
-                )
-                .set_opaque(opaque)
-                .mark_response_type(),
-            ),
-            EmbeddedDispatchOutcome::Deferred { .. } => Err(rocketmq_error::RocketMQError::invariant_violated(
-                "terminal embedded Broker V2 dispatch returned deferred",
-            )),
-            EmbeddedDispatchOutcome::NoReply { .. } => Err(rocketmq_error::RocketMQError::invariant_violated(
-                "outer V1 Proxy compatibility request completed without a response",
-            )),
-            _ => Err(rocketmq_error::RocketMQError::invariant_violated(
-                "embedded Broker V2 dispatch returned an unsupported compatibility outcome",
-            )),
-        }
     }
 
     async fn process_request_v2_with_deadline(
@@ -340,25 +268,6 @@ fn embedded_dispatch_v2_error(
         };
     }
     rocketmq_error::RocketMQError::response_process_failed("embedded_broker_v2_dispatch", error.to_string())
-}
-
-fn embedded_v2_compatibility_materialization_error(
-    error: rocketmq_transport::api::v1::EmbeddedV2CompatibilityMaterializationError,
-    timeout: Duration,
-) -> rocketmq_error::RocketMQError {
-    if matches!(
-        error.kind(),
-        rocketmq_transport::api::v1::EmbeddedV2CompatibilityMaterializationErrorKind::DeadlineExceeded
-    ) {
-        return rocketmq_error::RocketMQError::Timeout {
-            operation: "embedded_broker_v2_compatibility_materialization",
-            timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-        };
-    }
-    rocketmq_error::RocketMQError::response_process_failed(
-        "embedded_broker_v2_compatibility_materialization",
-        error.to_string(),
-    )
 }
 
 #[cfg(test)]
