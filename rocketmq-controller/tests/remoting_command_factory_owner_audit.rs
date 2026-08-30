@@ -16,7 +16,17 @@ const RUNTIME_OWNER_SOURCES: &[(&str, &str, bool)] = &[
     (
         "controller_manager.rs",
         include_str!("../src/controller/controller_manager.rs"),
-        true,
+        false,
+    ),
+    (
+        "controller_manager/lifecycle.rs",
+        include_str!("../src/controller/controller_manager/lifecycle.rs"),
+        false,
+    ),
+    (
+        "controller_manager/leadership.rs",
+        include_str!("../src/controller/controller_manager/leadership.rs"),
+        false,
     ),
     (
         "open_raft_controller.rs",
