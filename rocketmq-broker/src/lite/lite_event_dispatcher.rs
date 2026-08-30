@@ -95,7 +95,10 @@ impl ClientEventState {
         if self.event_set.contains(&event) {
             return true;
         }
-        if self.event_set.len() >= self.max_event_count {
+        // `event_set` also retains reserved and committed records for
+        // deduplication. Only queued records occupy the client pending-event
+        // limit, so deferred records can join the batch that just freed space.
+        if self.events.len() >= self.max_event_count {
             return false;
         }
         self.event_set.insert(event.clone());
