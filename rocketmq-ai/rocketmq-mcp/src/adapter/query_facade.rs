@@ -17,6 +17,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapter::admin_session::AdminCoreSessionFactory;
@@ -31,7 +32,12 @@ use crate::infrastructure::cache::QueryCache;
 use crate::model::contract::observed_at;
 use crate::model::contract::paginate;
 use crate::model::contract::PageRequest;
+use crate::model::contract::QueryCompleteness;
+use crate::model::contract::QueryPayload;
 use crate::model::contract::QueryResult;
+use crate::model::contract::QuerySource;
+use crate::model::contract::SourceFailure;
+use crate::model::contract::SourceFailureCode;
 use crate::model::contract::DEFAULT_PAGE_LIMIT;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::model::diagnosis::DiagnosisReport;
@@ -193,16 +199,18 @@ where
                     self.run_workflow(cluster, |session, cluster| {
                         Box::pin(async move {
                             let brokers = session.broker_rows().await?;
+                            let mut completeness = brokers.completeness();
                             let topics = sorted_unique_topic_names(session.topic_inventory().await?);
                             let consumer_groups = session.consumer_groups().await?;
-                            Ok(ClusterOverviewOutput {
+                            completeness.merge(consumer_groups.completeness());
+                            Ok(completeness.wrap(ClusterOverviewOutput {
                                 cluster: cluster.name.clone(),
                                 namesrv_addr: cluster.namesrv_addr.clone(),
-                                brokers,
+                                brokers: brokers.data,
                                 topic_count: topics.len(),
-                                consumer_group_count: consumer_groups.len(),
+                                consumer_group_count: consumer_groups.data.len(),
                                 generated_at: observed_at(),
-                            })
+                            }))
                         })
                     })
                     .await
@@ -244,12 +252,12 @@ where
                             }
                             let page = paginate(topics, &args.page)
                                 .map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))?;
-                            Ok(ListTopicsOutput {
+                            Ok(QueryPayload::complete(ListTopicsOutput {
                                 cluster: cluster.name.clone(),
                                 namesrv_addr: cluster.namesrv_addr.clone(),
                                 page,
                                 generated_at: observed_at(),
-                            })
+                            }))
                         })
                     })
                     .await
@@ -281,7 +289,7 @@ where
                         Box::pin(async move {
                             let route = session.topic_route(&args.topic).await?;
                             let route = topic_route_output(cluster, &args.topic, route, &args.page)?;
-                            Ok(describe_topic_output(&route))
+                            Ok(QueryPayload::complete(describe_topic_output(&route)))
                         })
                     })
                     .await
@@ -312,7 +320,7 @@ where
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let route = session.topic_route(&args.topic).await?;
-                            topic_route_output(cluster, &args.topic, route, &args.page)
+                            topic_route_output(cluster, &args.topic, route, &args.page).map(QueryPayload::complete)
                         })
                     })
                     .await
@@ -341,19 +349,21 @@ where
                 move || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
-                            let mut groups = session.consumer_groups().await?;
+                            let groups = session.consumer_groups().await?;
+                            let completeness = groups.completeness();
+                            let mut groups = groups.data;
                             groups.sort_by(|left, right| left.group.cmp(&right.group));
                             if let Some(filter) = normalized_filter(args.filter.as_deref()) {
                                 groups.retain(|entry| entry.group.to_ascii_lowercase().contains(&filter));
                             }
                             let page = paginate(groups, &args.page)
                                 .map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))?;
-                            Ok(ListConsumerGroupsOutput {
+                            Ok(completeness.wrap(ListConsumerGroupsOutput {
                                 cluster: cluster.name.clone(),
                                 namesrv_addr: cluster.namesrv_addr.clone(),
                                 page,
                                 generated_at: observed_at(),
-                            })
+                            }))
                         })
                     })
                     .await
@@ -390,7 +400,9 @@ where
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let lag = session.consumer_lag(&args.topic, &args.consumer_group).await?;
-                            consumer_lag_output(cluster, args.topic, args.consumer_group, &args.page, lag)
+                            let completeness = lag.completeness();
+                            consumer_lag_output(cluster, args.topic, args.consumer_group, &args.page, lag.data)
+                                .map(|output| completeness.wrap(output))
                         })
                     })
                     .await
@@ -450,19 +462,27 @@ where
                 move || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
-                            let lag_result =
-                                session
-                                    .consumer_lag(&args.topic, &args.consumer_group)
-                                    .await
-                                    .and_then(|lag| {
-                                        consumer_lag_output(
-                                            cluster,
-                                            args.topic.clone(),
-                                            args.consumer_group.clone(),
-                                            &PageRequest::default(),
-                                            lag,
-                                        )
-                                    });
+                            let mut completeness = QueryCompleteness::default();
+                            let lag_result = match session.consumer_lag(&args.topic, &args.consumer_group).await {
+                                Ok(lag) => {
+                                    completeness.merge(lag.completeness());
+                                    consumer_lag_output(
+                                        cluster,
+                                        args.topic.clone(),
+                                        args.consumer_group.clone(),
+                                        &PageRequest::default(),
+                                        lag.data,
+                                    )
+                                }
+                                Err(error) => {
+                                    completeness.merge(completeness_for_error(
+                                        QuerySource::ConsumerStatistics,
+                                        &args.consumer_group,
+                                        &error,
+                                    ));
+                                    Err(error)
+                                }
+                            };
                             let (topic_result, route_result) = match session.topic_route(&args.topic).await {
                                 Ok(route) => {
                                     let route =
@@ -470,18 +490,40 @@ where
                                     (Ok(describe_topic_output(&route)), Ok(route))
                                 }
                                 Err(error) => {
-                                    let message = error.to_string();
-                                    (Err(ToolExecutionError::backend(&message)), Err(error))
+                                    completeness.merge(completeness_for_error(
+                                        QuerySource::TopicRoute,
+                                        &args.topic,
+                                        &error,
+                                    ));
+                                    (
+                                        Err(ToolExecutionError::Backend(
+                                            "topic route source is unavailable".to_string(),
+                                        )),
+                                        Err(error),
+                                    )
                                 }
                             };
                             let broker_result = match top_lag_broker(lag_result.as_ref().ok()) {
                                 Some(broker_name) => {
-                                    Some(describe_broker_in_session(session, cluster, broker_name).await)
+                                    match describe_broker_in_session(session, cluster, broker_name.clone()).await {
+                                        Ok(broker) => {
+                                            completeness.merge(broker.completeness());
+                                            Some(Ok(broker.data))
+                                        }
+                                        Err(error) => {
+                                            completeness.merge(completeness_for_error(
+                                                QuerySource::BrokerRuntime,
+                                                &broker_name,
+                                                &error,
+                                            ));
+                                            Some(Err(error))
+                                        }
+                                    }
                                 }
                                 None => None,
                             };
 
-                            Ok(diagnosis_rules::evaluate(
+                            let report = diagnosis_rules::evaluate(
                                 &args,
                                 ConsumerLagEvidence {
                                     lag: lag_result,
@@ -490,7 +532,12 @@ where
                                     broker: broker_result,
                                 },
                                 &policy,
-                            ))
+                            );
+                            if report.partial {
+                                completeness.partial = true;
+                                completeness.warnings.push("diagnosis_evidence_incomplete".to_string());
+                            }
+                            Ok(completeness.wrap(report))
                         })
                     })
                     .await
@@ -715,30 +762,59 @@ async fn describe_broker_in_session<S>(
     session: &mut S,
     cluster: &ResolvedCluster,
     broker_name: String,
-) -> Result<DescribeBrokerOutput, ToolExecutionError>
+) -> Result<QueryPayload<DescribeBrokerOutput>, ToolExecutionError>
 where
     S: AdminSession,
 {
-    let brokers = session
-        .broker_rows()
-        .await?
+    let broker_payload = session.broker_rows().await?;
+    let completeness = broker_payload.completeness();
+    let brokers = broker_payload
+        .data
         .into_iter()
         .filter(|broker| broker.broker_name == broker_name)
         .collect::<Vec<_>>();
     if brokers.is_empty() {
-        session.probe_broker_runtime().await?;
+        match session.probe_broker_runtime_target(&broker_name).await? {
+            BrokerRuntimeTargetStatus::Available | BrokerRuntimeTargetStatus::SourceUnavailable => {
+                return Err(ToolExecutionError::Backend(
+                    "selected broker source is unavailable".to_string(),
+                ));
+            }
+            BrokerRuntimeTargetStatus::NotFound => {}
+        }
         return Err(ToolExecutionError::InvalidArguments(format!(
             "broker not found in cluster {}: {broker_name}",
             cluster.name
         )));
     }
-    Ok(DescribeBrokerOutput {
+    Ok(completeness.wrap(DescribeBrokerOutput {
         cluster: cluster.name.clone(),
         namesrv_addr: cluster.namesrv_addr.clone(),
         broker_name,
         brokers,
         generated_at: observed_at(),
-    })
+    }))
+}
+
+fn completeness_for_error(source: QuerySource, logical_target: &str, error: &ToolExecutionError) -> QueryCompleteness {
+    let (code, retryable) = match error {
+        ToolExecutionError::TimedOut { .. } => (SourceFailureCode::Timeout, true),
+        ToolExecutionError::RateLimited(_) => (SourceFailureCode::RateLimited, true),
+        ToolExecutionError::PermissionDenied(_)
+        | ToolExecutionError::UnauthorizedScope(_)
+        | ToolExecutionError::TenantMismatch(_)
+        | ToolExecutionError::ClusterNotAllowed(_) => (SourceFailureCode::PermissionDenied, false),
+        ToolExecutionError::InvalidArguments(_) => (SourceFailureCode::NotFound, false),
+        ToolExecutionError::Backend(_) | ToolExecutionError::Cancelled => (SourceFailureCode::SourceUnavailable, true),
+        ToolExecutionError::OutputTooLarge { .. }
+        | ToolExecutionError::ChangePlanningDisabled(_)
+        | ToolExecutionError::Internal(_) => (SourceFailureCode::InvalidResponse, false),
+    };
+    QueryCompleteness {
+        partial: true,
+        warnings: vec!["source_failures_present".to_string()],
+        source_failures: vec![SourceFailure::new(source, code, retryable, logical_target)],
+    }
 }
 
 fn top_lag_broker(lag: Option<&QueryConsumerLagOutput>) -> Option<String> {
@@ -828,6 +904,9 @@ mod tests {
     struct FakeSessionFactory {
         counters: Arc<LifecycleCounters>,
         selected_broker_missing: bool,
+        failed_selected_broker: bool,
+        overflow_failed_selected_broker: bool,
+        partial_sources: bool,
         hang_broker_query: bool,
         hang_topic_inventory: bool,
         delay_topic_inventory: bool,
@@ -843,6 +922,9 @@ mod tests {
                 cluster,
                 counters: self.counters.clone(),
                 selected_broker_missing: self.selected_broker_missing,
+                failed_selected_broker: self.failed_selected_broker,
+                overflow_failed_selected_broker: self.overflow_failed_selected_broker,
+                partial_sources: self.partial_sources,
                 hang_broker_query: self.hang_broker_query,
                 hang_topic_inventory: self.hang_topic_inventory,
                 delay_topic_inventory: self.delay_topic_inventory,
@@ -855,6 +937,9 @@ mod tests {
         cluster: ResolvedCluster,
         counters: Arc<LifecycleCounters>,
         selected_broker_missing: bool,
+        failed_selected_broker: bool,
+        overflow_failed_selected_broker: bool,
+        partial_sources: bool,
         hang_broker_query: bool,
         hang_topic_inventory: bool,
         delay_topic_inventory: bool,
@@ -862,17 +947,44 @@ mod tests {
     }
 
     impl AdminSession for FakeSession {
-        async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError> {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
+            }
+            if self.failed_selected_broker {
+                return Ok(partial_payload(Vec::new(), QuerySource::BrokerRuntime, "broker-a"));
+            }
+            if self.overflow_failed_selected_broker {
+                let failures = (0..crate::model::contract::MAX_SOURCE_FAILURES)
+                    .map(|index| {
+                        SourceFailure::new(
+                            QuerySource::BrokerRuntime,
+                            SourceFailureCode::SourceUnavailable,
+                            true,
+                            format!("broker-{index:02}"),
+                        )
+                    })
+                    .chain(std::iter::once(SourceFailure::new(
+                        QuerySource::BrokerRuntime,
+                        SourceFailureCode::SourceUnavailable,
+                        true,
+                        "broker-z",
+                    )))
+                    .collect();
+                return Ok(QueryPayload::new(Vec::new(), true, Vec::new(), failures));
             }
             let broker_name = if self.selected_broker_missing {
                 "broker-b"
             } else {
                 "broker-a"
             };
-            Ok(vec![broker_summary(&self.cluster.name, broker_name)])
+            let brokers = vec![broker_summary(&self.cluster.name, broker_name)];
+            Ok(if self.partial_sources {
+                partial_payload(brokers, QuerySource::BrokerRuntime, "broker-b")
+            } else {
+                QueryPayload::complete(brokers)
+            })
         }
 
         async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
@@ -897,34 +1009,67 @@ mod tests {
             })
         }
 
-        async fn consumer_groups(&mut self) -> Result<Vec<ConsumerGroupSummary>, ToolExecutionError> {
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
             self.counters.consumer_group_queries.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![consumer_group("order-service")])
+            let groups = vec![consumer_group("order-service")];
+            Ok(if self.partial_sources {
+                partial_payload(groups, QuerySource::ConsumerConnection, "broker-b")
+            } else {
+                QueryPayload::complete(groups)
+            })
         }
 
         async fn consumer_lag(
             &mut self,
             _topic: &str,
             _consumer_group: &str,
-        ) -> Result<SessionConsumerLag, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
             self.counters.consumer_lag_queries.fetch_add(1, Ordering::SeqCst);
-            Ok(SessionConsumerLag {
+            let lag = SessionConsumerLag {
                 queues: vec![queue_lag("broker-a")],
                 total_lag: 10_000,
                 consume_tps: 0.5,
                 inflight_total: 5,
+            };
+            Ok(if self.partial_sources {
+                partial_payload(lag, QuerySource::ConsumerStatistics, "broker-b")
+            } else {
+                QueryPayload::complete(lag)
             })
         }
 
-        async fn probe_broker_runtime(&mut self) -> Result<(), ToolExecutionError> {
+        async fn probe_broker_runtime_target(
+            &mut self,
+            _broker_name: &str,
+        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
             self.counters.runtime_probes.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            if self.failed_selected_broker || self.overflow_failed_selected_broker {
+                Ok(BrokerRuntimeTargetStatus::SourceUnavailable)
+            } else if self.selected_broker_missing {
+                Ok(BrokerRuntimeTargetStatus::NotFound)
+            } else {
+                Ok(BrokerRuntimeTargetStatus::Available)
+            }
         }
 
         async fn shutdown(self) -> Result<(), ToolExecutionError> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    fn partial_payload<T>(data: T, source: QuerySource, logical_target: &str) -> QueryPayload<T> {
+        QueryPayload::new(
+            data,
+            true,
+            Vec::new(),
+            vec![SourceFailure::new(
+                source,
+                SourceFailureCode::SourceUnavailable,
+                true,
+                logical_target,
+            )],
+        )
     }
 
     #[test]
@@ -1010,6 +1155,138 @@ mod tests {
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn query_facade_composes_partial_evidence_for_overview_lists_lag_broker_and_diagnosis() {
+        let facade = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                partial_sources: true,
+                ..Default::default()
+            },
+        );
+
+        let overview = facade
+            .cluster_overview(ClusterOverviewArgs {
+                cluster: "local-dev".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(overview.partial);
+        assert_eq!(overview.source_failures.len(), 2);
+
+        let groups = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap();
+        assert!(groups.partial);
+        assert_eq!(groups.source_failures[0].source, QuerySource::ConsumerConnection);
+
+        let lag = facade
+            .query_consumer_lag(QueryConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap();
+        assert!(lag.partial);
+        assert_eq!(lag.source_failures[0].source, QuerySource::ConsumerStatistics);
+
+        let broker = facade
+            .describe_broker(DescribeBrokerArgs {
+                cluster: "local-dev".to_string(),
+                broker_name: "broker-a".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(broker.partial);
+        assert_eq!(broker.source_failures[0].logical_target, "broker-b");
+
+        let diagnosis = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
+        assert!(diagnosis.partial);
+        assert!(diagnosis
+            .warnings
+            .iter()
+            .any(|warning| warning == "source_failures_present"));
+        assert!(diagnosis.source_failures.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn failed_selected_broker_is_not_reported_as_not_found() {
+        let facade = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                failed_selected_broker: true,
+                ..Default::default()
+            },
+        );
+
+        let error = facade
+            .describe_broker(DescribeBrokerArgs {
+                cluster: "local-dev".to_string(),
+                broker_name: "broker-a".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ToolExecutionError::Backend(_)));
+        assert!(!error.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn selected_broker_beyond_public_failure_cap_is_unavailable_for_tool_and_resource() {
+        let facade = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                overflow_failed_selected_broker: true,
+                ..Default::default()
+            },
+        );
+
+        let public = facade
+            .cluster_overview(ClusterOverviewArgs {
+                cluster: "local-dev".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            public.source_failures.len(),
+            crate::model::contract::MAX_SOURCE_FAILURES
+        );
+        assert!(public
+            .warnings
+            .iter()
+            .any(|warning| warning == "source_failures_truncated"));
+        assert!(!public
+            .source_failures
+            .iter()
+            .any(|failure| failure.logical_target == "broker-z"));
+
+        let tool_error = ReadOnlyQuery::describe_broker(
+            &facade,
+            DescribeBrokerArgs {
+                cluster: "local-dev".to_string(),
+                broker_name: "broker-z".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(tool_error, ToolExecutionError::Backend(_)));
+        assert!(!tool_error.to_string().contains("not found"));
+
+        let resource_error =
+            resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/brokers/broker-z")
+                .await
+                .unwrap_err();
+        assert_ne!(resource_error.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+        assert_eq!(resource_error.data.unwrap()["code"], "source_unavailable");
     }
 
     #[tokio::test]

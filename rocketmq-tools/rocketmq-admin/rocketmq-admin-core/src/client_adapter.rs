@@ -17,6 +17,8 @@
 #[cfg(feature = "client-adapter")]
 mod broker;
 #[cfg(feature = "client-adapter")]
+mod connection;
+#[cfg(feature = "client-adapter")]
 mod consumer;
 #[cfg(feature = "client-adapter")]
 mod dashboard;

@@ -26,12 +26,15 @@ use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::MQAdminMessageReadExt;
 use rocketmq_client_rust::MQAdminReadExt;
 use rocketmq_client_rust::MQAdminTopicInventoryReadExt;
+use rocketmq_client_rust::ReadFailureCode;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::mix_all;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
@@ -44,11 +47,13 @@ use crate::core::broker::project_broker_log_filter_state;
 use crate::core::broker::BrokerAllowlistedConfig;
 use crate::core::broker::BrokerLogFilterState;
 use crate::core::broker::BrokerQueryAdmin;
+use crate::core::broker::BrokerRuntimeTargetStatus;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::broker::ProbeBrokerRuntimeTargetRequest;
 use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
@@ -67,6 +72,10 @@ use crate::core::proxy::ProxyDrainPending;
 use crate::core::proxy::ProxyDrainState;
 use crate::core::proxy::ProxyQueryAdmin;
 use crate::core::proxy::QueryProxyDrainStateRequest;
+use crate::core::query::AdminQueryFailureCode;
+use crate::core::query::AdminQueryResult;
+use crate::core::query::AdminQuerySource;
+use crate::core::query::AdminSourceFailure;
 use crate::core::security::AdminCredentials;
 use crate::core::topic::GetTopicRouteRequest;
 use crate::core::topic::ListTopicsRequest;
@@ -399,6 +408,77 @@ impl BrokerQueryAdmin for ReadAdminSession {
         })
     }
 
+    fn list_brokers_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListBrokersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListBrokersResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let now_millis = self.clock.now_millis();
+            let mut brokers = Vec::new();
+            let mut successful_sources = 0usize;
+            let mut failures = Vec::new();
+            for broker_name in broker_names {
+                let Some(broker_data) = broker_table.get(&broker_name) else {
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                };
+                if broker_data.broker_addrs().is_empty() {
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                }
+                for (broker_id, broker_addr) in broker_data.broker_addrs() {
+                    match self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
+                        Ok(runtime) => {
+                            successful_sources += 1;
+                            brokers.push(build_broker_summary(
+                                request.cluster.clone(),
+                                broker_name.to_string(),
+                                *broker_id,
+                                broker_addr.to_string(),
+                                Some(&runtime),
+                                now_millis,
+                            ));
+                        }
+                        Err(error) => failures.push(source_failure_from_error(
+                            AdminQuerySource::BrokerRuntime,
+                            broker_name.as_str(),
+                            &error,
+                        )),
+                    }
+                }
+            }
+            brokers.sort_by(|left, right| {
+                left.broker_name
+                    .cmp(&right.broker_name)
+                    .then(left.broker_id.cmp(&right.broker_id))
+            });
+            AdminQueryResult::from_sources(ListBrokersResult { brokers }, successful_sources, failures)
+        })
+    }
+
     fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
@@ -444,6 +524,105 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 result.failures.push(format!("code=other;count={overflow}"));
             }
             Ok(result)
+        })
+    }
+
+    fn probe_broker_runtime_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let mut result = ProbeBrokerRuntimeResult::default();
+            let mut successful_sources = 0usize;
+            let mut failures = Vec::new();
+            for broker_name in broker_names {
+                let Some(broker_data) = broker_table.get(&broker_name) else {
+                    result.attempted += 1;
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                };
+                if broker_data.broker_addrs().is_empty() {
+                    result.attempted += 1;
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                }
+                for broker_addr in broker_data.broker_addrs().values() {
+                    result.attempted += 1;
+                    match self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
+                        Ok(_) => successful_sources += 1,
+                        Err(error) => failures.push(source_failure_from_error(
+                            AdminQuerySource::BrokerRuntime,
+                            broker_name.as_str(),
+                            &error,
+                        )),
+                    }
+                }
+            }
+            result.failures = stable_legacy_failures(&failures);
+            AdminQueryResult::from_sources(result, successful_sources, failures)
+        })
+    }
+
+    fn probe_broker_runtime_target<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeTargetRequest,
+    ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            if !broker_names
+                .iter()
+                .any(|broker_name| broker_name.as_str() == request.broker_name)
+            {
+                return Ok(BrokerRuntimeTargetStatus::NotFound);
+            }
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let Some(broker_data) = broker_table.get(request.broker_name.as_str()) else {
+                return Ok(BrokerRuntimeTargetStatus::SourceUnavailable);
+            };
+            for broker_addr in broker_data
+                .broker_addrs()
+                .values()
+                .filter(|broker_addr| !broker_addr.as_str().trim().is_empty())
+            {
+                if self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await.is_ok() {
+                    return Ok(BrokerRuntimeTargetStatus::Available);
+                }
+            }
+            Ok(BrokerRuntimeTargetStatus::SourceUnavailable)
         })
     }
 
@@ -592,6 +771,90 @@ impl ClientConnectionQueryAdmin for ReadAdminSession {
         })
     }
 
+    fn query_consumer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerConnectionsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let (targets, mut failures) = cluster_broker_targets_with_evidence(
+                &self.inner,
+                &request.cluster,
+                AdminQuerySource::ConsumerConnection,
+            )
+            .await?;
+            failures.retain(|failure| {
+                request
+                    .broker_name
+                    .as_ref()
+                    .is_none_or(|expected| expected == failure.logical_target())
+            });
+            let mut connections = BTreeMap::new();
+            let mut queried_brokers = failures
+                .iter()
+                .map(|failure| failure.logical_target().to_string())
+                .collect::<BTreeSet<_>>();
+            let mut successful_sources = 0usize;
+            let mut truncated = false;
+            for (broker_name, broker_addr) in targets {
+                if request
+                    .broker_name
+                    .as_ref()
+                    .is_some_and(|expected| expected != &broker_name)
+                {
+                    continue;
+                }
+                queried_brokers.insert(broker_name.clone());
+                match self
+                    .inner
+                    .observe_consumer_connection_at(CheetahString::from(request.consumer_group.as_str()), broker_addr)
+                    .await
+                {
+                    Ok(connection) => {
+                        successful_sources += 1;
+                        for row in consumer_connection_rows(&broker_name, connection) {
+                            let identity = client_connection_identity(&row);
+                            connections.entry(identity).or_insert(row);
+                            if connections.len() > request.max_connections {
+                                truncated = true;
+                                break;
+                            }
+                        }
+                    }
+                    Err(error) => failures.push(source_failure_from_error(
+                        AdminQuerySource::ConsumerConnection,
+                        &broker_name,
+                        &error,
+                    )),
+                }
+                if truncated {
+                    break;
+                }
+            }
+            let connections = connections
+                .into_values()
+                .take(request.max_connections)
+                .collect::<Vec<_>>();
+            let failed_brokers = failures
+                .iter()
+                .map(|failure| failure.logical_target().to_string())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            AdminQueryResult::from_sources(
+                QueryConsumerConnectionsResult {
+                    consumer_group: request.consumer_group.clone(),
+                    connections,
+                    queried_broker_count: queried_brokers.len(),
+                    failed_brokers,
+                    truncated,
+                },
+                successful_sources,
+                failures,
+            )
+        })
+    }
+
     fn list_producer_connections<'a>(
         &'a mut self,
         request: &'a ListProducerConnectionsRequest,
@@ -641,6 +904,85 @@ impl ClientConnectionQueryAdmin for ReadAdminSession {
                 failed_brokers: failed_brokers.into_iter().collect(),
                 truncated,
             })
+        })
+    }
+
+    fn list_producer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListProducerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListProducerConnectionsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let (targets, mut failures) = cluster_broker_targets_with_evidence(
+                &self.inner,
+                &request.cluster,
+                AdminQuerySource::ProducerConnection,
+            )
+            .await?;
+            failures.retain(|failure| {
+                request
+                    .broker_name
+                    .as_ref()
+                    .is_none_or(|expected| expected == failure.logical_target())
+            });
+            let mut connections = BTreeMap::new();
+            let mut queried_brokers = failures
+                .iter()
+                .map(|failure| failure.logical_target().to_string())
+                .collect::<BTreeSet<_>>();
+            let mut successful_sources = 0usize;
+            let mut truncated = false;
+            for (broker_name, broker_addr) in targets {
+                if request
+                    .broker_name
+                    .as_ref()
+                    .is_some_and(|expected| expected != &broker_name)
+                {
+                    continue;
+                }
+                queried_brokers.insert(broker_name.clone());
+                match self.inner.get_all_producer_info(broker_addr).await {
+                    Ok(table) => {
+                        successful_sources += 1;
+                        for row in producer_connection_rows(&broker_name, table, request.producer_group.as_deref()) {
+                            let identity = (row.producer_group.clone(), client_connection_identity(&row.connection));
+                            connections.entry(identity).or_insert(row);
+                            if connections.len() > request.max_connections {
+                                truncated = true;
+                                break;
+                            }
+                        }
+                    }
+                    Err(error) => failures.push(source_failure_from_error(
+                        AdminQuerySource::ProducerConnection,
+                        &broker_name,
+                        &error,
+                    )),
+                }
+                if truncated {
+                    break;
+                }
+            }
+            let connections = connections
+                .into_values()
+                .take(request.max_connections)
+                .collect::<Vec<_>>();
+            let failed_brokers = failures
+                .iter()
+                .map(|failure| failure.logical_target().to_string())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            AdminQueryResult::from_sources(
+                ListProducerConnectionsResult {
+                    connections,
+                    queried_broker_count: queried_brokers.len(),
+                    failed_brokers,
+                    truncated,
+                },
+                successful_sources,
+                failures,
+            )
         })
     }
 }
@@ -955,6 +1297,75 @@ impl ConsumerQueryAdmin for ReadAdminSession {
         })
     }
 
+    fn list_consumer_groups_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a consumer::ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<consumer::ListConsumerGroupsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let topic_list = self
+                .inner
+                .fetch_all_topic_list()
+                .await
+                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+            let mut groups = Vec::new();
+            let mut failures = Vec::new();
+            // The inventory is itself a successful required source. It makes
+            // an empty inventory authoritative and keeps enrichment failures
+            // partial rather than converting known group rows into a total error.
+            let mut successful_sources = 1usize;
+            for retry_topic in topic_list
+                .topic_list
+                .into_iter()
+                .filter(|topic| topic.starts_with(RETRY_GROUP_TOPIC_PREFIX))
+            {
+                let group = KeyBuilder::parse_group(retry_topic.as_str());
+                let mut summary = default_consumer_group_summary(&group);
+                let stats = self
+                    .inner
+                    .examine_consume_stats_with_evidence(CheetahString::from(group.as_str()), None, None, None)
+                    .await;
+                match stats {
+                    Ok(stats) => {
+                        successful_sources += stats.successful_brokers;
+                        summary.consume_tps = stats.stats.get_consume_tps();
+                        summary.diff_total = stats.stats.compute_total_diff();
+                        failures.extend(stats.failures.into_iter().map(|failure| {
+                            source_failure_from_client(
+                                AdminQuerySource::ConsumerStatistics,
+                                failure.broker_name(),
+                                failure.code(),
+                                failure.retryable(),
+                            )
+                        }));
+                    }
+                    Err(error) => failures.push(source_failure_from_error(
+                        AdminQuerySource::ConsumerStatistics,
+                        &group,
+                        &error,
+                    )),
+                }
+
+                let connection_evidence = collect_group_connection_summary(&self.inner, &group).await?;
+                successful_sources += connection_evidence.successful_sources;
+                failures.extend(connection_evidence.failures);
+                if let Some(connection) = connection_evidence.summary {
+                    summary.client_count = connection.client_count;
+                    summary.consume_type = connection.consume_type;
+                    summary.message_model = connection.message_model;
+                    summary.version = connection.version;
+                }
+                groups.push(summary);
+            }
+            groups.sort_by(|left, right| left.group.cmp(&right.group));
+            AdminQueryResult::from_sources(
+                consumer::ListConsumerGroupsResult { groups },
+                successful_sources,
+                failures,
+            )
+        })
+    }
+
     fn query_consumer_lag<'a>(
         &'a mut self,
         request: &'a consumer::QueryConsumerLagRequest,
@@ -999,6 +1410,52 @@ impl ConsumerQueryAdmin for ReadAdminSession {
                 });
             }
             Ok(result)
+        })
+    }
+
+    fn query_consumer_lag_with_evidence<'a>(
+        &'a mut self,
+        request: &'a consumer::QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<consumer::QueryConsumerLagResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let stats = self
+                .inner
+                .examine_consume_stats_with_evidence(
+                    CheetahString::from(request.consumer_group.as_str()),
+                    Some(CheetahString::from(request.topic.as_str())),
+                    None,
+                    None,
+                )
+                .await;
+            let stats = match stats {
+                Ok(stats) => stats,
+                Err(error) => {
+                    return AdminQueryResult::from_sources(
+                        consumer::QueryConsumerLagResult::default(),
+                        0,
+                        vec![source_failure_from_error(
+                            AdminQuerySource::ConsumerStatistics,
+                            &request.consumer_group,
+                            &error,
+                        )],
+                    );
+                }
+            };
+            let failures = stats
+                .failures
+                .into_iter()
+                .map(|failure| {
+                    source_failure_from_client(
+                        AdminQuerySource::ConsumerStatistics,
+                        failure.broker_name(),
+                        failure.code(),
+                        failure.retryable(),
+                    )
+                })
+                .collect();
+            let result = map_consumer_lag_result(stats.stats);
+            AdminQueryResult::from_sources(result, stats.successful_brokers, failures)
         })
     }
 
@@ -1119,6 +1576,65 @@ async fn cluster_broker_targets(admin: &DefaultMQAdminExt, cluster: &str) -> Adm
         .collect())
 }
 
+async fn cluster_broker_targets_with_evidence(
+    admin: &DefaultMQAdminExt,
+    cluster: &str,
+    source: AdminQuerySource,
+) -> AdminResult<(Vec<(String, CheetahString)>, Vec<AdminSourceFailure>)> {
+    let cluster_info = admin
+        .examine_broker_cluster_info()
+        .await
+        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+    let broker_names = cluster_info
+        .cluster_addr_table
+        .as_ref()
+        .and_then(|table| table.get(cluster))
+        .cloned()
+        .unwrap_or_default();
+    let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+    let mut targets = Vec::new();
+    let mut failures = Vec::new();
+    for broker_name in broker_names {
+        let Some(broker) = broker_table.get(&broker_name) else {
+            failures.push(AdminSourceFailure::new(
+                source,
+                AdminQueryFailureCode::InvalidResponse,
+                false,
+                broker_name.as_str(),
+            ));
+            continue;
+        };
+        if broker.broker_addrs().is_empty() {
+            failures.push(AdminSourceFailure::new(
+                source,
+                AdminQueryFailureCode::InvalidResponse,
+                false,
+                broker_name.as_str(),
+            ));
+            continue;
+        }
+        targets.extend(
+            broker
+                .broker_addrs()
+                .iter()
+                .map(|(broker_id, address)| (broker_name.to_string(), *broker_id, address.clone())),
+        );
+    }
+    targets.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    Ok((
+        targets
+            .into_iter()
+            .map(|(broker_name, _, address)| (broker_name, address))
+            .collect(),
+        failures,
+    ))
+}
+
 fn producer_connection_rows(
     broker_name: &str,
     table: ProducerTableInfo,
@@ -1223,6 +1739,144 @@ fn build_broker_summary(
     }
 }
 
+fn default_consumer_group_summary(group: &str) -> consumer::ConsumerGroupSummary {
+    consumer::ConsumerGroupSummary {
+        group: group.to_string(),
+        version: 0,
+        client_count: 0,
+        consume_type: format!("{:?}", ConsumeType::ConsumePassively),
+        message_model: format!("{:?}", MessageModel::Clustering),
+        consume_tps: 0.0,
+        diff_total: 0,
+    }
+}
+
+struct ConsumerConnectionSummary {
+    client_count: i32,
+    consume_type: String,
+    message_model: String,
+    version: i32,
+}
+
+struct ConsumerConnectionEvidence {
+    successful_sources: usize,
+    failures: Vec<AdminSourceFailure>,
+    summary: Option<ConsumerConnectionSummary>,
+}
+
+async fn collect_group_connection_summary(
+    admin: &DefaultMQAdminExt,
+    group: &str,
+) -> AdminResult<ConsumerConnectionEvidence> {
+    let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(group));
+    let route = match admin.examine_topic_route_info(retry_topic).await {
+        Ok(route) => route,
+        Err(error) => {
+            return Ok(ConsumerConnectionEvidence {
+                successful_sources: 0,
+                failures: vec![source_failure_from_error(
+                    AdminQuerySource::ConsumerConnection,
+                    group,
+                    &error,
+                )],
+                summary: None,
+            });
+        }
+    };
+    let Some(route) = route else {
+        return Ok(ConsumerConnectionEvidence {
+            successful_sources: 0,
+            failures: Vec::new(),
+            summary: Some(ConsumerConnectionSummary {
+                client_count: 0,
+                consume_type: format!("{:?}", ConsumeType::ConsumePassively),
+                message_model: format!("{:?}", MessageModel::Clustering),
+                version: 0,
+            }),
+        });
+    };
+
+    let mut successful_sources = 0usize;
+    let mut failures = Vec::new();
+    let mut clients = BTreeSet::new();
+    let mut consume_type = None;
+    let mut message_model = None;
+    let mut version = None;
+    for broker in route.broker_datas {
+        let Some(address) = broker.broker_addrs().get(&mix_all::MASTER_ID).cloned() else {
+            continue;
+        };
+        let broker_name = broker.broker_name().to_string();
+        match admin
+            .observe_consumer_connection_at(CheetahString::from(group), address)
+            .await
+        {
+            Ok(connection) => {
+                successful_sources += 1;
+                clients.extend(connection.get_connection_set().iter().map(|connection| {
+                    (
+                        connection.get_client_id().to_string(),
+                        connection.get_language().to_string(),
+                        connection.get_version(),
+                    )
+                }));
+                consume_type = consume_type.or_else(|| connection.get_consume_type());
+                message_model = message_model.or_else(|| connection.get_message_model());
+                let candidate = connection.compute_min_version();
+                if candidate != i32::MAX {
+                    version = Some(version.map_or(candidate, |current: i32| current.min(candidate)));
+                }
+            }
+            Err(error) => failures.push(source_failure_from_error(
+                AdminQuerySource::ConsumerConnection,
+                &broker_name,
+                &error,
+            )),
+        }
+    }
+    let client_count = i32::try_from(clients.len()).unwrap_or(i32::MAX);
+    Ok(ConsumerConnectionEvidence {
+        successful_sources,
+        failures,
+        summary: Some(ConsumerConnectionSummary {
+            client_count,
+            consume_type: format!("{:?}", consume_type.unwrap_or(ConsumeType::ConsumePassively)),
+            message_model: format!("{:?}", message_model.unwrap_or(MessageModel::Clustering)),
+            version: version.unwrap_or_default(),
+        }),
+    })
+}
+
+fn map_consumer_lag_result(stats: ConsumeStats) -> consumer::QueryConsumerLagResult {
+    let mut queues = stats.get_offset_table().keys().cloned().collect::<Vec<_>>();
+    queues.sort();
+    let mut result = consumer::QueryConsumerLagResult {
+        consume_tps: stats.get_consume_tps(),
+        ..consumer::QueryConsumerLagResult::default()
+    };
+    for queue in queues {
+        let Some(offset) = stats.get_offset_table().get(&queue) else {
+            continue;
+        };
+        let lag = offset.get_broker_offset() - offset.get_consumer_offset();
+        let inflight = offset.get_pull_offset() - offset.get_consumer_offset();
+        result.total_lag += lag;
+        result.inflight_total += inflight;
+        result.rows.push(consumer::ConsumerLagRow {
+            topic: queue.topic().to_string(),
+            broker_name: queue.broker_name().to_string(),
+            queue_id: queue.queue_id(),
+            broker_offset: offset.get_broker_offset(),
+            consumer_offset: offset.get_consumer_offset(),
+            lag,
+            inflight,
+            last_timestamp: offset.get_last_timestamp(),
+            client_ip: None,
+        });
+    }
+    result
+}
+
 fn runtime_value<'a>(runtime: Option<&'a KVTable>, key: &str) -> Option<&'a str> {
     runtime
         .and_then(|runtime| runtime.table.get(&CheetahString::from(key)))
@@ -1253,6 +1907,63 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
         view.http().status.as_u16(),
         view.is_retryable(),
     )
+}
+
+fn source_failure_from_error(
+    source: AdminQuerySource,
+    logical_target: &str,
+    error: &RocketMQError,
+) -> AdminSourceFailure {
+    let view = error.boundary_view();
+    AdminSourceFailure::new(
+        source,
+        query_failure_code(view.http().status.as_u16()),
+        view.is_retryable(),
+        logical_target,
+    )
+}
+
+fn source_failure_from_client(
+    source: AdminQuerySource,
+    logical_target: &str,
+    code: ReadFailureCode,
+    retryable: bool,
+) -> AdminSourceFailure {
+    let code = match code {
+        ReadFailureCode::SourceUnavailable => AdminQueryFailureCode::SourceUnavailable,
+        ReadFailureCode::Timeout => AdminQueryFailureCode::Timeout,
+        ReadFailureCode::PermissionDenied => AdminQueryFailureCode::PermissionDenied,
+        ReadFailureCode::NotFound => AdminQueryFailureCode::NotFound,
+        ReadFailureCode::RateLimited => AdminQueryFailureCode::RateLimited,
+        ReadFailureCode::InvalidResponse => AdminQueryFailureCode::InvalidResponse,
+    };
+    AdminSourceFailure::new(source, code, retryable, logical_target)
+}
+
+fn query_failure_code(http_status: u16) -> AdminQueryFailureCode {
+    match http_status {
+        401 | 403 => AdminQueryFailureCode::PermissionDenied,
+        404 => AdminQueryFailureCode::NotFound,
+        408 | 504 => AdminQueryFailureCode::Timeout,
+        429 => AdminQueryFailureCode::RateLimited,
+        400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
+        _ => AdminQueryFailureCode::SourceUnavailable,
+    }
+}
+
+fn stable_legacy_failures(failures: &[AdminSourceFailure]) -> Vec<String> {
+    failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "source={:?};code={:?};target={}",
+                failure.source(),
+                failure.code(),
+                failure.logical_target()
+            )
+            .to_ascii_lowercase()
+        })
+        .collect()
 }
 
 fn bounded_subscription_group_value(field: &'static str, value: i32, maximum: u32) -> AdminResult<u32> {

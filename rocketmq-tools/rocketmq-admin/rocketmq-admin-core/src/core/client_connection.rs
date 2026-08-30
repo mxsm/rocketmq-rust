@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::core::error::required;
+use crate::core::query::AdminQueryResult;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
@@ -122,10 +123,34 @@ pub trait ClientConnectionQueryAdmin: Send {
         request: &'a QueryConsumerConnectionsRequest,
     ) -> AdminFuture<'a, QueryConsumerConnectionsResult>;
 
+    /// Evidence-aware sibling of [`Self::query_consumer_connections`].
+    fn query_consumer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerConnectionsResult>> {
+        Box::pin(async move {
+            self.query_consumer_connections(request)
+                .await
+                .map(AdminQueryResult::complete)
+        })
+    }
+
     fn list_producer_connections<'a>(
         &'a mut self,
         request: &'a ListProducerConnectionsRequest,
     ) -> AdminFuture<'a, ListProducerConnectionsResult>;
+
+    /// Evidence-aware sibling of [`Self::list_producer_connections`].
+    fn list_producer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListProducerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListProducerConnectionsResult>> {
+        Box::pin(async move {
+            self.list_producer_connections(request)
+                .await
+                .map(AdminQueryResult::complete)
+        })
+    }
 }
 
 fn validated_limit(limit: usize) -> AdminResult<usize> {

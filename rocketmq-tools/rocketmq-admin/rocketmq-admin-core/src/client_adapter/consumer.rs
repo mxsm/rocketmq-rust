@@ -17,11 +17,13 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::{ConsumerAdmin as _, RouteAdmin as _, TopicAdmin as _};
+use rocketmq_client_rust::{ConsumerAdmin as _, ReadFailureCode, RouteAdmin as _, TopicAdmin as _};
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::message::MessageQueue;
 use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
@@ -41,6 +43,10 @@ use crate::core::consumer::ConsumerAdmin;
 use crate::core::consumer::ConsumerBatchMutationOutcome;
 use crate::core::consumer::ConsumerDiagnosticAdmin;
 use crate::core::consumer::DeleteSubscriptionGroupsRequest;
+use crate::core::query::AdminQueryFailureCode;
+use crate::core::query::AdminQueryResult;
+use crate::core::query::AdminQuerySource;
+use crate::core::query::AdminSourceFailure;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
@@ -131,6 +137,71 @@ impl ConsumerAdmin for AdminSession {
         })
     }
 
+    fn list_consumer_groups_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a consumer::ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<consumer::ListConsumerGroupsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let topic_list = self
+                .inner
+                .fetch_all_topic_list()
+                .await
+                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+            let mut groups = Vec::new();
+            let mut failures = Vec::new();
+            let mut successful_sources = 1usize;
+            for retry_topic in topic_list
+                .topic_list
+                .into_iter()
+                .filter(|topic| topic.starts_with(RETRY_GROUP_TOPIC_PREFIX))
+            {
+                let group = KeyBuilder::parse_group(retry_topic.as_str());
+                let mut summary = default_consumer_group_summary(&group);
+                let stats = rocketmq_client_rust::MQAdminReadExt::examine_consume_stats_with_evidence(
+                    &self.inner,
+                    CheetahString::from(group.as_str()),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+                match stats {
+                    Ok(stats) => {
+                        successful_sources += stats.successful_brokers;
+                        summary.consume_tps = stats.stats.get_consume_tps();
+                        summary.diff_total = stats.stats.compute_total_diff();
+                        failures.extend(stats.failures.into_iter().map(|failure| {
+                            source_failure_from_client(
+                                AdminQuerySource::ConsumerStatistics,
+                                failure.broker_name(),
+                                failure.code(),
+                                failure.retryable(),
+                            )
+                        }));
+                    }
+                    Err(error) => failures.push(source_failure(AdminQuerySource::ConsumerStatistics, &group, &error)),
+                }
+                let connection_evidence = collect_group_connection_evidence(&self.inner, &group).await;
+                successful_sources += connection_evidence.successful_sources;
+                failures.extend(connection_evidence.failures);
+                if let Some(connection) = connection_evidence.summary {
+                    summary.client_count = connection.client_count;
+                    summary.consume_type = connection.consume_type;
+                    summary.message_model = connection.message_model;
+                    summary.version = connection.version;
+                }
+                groups.push(summary);
+            }
+            groups.sort_by(|left, right| left.group.cmp(&right.group));
+            AdminQueryResult::from_sources(
+                consumer::ListConsumerGroupsResult { groups },
+                successful_sources,
+                failures,
+            )
+        })
+    }
+
     fn query_consumer_lag<'a>(
         &'a mut self,
         request: &'a consumer::QueryConsumerLagRequest,
@@ -181,6 +252,56 @@ impl ConsumerAdmin for AdminSession {
                 });
             }
             Ok(result)
+        })
+    }
+
+    fn query_consumer_lag_with_evidence<'a>(
+        &'a mut self,
+        request: &'a consumer::QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<consumer::QueryConsumerLagResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let stats = rocketmq_client_rust::MQAdminReadExt::examine_consume_stats_with_evidence(
+                &self.inner,
+                CheetahString::from(request.consumer_group.as_str()),
+                Some(CheetahString::from(request.topic.as_str())),
+                None,
+                None,
+            )
+            .await;
+            let stats = match stats {
+                Ok(stats) => stats,
+                Err(error) => {
+                    return AdminQueryResult::from_sources(
+                        consumer::QueryConsumerLagResult::default(),
+                        0,
+                        vec![source_failure(
+                            AdminQuerySource::ConsumerStatistics,
+                            &request.consumer_group,
+                            &error,
+                        )],
+                    );
+                }
+            };
+            let failures = stats
+                .failures
+                .into_iter()
+                .map(|failure| {
+                    source_failure_from_client(
+                        AdminQuerySource::ConsumerStatistics,
+                        failure.broker_name(),
+                        failure.code(),
+                        failure.retryable(),
+                    )
+                })
+                .collect();
+            let allocation = if request.include_client_ip {
+                message_queue_allocation(&self.inner, request.consumer_group.as_str()).await
+            } else {
+                HashMap::new()
+            };
+            let result = map_lag_result(stats.stats, &allocation);
+            AdminQueryResult::from_sources(result, stats.successful_brokers, failures)
         })
     }
 
@@ -660,6 +781,172 @@ fn now_timestamp_millis() -> i64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or_default()
+}
+
+fn default_consumer_group_summary(group: &str) -> consumer::ConsumerGroupSummary {
+    consumer::ConsumerGroupSummary {
+        group: group.to_string(),
+        version: 0,
+        client_count: 0,
+        consume_type: format!("{:?}", ConsumeType::ConsumePassively),
+        message_model: format!("{:?}", MessageModel::Clustering),
+        consume_tps: 0.0,
+        diff_total: 0,
+    }
+}
+
+struct GroupConnectionSummary {
+    client_count: i32,
+    consume_type: String,
+    message_model: String,
+    version: i32,
+}
+
+struct GroupConnectionEvidence {
+    successful_sources: usize,
+    failures: Vec<AdminSourceFailure>,
+    summary: Option<GroupConnectionSummary>,
+}
+
+async fn collect_group_connection_evidence(
+    admin: &rocketmq_client_rust::DefaultMQAdminExt,
+    group: &str,
+) -> GroupConnectionEvidence {
+    let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(group));
+    let route = match rocketmq_client_rust::MQAdminReadExt::examine_topic_route_info(admin, retry_topic).await {
+        Ok(route) => route,
+        Err(error) => {
+            return GroupConnectionEvidence {
+                successful_sources: 0,
+                failures: vec![source_failure(AdminQuerySource::ConsumerConnection, group, &error)],
+                summary: None,
+            };
+        }
+    };
+    let Some(route) = route else {
+        return GroupConnectionEvidence {
+            successful_sources: 0,
+            failures: Vec::new(),
+            summary: Some(GroupConnectionSummary {
+                client_count: 0,
+                consume_type: format!("{:?}", ConsumeType::ConsumePassively),
+                message_model: format!("{:?}", MessageModel::Clustering),
+                version: 0,
+            }),
+        };
+    };
+
+    let mut successful_sources = 0usize;
+    let mut failures = Vec::new();
+    let mut clients = std::collections::BTreeSet::new();
+    let mut consume_type = None;
+    let mut message_model = None;
+    let mut version = None;
+    for broker in route.broker_datas {
+        let Some(address) = broker.broker_addrs().get(&mix_all::MASTER_ID).cloned() else {
+            continue;
+        };
+        let broker_name = broker.broker_name().to_string();
+        match rocketmq_client_rust::MQAdminReadExt::observe_consumer_connection_at(
+            admin,
+            CheetahString::from(group),
+            address,
+        )
+        .await
+        {
+            Ok(connection) => {
+                successful_sources += 1;
+                clients.extend(connection.get_connection_set().iter().map(|connection| {
+                    (
+                        connection.get_client_id().to_string(),
+                        connection.get_language().to_string(),
+                        connection.get_version(),
+                    )
+                }));
+                consume_type = consume_type.or_else(|| connection.get_consume_type());
+                message_model = message_model.or_else(|| connection.get_message_model());
+                let candidate = connection.compute_min_version();
+                if candidate != i32::MAX {
+                    version = Some(version.map_or(candidate, |current: i32| current.min(candidate)));
+                }
+            }
+            Err(error) => failures.push(source_failure(
+                AdminQuerySource::ConsumerConnection,
+                &broker_name,
+                &error,
+            )),
+        }
+    }
+    GroupConnectionEvidence {
+        successful_sources,
+        failures,
+        summary: Some(GroupConnectionSummary {
+            client_count: i32::try_from(clients.len()).unwrap_or(i32::MAX),
+            consume_type: format!("{:?}", consume_type.unwrap_or(ConsumeType::ConsumePassively)),
+            message_model: format!("{:?}", message_model.unwrap_or(MessageModel::Clustering)),
+            version: version.unwrap_or_default(),
+        }),
+    }
+}
+
+fn map_lag_result(stats: ConsumeStats, allocation: &HashMap<MessageQueue, String>) -> consumer::QueryConsumerLagResult {
+    let mut queues = stats.get_offset_table().keys().cloned().collect::<Vec<_>>();
+    queues.sort();
+    let mut result = consumer::QueryConsumerLagResult {
+        consume_tps: stats.get_consume_tps(),
+        ..consumer::QueryConsumerLagResult::default()
+    };
+    for queue in queues {
+        let Some(offset) = stats.get_offset_table().get(&queue) else {
+            continue;
+        };
+        let lag = offset.get_broker_offset() - offset.get_consumer_offset();
+        let inflight = offset.get_pull_offset() - offset.get_consumer_offset();
+        result.total_lag += lag;
+        result.inflight_total += inflight;
+        result.rows.push(consumer::ConsumerLagRow {
+            topic: queue.topic().to_string(),
+            broker_name: queue.broker_name().to_string(),
+            queue_id: queue.queue_id(),
+            broker_offset: offset.get_broker_offset(),
+            consumer_offset: offset.get_consumer_offset(),
+            lag,
+            inflight,
+            last_timestamp: offset.get_last_timestamp(),
+            client_ip: allocation.get(&queue).cloned(),
+        });
+    }
+    result
+}
+
+fn source_failure(source: AdminQuerySource, logical_target: &str, error: &RocketMQError) -> AdminSourceFailure {
+    let view = error.boundary_view();
+    let code = match view.http().status.as_u16() {
+        401 | 403 => AdminQueryFailureCode::PermissionDenied,
+        404 => AdminQueryFailureCode::NotFound,
+        408 | 504 => AdminQueryFailureCode::Timeout,
+        429 => AdminQueryFailureCode::RateLimited,
+        400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
+        _ => AdminQueryFailureCode::SourceUnavailable,
+    };
+    AdminSourceFailure::new(source, code, view.is_retryable(), logical_target)
+}
+
+fn source_failure_from_client(
+    source: AdminQuerySource,
+    logical_target: &str,
+    code: ReadFailureCode,
+    retryable: bool,
+) -> AdminSourceFailure {
+    let code = match code {
+        ReadFailureCode::SourceUnavailable => AdminQueryFailureCode::SourceUnavailable,
+        ReadFailureCode::Timeout => AdminQueryFailureCode::Timeout,
+        ReadFailureCode::PermissionDenied => AdminQueryFailureCode::PermissionDenied,
+        ReadFailureCode::NotFound => AdminQueryFailureCode::NotFound,
+        ReadFailureCode::RateLimited => AdminQueryFailureCode::RateLimited,
+        ReadFailureCode::InvalidResponse => AdminQueryFailureCode::InvalidResponse,
+    };
+    AdminSourceFailure::new(source, code, retryable, logical_target)
 }
 
 fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {

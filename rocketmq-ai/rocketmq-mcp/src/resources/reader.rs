@@ -68,14 +68,7 @@ where
                     cluster: cluster.clone(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "overview",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data),
-            ))
+            Ok(live_payload(uri, "overview", output, |data| json!(data)))
         }
         ResourceKind::Topics => {
             let output = query
@@ -85,14 +78,7 @@ where
                     page: PageRequest::default(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "topics",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data.page),
-            ))
+            Ok(live_payload(uri, "topics", output, |data| json!(data.page)))
         }
         ResourceKind::Topic(topic) => {
             let output = query
@@ -102,14 +88,7 @@ where
                     page: PageRequest::default(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "topic",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data),
-            ))
+            Ok(live_payload(uri, "topic", output, |data| json!(data)))
         }
         ResourceKind::TopicRoute(topic) => {
             let output = query
@@ -119,14 +98,7 @@ where
                     page: PageRequest::default(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "route",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data),
-            ))
+            Ok(live_payload(uri, "route", output, |data| json!(data)))
         }
         ResourceKind::Brokers => {
             let output = query
@@ -134,14 +106,7 @@ where
                     cluster: cluster.clone(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "brokers",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data.brokers),
-            ))
+            Ok(live_payload(uri, "brokers", output, |data| json!(data.brokers)))
         }
         ResourceKind::Broker(broker) => {
             let output = query
@@ -156,14 +121,7 @@ where
                     cluster
                 )));
             }
-            Ok(live_payload(
-                uri,
-                "broker",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data),
-            ))
+            Ok(live_payload(uri, "broker", output, |data| json!(data)))
         }
         ResourceKind::ConsumerGroups => {
             let output = query
@@ -173,14 +131,7 @@ where
                     page: PageRequest::default(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "consumer_groups",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data.page),
-            ))
+            Ok(live_payload(uri, "consumer_groups", output, |data| json!(data.page)))
         }
         ResourceKind::ConsumerGroup(group) => {
             let output = query
@@ -203,14 +154,7 @@ where
                         cluster
                     ))
                 })?;
-            Ok(live_payload(
-                uri,
-                "consumer_group",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(consumer_group),
-            ))
+            Ok(live_payload(uri, "consumer_group", output, |_| json!(consumer_group)))
         }
         ResourceKind::ConsumerLag { group, topic } => {
             let output = query
@@ -221,37 +165,32 @@ where
                     page: PageRequest::default(),
                 })
                 .await?;
-            Ok(live_payload(
-                uri,
-                "consumer_lag",
-                output.observed_at,
-                output.freshness_ms,
-                output.cache_status,
-                json!(output.data),
-            ))
+            Ok(live_payload(uri, "consumer_lag", output, |data| json!(data)))
         }
     }
 }
 
-fn live_payload(
+fn live_payload<T>(
     uri: &RocketmqResourceUri,
     field: &str,
-    observed_at: String,
-    freshness_ms: u64,
-    cache_status: crate::model::contract::CacheStatus,
-    data: Value,
+    output: crate::model::contract::QueryResult<T>,
+    project: impl FnOnce(T) -> Value,
 ) -> Value {
+    let data = project(output.data);
     let mut payload = serde_json::Map::from_iter([
         ("schema_version".to_string(), json!(SCHEMA_VERSION)),
         ("resource".to_string(), json!(uri.as_string())),
         ("cluster".to_string(), json!(uri.cluster())),
-        ("observed_at".to_string(), json!(observed_at)),
-        ("freshness_ms".to_string(), json!(freshness_ms)),
-        ("cache_status".to_string(), json!(cache_status)),
+        ("observed_at".to_string(), json!(output.observed_at)),
+        ("freshness_ms".to_string(), json!(output.freshness_ms)),
+        ("cache_status".to_string(), json!(output.cache_status)),
         ("source".to_string(), json!("live")),
-        ("partial".to_string(), json!(false)),
-        ("warnings".to_string(), json!([])),
+        ("partial".to_string(), json!(output.partial)),
+        ("warnings".to_string(), json!(output.warnings)),
     ]);
+    if !output.source_failures.is_empty() {
+        payload.insert("source_failures".to_string(), json!(output.source_failures));
+    }
     payload.insert(field.to_string(), data);
     Value::Object(payload)
 }
@@ -310,6 +249,9 @@ fn resource_error(uri: &str, error: ToolExecutionError) -> ErrorData {
 mod tests {
     use crate::model::contract::Page;
     use crate::model::contract::QueryResult;
+    use crate::model::contract::QuerySource;
+    use crate::model::contract::SourceFailure;
+    use crate::model::contract::SourceFailureCode;
     use crate::model::diagnosis::DiagnosisReport;
     use crate::tools::broker_tools::DescribeBrokerArgs;
     use crate::tools::broker_tools::DescribeBrokerOutput;
@@ -497,6 +439,27 @@ mod tests {
         assert_eq!(payload["source"], "live");
         assert_eq!(payload["partial"], false);
         assert_eq!(payload["consumer_groups"]["total_count"], 1);
+    }
+
+    #[test]
+    fn query_backed_resource_payload_preserves_partial_evidence() {
+        let uri = RocketmqResourceUri::parse("rocketmq://clusters/local-dev/overview").unwrap();
+        let mut output = QueryResult::bypass(serde_json::json!({"brokers": []}));
+        output.partial = true;
+        output.warnings = vec!["source_failures_present".to_string()];
+        output.source_failures = vec![SourceFailure::new(
+            QuerySource::BrokerRuntime,
+            SourceFailureCode::Timeout,
+            true,
+            "broker-b",
+        )];
+
+        let payload = live_payload(&uri, "overview", output, |data| data);
+
+        assert_eq!(payload["partial"], true);
+        assert_eq!(payload["warnings"], json!(["source_failures_present"]));
+        assert_eq!(payload["source_failures"][0]["source"], "broker_runtime");
+        assert_eq!(payload["source_failures"][0]["logical_target"], "broker-b");
     }
 
     #[tokio::test]

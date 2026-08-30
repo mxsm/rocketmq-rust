@@ -257,6 +257,52 @@ expression: surface
               "generated_at"
             ],
             "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -286,6 +332,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -411,6 +466,52 @@ expression: surface
             ],
             "type": "object"
           },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          },
           "TopicListEntry": {
             "properties": {
               "cluster": {
@@ -462,6 +563,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -613,6 +723,52 @@ expression: surface
             ],
             "type": "object"
           },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          },
           "TopicRouteBroker": {
             "properties": {
               "broker_name": {
@@ -702,6 +858,15 @@ expression: surface
           "schema_version": {
             "type": "string"
           },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "warnings": {
             "items": {
               "type": "string"
@@ -778,6 +943,17 @@ expression: surface
             ],
             "type": "string"
           },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
           "QueryTopicRouteOutput": {
             "properties": {
               "brokers": {
@@ -844,6 +1020,41 @@ expression: surface
               "generated_at"
             ],
             "type": "object"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           },
           "TopicRouteBroker": {
             "properties": {
@@ -933,6 +1144,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -1096,6 +1316,52 @@ expression: surface
               "generated_at"
             ],
             "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1125,6 +1391,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -1278,6 +1553,17 @@ expression: surface
             ],
             "type": "object"
           },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
           "QueueLag": {
             "properties": {
               "broker_name": {
@@ -1323,6 +1609,41 @@ expression: surface
               "inflight"
             ],
             "type": "object"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1352,6 +1673,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -1490,6 +1820,52 @@ expression: surface
               "generated_at"
             ],
             "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1519,6 +1895,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -1928,6 +2313,17 @@ expression: surface
             ],
             "type": "object"
           },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
           "Recommendation": {
             "properties": {
               "action": {
@@ -1992,6 +2388,41 @@ expression: surface
               "unknown"
             ],
             "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2021,6 +2452,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -2213,6 +2653,52 @@ expression: surface
               "reset_consumer_offset"
             ],
             "type": "string"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2242,6 +2728,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -2417,6 +2912,52 @@ expression: surface
               "reset_consumer_offset"
             ],
             "type": "string"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2446,6 +2987,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -2617,6 +3167,52 @@ expression: surface
               "reset_consumer_offset"
             ],
             "type": "string"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2646,6 +3242,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -2821,6 +3426,52 @@ expression: surface
               "reset_consumer_offset"
             ],
             "type": "string"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2850,6 +3501,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {
@@ -3037,6 +3697,52 @@ expression: surface
               "reset_consumer_offset"
             ],
             "type": "string"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "subscription_groups",
+              "topic_route"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3066,6 +3772,15 @@ expression: surface
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "warnings": {
             "items": {

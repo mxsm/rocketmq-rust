@@ -58,6 +58,10 @@ pub use mq_admin_mutation_ext::TopicOffsetMutationTargetOutcome;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::BrokerReadFailure;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::ConsumeStatsReadResult;
+#[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::MQAdminMessageReadExt;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::MQAdminReadExt;
@@ -65,6 +69,8 @@ pub use mq_admin_read_ext::MQAdminReadExt;
 pub use mq_admin_read_ext::MQAdminTopicInventoryReadExt;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::MessageMetadataRead;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::ReadFailureCode;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::SubscriptionGroupConfigVersioned;
 #[cfg(feature = "admin-read")]

@@ -15,6 +15,7 @@
 use serde_json::Map;
 use serde_json::Value;
 
+use crate::model::contract::MAX_SOURCE_FAILURES;
 use crate::tools::executor::ToolExecutionError;
 
 const MAX_STRUCTURED_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -40,6 +41,17 @@ pub(crate) fn apply(value: Value) -> Result<Value, ToolExecutionError> {
 }
 
 pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Result<Value, ToolExecutionError> {
+    let source_failures_overflow = value
+        .get("source_failures")
+        .and_then(Value::as_array)
+        .is_some_and(|failures| failures.len() > MAX_SOURCE_FAILURES);
+    let source_metadata_changed = normalize_source_failure_metadata(&mut value);
+    if source_metadata_changed {
+        add_warning(&mut value, "source_failure_metadata_sanitized");
+    }
+    if source_failures_overflow {
+        add_warning(&mut value, "source_failures_truncated");
+    }
     remove_internal_topology(&mut value);
     let truncated = bound_rows(&mut value, policy.max_rows);
     if truncated {
@@ -81,7 +93,14 @@ fn mark_partial(value: &mut Value) {
         return;
     };
     object.insert("partial".to_string(), Value::Bool(true));
-    let warning = Value::String("output_rows_truncated".to_string());
+    add_warning(value, "output_rows_truncated");
+}
+
+fn add_warning(value: &mut Value, warning: &str) {
+    let Value::Object(object) = value else {
+        return;
+    };
+    let warning = Value::String(warning.to_string());
     match object.get_mut("warnings") {
         Some(Value::Array(warnings)) if !warnings.contains(&warning) => warnings.push(warning),
         Some(_) => {
@@ -91,6 +110,102 @@ fn mark_partial(value: &mut Value) {
             object.insert("warnings".to_string(), Value::Array(vec![warning]));
         }
     }
+}
+
+fn normalize_source_failure_metadata(value: &mut Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            let mut changed = object
+                .get_mut("source_failures")
+                .map(normalize_source_failure_array)
+                .unwrap_or(false);
+            for (key, value) in object.iter_mut() {
+                if key != "source_failures" {
+                    changed |= normalize_source_failure_metadata(value);
+                }
+            }
+            changed
+        }
+        Value::Array(values) => values.iter_mut().fold(false, |changed, value| {
+            normalize_source_failure_metadata(value) | changed
+        }),
+        _ => false,
+    }
+}
+
+fn normalize_source_failure_array(value: &mut Value) -> bool {
+    let Value::Array(failures) = value else {
+        *value = Value::Array(Vec::new());
+        return true;
+    };
+    let original = failures.clone();
+    let mut normalized = failures.iter().filter_map(normalize_source_failure).collect::<Vec<_>>();
+    normalized.sort_by_key(source_failure_key);
+    normalized.dedup();
+    normalized.truncate(MAX_SOURCE_FAILURES);
+    let changed = normalized != original;
+    *failures = normalized;
+    changed
+}
+
+fn normalize_source_failure(value: &Value) -> Option<Value> {
+    let object = value.as_object()?;
+    let source = object.get("source")?.as_str()?;
+    let code = object.get("code")?.as_str()?;
+    let retryable = object.get("retryable")?.as_bool()?;
+    let logical_target = safe_logical_target(object.get("logical_target")?.as_str()?);
+    if !matches!(
+        source,
+        "broker_runtime"
+            | "consumer_statistics"
+            | "consumer_connection"
+            | "producer_connection"
+            | "subscription_groups"
+            | "topic_route"
+    ) || !matches!(
+        code,
+        "source_unavailable" | "timeout" | "permission_denied" | "not_found" | "rate_limited" | "invalid_response"
+    ) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "source": source,
+        "code": code,
+        "retryable": retryable,
+        "logical_target": logical_target,
+    }))
+}
+
+fn source_failure_key(value: &Value) -> (String, String, String, bool) {
+    (
+        value["source"].as_str().unwrap_or_default().to_string(),
+        value["code"].as_str().unwrap_or_default().to_string(),
+        value["logical_target"].as_str().unwrap_or_default().to_string(),
+        value["retryable"].as_bool().unwrap_or_default(),
+    )
+}
+
+fn safe_logical_target(target: &str) -> String {
+    let target = target.trim();
+    if target.is_empty()
+        || target.len() > 128
+        || target.parse::<std::net::IpAddr>().is_ok()
+        || target.parse::<std::net::SocketAddr>().is_ok()
+        || target.contains([':', '/', '\\', '@', '=', '&', '?'])
+        || target.chars().any(char::is_control)
+    {
+        return "unknown".to_string();
+    }
+    target
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn remove_internal_topology(value: &mut Value) {
@@ -181,6 +296,77 @@ mod tests {
 
         assert_eq!(output["partial"], true);
         assert_eq!(output["warnings"][0], "output_rows_truncated");
+        assert_eq!(output["data"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn source_failure_policy_sanitizes_deduplicates_orders_and_caps_metadata() {
+        let mut failures = (0..20)
+            .rev()
+            .map(|index| {
+                json!({
+                    "source": "broker_runtime",
+                    "code": "source_unavailable",
+                    "retryable": true,
+                    "logical_target": format!("broker-{index:02}"),
+                    "raw_error": "secret backend body"
+                })
+            })
+            .collect::<Vec<_>>();
+        failures.push(failures[19].clone());
+        failures.push(json!({
+            "source": "broker_runtime",
+            "code": "source_unavailable",
+            "retryable": true,
+            "logical_target": "10.0.0.1:10911"
+        }));
+        let output = apply(json!({
+            "partial": true,
+            "warnings": ["source_failures_present"],
+            "source_failures": failures,
+            "data": {}
+        }))
+        .unwrap();
+
+        let normalized = output["source_failures"].as_array().unwrap();
+        assert_eq!(normalized.len(), MAX_SOURCE_FAILURES);
+        assert_eq!(normalized[0]["logical_target"], "broker-00");
+        assert!(output["warnings"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("source_failures_truncated")));
+        let serialized = output.to_string();
+        assert!(!serialized.contains("10.0.0.1"));
+        assert!(!serialized.contains("secret backend body"));
+        assert!(!serialized.contains("raw_error"));
+    }
+
+    #[test]
+    fn row_truncation_composes_with_existing_source_failure_metadata() {
+        let output = apply_with_policy(
+            json!({
+                "partial": true,
+                "warnings": ["source_failures_present"],
+                "source_failures": [{
+                    "source": "consumer_statistics",
+                    "code": "timeout",
+                    "retryable": true,
+                    "logical_target": "broker-a"
+                }],
+                "data": [1, 2, 3]
+            }),
+            OutputPolicy {
+                max_bytes: 1024,
+                max_rows: 2,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output["partial"], true);
+        let warnings = output["warnings"].as_array().unwrap();
+        assert!(warnings.contains(&json!("source_failures_present")));
+        assert!(warnings.contains(&json!("output_rows_truncated")));
+        assert_eq!(output["source_failures"].as_array().unwrap().len(), 1);
         assert_eq!(output["data"].as_array().unwrap().len(), 2);
     }
 }

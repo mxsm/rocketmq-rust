@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::core::error::required;
+use crate::core::query::AdminQueryResult;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
@@ -83,6 +84,30 @@ impl ProbeBrokerRuntimeRequest {
 pub struct ProbeBrokerRuntimeResult {
     pub attempted: usize,
     pub failures: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeBrokerRuntimeTargetRequest {
+    pub cluster: String,
+    pub broker_name: String,
+}
+
+impl ProbeBrokerRuntimeTargetRequest {
+    pub fn try_new(cluster: impl Into<String>, broker_name: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            broker_name: required("broker_name", broker_name)?,
+        })
+    }
+}
+
+/// Exact, uncapped status for one logical Broker target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerRuntimeTargetStatus {
+    Available,
+    SourceUnavailable,
+    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -410,6 +435,32 @@ pub trait BrokerAdmin: Send {
         request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
 
+    fn list_brokers_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListBrokersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListBrokersResult>> {
+        Box::pin(async move { self.list_brokers(request).await.map(AdminQueryResult::complete) })
+    }
+
+    fn probe_broker_runtime_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
+        Box::pin(async move { self.probe_broker_runtime(request).await.map(AdminQueryResult::complete) })
+    }
+
+    fn probe_broker_runtime_target<'a>(
+        &'a mut self,
+        _request: &'a ProbeBrokerRuntimeTargetRequest,
+    ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "probe_broker_runtime_target",
+                "exact Broker target probing is not implemented by this adapter",
+            ))
+        })
+    }
+
     fn query_broker_diagnostics<'a>(
         &'a mut self,
         request: &'a QueryBrokerDiagnosticsRequest,
@@ -441,6 +492,35 @@ pub trait BrokerQueryAdmin: Send {
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
+
+    /// Evidence-aware sibling of [`Self::list_brokers`].
+    fn list_brokers_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListBrokersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListBrokersResult>> {
+        Box::pin(async move { self.list_brokers(request).await.map(AdminQueryResult::complete) })
+    }
+
+    /// Evidence-aware sibling of [`Self::probe_broker_runtime`].
+    fn probe_broker_runtime_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
+        Box::pin(async move { self.probe_broker_runtime(request).await.map(AdminQueryResult::complete) })
+    }
+
+    /// Classifies one target independently of bounded public failure evidence.
+    fn probe_broker_runtime_target<'a>(
+        &'a mut self,
+        _request: &'a ProbeBrokerRuntimeTargetRequest,
+    ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "probe_broker_runtime_target",
+                "exact Broker target probing is not implemented by this adapter",
+            ))
+        })
+    }
 
     fn query_broker_diagnostics<'a>(
         &'a mut self,
@@ -475,6 +555,27 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
         request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, ProbeBrokerRuntimeResult> {
         BrokerAdmin::probe_broker_runtime(self, request)
+    }
+
+    fn list_brokers_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListBrokersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListBrokersResult>> {
+        BrokerAdmin::list_brokers_with_evidence(self, request)
+    }
+
+    fn probe_broker_runtime_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
+        BrokerAdmin::probe_broker_runtime_with_evidence(self, request)
+    }
+
+    fn probe_broker_runtime_target<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeTargetRequest,
+    ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
+        BrokerAdmin::probe_broker_runtime_target(self, request)
     }
 
     fn query_broker_diagnostics<'a>(

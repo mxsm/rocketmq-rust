@@ -22,6 +22,10 @@ pub use crate::admin::BrokerAdmin;
 pub use crate::admin::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::BrokerConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::BrokerReadFailure;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::ConsumeStatsReadResult;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::ConsumerAdmin;
 pub use crate::admin::DefaultMQAdminExt;
@@ -38,6 +42,8 @@ pub use crate::admin::MQAdminTopicInventoryReadExt;
 pub use crate::admin::MessageMetadataRead;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::OffsetAdmin;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::ReadFailureCode;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::RouteAdmin;
 #[cfg(feature = "admin-mutation")]

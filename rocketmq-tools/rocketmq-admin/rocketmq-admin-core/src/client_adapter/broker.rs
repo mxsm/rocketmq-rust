@@ -14,6 +14,7 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
+use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 
 use crate::client_adapter::lifecycle::AdminSession;
@@ -22,15 +23,21 @@ use crate::core::broker::project_broker_log_filter_state;
 use crate::core::broker::BrokerAdmin;
 use crate::core::broker::BrokerAllowlistedConfig;
 use crate::core::broker::BrokerLogFilterState;
+use crate::core::broker::BrokerRuntimeTargetStatus;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::broker::ProbeBrokerRuntimeTargetRequest;
 use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
 use crate::core::broker::QueryBrokerLogFilterStateRequest;
+use crate::core::query::AdminQueryFailureCode;
+use crate::core::query::AdminQueryResult;
+use crate::core::query::AdminQuerySource;
+use crate::core::query::AdminSourceFailure;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 
@@ -77,6 +84,77 @@ impl BrokerAdmin for AdminSession {
         })
     }
 
+    fn list_brokers_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListBrokersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListBrokersResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let now_millis = self.clock.now_millis();
+            let mut brokers = Vec::new();
+            let mut successful_sources = 0usize;
+            let mut failures = Vec::new();
+            for broker_name in broker_names {
+                let Some(broker_data) = broker_table.get(&broker_name) else {
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                };
+                if broker_data.broker_addrs().is_empty() {
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                }
+                for (broker_id, broker_addr) in broker_data.broker_addrs() {
+                    match self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
+                        Ok(runtime) => {
+                            successful_sources += 1;
+                            brokers.push(build_broker_summary(
+                                request.cluster.clone(),
+                                broker_name.to_string(),
+                                *broker_id,
+                                broker_addr.to_string(),
+                                Some(&runtime),
+                                now_millis,
+                            ));
+                        }
+                        Err(error) => failures.push(source_failure(
+                            AdminQuerySource::BrokerRuntime,
+                            broker_name.as_str(),
+                            &error,
+                        )),
+                    }
+                }
+            }
+            brokers.sort_by(|left, right| {
+                left.broker_name
+                    .cmp(&right.broker_name)
+                    .then(left.broker_id.cmp(&right.broker_id))
+            });
+            AdminQueryResult::from_sources(ListBrokersResult { brokers }, successful_sources, failures)
+        })
+    }
+
     fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
@@ -108,6 +186,116 @@ impl BrokerAdmin for AdminSession {
                 }
             }
             Ok(result)
+        })
+    }
+
+    fn probe_broker_runtime_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let mut result = ProbeBrokerRuntimeResult::default();
+            let mut successful_sources = 0usize;
+            let mut failures = Vec::new();
+            for broker_name in broker_names {
+                let Some(broker_data) = broker_table.get(&broker_name) else {
+                    result.attempted += 1;
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                };
+                if broker_data.broker_addrs().is_empty() {
+                    result.attempted += 1;
+                    failures.push(AdminSourceFailure::new(
+                        AdminQuerySource::BrokerRuntime,
+                        AdminQueryFailureCode::InvalidResponse,
+                        false,
+                        broker_name.as_str(),
+                    ));
+                    continue;
+                }
+                for broker_addr in broker_data.broker_addrs().values() {
+                    result.attempted += 1;
+                    match self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
+                        Ok(_) => successful_sources += 1,
+                        Err(error) => failures.push(source_failure(
+                            AdminQuerySource::BrokerRuntime,
+                            broker_name.as_str(),
+                            &error,
+                        )),
+                    }
+                }
+            }
+            result.failures = failures
+                .iter()
+                .map(|failure| {
+                    format!(
+                        "source={:?};code={:?};target={}",
+                        failure.source(),
+                        failure.code(),
+                        failure.logical_target()
+                    )
+                    .to_ascii_lowercase()
+                })
+                .collect();
+            AdminQueryResult::from_sources(result, successful_sources, failures)
+        })
+    }
+
+    fn probe_broker_runtime_target<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeTargetRequest,
+    ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            if !broker_names
+                .iter()
+                .any(|broker_name| broker_name.as_str() == request.broker_name)
+            {
+                return Ok(BrokerRuntimeTargetStatus::NotFound);
+            }
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let Some(broker_data) = broker_table.get(request.broker_name.as_str()) else {
+                return Ok(BrokerRuntimeTargetStatus::SourceUnavailable);
+            };
+            for broker_addr in broker_data
+                .broker_addrs()
+                .values()
+                .filter(|broker_addr| !broker_addr.as_str().trim().is_empty())
+            {
+                if self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await.is_ok() {
+                    return Ok(BrokerRuntimeTargetStatus::Available);
+                }
+            }
+            Ok(BrokerRuntimeTargetStatus::SourceUnavailable)
         })
     }
 
@@ -201,6 +389,19 @@ impl BrokerAdmin for AdminSession {
             Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
+}
+
+fn source_failure(source: AdminQuerySource, logical_target: &str, error: &RocketMQError) -> AdminSourceFailure {
+    let view = error.boundary_view();
+    let code = match view.http().status.as_u16() {
+        401 | 403 => AdminQueryFailureCode::PermissionDenied,
+        404 => AdminQueryFailureCode::NotFound,
+        408 | 504 => AdminQueryFailureCode::Timeout,
+        429 => AdminQueryFailureCode::RateLimited,
+        400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
+        _ => AdminQueryFailureCode::SourceUnavailable,
+    };
+    AdminSourceFailure::new(source, code, view.is_retryable(), logical_target)
 }
 
 fn build_broker_summary(
