@@ -18,7 +18,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 
 use super::PullMessageProcessor;
 use crate::long_polling::pull_deferred::PullHookMetadata;
@@ -42,7 +42,7 @@ where
         &self,
         resume: ResumePull,
         reason: DeferredWakeReason,
-    ) -> RocketMQResult<ResponsePlan> {
+    ) -> RocketMQResult<RemotingResponse> {
         let (request, criteria, _wait_deadline) = resume.into_parts();
         drop(criteria);
         let (request_code, header, effective_peer, session_id, hook_metadata) = request.into_parts();
@@ -67,7 +67,7 @@ where
         hook_metadata: &PullHookMetadata,
         broadcast_client_resolver: &PullBroadcastClientResolver<'_>,
         reason: DeferredWakeReason,
-    ) -> RocketMQResult<ResponsePlan> {
+    ) -> RocketMQResult<RemotingResponse> {
         match reason {
             DeferredWakeReason::MessageArrived | DeferredWakeReason::Timeout | DeferredWakeReason::ForcedRefresh => {}
         }
@@ -82,7 +82,7 @@ where
             )
             .await?
         {
-            PullMessageResult::Reply(parts) => parts.into_response_plan(),
+            PullMessageResult::Reply(parts) => parts.into_remoting_response(),
             PullMessageResult::Suspend(_) => Err(RocketMQError::internal(
                 "resume-pull",
                 PullResumeError::UnexpectedSuspension,

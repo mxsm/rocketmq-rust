@@ -35,9 +35,11 @@ fn success_reply(polling_full: bool) -> rocketmq_error::RocketMQResult<HandlerOu
         has_msg: false,
         polling_full,
     };
-    ResponsePlan::command(application_remoting_command_factory().create_success_response_command_with_header(header))
-        .map(HandlerOutcome::Reply)
-        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    RemotingResponse::command(
+        application_remoting_command_factory().create_success_response_command_with_header(header),
+    )
+    .map(HandlerOutcome::Reply)
+    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
 }
 
 fn limited_service(

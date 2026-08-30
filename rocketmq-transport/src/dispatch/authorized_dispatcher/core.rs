@@ -46,12 +46,12 @@ use crate::dispatch::HandlerOutcomeContractError;
 use crate::dispatch::InternalProcessorCandidate;
 use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestTransport;
 use crate::dispatch::ResponseBindingError;
+use crate::dispatch::ResponseBuildError;
 use crate::dispatch::ResponseErrorKind;
-use crate::dispatch::ResponsePlan;
-use crate::dispatch::ResponsePlanError;
 use crate::dispatch::ResponseSink;
 use crate::dispatch::WriteProgress;
 use crate::hook_registry::HookRegistry;
@@ -81,7 +81,7 @@ pub(crate) enum AuthorizedDispatchError {
     #[error(transparent)]
     RequestBuild(#[from] RemotingRequestBuildError),
     #[error(transparent)]
-    ResponsePlan(#[from] ResponsePlanError),
+    ResponseConstruction(#[from] ResponseBuildError),
     #[error(transparent)]
     ResponseBinding(#[from] ResponseBindingError),
     #[error(transparent)]
@@ -108,7 +108,7 @@ impl AuthorizedDispatchError {
             Self::Admission(_) => "admission",
             Self::BoundaryResponse(_) => "boundary_response",
             Self::RequestBuild(_) => "request_build",
-            Self::ResponsePlan(_) => "response_plan",
+            Self::ResponseConstruction(_) => "response_construction",
             Self::ResponseBinding(_) => "response_binding",
             Self::HandlerContract(_) => "handler_contract",
             Self::DeferredCommit(error) => error.category(),
@@ -175,7 +175,7 @@ where
 impl From<DispatchProcessorError> for AuthorizedDispatchError {
     fn from(error: DispatchProcessorError) -> Self {
         match error {
-            DispatchProcessorError::ResponsePlan(error) => Self::ResponsePlan(error),
+            DispatchProcessorError::ResponseConstruction(error) => Self::ResponseConstruction(error),
             DispatchProcessorError::HandlerContract(error) => Self::HandlerContract(error),
         }
     }
@@ -410,15 +410,15 @@ where
             ));
         };
         let result = async {
-            let response = ResponseSink::network_plan(session.clone(), class, builder.control().clone());
+            let sink = ResponseSink::network(session.clone(), class, builder.control().clone());
 
             if builder.deadline().is_some_and(|deadline| deadline.is_expired()) {
-                let plan = ResponsePlan::command(deadline_response(original.original_opaque()))?;
-                let candidate = processor.deadline_candidate(plan);
+                let response = RemotingResponse::command(deadline_response(original.original_opaque()))?;
+                let candidate = processor.deadline_candidate(response);
                 return self
                     .finish_candidate(
                         processor,
-                        response,
+                        sink,
                         original,
                         request_started,
                         candidate,
@@ -432,7 +432,7 @@ where
                 return self
                     .finish_candidate(
                         processor,
-                        response,
+                        sink,
                         original,
                         request_started,
                         candidate,
@@ -447,7 +447,7 @@ where
             } else {
                 processor.install_deferred_response(
                     builder,
-                    &response,
+                    &sink,
                     &session,
                     ordering,
                     class,
@@ -466,14 +466,14 @@ where
                     remote_address,
                     &session,
                     &network_session,
-                    &response,
+                    &sink,
                 )
                 .await?;
             let InternalProcessorCandidate { outcome, failure } = candidate;
             let outcome = processor.resolve_outcome(&mut request, outcome)?;
             self.finish_candidate(
                 processor,
-                response,
+                sink,
                 original,
                 request_started,
                 InternalProcessorCandidate { outcome, failure },
@@ -491,7 +491,7 @@ where
     async fn finish_candidate(
         &self,
         _processor: &D,
-        response: ResponseSink,
+        sink: ResponseSink,
         original: OriginalRequestIdentity,
         _request_started: Instant,
         candidate: InternalProcessorCandidate,
@@ -500,13 +500,13 @@ where
     ) -> Result<(), AuthorizedDispatchError> {
         let InternalProcessorCandidate { outcome, failure } = candidate;
         match outcome {
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(plan)) => {
-                let response_code = plan.response_code();
+            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)) => {
+                let response_code = response.response_code();
                 if failure.is_some() {
                     metrics.complete_process_request_failed(response_code);
                 }
                 if original.is_one_way() {
-                    drop(plan);
+                    drop(response);
                     if failure.is_none() {
                         metrics.complete_oneway();
                     }
@@ -515,7 +515,7 @@ where
                     }
                     return Ok(());
                 }
-                deliver_and_observe(response, original, plan, failure.is_some(), metrics).await
+                deliver_and_observe(sink, original, response, failure.is_some(), metrics).await
             }
             InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Deferred(registration)) => {
                 if original.is_one_way() {
@@ -639,17 +639,17 @@ where
 }
 
 async fn deliver_and_observe(
-    response: ResponseSink,
+    sink: ResponseSink,
     original: OriginalRequestIdentity,
-    plan: ResponsePlan,
+    response: RemotingResponse,
     failure_recorded: bool,
     metrics: &mut crate::dispatch::DispatchMetricsGuard,
 ) -> Result<(), AuthorizedDispatchError> {
-    let response_code = plan.response_code();
-    let body_kind = plan.body_kind();
-    let bound = plan.bind(original)?;
+    let response_code = response.response_code();
+    let body_kind = response.body_kind();
+    let bound = response.bind(original)?;
     let write_started = Instant::now();
-    let result = response.send_plan(bound).await;
+    let result = sink.send_response(bound).await;
     let write_elapsed = write_started.elapsed();
     let failure = result
         .as_ref()
@@ -703,17 +703,17 @@ async fn send_boundary_response(
         return Ok(());
     }
     if let Some(observation) = observation {
-        let plan = ResponsePlan::command(response)?;
-        let response_code = plan.response_code();
-        let body_kind = plan.body_kind();
-        let bound = plan.bind(original)?;
-        let response = ResponseSink::network_plan(
+        let response = RemotingResponse::command(response)?;
+        let response_code = response.response_code();
+        let body_kind = response.body_kind();
+        let bound = response.bind(original)?;
+        let sink = ResponseSink::network(
             session.clone(),
             AdmissionClass::Control,
             control.boundary_response_control(),
         );
         let write_started = Instant::now();
-        let result = response.send_plan(bound).await;
+        let result = sink.send_response(bound).await;
         let write_elapsed = write_started.elapsed();
         observation.complete_boundary_rejection(
             reason,

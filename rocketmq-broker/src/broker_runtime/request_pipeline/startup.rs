@@ -320,8 +320,8 @@ mod tests {
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
     use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
-    use rocketmq_transport::api::ResponsePlan;
 
     use super::prepared_transport_security;
     use crate::processor::dispatcher::BrokerRequestProcessor;
@@ -336,7 +336,7 @@ mod tests {
     impl RequestProcessor for StartupProbe {
         async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(
+            Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(
                 ResponseCode::Success as i32,
             )))
         }
@@ -398,7 +398,7 @@ mod tests {
             RemotingCommand::create_remoting_command(STARTUP_PROBE_CODE),
         )
         .await
-        .expect("Broker ACL denial should be a response plan");
+        .expect("Broker ACL denial should be a remoting response");
         let EmbeddedDispatchOutcome::Reply(plan) = denied else {
             panic!("unconfigured Broker ACL should fail closed with one reply")
         };

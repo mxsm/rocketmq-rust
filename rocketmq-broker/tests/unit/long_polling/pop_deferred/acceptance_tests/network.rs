@@ -44,11 +44,11 @@ use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::test_support::Connection;
@@ -186,7 +186,7 @@ impl RequestProcessor for DeferredTestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if request.command().code() == SENTINEL_CODE {
             self.barrier.commit_observed.notify_one();
-            return ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+            return RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
             .map(HandlerOutcome::Reply)
@@ -393,7 +393,7 @@ async fn prepared_arrival_and_timeout_reexecute_then_write_one_bound_frame() {
                             assert_eq!(reason, wake_reason);
                             assert_eq!(resume.request().caller_host().as_str(), registered.caller.to_string());
                             reread_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                            RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                                 ResponseCode::PollingTimeout,
                             ))
                             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -641,7 +641,7 @@ async fn service_shutdown_drains_accepted_resume_to_parent_cancelled_without_a_f
                         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         started.notify_one();
                         release.notified().await;
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::PollingTimeout,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))

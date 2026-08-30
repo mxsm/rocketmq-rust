@@ -43,7 +43,7 @@ where
         harness.session.view().state().clone(),
         &harness.parent,
     );
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let responder = sink
         .deferred_seed_for_test(telemetry, harness.session.view().id(), control)
         .into_responder(original);

@@ -59,8 +59,8 @@ use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrigin;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::TakeDeferredResponderError;
 
@@ -676,7 +676,7 @@ impl NotificationDeferredService {
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -701,7 +701,7 @@ impl NotificationDeferredService {
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);

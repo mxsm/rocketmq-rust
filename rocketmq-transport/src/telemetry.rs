@@ -61,7 +61,7 @@ fn request_span(
         rocketmq.request.principal_kind = principal_kind(authentication),
         rocketmq.request.deadline_bucket = deadline_bucket(deadline),
         outcome = tracing::field::Empty,
-        response_plan_kind = tracing::field::Empty,
+        response_body_kind = tracing::field::Empty,
         response_disposition = tracing::field::Empty,
         error_kind = tracing::field::Empty,
         write_progress = tracing::field::Empty,
@@ -340,7 +340,7 @@ impl RequestObservation {
         &self,
         mode: ResponseObservationMode,
         response_code: i32,
-        plan_kind: ResponseBodyKind,
+        body_kind: ResponseBodyKind,
         write_elapsed: Duration,
         result: Result<ResponseReceipt, (ResponseErrorKind, Option<WriteProgress>)>,
     ) {
@@ -356,7 +356,7 @@ impl RequestObservation {
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 Some(response_code),
-                Some(plan_kind),
+                Some(body_kind),
                 mode,
                 outcome,
             ),
@@ -368,7 +368,7 @@ impl RequestObservation {
         &self,
         reason: BoundaryRejectionReason,
         response_code: Option<i32>,
-        plan_kind: Option<ResponseBodyKind>,
+        body_kind: Option<ResponseBodyKind>,
         write_elapsed: Option<Duration>,
         outcome: ResponseObservationOutcome,
     ) {
@@ -377,7 +377,7 @@ impl RequestObservation {
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 response_code,
-                plan_kind,
+                body_kind,
                 if response_code.is_some() {
                     ResponseObservationMode::Inline
                 } else {
@@ -408,7 +408,7 @@ impl RequestObservation {
         &self,
         mode: ResponseObservationMode,
         response_code: Option<i32>,
-        plan_kind: Option<ResponseBodyKind>,
+        body_kind: Option<ResponseBodyKind>,
         progress: Option<WriteProgress>,
     ) {
         self.complete(
@@ -416,7 +416,7 @@ impl RequestObservation {
                 self.inner.original.request_id(),
                 self.inner.original.original_code(),
                 response_code,
-                plan_kind,
+                body_kind,
                 mode,
                 ResponseObservationOutcome::Failed { kind: None, progress },
             ),
@@ -494,8 +494,8 @@ impl RequestObservation {
             "outcome",
             rejection.map_or_else(|| observation_outcome_label(metadata.outcome()), |_| "rejected"),
         );
-        if let Some(plan_kind) = metadata.plan_kind() {
-            self.inner.span.record("response_plan_kind", plan_kind.as_str());
+        if let Some(body_kind) = metadata.body_kind() {
+            self.inner.span.record("response_body_kind", body_kind.as_str());
         }
         match metadata.outcome() {
             ResponseObservationOutcome::Written(receipt) => {
@@ -557,7 +557,7 @@ fn complete_request_metrics(metrics: &mut TransportRequestMetricsGuard, metadata
             metrics.complete_deferred_resumed(metadata.response_code().unwrap_or(-1));
         }
         ResponseObservationOutcome::Written(_) => {
-            if let (Some(response_code), Some(body_kind)) = (metadata.response_code(), metadata.plan_kind()) {
+            if let (Some(response_code), Some(body_kind)) = (metadata.response_code(), metadata.body_kind()) {
                 metrics.complete_reply(response_code, body_kind);
             } else {
                 metrics.complete_process_request_failed(metadata.response_code().unwrap_or(-1));

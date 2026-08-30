@@ -45,10 +45,10 @@ use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::api::WriteProgress;
@@ -339,7 +339,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
             SubscriptionData::default(),
             Arc::new(MatchAll),
         );
-        let fallback = ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+        let fallback = RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::PullNotFound,
         ))
         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
@@ -388,7 +388,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
 }
 
 fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-    ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)
@@ -585,10 +585,10 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
                             let body =
                                 Bytes::from_owner(CountingBodyOwner::new(RESPONSE_BODY.to_vec(), response_owner_drops));
                             let _ = plan_ready_tx.send(());
-                            release_plan_rx
-                                .await
-                                .map_err(|_| RocketMQError::illegal_argument("Pull response plan release closed"))?;
-                            ResponsePlan::bytes(
+                            release_plan_rx.await.map_err(|_| {
+                                RocketMQError::illegal_argument("Pull remoting response release closed")
+                            })?;
+                            RemotingResponse::bytes(
                                 RemotingCommand::create_response_command_with_code(ResponseCode::PullNotFound),
                                 body,
                             )
@@ -599,7 +599,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
                 let _ = receipt_tx.send(result);
             })
             .expect("spawn owned Pull resume");
-        plan_ready_rx.await.expect("owner-backed Pull response plan ready");
+        plan_ready_rx.await.expect("owner-backed Pull remoting response ready");
         let active_resume = service.resource_snapshot();
         assert_eq!(active_resume.resume_executions, 1);
         assert_eq!(active_resume.resume_execution_bytes, 321);
@@ -612,7 +612,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
         }
         release_plan_tx
             .send(())
-            .expect("release owner-backed Pull response plan");
+            .expect("release owner-backed Pull remoting response");
 
         let response = client
             .receive_command()
@@ -721,7 +721,7 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
                         release_plan_rx
                             .await
                             .map_err(|_| RocketMQError::illegal_argument("partial Pull plan release closed"))?;
-                        ResponsePlan::bytes(
+                        RemotingResponse::bytes(
                             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                             body,
                         )
@@ -733,9 +733,11 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
         })
         .expect("spawn owned partial-write Pull resume");
 
-    plan_ready_rx.await.expect("partial Pull response plan ready");
+    plan_ready_rx.await.expect("partial Pull remoting response ready");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 0);
-    release_plan_tx.send(()).expect("release partial Pull response plan");
+    release_plan_tx
+        .send(())
+        .expect("release partial Pull remoting response");
     let mut socket = framed.into_inner();
     let mut prefix = [0_u8; 64];
     socket

@@ -83,22 +83,28 @@ fn response_parts_reject_every_invalid_head_before_storing_an_owner() {
     let with_body = response_head().set_body(Bytes::from_static(b"body"));
     assert!(matches!(
         BrokerResponseParts::command(with_body),
-        Err(BrokerResponseBuildError::ResponsePlan(ResponsePlanError::HeadHasBody))
+        Err(BrokerResponseBuildError::ResponseConstruction(
+            ResponseBuildError::HeadHasBody
+        ))
     ));
 
     assert!(matches!(
         BrokerResponseParts::command(RemotingCommand::create_remoting_command(11)),
-        Err(BrokerResponseBuildError::ResponsePlan(ResponsePlanError::RequestHead))
+        Err(BrokerResponseBuildError::ResponseConstruction(
+            ResponseBuildError::RequestHead
+        ))
     ));
 
     assert!(matches!(
         BrokerResponseParts::command(response_head().mark_oneway_rpc()),
-        Err(BrokerResponseBuildError::ResponsePlan(ResponsePlanError::OneWayHead))
+        Err(BrokerResponseBuildError::ResponseConstruction(
+            ResponseBuildError::OneWayHead
+        ))
     ));
 }
 
 #[test]
-fn command_conversion_extracts_the_body_before_plan_validation() {
+fn command_conversion_extracts_the_body_before_response_validation() {
     let parts = BrokerResponseParts::from_command(response_head().set_body(Bytes::from_static(b"body")))
         .expect("response body should become the affine bytes owner");
     let BrokerResponseBodyOwner::Bytes(body) = parts.body() else {
@@ -106,11 +112,11 @@ fn command_conversion_extracts_the_body_before_plan_validation() {
     };
     assert_eq!(body.as_ref(), b"body");
 
-    let plan = parts
-        .into_response_plan()
-        .expect("converted command should build a response plan");
-    assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
-    assert_eq!(plan.body_len(), 4);
+    let response = parts
+        .into_remoting_response()
+        .expect("converted command should build a remoting response");
+    assert_eq!(response.body_kind(), ResponseBodyKind::Bytes);
+    assert_eq!(response.body_len(), 4);
 }
 
 #[test]
@@ -124,10 +130,10 @@ fn immediate_leaf_mapper_turns_only_typed_header_failures_into_replies() {
         "ordinary leaf returned no response",
     )
     .expect("typed request-header failures should become a Broker reply");
-    let HandlerOutcome::Reply(plan) = outcome else {
+    let HandlerOutcome::Reply(response) = outcome else {
         panic!("ordinary leaf error mapping must produce one reply")
     };
-    assert_eq!(plan.response_code(), expected_response_code);
+    assert_eq!(response.response_code(), expected_response_code);
 
     let non_header = RocketMQError::illegal_argument("business failure");
     let result = immediate_outcome_from_command_result(
@@ -152,7 +158,7 @@ fn immediate_leaf_mapper_rejects_missing_response_semantics() {
 }
 
 #[test]
-fn bytes_owner_moves_into_the_plan_without_a_builder_copy() {
+fn bytes_owner_moves_into_the_response_without_a_builder_copy() {
     let drops = Arc::new(AtomicUsize::new(0));
     let body = Bytes::from_owner(DropBytes {
         bytes: b"owner-backed-body",
@@ -167,12 +173,12 @@ fn bytes_owner_moves_into_the_plan_without_a_builder_copy() {
     assert_eq!(stored.as_ptr(), pointer);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
 
-    let plan = parts.into_response_plan().expect("valid byte response plan");
-    assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
-    assert_eq!(plan.body_len(), 17);
-    assert_eq!(plan.body_part_count(), 1);
+    let response = parts.into_remoting_response().expect("valid byte remoting response");
+    assert_eq!(response.body_kind(), ResponseBodyKind::Bytes);
+    assert_eq!(response.body_len(), 17);
+    assert_eq!(response.body_part_count(), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
-    drop(plan);
+    drop(response);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
@@ -195,25 +201,27 @@ fn segments_are_body_only_ordered_and_move_their_backing_allocations() {
     assert_eq!(stored[0], b"first"[..]);
     assert_eq!(stored[2], b"second"[..]);
 
-    let plan = parts.into_response_plan().expect("valid segmented response plan");
-    assert_eq!(plan.body_kind(), ResponseBodyKind::Segments);
-    assert_eq!(plan.body_len(), 11);
-    assert_eq!(plan.body_part_count(), 2);
+    let response = parts
+        .into_remoting_response()
+        .expect("valid segmented remoting response");
+    assert_eq!(response.body_kind(), ResponseBodyKind::Segments);
+    assert_eq!(response.body_len(), 11);
+    assert_eq!(response.body_part_count(), 2);
 }
 
 #[test]
-fn empty_bytes_and_segments_normalize_to_an_empty_command_plan() {
-    let byte_plan = BrokerResponseParts::bytes(response_head(), Bytes::new())
+fn empty_bytes_and_segments_normalize_to_an_empty_command_response() {
+    let byte_response = BrokerResponseParts::bytes(response_head(), Bytes::new())
         .expect("valid empty bytes")
-        .into_response_plan()
-        .expect("valid empty byte plan");
-    let segment_plan = BrokerResponseParts::segments(response_head(), vec![Bytes::new()])
+        .into_remoting_response()
+        .expect("valid empty byte response");
+    let segment_response = BrokerResponseParts::segments(response_head(), vec![Bytes::new()])
         .expect("valid empty segments")
-        .into_response_plan()
-        .expect("valid empty segment plan");
+        .into_remoting_response()
+        .expect("valid empty segment response");
 
-    assert_eq!(byte_plan.body_kind(), ResponseBodyKind::Empty);
-    assert_eq!(segment_plan.body_kind(), ResponseBodyKind::Empty);
+    assert_eq!(byte_response.body_kind(), ResponseBodyKind::Empty);
+    assert_eq!(segment_response.body_kind(), ResponseBodyKind::Empty);
 }
 
 #[test]
@@ -223,17 +231,17 @@ fn handler_outcome_seam_exposes_reply_metadata() {
         .into_handler_outcome()
         .expect("valid reply outcome");
 
-    let HandlerOutcome::Reply(plan) = outcome else {
+    let HandlerOutcome::Reply(response) = outcome else {
         panic!("immediate Broker responses must become Reply outcomes");
     };
-    assert_eq!(plan.response_code(), ResponseCode::Success as i32);
-    assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
-    assert_eq!(plan.body_len(), 5);
+    assert_eq!(response.response_code(), ResponseCode::Success as i32);
+    assert_eq!(response.body_kind(), ResponseBodyKind::Bytes);
+    assert_eq!(response.body_len(), 5);
 }
 
 #[test]
 fn all_store_file_ranges_become_one_affine_file_region_sequence() {
-    let directory = tempfile::tempdir().expect("temporary response-plan range directory");
+    let directory = tempfile::tempdir().expect("temporary response-assembly range directory");
     let path = directory.path().join("00000000000000000000");
     let mapped_file =
         DefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 64).expect("mapped file");
@@ -256,16 +264,16 @@ fn all_store_file_ranges_become_one_affine_file_region_sequence() {
         BrokerResponseBodyOwner::FileRegions(regions) if regions.len() == 15
     ));
 
-    let plan = parts.into_response_plan().expect("file-region response plan");
-    assert_eq!(plan.body_kind(), ResponseBodyKind::FileRegions);
-    assert_eq!(plan.body_len(), 15);
-    assert_eq!(plan.body_part_count(), 2);
+    let response = parts.into_remoting_response().expect("file-region remoting response");
+    assert_eq!(response.body_kind(), ResponseBodyKind::FileRegions);
+    assert_eq!(response.body_len(), 15);
+    assert_eq!(response.body_part_count(), 2);
 }
 
 #[test]
-fn file_region_lease_moves_from_builder_to_plan_and_drops_once() {
-    let file = tempfile::tempfile().expect("temporary response-plan file");
-    file.set_len(16).expect("size temporary response-plan file");
+fn file_region_lease_moves_from_builder_to_response_and_drops_once() {
+    let file = tempfile::tempfile().expect("temporary response-assembly file");
+    file.set_len(16).expect("size temporary response-assembly file");
     let drops = Arc::new(AtomicUsize::new(0));
     let region = FileRegion::try_new(
         Arc::new(CountingFileLease {
@@ -280,17 +288,17 @@ fn file_region_lease_moves_from_builder_to_plan_and_drops_once() {
 
     let parts = BrokerResponseParts::file_regions(response_head(), regions).expect("file-region response parts");
     assert_eq!(drops.load(Ordering::SeqCst), 0);
-    let plan = parts.into_response_plan().expect("file-region response plan");
-    assert_eq!(plan.body_kind(), ResponseBodyKind::FileRegions);
+    let response = parts.into_remoting_response().expect("file-region remoting response");
+    assert_eq!(response.body_kind(), ResponseBodyKind::FileRegions);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
 
-    drop(plan);
+    drop(response);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]
 fn mixed_store_sources_fall_back_to_all_segments_without_reordering() {
-    let directory = tempfile::tempdir().expect("temporary mixed response-plan directory");
+    let directory = tempfile::tempdir().expect("temporary mixed response-assembly directory");
     let path = directory.path().join("00000000000000000000");
     let mapped_file =
         DefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 64).expect("mapped file");
@@ -360,11 +368,11 @@ fn assert_injected_file_region_failure_falls_back(
     assert_eq!(segments[0], b"first"[..]);
     assert_eq!(segments[1], b"second"[..]);
 
-    let plan = parts.into_response_plan().expect("fallback response plan");
-    assert_eq!(plan.body_kind(), ResponseBodyKind::Segments);
-    assert_eq!(plan.body_len(), 11);
-    assert_eq!(plan.body_part_count(), 2);
-    drop(plan);
+    let response = parts.into_remoting_response().expect("fallback remoting response");
+    assert_eq!(response.body_kind(), ResponseBodyKind::Segments);
+    assert_eq!(response.body_len(), 11);
+    assert_eq!(response.body_part_count(), 2);
+    drop(response);
     assert_eq!(attempt_drops.load(Ordering::SeqCst), expected_attempt_drops);
 }
 

@@ -389,8 +389,8 @@ mod tests {
     use rocketmq_runtime::ShutdownReport;
     use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
-    use rocketmq_transport::api::ResponsePlan;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::ServerStartError;
     use rocketmq_transport::api::TransportServer;
@@ -474,10 +474,10 @@ mod tests {
     }
 
     fn response_outcome(response: RemotingCommand) -> RocketMQResult<HandlerOutcome> {
-        let plan = ResponsePlan::from_command(response).map_err(|error| {
-            RocketMQError::response_process_failed("namesrv.route_lookup_test.response_plan", error.to_string())
+        let response = RemotingResponse::from_command(response).map_err(|error| {
+            RocketMQError::response_process_failed("namesrv.route_lookup_test.remoting_response", error.to_string())
         })?;
-        Ok(HandlerOutcome::Reply(plan))
+        Ok(HandlerOutcome::Reply(response))
     }
 
     struct RunningRouteServer {

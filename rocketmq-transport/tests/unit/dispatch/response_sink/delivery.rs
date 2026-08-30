@@ -96,11 +96,11 @@ fn response_head(code: i32, opaque: i32) -> RemotingCommand {
     RemotingCommand::create_response_command_with_code(code).set_opaque(opaque)
 }
 
-fn bind(plan: ResponsePlan, owner: u64, opaque: i32) -> BoundResponsePlan {
+fn bind(response: RemotingResponse, owner: u64, opaque: i32) -> BoundResponse {
     let request = RemotingCommand::create_remoting_command(31).set_opaque(opaque);
     let original = OriginalRequestIdentity::capture(owner, &AtomicU64::new(1), &request)
         .expect("test request identity should allocate");
-    plan.bind(original).expect("ordinary request should bind")
+    response.bind(original).expect("ordinary request should bind")
 }
 
 struct CountingHeader {
@@ -338,7 +338,11 @@ impl Drop for CountingLease {
     }
 }
 
-fn counting_file_plan(code: i32, opaque: i32, body: &[u8]) -> (ResponsePlan, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+fn counting_file_response(
+    code: i32,
+    opaque: i32,
+    body: &[u8],
+) -> (RemotingResponse, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let accesses = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
     let mut file = tempfile::tempfile().expect("temporary counting lease file");
@@ -349,14 +353,14 @@ fn counting_file_plan(code: i32, opaque: i32, body: &[u8]) -> (ResponsePlan, Arc
         drops: Arc::clone(&drops),
     });
     let region = FileRegion::try_new(lease.clone(), 0, body.len() as u64).expect("counting file region");
-    let plan = ResponsePlan::file_regions(response_head(code, opaque), FileRegionSequence::single(region))
-        .expect("counting file response plan");
+    let response = RemotingResponse::file_regions(response_head(code, opaque), FileRegionSequence::single(region))
+        .expect("counting file remoting response");
     drop(lease);
-    (plan, accesses, drops)
+    (response, accesses, drops)
 }
 
-#[path = "plan/local.rs"]
+#[path = "delivery/local.rs"]
 mod local;
 
-#[path = "plan/network.rs"]
+#[path = "delivery/network.rs"]
 mod network;

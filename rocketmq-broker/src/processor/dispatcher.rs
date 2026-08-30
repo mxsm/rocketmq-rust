@@ -37,10 +37,10 @@ use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseObservation;
-use rocketmq_transport::api::ResponsePlan;
 use tracing::warn;
 
 use super::ack_message_processor::AckMessageProcessor;
@@ -69,7 +69,7 @@ use super::reply_message_processor::ReplyMessageProcessor;
 use super::request_ordering;
 use super::send_message_processor::SendMessageProcessor;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 /// Every Broker leaf that implements the formal processor contract.
@@ -261,10 +261,10 @@ where
 }
 
 fn response_rejection(response: RemotingCommand, source: &'static str) -> RejectRequestDecision {
-    match ResponsePlan::from_command(response) {
-        Ok(plan) => RejectRequestDecision::Reject(plan),
+    match RemotingResponse::from_command(response) {
+        Ok(response) => RejectRequestDecision::Reject(response),
         Err(error) => {
-            warn!(%error, source, "Broker rejection response could not become an owned plan");
+            warn!(%error, source, "Broker rejection command could not become an owned response");
             fallback_rejection(source)
         }
     }
@@ -272,7 +272,7 @@ fn response_rejection(response: RemotingCommand, source: &'static str) -> Reject
 
 fn fallback_rejection(source: &'static str) -> RejectRequestDecision {
     warn!(source, "Broker rejection is using the canonical fallback response");
-    RejectRequestDecision::Reject(ResponsePlan::empty_response(ResponseCode::SystemBusy as i32))
+    RejectRequestDecision::Reject(RemotingResponse::empty_response(ResponseCode::SystemBusy as i32))
 }
 
 /// Code-indexed Broker router over one statically selected processor type.
@@ -526,7 +526,7 @@ where
             Ok(admission) => admission,
             Err(rejection) => {
                 return rejection
-                    .into_response_plan()
+                    .into_remoting_response()
                     .map(HandlerOutcome::Reply)
                     .map_err(|error| rocketmq_error::RocketMQError::internal("broker-fast-failure", error));
             }
@@ -538,7 +538,7 @@ where
             Ok(run) => run,
             Err(fast_failure_dispatch::FastFailureAwaitError::Rejected(rejection)) => {
                 return rejection
-                    .into_response_plan()
+                    .into_remoting_response()
                     .map(HandlerOutcome::Reply)
                     .map_err(|error| rocketmq_error::RocketMQError::internal("broker-fast-failure", error));
             }

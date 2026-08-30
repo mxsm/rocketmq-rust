@@ -35,7 +35,7 @@ use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::OriginalRequestIdentity;
-use crate::dispatch::ResponsePlan;
+use crate::dispatch::RemotingResponse;
 use crate::hook_registry::HookRegistry;
 use crate::runtime::RPCHook;
 
@@ -66,11 +66,11 @@ pub struct PreparedResponseBenchmarkResult {
 
 /// Feature-gated adapter for benchmarking canonical response preparation
 /// without exposing binding or frame-encoding authority on the API.
-pub struct ResponsePlanPreparationHarness {
+pub struct RemotingResponsePreparationHarness {
     sequence: AtomicU64,
 }
 
-impl ResponsePlanPreparationHarness {
+impl RemotingResponsePreparationHarness {
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -83,12 +83,12 @@ impl ResponsePlanPreparationHarness {
     /// # Panics
     ///
     /// Panics if the synthetic identity space is exhausted or the supplied
-    /// plan violates a canonical binding/preparation invariant.
-    pub fn prepare(&self, plan: ResponsePlan, request_opaque: i32) -> PreparedResponseBenchmarkResult {
+    /// response violates a canonical binding/preparation invariant.
+    pub fn prepare(&self, response: RemotingResponse, request_opaque: i32) -> PreparedResponseBenchmarkResult {
         let request = RemotingCommand::create_remoting_command(39).set_opaque(request_opaque);
         let original = OriginalRequestIdentity::capture(7, &self.sequence, &request)
             .expect("benchmark request identity namespace");
-        let bound = plan.bind(original).expect("benchmark response binding");
+        let bound = response.bind(original).expect("benchmark response binding");
         let prepared =
             crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
                 .expect("benchmark response preparation");
@@ -102,7 +102,7 @@ impl ResponsePlanPreparationHarness {
     }
 }
 
-impl Default for ResponsePlanPreparationHarness {
+impl Default for RemotingResponsePreparationHarness {
     fn default() -> Self {
         Self::new()
     }

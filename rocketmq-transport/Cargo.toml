@@ -121,7 +121,7 @@ harness = false
 required-features = ["test-support"]
 
 [[bench]]
-name = "response_plan"
+name = "remoting_response"
 harness = false
 required-features = ["test-support"]
 

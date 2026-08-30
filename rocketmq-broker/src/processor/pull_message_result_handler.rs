@@ -26,7 +26,7 @@ use rocketmq_store::GetMessageResult;
 
 use crate::long_polling::pull_deferred::PullHookMetadata;
 use crate::long_polling::pull_deferred::PullSuspendTiming;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 pub(crate) type PullBroadcastClientResolver<'a> =
     dyn Fn(&PullMessageRequestHeader) -> rocketmq_error::RocketMQResult<Option<CheetahString>> + Send + Sync + 'a;
@@ -68,7 +68,7 @@ pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
     ///
     /// This method processes the result of a message retrieval operation (`get_message_result`),
     /// using typed request facts, subscription data, and store results to generate an appropriate
-    /// response plan or suspension candidate.
+    /// remoting response or suspension candidate.
     ///
     /// # Parameters
     /// - `get_message_result`: The result of the message retrieval operation.

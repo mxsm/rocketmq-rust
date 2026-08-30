@@ -62,7 +62,7 @@ async fn pop_lite_deferred_caller_drop_keeps_gate_until_canonical_terminal_and_r
                         .map_err(|_| RocketMQError::illegal_argument("terminal handler release closed"))?;
                     let batch = reservation.commit();
                     batch.complete(&HashSet::new());
-                    ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                         ResponseCode::Success,
                     ))
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -175,7 +175,7 @@ async fn pop_lite_deferred_requeue_stays_affine_until_canonical_writer_terminal(
                     move |_resume, reason, reservation| async move {
                         assert_eq!(reason, DeferredWakeReason::MessageArrived);
                         reservation.commit().complete(&HashSet::from([requeued_event]));
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -292,7 +292,7 @@ async fn pop_lite_deferred_staged_requeue_rolls_back_once_when_session_closes_be
                         release_handler_rx
                             .await
                             .map_err(|_| RocketMQError::illegal_argument("staged-cancel handler release closed"))?;
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -401,7 +401,7 @@ async fn pop_lite_deferred_parent_shutdown_settles_staged_requeue_without_a_fram
                     DeferredResumeRetainedSize::new(73),
                     move |_resume, _reason, reservation| async move {
                         reservation.commit().complete(&HashSet::from([first_for_requeue]));
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -505,7 +505,7 @@ async fn pop_lite_deferred_session_close_rolls_back_claimed_events_and_gate() {
                             .map_err(|_| RocketMQError::illegal_argument("session-close handler release closed"))?;
                         let batch = reservation.commit();
                         batch.complete(&HashSet::new());
-                        ResponsePlan::bytes(
+                        RemotingResponse::bytes(
                             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                             body,
                         )

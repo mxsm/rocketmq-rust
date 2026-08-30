@@ -53,7 +53,7 @@ use crate::client::manager::consumer_manager::ConsumerSessionRegistration;
 use crate::client::manager::producer_manager::ProducerClientRegistration;
 use crate::client::session_transition_locks::ClientSessionTransitionGuard;
 use crate::client::session_transition_locks::ClientSessionTransitionLocks;
-use crate::processor::response_plan::immediate_outcome_from_command_result;
+use crate::processor::response_assembly::immediate_outcome_from_command_result;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;

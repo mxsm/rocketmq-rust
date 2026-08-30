@@ -1246,7 +1246,7 @@ async fn shutdown_local_broker(facade: &mut ProxyBrokerFacade, deadline: Shutdow
 
 fn embedded_response(outcome: EmbeddedDispatchOutcome) -> ProxyResult<EmbeddedResponse> {
     match outcome {
-        EmbeddedDispatchOutcome::Reply(plan) => Ok(plan.into_embedded_response()),
+        EmbeddedDispatchOutcome::Reply(response) => Ok(response.into_embedded_response()),
         EmbeddedDispatchOutcome::OneWay { .. } => Err(ProxyError::Transport {
             message: "local Broker returned one-way completion where a response was required".to_owned(),
         }),
@@ -2688,7 +2688,7 @@ mod tests {
     use rocketmq_proxy_core::TransactionResolution;
     use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::ResponsePlan;
+    use rocketmq_transport::api::RemotingResponse;
 
     use super::broker_operation_error;
     use super::build_local_proxy_producer_group;
@@ -3035,7 +3035,7 @@ mod tests {
                 assert_eq!(RequestCode::from(request.code()), RequestCode::GetBrokerConfig);
                 assert_eq!(request.opaque(), 9_852);
                 assert_eq!(timeout, Duration::from_secs(3));
-                let response = ResponsePlan::command(
+                let response = RemotingResponse::command(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success)
                         .set_opaque(request.opaque())
                         .mark_response_type(),
@@ -3084,7 +3084,7 @@ mod tests {
                 assert_eq!(RequestCode::from(request.code()), RequestCode::GetBrokerConfig);
                 assert_eq!(request.opaque(), 9_857);
                 assert_eq!(timeout, Duration::from_millis(275));
-                let response = ResponsePlan::command(
+                let response = RemotingResponse::command(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success)
                         .set_opaque(request.opaque())
                         .mark_response_type(),

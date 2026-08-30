@@ -61,9 +61,9 @@ use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredTerminalReason;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::RequestOrigin;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::TakeDeferredResponderError;
@@ -635,7 +635,7 @@ impl PopDeferredService {
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let observation = Arc::new(Mutex::new(None));
         let accepted = Arc::clone(&observation);
@@ -667,7 +667,7 @@ impl PopDeferredService {
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let result = self.resume_claimed(claimed, handler_retained, handler).await;
         observer.complete_resume_result(&result);
@@ -684,7 +684,7 @@ impl PopDeferredService {
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -704,7 +704,7 @@ impl PopDeferredService {
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -1343,7 +1343,7 @@ fn pop_wakeup_outcome_from_resume_result(result: &Result<ResponseReceipt, Deferr
         | DeferredResumeErrorKind::Admission
         | DeferredResumeErrorKind::RetainedSizeOverflow
         | DeferredResumeErrorKind::Response
-        | DeferredResumeErrorKind::ResponsePlan => PopWakeupOutcome::ProcessingFailed,
+        | DeferredResumeErrorKind::ResponseConstruction => PopWakeupOutcome::ProcessingFailed,
     }
 }
 

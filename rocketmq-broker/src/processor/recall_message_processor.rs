@@ -226,7 +226,7 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
         let command_factory = self.context.command_factory;
         let remote_address = recall_remote_address(request.origin())?;
         let result = self.process_command(request.command_mut(), remote_address).await;
-        crate::processor::response_plan::immediate_outcome_from_command_result(
+        crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
             result,
             original_opaque,
@@ -813,7 +813,7 @@ mod tests {
         let outcome = harness
             .dispatch(None, RemotingCommand::create_remoting_command(-98_454).set_opaque(321))
             .await
-            .expect("embedded RecallMessage rejection must produce a typed response plan");
+            .expect("embedded RecallMessage rejection must produce a typed remoting response");
         let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
             panic!("embedded RecallMessage request must fail closed with a reply plan");
         };

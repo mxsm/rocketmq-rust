@@ -40,7 +40,7 @@ use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredResumeError;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::ResponseReceipt;
 
 use crate::lite::lite_event_dispatcher::LiteEventBatchExecution;
@@ -247,7 +247,7 @@ impl PopLiteDeferredService {
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let PopLiteEventClaim {
             claimed,
@@ -291,7 +291,7 @@ impl PopLiteDeferredService {
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let retained = handler_retained.dynamic_bytes();
         let observations = Arc::clone(&self.observations);
@@ -313,7 +313,7 @@ impl PopLiteDeferredService {
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let PopLiteEventClaim {
             claimed,
@@ -356,7 +356,7 @@ impl PopLiteDeferredService {
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         let retained = handler_retained.dynamic_bytes();
         let accepted = ObservationGuard::accepted(Arc::clone(&self.observations), retained);

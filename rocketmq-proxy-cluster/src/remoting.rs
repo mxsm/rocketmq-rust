@@ -27,7 +27,7 @@ use rocketmq_proxy_core::EmbeddedDispatchOutcome;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyRemotingBackend;
 use rocketmq_proxy_core::ProxyServiceFuture;
-use rocketmq_proxy_core::ResponsePlan;
+use rocketmq_proxy_core::RemotingResponse;
 
 use crate::cluster::RocketmqClusterClient;
 
@@ -83,10 +83,10 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
                 }
                 _ => return Err(ProxyError::not_implemented("cluster remoting backend request")),
             }?;
-            let plan = ResponsePlan::from_command(response).map_err(|error| ProxyError::Transport {
-                message: format!("cluster backend response could not become a response plan: {error}"),
+            let response = RemotingResponse::from_command(response).map_err(|error| ProxyError::Transport {
+                message: format!("cluster backend response could not become a remoting response: {error}"),
             })?;
-            Ok(EmbeddedDispatchOutcome::Reply(plan))
+            Ok(EmbeddedDispatchOutcome::Reply(response))
         })
     }
 }

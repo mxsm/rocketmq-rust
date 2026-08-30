@@ -76,7 +76,7 @@ use crate::processor::pull_message_result_handler::PullBroadcastClientResolver;
 use crate::processor::pull_message_result_handler::PullMessageResult;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullResponseContext;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
     max_msg_bytes
@@ -844,7 +844,7 @@ where
                     suspension.subscription_data,
                     suspension.message_filter,
                 );
-                let fallback = suspension.fallback.into_response_plan()?;
+                let fallback = suspension.fallback.into_remoting_response()?;
                 let prepared = match service.prepare(
                     request,
                     criteria,

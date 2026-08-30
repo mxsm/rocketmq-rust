@@ -40,6 +40,46 @@
       "reason": "The exported placeholder and production probe facades were replaced by narrow capabilities; test-only probes moved behind the explicit test-support feature.",
       "approved_by": "repository-owner",
       "approved_on": "2026-07-29"
+    },
+    {
+      "id": "API-0.9-005",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_transport::dispatch::response_plan::{ResponsePlan,ResponsePlanError}",
+      "replacement": "rocketmq_transport::dispatch::remoting_response::{RemotingResponse,ResponseBuildError}",
+      "reason": "The unreleased response aggregate is a validated remoting response, not an execution plan; the replacement aligns it with RemotingRequest and distinguishes construction failures from delivery failures without changing wire behavior.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-08-30"
+    },
+    {
+      "id": "API-0.9-006",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_transport::runtime::processor::ResponseMetadata::plan_kind",
+      "replacement": "rocketmq_transport::runtime::processor::ResponseMetadata::body_kind",
+      "reason": "The metadata accessor reports the response body representation, not a response execution plan; the unreleased name is corrected before the first production release.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-08-30"
+    },
+    {
+      "id": "API-0.9-007",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_transport::api::DeferredResumeErrorKind::ResponsePlan (label=response_plan)",
+      "replacement": "rocketmq_transport::api::DeferredResumeErrorKind::ResponseConstruction (label=response_construction)",
+      "reason": "The error class describes failure to construct a response, not a response value; the variant and low-cardinality label now identify that stage explicitly.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-08-30"
+    },
+    {
+      "id": "API-0.9-008",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "tracing field response_plan_kind",
+      "replacement": "tracing field response_body_kind",
+      "reason": "The observation records ResponseBodyKind rather than a plan category; the unreleased telemetry field is renamed with the corresponding accessor.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-08-30"
     }
   ],
   "frozen_contracts": [

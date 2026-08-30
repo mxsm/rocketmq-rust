@@ -20,7 +20,7 @@ Compile all three groups without running them:
 
 ```powershell
 cargo bench -p rocketmq-transport --features test-support --bench processor_dispatch --no-run
-cargo bench -p rocketmq-transport --features test-support --bench response_plan --no-run
+cargo bench -p rocketmq-transport --features test-support --bench remoting_response --no-run
 cargo bench -p rocketmq-broker --bench pull_pop_response_benchmark --no-run
 ```
 
@@ -31,7 +31,7 @@ $env:ROCKETMQ_REMOTING_COMMAND_BASELINE_WARMUP_SECONDS = "1"
 $env:ROCKETMQ_REMOTING_COMMAND_BASELINE_MEASUREMENT_SECONDS = "1"
 $env:ROCKETMQ_REMOTING_COMMAND_BASELINE_SAMPLE_SIZE = "10"
 cargo bench -p rocketmq-transport --features test-support --bench processor_dispatch
-cargo bench -p rocketmq-transport --features test-support --bench response_plan
+cargo bench -p rocketmq-transport --features test-support --bench remoting_response
 cargo bench -p rocketmq-broker --bench pull_pop_response_benchmark
 ```
 
@@ -39,7 +39,7 @@ The recorded transport run used the same variables and added Criterion's
 `--noplot` argument:
 
 ```powershell
-cargo bench -p rocketmq-transport --features test-support --bench response_plan -- --noplot
+cargo bench -p rocketmq-transport --features test-support --bench remoting_response -- --noplot
 cargo bench -p rocketmq-transport --features test-support --bench processor_dispatch -- --noplot
 ```
 
@@ -70,10 +70,10 @@ reports copied from different hosts.
 | Group | Cases | Primary evidence |
 |---|---|---|
 | `transport_processor_dispatch` | materialized command-shape reference; canonical embedded inline dispatch with 0 B, 128 B, and 4 KiB requests | absolute channel-free dispatch latency and throughput; materialization reference is not a complete dispatcher |
-| `transport_response_plan` | contiguous legacy materialize/encode; canonical `Bytes`; canonical four-segment body at 128 B, 4 KiB, and 256 KiB | encode/preparation cost, body-copy versus shared `Bytes`, segmented zero-concat preparation |
+| `transport_remoting_response` | contiguous legacy materialize/encode; canonical `Bytes`; canonical four-segment body at 128 B, 4 KiB, and 256 KiB | encode/preparation cost, body-copy versus shared `Bytes`, segmented zero-concat preparation |
 | `broker_pull_pop_response` | Pull materialized/canonical bytes and Pop materialized/canonical segments at 4 KiB and 256 KiB | real Pull/Pop headers, encode/preparation cost, heap and segmented response ownership |
 
-`ResponsePlanPreparationHarness` is available only through the explicit
+`RemotingResponsePreparationHarness` is available only through the explicit
 `test-support` feature. It exercises the private bind-and-prepare path without
 adding response binding, complete-frame encoding, or body access to the
 public API.
@@ -99,15 +99,15 @@ rate.
 | `transport_processor_dispatch/canonical_embedded_inline` | 128 B | `[2.9934, 3.0584, 3.0990] us` | `[322.68, 326.97, 334.07] Kelem/s` |
 | `transport_processor_dispatch/legacy_materialized_contract_reference` | 4 KiB | `[472.55, 506.57, 536.95] ns` | `[1.8624, 1.9741, 2.1162] Melem/s` |
 | `transport_processor_dispatch/canonical_embedded_inline` | 4 KiB | `[2.9568, 3.0075, 3.0661] us` | `[326.15, 332.50, 338.20] Kelem/s` |
-| `transport_response_plan/legacy_materialize_and_contiguous_encode` | 128 B | `[560.39, 564.88, 570.65] ns` | `[213.91, 216.10, 217.83] MiB/s` |
-| `transport_response_plan/canonical_bytes_prepare_zero_copy_body` | 128 B | `[560.51, 571.44, 579.98] ns` | `[210.47, 213.62, 217.78] MiB/s` |
-| `transport_response_plan/canonical_segmented_prepare_zero_copy_body` | 128 B | `[666.17, 674.82, 687.89] ns` | `[177.46, 180.89, 183.24] MiB/s` |
-| `transport_response_plan/legacy_materialize_and_contiguous_encode` | 4 KiB | `[638.14, 649.52, 660.21] ns` | `[5.7780, 5.8731, 5.9778] GiB/s` |
-| `transport_response_plan/canonical_bytes_prepare_zero_copy_body` | 4 KiB | `[564.69, 570.22, 576.44] ns` | `[6.6177, 6.6899, 6.7554] GiB/s` |
-| `transport_response_plan/canonical_segmented_prepare_zero_copy_body` | 4 KiB | `[652.44, 661.55, 673.03] ns` | `[5.6680, 5.7663, 5.8468] GiB/s` |
-| `transport_response_plan/legacy_materialize_and_contiguous_encode` | 256 KiB | `[28.614, 29.236, 29.784] us` | `[8.1970, 8.3506, 8.5321] GiB/s` |
-| `transport_response_plan/canonical_bytes_prepare_zero_copy_body` | 256 KiB | `[574.84, 584.87, 597.69] ns` | `[408.47, 417.43, 424.71] GiB/s` |
-| `transport_response_plan/canonical_segmented_prepare_zero_copy_body` | 256 KiB | `[760.15, 777.78, 795.53] ns` | `[306.89, 313.90, 321.17] GiB/s` |
+| `transport_remoting_response/legacy_materialize_and_contiguous_encode` | 128 B | `[560.39, 564.88, 570.65] ns` | `[213.91, 216.10, 217.83] MiB/s` |
+| `transport_remoting_response/canonical_bytes_prepare_zero_copy_body` | 128 B | `[560.51, 571.44, 579.98] ns` | `[210.47, 213.62, 217.78] MiB/s` |
+| `transport_remoting_response/canonical_segmented_prepare_zero_copy_body` | 128 B | `[666.17, 674.82, 687.89] ns` | `[177.46, 180.89, 183.24] MiB/s` |
+| `transport_remoting_response/legacy_materialize_and_contiguous_encode` | 4 KiB | `[638.14, 649.52, 660.21] ns` | `[5.7780, 5.8731, 5.9778] GiB/s` |
+| `transport_remoting_response/canonical_bytes_prepare_zero_copy_body` | 4 KiB | `[564.69, 570.22, 576.44] ns` | `[6.6177, 6.6899, 6.7554] GiB/s` |
+| `transport_remoting_response/canonical_segmented_prepare_zero_copy_body` | 4 KiB | `[652.44, 661.55, 673.03] ns` | `[5.6680, 5.7663, 5.8468] GiB/s` |
+| `transport_remoting_response/legacy_materialize_and_contiguous_encode` | 256 KiB | `[28.614, 29.236, 29.784] us` | `[8.1970, 8.3506, 8.5321] GiB/s` |
+| `transport_remoting_response/canonical_bytes_prepare_zero_copy_body` | 256 KiB | `[574.84, 584.87, 597.69] ns` | `[408.47, 417.43, 424.71] GiB/s` |
+| `transport_remoting_response/canonical_segmented_prepare_zero_copy_body` | 256 KiB | `[760.15, 777.78, 795.53] ns` | `[306.89, 313.90, 321.17] GiB/s` |
 | `broker_pull_pop_response/pull_legacy_materialize_and_encode` | 4 KiB | `[537.84, 555.05, 575.30] ns` | `[6.6308, 6.8727, 7.0926] GiB/s` |
 | `broker_pull_pop_response/pull_canonical_bytes_prepare` | 4 KiB | `[452.18, 475.61, 496.15] ns` | `[7.6886, 8.0206, 8.4362] GiB/s` |
 | `broker_pull_pop_response/pop_legacy_materialize_and_encode` | 4 KiB | `[1.3499, 1.3876, 1.4232] us` | `[2.6803, 2.7491, 2.8259] GiB/s` |
@@ -139,7 +139,7 @@ or counter evidence in addition to the Criterion group.
 | Writer count is one per session | `SessionHandle` retains one `writer_task_id`; `session_writer_reports_bounded_queue_and_write_diagnostics`, the no-interleave session concurrency tests, and typed close tests exercise that single queue/task through retirement. | Meets structurally and behaviorally. |
 | Writer queue wait is observable | `rocketmq_transport_response_queue_wait_seconds` is recorded at the canonical write boundary; the `frame_write` and `write_pipeline` groups exercise queue/write paths. | Meets observability requirement; no release percentile is claimed by the quick run. |
 | Deferred wait/execution permits and retained bytes return to zero | Typed server close tests assert writer queued items/bytes and `DeferredAdmissionSnapshot::retained_bytes()` are zero. Deferred registry acceptance tests assert `invariant_failures() == 0`. | Meets. |
-| Lease lifetime and zero-copy eligibility do not regress | Response-plan and Broker pointer/lease tests prove move semantics and exactly-once drops. `linux_file_send` covers native plaintext sendfile eligibility on Linux; TLS and unsupported platforms retain portable fallback. | Meets semantically. Native sendfile was not executed on this Windows host. |
+| Lease lifetime and zero-copy eligibility do not regress | `RemotingResponse` and Broker pointer/lease tests prove move semantics and exactly-once drops. `linux_file_send` covers native plaintext sendfile eligibility on Linux; TLS and unsupported platforms retain portable fallback. | Meets semantically. Native sendfile was not executed on this Windows host. |
 | Shutdown deferred leak is zero | `typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_completion`, `shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_frame`, and broker runtime lifecycle probes assert healthy reports and zero post-shutdown task/queue/retained counts. | Meets. |
 
 ## Comparison scope
@@ -147,7 +147,7 @@ or counter evidence in addition to the Criterion group.
 There is no second processor implementation in this revision. The
 same-revision `legacy_materialized_contract_reference` measures only a
 materialized command shape; it is not a complete dispatcher latency baseline.
-The response-plan and Pull/Pop groups do provide valid materialized-versus-owned
+The remoting-response and Pull/Pop groups do provide valid materialized-versus-owned
 response preparation comparisons.
 
 Criterion does not produce request P99 values, so this quick run cannot approve

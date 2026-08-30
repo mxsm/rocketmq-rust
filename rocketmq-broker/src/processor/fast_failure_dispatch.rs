@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
-use rocketmq_transport::api::ResponsePlan;
-use rocketmq_transport::api::ResponsePlanError;
+use rocketmq_transport::api::ResponseBuildError;
 use tokio::sync::OwnedSemaphorePermit;
 
 use crate::latency::broker_fast_failure::BrokerFastFailure;
@@ -255,7 +255,7 @@ impl FastFailureRunGuard {
     ///
     /// The handler outcome remains affine and is delivered only by the
     /// canonical dispatcher. Fast failure owns scheduling/accounting here,
-    /// not the response plan.
+    /// not the remoting response.
     pub(super) fn finish(mut self) {
         self.service.complete(self.queue_kind, &self.task, None);
         self.response_rx.take();
@@ -317,10 +317,10 @@ impl FastFailureRejection {
         self.response
     }
 
-    pub(super) fn into_response_plan(mut self) -> Result<ResponsePlan, ResponsePlanError> {
+    pub(super) fn into_remoting_response(mut self) -> Result<RemotingResponse, ResponseBuildError> {
         match self.response.take_body() {
-            Some(body) => ResponsePlan::bytes(self.response, body),
-            None => ResponsePlan::command(self.response),
+            Some(body) => RemotingResponse::bytes(self.response, body),
+            None => RemotingResponse::command(self.response),
         }
     }
 }

@@ -35,8 +35,8 @@ use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RejectRequestDecision;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::ResponseObservation;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -80,7 +80,7 @@ impl RequestProcessor for ProbeProcessor {
         let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
             .set_opaque(request.original_identity().original_opaque());
         Ok(HandlerOutcome::Reply(
-            ResponsePlan::command(response).expect("probe response plan"),
+            RemotingResponse::command(response).expect("probe remoting response"),
         ))
     }
 
@@ -89,7 +89,7 @@ impl RequestProcessor for ProbeProcessor {
             return RejectRequestDecision::Proceed;
         }
         RejectRequestDecision::Reject(
-            ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+            RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::SystemBusy,
             ))
             .expect("probe rejection plan"),
@@ -436,7 +436,7 @@ async fn router_fast_failure_keeps_response_affine_and_releases_run_resources() 
         .await
         .expect("budget rejection remains a typed reply");
     let EmbeddedDispatchOutcome::Reply(rejected) = rejected else {
-        panic!("budget rejection must own one response plan");
+        panic!("budget rejection must own one remoting response");
     };
     assert_eq!(rejected.response_code(), ResponseCode::SystemBusy as i32);
     assert_eq!(calls.load(Ordering::SeqCst), 1);

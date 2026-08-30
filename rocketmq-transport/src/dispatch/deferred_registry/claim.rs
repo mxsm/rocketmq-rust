@@ -33,8 +33,8 @@ use crate::dispatch::deferred_response::DeferredSystemCancellationReason;
 use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
 use crate::dispatch::DeferredTerminalReason;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseState;
 use crate::dispatch::ResponseTerminalState;
@@ -234,8 +234,8 @@ pub enum DeferredResumeErrorKind {
     RetainedSizeOverflow,
     /// Canonical response delivery failed.
     Response,
-    /// A handler error could not be converted into a response plan.
-    ResponsePlan,
+    /// A handler error could not be converted into a remoting response.
+    ResponseConstruction,
 }
 
 impl DeferredResumeErrorKind {
@@ -250,7 +250,7 @@ impl DeferredResumeErrorKind {
             Self::Admission => "admission",
             Self::RetainedSizeOverflow => "retained_size_overflow",
             Self::Response => "response",
-            Self::ResponsePlan => "response_plan",
+            Self::ResponseConstruction => "response_construction",
         }
     }
 }
@@ -451,7 +451,7 @@ where
     /// # Errors
     ///
     /// Returns a typed failure for lifecycle stop, executor shutdown, bounded
-    /// admission, retained-size overflow, response planning, or response I/O.
+    /// admission, retained-size overflow, response construction, or response I/O.
     pub async fn resume<F, Fut>(
         self,
         handler_retained: DeferredResumeRetainedSize,
@@ -459,7 +459,7 @@ where
     ) -> Result<ResponseReceipt, DeferredResumeError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
     {
         crate::dispatch::deferred_resume::resume_claimed(self, handler_retained, handler).await
     }
@@ -483,7 +483,7 @@ where
     ) -> Result<(), DeferredResumeError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = RocketMQResult<ResponsePlan>> + Send + 'static,
+        Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
         O: FnOnce(&Result<ResponseReceipt, DeferredResumeError>) + Send + 'static,
     {
         crate::dispatch::deferred_resume::submit_claimed(self, handler_retained, handler, terminal_observer)

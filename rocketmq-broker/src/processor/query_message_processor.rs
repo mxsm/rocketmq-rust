@@ -44,7 +44,7 @@ use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 pub(crate) struct QueryMessageStoreCapability<MS: BrokerReadStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
@@ -645,15 +645,15 @@ mod tests {
         let outcome = processor
             .process_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
-            .expect("query response plan");
-        let HandlerOutcome::Reply(plan) = outcome else {
+            .expect("query remoting response");
+        let HandlerOutcome::Reply(response) = outcome else {
             panic!("query success must return an inline reply");
         };
 
-        assert_eq!(ResponseCode::Success as i32, plan.response_code());
-        assert_eq!(ResponseBodyKind::Bytes, plan.body_kind());
-        assert_eq!(body.len(), plan.body_len());
-        assert_eq!(1, plan.body_part_count());
+        assert_eq!(ResponseCode::Success as i32, response.response_code());
+        assert_eq!(ResponseBodyKind::Bytes, response.body_kind());
+        assert_eq!(body.len(), response.body_len());
+        assert_eq!(1, response.body_part_count());
     }
 
     #[tokio::test]
@@ -749,18 +749,18 @@ mod tests {
         let outcome = processor
             .process_command(&mut request, RequestCode::ViewMessageById as i32, 0)
             .await
-            .expect("view response plan");
-        let HandlerOutcome::Reply(plan) = outcome else {
+            .expect("view remoting response");
+        let HandlerOutcome::Reply(response) = outcome else {
             panic!("view success must return an inline reply");
         };
 
-        assert_eq!(ResponseCode::Success as i32, plan.response_code());
-        assert_eq!(ResponseBodyKind::Bytes, plan.body_kind());
-        assert_eq!(body.len(), plan.body_len());
+        assert_eq!(ResponseCode::Success as i32, response.response_code());
+        assert_eq!(ResponseBodyKind::Bytes, response.body_kind());
+        assert_eq!(body.len(), response.body_len());
     }
 
     #[tokio::test]
-    async fn query_not_found_returns_an_empty_reply_plan() {
+    async fn query_not_found_returns_an_empty_reply_response() {
         let processor = QueryMessageProcessor::new(64, TestQueryStore::default());
         let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, header(None));
         request.make_custom_header_to_net();
@@ -768,13 +768,13 @@ mod tests {
         let outcome = processor
             .process_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
-            .expect("not-found response plan");
-        let HandlerOutcome::Reply(plan) = outcome else {
+            .expect("not-found remoting response");
+        let HandlerOutcome::Reply(response) = outcome else {
             panic!("query not found must return an inline reply");
         };
 
-        assert_eq!(ResponseCode::QueryNotFound as i32, plan.response_code());
-        assert_eq!(ResponseBodyKind::Empty, plan.body_kind());
-        assert_eq!(0, plan.body_len());
+        assert_eq!(ResponseCode::QueryNotFound as i32, response.response_code());
+        assert_eq!(ResponseBodyKind::Empty, response.body_kind());
+        assert_eq!(0, response.body_len());
     }
 }

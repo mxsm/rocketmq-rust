@@ -134,7 +134,7 @@ async fn pop_lite_deferred_different_clients_resume_and_write_in_parallel() {
                                 .forget();
                             let batch = reservation.commit();
                             batch.complete(&HashSet::new());
-                            ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                            RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                                 ResponseCode::Success,
                             ))
                             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -234,7 +234,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
                         event_started_for_handler.notify_one();
                         event_release_for_handler.notified().await;
                         reservation.commit().complete(&HashSet::new());
-                        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
                         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -259,7 +259,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
             DeferredResumeRetainedSize::new(41),
             move |_resume, reason| async move {
                 assert_eq!(reason, DeferredWakeReason::Timeout);
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::PollingTimeout,
                 ))
                 .map_err(|error| RocketMQError::illegal_argument(error.to_string()))

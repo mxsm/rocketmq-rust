@@ -286,7 +286,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = self.process_command(request.command_mut()).await;
-        crate::processor::response_plan::immediate_outcome_from_command_result(
+        crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
             result,
             original_opaque,
@@ -644,7 +644,7 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {}).set_opaque(7_707);
 
         let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
-            panic!("Lite subscription must return an inline response plan");
+            panic!("Lite subscription must return an inline remoting response");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::IllegalOperation);

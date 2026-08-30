@@ -15,7 +15,7 @@
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 
 use super::core::NotificationCoreOutcome;
 use super::NotificationFilterContract;
@@ -35,10 +35,10 @@ where
         &self,
         resume: ResumeNotification,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
         let command = self.resume_notification_command(resume, reason).await?;
-        ResponsePlan::command(command)
-            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("invalid Notification response plan"))
+        RemotingResponse::command(command)
+            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("invalid Notification remoting response"))
     }
 
     async fn resume_notification_command(

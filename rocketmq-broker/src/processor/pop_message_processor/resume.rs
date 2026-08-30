@@ -30,16 +30,16 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 
 use super::PopMessageProcessor;
 use crate::long_polling::pop_deferred::service::ResumePop;
 use crate::processor::pop_message_processor::capability::PopPolicy;
-use crate::processor::response_plan::pop::attach_pop_response_header;
-use crate::processor::response_plan::pop::pop_heap_response_parts;
-use crate::processor::response_plan::pop::pop_segmented_response_parts;
-use crate::processor::response_plan::pop::take_pop_body_segments;
-use crate::processor::response_plan::BrokerResponseParts;
+use crate::processor::response_assembly::pop::attach_pop_response_header;
+use crate::processor::response_assembly::pop::pop_heap_response_parts;
+use crate::processor::response_assembly::pop::pop_segmented_response_parts;
+use crate::processor::response_assembly::pop::take_pop_body_segments;
+use crate::processor::response_assembly::BrokerResponseParts;
 
 /// Allocation-free caller identity until a store offset commit needs ownership.
 #[derive(Clone, Copy)]
@@ -135,7 +135,7 @@ where
         &self,
         resume: ResumePop,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
         self.resume_pop_request(PopResumeRequest::from_resume(resume), reason)
             .await
     }
@@ -144,7 +144,7 @@ where
         &self,
         request: PopResumeRequest,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
         match reason {
             DeferredWakeReason::MessageArrived | DeferredWakeReason::Timeout | DeferredWakeReason::ForcedRefresh => {}
         }
@@ -153,7 +153,7 @@ where
                 ResponseCode::TopicNotExist,
                 "POP topic is no longer available",
             );
-            return BrokerResponseParts::command(head)?.into_response_plan();
+            return BrokerResponseParts::command(head)?.into_remoting_response();
         };
         let Some(group_config) = self
             .context
@@ -164,7 +164,7 @@ where
                 ResponseCode::SubscriptionGroupNotExist,
                 "POP subscription group is no longer available",
             );
-            return BrokerResponseParts::command(head)?.into_response_plan();
+            return BrokerResponseParts::command(head)?.into_remoting_response();
         };
         let policy = self.context.policy.snapshot();
         let retry_policy = self.retry_policy_for_group(&request.header.consumer_group);
@@ -181,10 +181,10 @@ where
             ))
             .await?
         {
-            PopStoreReadOutcome::Found(parts) => parts.into_response_plan(),
+            PopStoreReadOutcome::Found(parts) => parts.into_remoting_response(),
             PopStoreReadOutcome::Empty { mut head, .. } => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
-                BrokerResponseParts::command(head)?.into_response_plan()
+                BrokerResponseParts::command(head)?.into_remoting_response()
             }
         }
     }

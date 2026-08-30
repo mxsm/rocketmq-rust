@@ -47,7 +47,7 @@ use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::HandlerOutcome;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
-use crate::dispatch::ResponsePlan;
+use crate::dispatch::RemotingResponse;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::RPCHook;
 use crate::session_registry::ServerPushCommand;
@@ -121,11 +121,11 @@ impl RequestProcessor for TcpProcessor {
             ));
         }
         Ok(HandlerOutcome::Reply(
-            ResponsePlan::bytes(
+            RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(-9),
                 Bytes::from_static(b"tcp-response"),
             )
-            .expect("test response plan"),
+            .expect("test remoting response"),
         ))
     }
 
@@ -139,7 +139,7 @@ impl RequestProcessor for TcpProcessor {
     fn reject_request(&self, code: i32) -> RejectRequestDecision {
         if code == 703 {
             return RejectRequestDecision::Reject(
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(44))
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(44))
                     .expect("test rejection plan"),
             );
         }
@@ -168,10 +168,10 @@ impl Drop for DropTrackedProcessor {
 impl RequestProcessor for DropTrackedProcessor {
     async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
         Ok(HandlerOutcome::Reply(
-            ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+            RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
-            .expect("drop-tracked response plan"),
+            .expect("drop-tracked remoting response"),
         ))
     }
 }
@@ -192,11 +192,11 @@ impl RequestProcessor for DrainingProcessor {
             ));
         }
         Ok(HandlerOutcome::Reply(
-            ResponsePlan::bytes(
+            RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"drained-before-retire"),
             )
-            .expect("draining response plan"),
+            .expect("draining remoting response"),
         ))
     }
 }
@@ -298,11 +298,11 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
         if request.command().code() == 706 {
             return Ok(HandlerOutcome::Reply(
-                ResponsePlan::bytes(
+                RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                     Bytes::from_static(b"other-session-live"),
                 )
-                .expect("other-session response plan"),
+                .expect("other-session remoting response"),
             ));
         }
 
@@ -1479,11 +1479,11 @@ async fn shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_fra
         move |opaque, reason| async move {
             assert_eq!(opaque, OPAQUE as usize);
             assert_eq!(reason, DeferredWakeReason::MessageArrived);
-            Ok(ResponsePlan::bytes(
+            Ok(RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"deferred-writer-drained"),
             )
-            .expect("writer-drain deferred response plan"))
+            .expect("writer-drain deferred remoting response"))
         },
     );
     tokio::pin!(resume);
@@ -1597,11 +1597,11 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
     let running_resume = running_claim.resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
         let _ = resume_started_tx.send(());
         handler_release.notified().await;
-        Ok(ResponsePlan::bytes(
+        Ok(RemotingResponse::bytes(
             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
             Bytes::from_static(b"must-not-be-written"),
         )
-        .expect("blocked resume response plan"))
+        .expect("blocked resume remoting response"))
     });
     tokio::pin!(running_resume);
     tokio::select! {
@@ -1649,10 +1649,10 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .resume(DeferredResumeRetainedSize::new(0), move |_, _| async move {
             handler_called.fetch_add(1, Ordering::SeqCst);
             Ok(
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
-                .expect("held response plan"),
+                .expect("held remoting response"),
             )
         })
         .await

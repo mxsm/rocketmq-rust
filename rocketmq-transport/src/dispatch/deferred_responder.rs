@@ -24,12 +24,12 @@ use super::deferred_response::DeferredSystemCancellationReason;
 use super::deferred_response::DeferredSystemCloseReason;
 use super::deferred_response::DeferredTerminalReason;
 use super::OriginalRequestIdentity;
+use super::RemotingResponse;
 use super::RequestControlView;
 use super::RequestId;
 use super::ResponseBindingError;
 use super::ResponseError;
 use super::ResponseErrorKind;
-use super::ResponsePlan;
 use super::ResponseReceipt;
 use super::ResponseSink;
 use super::ResponseState;
@@ -77,7 +77,7 @@ pub enum DeferredResponseErrorKind {
     AlreadyCompleted,
     /// The attempted operation was invalid for a non-terminal state.
     InvalidTransition,
-    /// Immutable request binding rejected the response plan.
+    /// Immutable request binding rejected the remoting response.
     Binding,
     /// The immutable response deadline elapsed before completion.
     DeadlineExceeded,
@@ -258,7 +258,7 @@ impl Error for DeferredResponseError {
     }
 }
 
-/// Trusted seed that retains the one canonical plan sink and its composition telemetry.
+/// Trusted seed that retains the one canonical response sink and its composition telemetry.
 pub(crate) struct DeferredResponseSeed {
     sink: ResponseSink,
     telemetry: TransportTelemetry,
@@ -486,24 +486,27 @@ impl DeferredResponder {
         result
     }
 
-    /// Binds and delivers one response through the request's canonical plan sink.
+    /// Binds and delivers one response through the request's canonical response sink.
     ///
     /// # Errors
     ///
     /// Returns a typed, redacted error for lifecycle, immutable binding,
     /// encoding, queue, cancellation, deadline, session, or transport failure.
-    pub async fn respond(self, plan: ResponsePlan) -> Result<ResponseReceipt, DeferredResponseError> {
+    pub async fn respond(self, response: RemotingResponse) -> Result<ResponseReceipt, DeferredResponseError> {
         let span = self.request_span();
-        self.respond_in_request_span(plan).instrument(span).await
+        self.respond_in_request_span(response).instrument(span).await
     }
 
-    async fn respond_in_request_span(mut self, plan: ResponsePlan) -> Result<ResponseReceipt, DeferredResponseError> {
-        let response_code = plan.response_code();
-        let plan_kind = plan.body_kind();
+    async fn respond_in_request_span(
+        mut self,
+        response: RemotingResponse,
+    ) -> Result<ResponseReceipt, DeferredResponseError> {
+        let response_code = response.response_code();
+        let body_kind = response.body_kind();
         let write_started = std::time::Instant::now();
         let mut claim = self.state.begin_sending().map_err(DeferredResponseError::from_state)?;
         self.active = false;
-        let bound = match plan.bind(self.original) {
+        let bound = match response.bind(self.original) {
             Ok(bound) => bound,
             Err(source) => {
                 claim
@@ -513,7 +516,7 @@ impl DeferredResponder {
                     observation.complete_failure_without_kind(
                         crate::runtime::processor::ResponseObservationMode::Deferred,
                         Some(response_code),
-                        Some(plan_kind),
+                        Some(body_kind),
                         Some(WriteProgress::NotStarted),
                     );
                 }
@@ -526,7 +529,7 @@ impl DeferredResponder {
                 state: super::ResponseStateSnapshot::Sending,
             })
         })?;
-        let result = sink.send_deferred_plan(bound, &mut claim).await;
+        let result = sink.send_deferred_response(bound, &mut claim).await;
         match result {
             Ok(receipt) => {
                 claim.complete().map_err(DeferredResponseError::from_state)?;
@@ -534,7 +537,7 @@ impl DeferredResponder {
                     observation.complete_reply(
                         crate::runtime::processor::ResponseObservationMode::Deferred,
                         response_code,
-                        plan_kind,
+                        body_kind,
                         write_started.elapsed(),
                         Ok(receipt),
                     );
@@ -549,7 +552,7 @@ impl DeferredResponder {
                     observation.complete_reply(
                         crate::runtime::processor::ResponseObservationMode::Deferred,
                         response_code,
-                        plan_kind,
+                        body_kind,
                         write_started.elapsed(),
                         Err((kind, Some(progress))),
                     );

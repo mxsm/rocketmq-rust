@@ -60,9 +60,9 @@ fn identity_with_code(owner: u64, opaque: i32, one_way: bool, code: i32) -> Orig
     OriginalRequestIdentity::capture(owner, &AtomicU64::new(1), &command).expect("test identity should allocate")
 }
 
-fn response_plan(opaque: i32) -> ResponsePlan {
-    ResponsePlan::command(RemotingCommand::create_response_command_with_code(0).set_opaque(opaque))
-        .expect("response plan")
+fn remoting_response(opaque: i32) -> RemotingResponse {
+    RemotingResponse::command(RemotingCommand::create_response_command_with_code(0).set_opaque(opaque))
+        .expect("remoting response")
 }
 
 struct ControlHarness {
@@ -144,7 +144,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     ));
     assert_eq!(deferred_state_allocations(), before);
 
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let seed = sink.deferred_seed_for_test(TransportTelemetry::noop(), harness.session_id(), control);
     let mut slot = InlineResponseSlot::with_deferred_seed(seed);
     assert!(matches!(
@@ -168,7 +168,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let _ = completed
         .resolve(
             ordinary,
-            crate::dispatch::HandlerOutcome::Reply(response_plan(ordinary.original_opaque())),
+            crate::dispatch::HandlerOutcome::Reply(remoting_response(ordinary.original_opaque())),
         )
         .expect("inline reply completes the slot");
     assert!(matches!(
@@ -184,7 +184,7 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     let (harness, control) = ControlHarness::new("deferred-cancel-drop", 73);
     let original = identity(73, 19, false);
     let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let explicit = DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
         .into_responder(original);
     let explicit_state = Arc::clone(&explicit.state);
@@ -240,7 +240,7 @@ async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
         rocketmq_protocol::code::request_code::RequestCode::PullMessage.to_i32(),
     );
     let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let responder = DeferredResponseSeed::new(sink, telemetry, harness.session_id(), control).into_responder(original);
     let state = Arc::clone(&responder.state);
 
@@ -262,9 +262,9 @@ async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
 }
 
 #[tokio::test]
-async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
-    let (harness, control) = ControlHarness::new("deferred-responder-local-plan", 74);
-    let (sink, receiver) = ResponseSink::local_plan(control.clone());
+async fn local_response_binds_original_opaque_and_moves_body_once() {
+    let (harness, control) = ControlHarness::new("deferred-responder-local-response", 74);
+    let (sink, receiver) = ResponseSink::local(control.clone());
     let original = identity(74, -712, false);
     let bytes = Bytes::from_static(b"deferred-body");
     let pointer = bytes.as_ptr();
@@ -273,7 +273,7 @@ async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
     let state = Arc::clone(&responder.state);
     let receipt = responder
         .respond(
-            ResponsePlan::bytes(
+            RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(71).set_opaque(999),
                 bytes,
             )
@@ -296,7 +296,7 @@ async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
     let second = Bytes::from_static(b"second");
     let first_pointer = first.as_ptr();
     let second_pointer = second.as_ptr();
-    let segments_plan = ResponsePlan::segments(
+    let segments_plan = RemotingResponse::segments(
         RemotingCommand::create_response_command_with_code(72).set_opaque(1),
         vec![first, second],
     )
@@ -305,7 +305,7 @@ async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
         ResponseBody::Segments(segments) => (segments.as_ptr(), segments.capacity()),
         _ => panic!("segments plan must retain its representation"),
     };
-    let (sink, receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, receiver) = ResponseSink::local(control.clone());
     DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control.clone())
         .into_responder(original)
         .respond(segments_plan)
@@ -324,12 +324,12 @@ async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
     file.write_all(b"file-body").expect("write file body");
     let file = Arc::new(file);
     let region = FileRegion::try_new(file.clone(), 0, 9).expect("file region");
-    let plan = ResponsePlan::file_regions(
+    let plan = RemotingResponse::file_regions(
         RemotingCommand::create_response_command_with_code(73).set_opaque(2),
         FileRegionSequence::try_new(vec![region]).expect("file region sequence"),
     )
-    .expect("file response plan");
-    let (sink, receiver) = ResponseSink::local_plan(control.clone());
+    .expect("file remoting response");
+    let (sink, receiver) = ResponseSink::local(control.clone());
     DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
         .into_responder(original)
         .respond(plan)
@@ -348,10 +348,10 @@ async fn local_plan_response_binds_original_opaque_and_moves_body_once() {
 }
 
 #[tokio::test]
-async fn direct_response_plan_fails_closed_before_io_and_finishes_not_started() {
+async fn direct_remoting_response_fails_closed_before_io_and_finishes_not_started() {
     let (harness, control) = ControlHarness::new("deferred-direct-fail-closed", 78);
     let original = identity(78, 23, false);
-    let bound = response_plan(999).bind(original).expect("bound response plan");
+    let bound = remoting_response(999).bind(original).expect("bound remoting response");
     let prepared = crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
         .expect("prepared response");
     let state = Arc::new(ResponseState::open());
@@ -363,7 +363,7 @@ async fn direct_response_plan_fails_closed_before_io_and_finishes_not_started() 
     let error = connection
         .send_prepared_deferred_response(prepared, &control, transport_drop)
         .await
-        .expect_err("direct response-plan writer must fail closed");
+        .expect_err("direct remoting-response writer must fail closed");
     assert!(matches!(&error, ResponseError::SessionClosed));
     claim
         .fail(error.write_progress().unwrap_or(WriteProgress::NotStarted))
@@ -381,7 +381,7 @@ async fn direct_response_plan_fails_closed_before_io_and_finishes_not_started() 
 async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
     let (harness, control) = ControlHarness::new("deferred-queued-missing-context", 79);
     let original = identity(79, 24, false);
-    let bound = response_plan(1000).bind(original).expect("bound response plan");
+    let bound = remoting_response(1000).bind(original).expect("bound remoting response");
     let prepared = crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
         .expect("prepared response");
     let state = Arc::new(ResponseState::open());
@@ -435,12 +435,12 @@ async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
 async fn immutable_binding_failure_terminates_not_started_and_preserves_its_source() {
     let (harness, control) = ControlHarness::new("deferred-binding-failure", 76);
     let original = identity(76, 22, true);
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let responder = DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
         .into_responder(original);
     let state = Arc::clone(&responder.state);
     let error = responder
-        .respond(response_plan(1))
+        .respond(remoting_response(1))
         .await
         .expect_err("immutable one-way identity must fail binding");
     assert_eq!(error.kind(), DeferredResponseErrorKind::Binding);

@@ -94,7 +94,7 @@ async fn pop_lite_deferred_max_age_expires_as_business_timeout_and_drains() {
             DeferredResumeRetainedSize::new(43),
             move |_resume, reason| async move {
                 assert_eq!(reason, DeferredWakeReason::Timeout);
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::PollingTimeout,
                 ))
                 .map_err(|error| RocketMQError::illegal_argument(error.to_string()))

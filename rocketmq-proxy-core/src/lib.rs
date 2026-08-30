@@ -80,7 +80,7 @@ pub use message::ProxyMessageExt;
 pub use processor::*;
 pub use receipt_renewal::ReceiptRenewalMetricsSnapshot;
 pub use rocketmq_transport::api::EmbeddedDispatchOutcome;
-pub use rocketmq_transport::api::ResponsePlan;
+pub use rocketmq_transport::api::RemotingResponse;
 pub use session::build_lite_subscription_sync_request;
 pub use session::ClaimedReceiptHandle;
 pub use session::ClientSession;

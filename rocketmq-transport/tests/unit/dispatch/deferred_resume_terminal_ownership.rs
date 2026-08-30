@@ -55,10 +55,10 @@ use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
+use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
-use crate::dispatch::ResponsePlan;
 use crate::dispatch::ResponseSink;
 use crate::request_ordering::RequestOrdering;
 use crate::session_executor::DeferredResumeExecutor;
@@ -129,10 +129,10 @@ async fn claimed_for_terminal_test(
     (claim, admission)
 }
 
-fn response_plan() -> RocketMQResult<ResponsePlan> {
+fn remoting_response() -> RocketMQResult<RemotingResponse> {
     Ok(
-        ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
-            .expect("terminal ownership response plan"),
+        RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
+            .expect("terminal ownership remoting response"),
     )
 }
 
@@ -172,7 +172,7 @@ async fn claimed_resume_handler_reenters_the_original_request_span() {
         )
         .with_span_for_test(span);
     observation.bind_response_observer(|_| {});
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let responder = sink
         .deferred_seed_for_test(TransportTelemetry::noop(), session.view().id(), control)
         .with_observation(observation)
@@ -197,7 +197,7 @@ async fn claimed_resume_handler_reenters_the_original_request_span() {
     let stop_view = ResumeStopView::from_execution_parts(&parts);
     let work: Box<dyn DeferredResumeWork> = Box::new(ResumeWorkImpl {
         parts: Some(parts),
-        handler: Some(move |(), _reason| async move { response_plan() }),
+        handler: Some(move |(), _reason| async move { remoting_response() }),
         stop_view,
     });
 
@@ -209,12 +209,12 @@ async fn claimed_resume_handler_reenters_the_original_request_span() {
 }
 
 struct ReadyRetainedFuture {
-    output: Option<RocketMQResult<ResponsePlan>>,
+    output: Option<RocketMQResult<RemotingResponse>>,
     drops: Arc<AtomicUsize>,
 }
 
 impl Future for ReadyRetainedFuture {
-    type Output = RocketMQResult<ResponsePlan>;
+    type Output = RocketMQResult<RemotingResponse>;
 
     fn poll(mut self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         std::task::Poll::Ready(self.output.take().expect("retained future is polled once"))
@@ -241,7 +241,7 @@ async fn completed_handler_future_is_retained_until_canonical_response_handoff_t
     let checked = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (sink, _receiver, _attempts) =
-        ResponseSink::local_plan_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
+        ResponseSink::local_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
     let original = OriginalRequestIdentity::capture(
         98_330,
         &AtomicU64::new(1),
@@ -274,10 +274,10 @@ async fn completed_handler_future_is_retained_until_canonical_response_handoff_t
     let execution = tokio::spawn(execute_work(
         parts,
         move |(), _reason| ReadyRetainedFuture {
-            output: Some(Ok(ResponsePlan::command(
+            output: Some(Ok(RemotingResponse::command(
                 RemotingCommand::create_response_command_with_code(0),
             )
-            .expect("handler-owner response plan"))),
+            .expect("handler-owner remoting response"))),
             drops: future_drops,
         },
         stop_view,
@@ -321,7 +321,7 @@ async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_r
     let checked = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (sink, receiver, attempts) =
-        ResponseSink::local_plan_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
+        ResponseSink::local_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
     let (claim, admission) =
         claimed_for_terminal_test(sink, &session, control, Some(executor.deferred_resume_executor()), 834).await;
     let terminal_calls = Arc::new(AtomicUsize::new(0));
@@ -335,7 +335,7 @@ async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_r
         .spawn("submit-one-claim", TaskKind::Worker, async move {
             let submitted = claim.submit(
                 crate::dispatch::DeferredResumeRetainedSize::default(),
-                |(), _reason| async { response_plan() },
+                |(), _reason| async { remoting_response() },
                 move |result| {
                     calls.fetch_add(1, Ordering::AcqRel);
                     succeeded.store(result.is_ok(), Ordering::Release);
@@ -395,7 +395,7 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
         let checked = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let (sink, receiver, attempts) =
-            ResponseSink::local_plan_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
+            ResponseSink::local_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
         let mut receiver = Some(receiver);
         let (claim, admission) = claimed_for_terminal_test(
             sink,
@@ -411,7 +411,7 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
         claim
             .submit(
                 crate::dispatch::DeferredResumeRetainedSize::default(),
-                |(), _reason| async { response_plan() },
+                |(), _reason| async { remoting_response() },
                 {
                     let calls = Arc::clone(&calls);
                     let observed_failure = Arc::clone(&observed_failure);
@@ -452,7 +452,7 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
         session.view().state().clone(),
         component.task_group(),
     );
-    let (sink, _receiver) = ResponseSink::local_plan(control.clone());
+    let (sink, _receiver) = ResponseSink::local(control.clone());
     let (claim, admission) = claimed_for_terminal_test(sink, &session, control, None, 837).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let handler_calls = Arc::new(AtomicUsize::new(0));
@@ -463,7 +463,7 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
                 let handler_calls = Arc::clone(&handler_calls);
                 move |(), _reason| async move {
                     handler_calls.fetch_add(1, Ordering::AcqRel);
-                    response_plan()
+                    remoting_response()
                 }
             },
             {

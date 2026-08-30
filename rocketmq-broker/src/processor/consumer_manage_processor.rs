@@ -43,7 +43,7 @@ use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerAssignmentView;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetRequestCapability;
-use crate::processor::response_plan::immediate_outcome_from_command_result;
+use crate::processor::response_assembly::immediate_outcome_from_command_result;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
@@ -697,14 +697,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consumer_manage_maps_header_errors_into_a_response_plan() {
+    async fn consumer_manage_maps_header_errors_into_a_response_assembly() {
         let mut runtime = new_test_runtime("consumer-manage").await;
         let processor = consumer_processor_for_test(&mut runtime);
         let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, EmptyHeader {})
             .set_opaque(4_204);
 
         let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
-            panic!("consumer manager must return an inline response plan");
+            panic!("consumer manager must return an inline remoting response");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::InvalidParameter);

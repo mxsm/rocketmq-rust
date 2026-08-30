@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Broker-private ownership seam for immediate Pull, Pop, Query, and View responses.
+//! Broker-private assembly seam for immediate Pull, Pop, Query, and View responses.
 
 pub(crate) mod pop;
 
@@ -32,8 +32,8 @@ use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionLease;
 use rocketmq_transport::api::FileRegionSequence;
 use rocketmq_transport::api::HandlerOutcome;
-use rocketmq_transport::api::ResponsePlan;
-use rocketmq_transport::api::ResponsePlanError;
+use rocketmq_transport::api::RemotingResponse;
+use rocketmq_transport::api::ResponseBuildError;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -55,13 +55,13 @@ pub(crate) struct BrokerResponseParts {
 /// Typed failures while assembling a Broker-owned response body.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BrokerResponseBuildError {
-    #[error("invalid Broker response plan: {0}")]
-    ResponsePlan(#[from] ResponsePlanError),
+    #[error("invalid Broker response construction: {0}")]
+    ResponseConstruction(#[from] ResponseBuildError),
 }
 
 impl From<BrokerResponseBuildError> for RocketMQError {
     fn from(error: BrokerResponseBuildError) -> Self {
-        Self::internal("broker-response-plan", error)
+        Self::internal("broker-response-assembly", error)
     }
 }
 
@@ -85,7 +85,7 @@ impl FileRegionLease for StoreFileRegionLease {
 impl BrokerResponseParts {
     /// Splits a response command into the body-free head and affine byte owner required by the
     /// response contract. This prevents each leaf from open-coding body extraction or
-    /// accidentally placing a body-bearing head in a [`ResponsePlan`].
+    /// accidentally placing a body-bearing head in a [`RemotingResponse`].
     pub(crate) fn from_command(mut command: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
         match command.take_body() {
             Some(body) => Self::bytes(command, body),
@@ -124,18 +124,18 @@ impl BrokerResponseParts {
         Ok(Self { head, body })
     }
 
-    pub(crate) fn into_response_plan(self) -> RocketMQResult<ResponsePlan> {
+    pub(crate) fn into_remoting_response(self) -> RocketMQResult<RemotingResponse> {
         let result = match self.body {
-            BrokerResponseBodyOwner::Empty => ResponsePlan::command(self.head),
-            BrokerResponseBodyOwner::Bytes(body) => ResponsePlan::bytes(self.head, body),
-            BrokerResponseBodyOwner::Segments(segments) => ResponsePlan::segments(self.head, segments),
-            BrokerResponseBodyOwner::FileRegions(regions) => ResponsePlan::file_regions(self.head, regions),
+            BrokerResponseBodyOwner::Empty => RemotingResponse::command(self.head),
+            BrokerResponseBodyOwner::Bytes(body) => RemotingResponse::bytes(self.head, body),
+            BrokerResponseBodyOwner::Segments(segments) => RemotingResponse::segments(self.head, segments),
+            BrokerResponseBodyOwner::FileRegions(regions) => RemotingResponse::file_regions(self.head, regions),
         };
-        result.map_err(|error| BrokerResponseBuildError::ResponsePlan(error).into())
+        result.map_err(|error| BrokerResponseBuildError::ResponseConstruction(error).into())
     }
 
     pub(crate) fn into_handler_outcome(self) -> RocketMQResult<HandlerOutcome> {
-        self.into_response_plan().map(HandlerOutcome::Reply)
+        self.into_remoting_response().map(HandlerOutcome::Reply)
     }
 
     #[cfg(test)]
@@ -165,13 +165,13 @@ pub(crate) fn immediate_outcome_from_command_result(
 
 fn validate_head(head: &RemotingCommand) -> Result<(), BrokerResponseBuildError> {
     if head.body().is_some() {
-        return Err(ResponsePlanError::HeadHasBody.into());
+        return Err(ResponseBuildError::HeadHasBody.into());
     }
     if !head.is_response_type() {
-        return Err(ResponsePlanError::RequestHead.into());
+        return Err(ResponseBuildError::RequestHead.into());
     }
     if head.is_oneway_rpc() {
-        return Err(ResponsePlanError::OneWayHead.into());
+        return Err(ResponseBuildError::OneWayHead.into());
     }
     Ok(())
 }
@@ -190,12 +190,14 @@ fn validate_body(body: &BrokerResponseBodyOwner) -> Result<(), BrokerResponseBui
 fn checked_body_len(lengths: impl IntoIterator<Item = u64>) -> Result<usize, BrokerResponseBuildError> {
     let mut body_len = 0_u64;
     for len in lengths {
-        body_len = body_len.checked_add(len).ok_or(ResponsePlanError::BodyLengthOverflow)?;
+        body_len = body_len
+            .checked_add(len)
+            .ok_or(ResponseBuildError::BodyLengthOverflow)?;
     }
     if body_len > MAX_RESPONSE_BODY_LEN {
-        return Err(ResponsePlanError::BodyTooLarge { actual: body_len }.into());
+        return Err(ResponseBuildError::BodyTooLarge { actual: body_len }.into());
     }
-    usize::try_from(body_len).map_err(|_| ResponsePlanError::BodyLengthNotRepresentable { actual: body_len }.into())
+    usize::try_from(body_len).map_err(|_| ResponseBuildError::BodyLengthNotRepresentable { actual: body_len }.into())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -285,5 +287,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/processor/response_plan/tests.rs"]
+#[path = "../../tests/unit/processor/response_assembly/tests.rs"]
 mod tests;

@@ -57,7 +57,7 @@ use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 
 use crate::config::broker_config::BrokerConfig;
-use crate::processor::response_plan::immediate_outcome_from_command_result;
+use crate::processor::response_assembly::immediate_outcome_from_command_result;
 
 /// Broker endpoint for release-checkpoint operations.
 #[derive(Clone)]
@@ -758,7 +758,7 @@ mod tests {
                 .await
                 .expect("bound maintenance principal should be authorized")
         else {
-            panic!("authorized maintenance must return an inline response plan");
+            panic!("authorized maintenance must return an inline remoting response");
         };
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
         assert!(plan.body_len() > 0);
@@ -766,9 +766,9 @@ mod tests {
         let EmbeddedDispatchOutcome::Reply(denied) =
             dispatch_request(processor, "ordinary-admin", verify_request(5_506))
                 .await
-                .expect("authorization failures should become typed response plans")
+                .expect("authorization failures should become typed remoting responses")
         else {
-            panic!("denied maintenance must return an inline response plan");
+            panic!("denied maintenance must return an inline remoting response");
         };
         assert_eq!(ResponseCode::from(denied.response_code()), ResponseCode::NoPermission);
         assert_eq!(denied.body_len(), 0);
@@ -875,7 +875,7 @@ mod tests {
         )
         .await
         .expect("original maintenance capability request should remain authoritative") else {
-            panic!("maintenance capability request must return an inline response plan");
+            panic!("maintenance capability request must return an inline remoting response");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);

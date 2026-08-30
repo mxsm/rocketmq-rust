@@ -35,7 +35,7 @@ impl Drop for DispatchCountingLease {
 
 #[derive(Default)]
 struct FileReplyState {
-    plan: Mutex<Option<ResponsePlan>>,
+    plan: Mutex<Option<RemotingResponse>>,
     observations: Mutex<Vec<ResponseWriteObservation>>,
     observed: tokio::sync::Notify,
 }
@@ -157,11 +157,11 @@ async fn file_region_crosses_hooks_and_metric_projection_without_entering_the_ob
         drops: Arc::clone(&drops),
     });
     let region = crate::file_region::FileRegion::try_new(lease.clone(), 0, 18).expect("dispatch file region");
-    let plan = ResponsePlan::file_regions(
+    let plan = RemotingResponse::file_regions(
         RemotingCommand::create_response_command_with_code(79),
         crate::file_region::FileRegionSequence::single(region),
     )
-    .expect("dispatch file-region response plan");
+    .expect("dispatch file-region remoting response");
     drop(lease);
     assert_eq!(accesses.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);

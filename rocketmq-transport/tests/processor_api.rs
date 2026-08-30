@@ -73,6 +73,7 @@ use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingClient;
 use rocketmq_transport::api::RemotingClientBuilder;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RequestId;
@@ -82,10 +83,9 @@ use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseBodyKind;
+use rocketmq_transport::api::ResponseBuildError;
 use rocketmq_transport::api::ResponseDisposition;
 use rocketmq_transport::api::ResponseErrorKind;
-use rocketmq_transport::api::ResponsePlan;
-use rocketmq_transport::api::ResponsePlanError;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::ResponseWriteObservation;
 use rocketmq_transport::api::ResponseWriteOutcome;
@@ -167,7 +167,7 @@ fn assert_debug_contract<T: std::fmt::Debug>() {}
 fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchOutcome>, error: Option<EmbeddedDispatchError>) {
     if let Some(outcome) = outcome {
         match outcome {
-            EmbeddedDispatchOutcome::Reply(plan) => assert_response_plan_contract(Some(plan)),
+            EmbeddedDispatchOutcome::Reply(plan) => assert_remoting_response_contract(Some(plan)),
             EmbeddedDispatchOutcome::OneWay { request_id } | EmbeddedDispatchOutcome::Deferred { request_id } => {
                 let _: RequestId = request_id;
             }
@@ -184,7 +184,7 @@ fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchOutcome>, e
     }
 }
 
-fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
+fn assert_remoting_response_contract(plan: Option<RemotingResponse>) {
     if let Some(plan) = plan {
         let _: i32 = plan.response_code();
         let _: ResponseBodyKind = plan.body_kind();
@@ -197,17 +197,17 @@ fn assert_response_plan_contract(plan: Option<ResponsePlan>) {
         let _: (RemotingCommand, EmbeddedResponseBody) = response.into_parts();
     }
 
-    let _: fn(RemotingCommand) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::command;
-    let _: fn(i32) -> ResponsePlan = ResponsePlan::empty_response;
-    let _: fn(RemotingCommand, Bytes) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::bytes;
-    let _: fn(RemotingCommand, Vec<Bytes>) -> Result<ResponsePlan, ResponsePlanError> = ResponsePlan::segments;
-    let _: fn(RemotingCommand, FileRegionSequence) -> Result<ResponsePlan, ResponsePlanError> =
-        ResponsePlan::file_regions;
+    let _: fn(RemotingCommand) -> Result<RemotingResponse, ResponseBuildError> = RemotingResponse::command;
+    let _: fn(i32) -> RemotingResponse = RemotingResponse::empty_response;
+    let _: fn(RemotingCommand, Bytes) -> Result<RemotingResponse, ResponseBuildError> = RemotingResponse::bytes;
+    let _: fn(RemotingCommand, Vec<Bytes>) -> Result<RemotingResponse, ResponseBuildError> = RemotingResponse::segments;
+    let _: fn(RemotingCommand, FileRegionSequence) -> Result<RemotingResponse, ResponseBuildError> =
+        RemotingResponse::file_regions;
     let _ = ResponseBodyKind::Empty;
     let _ = ResponseBodyKind::Bytes;
     let _ = ResponseBodyKind::Segments;
     let _ = ResponseBodyKind::FileRegions;
-    assert_error_contract::<ResponsePlanError>();
+    assert_error_contract::<ResponseBuildError>();
 }
 
 fn consume_handler_outcome_exhaustively(outcome: HandlerOutcome) -> Option<RequestId> {
@@ -313,7 +313,7 @@ fn assert_claim_resume_contract<R>(
     let _: &mut R = claimed.resume_data_mut();
     assert_send_future(registry.claim(id, DeferredWakeReason::MessageArrived));
     let resume = claimed.resume(DeferredResumeRetainedSize::new(7), |_, _| async move {
-        ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+        RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
     });
     assert_send_future(resume);
@@ -361,7 +361,7 @@ fn assert_local_processor<T: LocalRequestProcessor>() {}
 
 fn assert_send_processor<T: RequestProcessor + Send>() {}
 
-fn consume_rejection_exhaustively(decision: RejectRequestDecision) -> Option<ResponsePlan> {
+fn consume_rejection_exhaustively(decision: RejectRequestDecision) -> Option<RemotingResponse> {
     match decision {
         RejectRequestDecision::Proceed => None,
         RejectRequestDecision::Reject(plan) => Some(plan),
@@ -489,8 +489,8 @@ fn api_exposes_the_request_aggregate_and_ingress_view_without_legacy_reexports()
 }
 
 #[test]
-fn api_exposes_only_response_plan_metadata_and_file_region_construction_dtos() {
-    assert_response_plan_contract(None);
+fn api_exposes_only_remoting_response_metadata_and_file_region_construction_dtos() {
+    assert_remoting_response_contract(None);
     assert_file_region_dto_contract(None, None);
 }
 
@@ -507,7 +507,7 @@ fn api_exposes_exactly_three_exhaustive_affine_handler_outcomes() {
     assert_debug_contract::<HandlerOutcome>();
     assert_debug_contract::<DeferredRegistration>();
     assert_debug_contract::<ProtocolNoResponse>();
-    let plan = ResponsePlan::command(RemotingCommand::create_response_command_with_code(0))
+    let plan = RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
         .expect("public reply plan should construct");
     assert_eq!(consume_handler_outcome_exhaustively(HandlerOutcome::Reply(plan)), None);
     assert_handler_outcome_contract(None, None);
@@ -583,18 +583,18 @@ fn api_processor_contract_preserves_local_and_send_future_boundaries() {
 
 #[test]
 fn api_processor_side_contracts_are_typed_and_body_free() {
-    let empty = ResponsePlan::empty_response(6);
+    let empty = RemotingResponse::empty_response(6);
     assert_eq!(empty.response_code(), 6);
     assert_eq!(empty.body_kind(), ResponseBodyKind::Empty);
     assert_eq!(empty.body_len(), 0);
 
-    let plan = ResponsePlan::bytes(
+    let plan = RemotingResponse::bytes(
         RemotingCommand::create_response_command_with_code(7),
         Bytes::from_static(b"owned rejection"),
     )
     .expect("public rejection plan");
     let plan = consume_rejection_exhaustively(RejectRequestDecision::Reject(plan))
-        .expect("rejection should own its response plan");
+        .expect("rejection should own its remoting response");
     assert_eq!(plan.response_code(), 7);
     assert_eq!(plan.body_kind(), ResponseBodyKind::Bytes);
     assert_eq!(plan.body_len(), 15);

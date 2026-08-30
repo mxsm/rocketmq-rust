@@ -73,14 +73,14 @@ impl RequestProcessor for PerRequestFilterProcessor {
     }
 }
 
-fn success_plan(has_msg: bool) -> rocketmq_error::RocketMQResult<ResponsePlan> {
+fn success_plan(has_msg: bool) -> rocketmq_error::RocketMQResult<RemotingResponse> {
     let head = application_remoting_command_factory().create_success_response_command_with_header(
         NotificationResponseHeader {
             has_msg,
             polling_full: false,
         },
     );
-    ResponsePlan::command(head).map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    RemotingResponse::command(head).map_err(|error| RocketMQError::illegal_argument(error.to_string()))
 }
 
 #[tokio::test]

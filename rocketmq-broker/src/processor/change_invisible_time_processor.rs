@@ -268,7 +268,7 @@ impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessor<MS> {
         let command_factory = self.context.command_factory;
         let request_source = request_origin_label(request.origin());
         let result = self.process_command(request.command_mut(), &request_source).await;
-        crate::processor::response_plan::immediate_outcome_from_command_result(
+        crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
             result,
             original_opaque,
@@ -928,18 +928,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_unknown_request_returns_a_reply_plan() {
+    async fn embedded_unknown_request_returns_a_reply_response() {
         let outcome = dispatch_embedded(
             test_processor(),
             RemotingCommand::create_remoting_command(-98_452).set_opaque(318),
         )
         .await
         .expect("embedded ChangeInvisibleTime response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
-            panic!("ChangeInvisibleTime unknown request must return a reply plan");
+        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+            panic!("ChangeInvisibleTime unknown request must return a reply response");
         };
 
-        assert_eq!(plan.response_code(), ResponseCode::RequestCodeNotSupported as i32);
-        assert_eq!(plan.body_kind(), ResponseBodyKind::Empty);
+        assert_eq!(response.response_code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(response.body_kind(), ResponseBodyKind::Empty);
     }
 }

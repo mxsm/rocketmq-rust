@@ -190,7 +190,7 @@ where
             Ok(Some(response)) => Ok(Some(response)),
             Ok(None) => Ok(Some(
                 // Legacy callers use None for pending or unknown transaction states. must make
-                // that branch explicit: one-way ingress still suppresses this plan in the dispatcher,
+                // that branch explicit: one-way ingress still suppresses this response in the dispatcher,
                 // while a malformed two-way caller receives a deterministic protocol error instead
                 // of a false success or an indefinite timeout.
                 command_factory
@@ -202,7 +202,7 @@ where
             )),
             Err(error) => Err(error),
         };
-        crate::processor::response_plan::immediate_outcome_from_command_result(
+        crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
             result,
             opaque,
@@ -803,7 +803,7 @@ mod tests {
         .set_opaque(6_606);
 
         let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
-            panic!("end transaction must return an inline response plan");
+            panic!("end transaction must return an inline remoting response");
         };
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::IllegalOperation);

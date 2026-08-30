@@ -17,9 +17,9 @@ use std::future::Future;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
-use rocketmq_transport::api::ResponsePlan;
-use rocketmq_transport::api::ResponsePlanError;
+use rocketmq_transport::api::ResponseBuildError;
 
 #[derive(Clone)]
 pub(crate) enum StoreAwaitControl {
@@ -56,13 +56,13 @@ where
 pub(crate) enum StructuredStoreReplyError {
     #[error("request lifecycle stopped while awaiting the message store")]
     Cancelled,
-    #[error("store response plan construction failed: {0}")]
-    ResponsePlan(#[from] ResponsePlanError),
+    #[error("store response construction failed: {0}")]
+    ResponseConstruction(#[from] ResponseBuildError),
 }
 
 /// Affine hook-completion token owned by exactly one structured store reply.
 /// Consuming the reply makes the caller handle every legacy-compatible timing
-/// class before handing the response plan to the canonical writer.
+/// class before handing the response to the canonical writer.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum StoreHookCompletion {
     AfterCanonicalWrite,
@@ -99,7 +99,7 @@ where
         .await
         .map_err(|StoreAwaitStopped| StructuredStoreReplyError::Cancelled)?;
     let (response, hook_completion) = build_response(result);
-    let outcome = ResponsePlan::command(response)
+    let outcome = RemotingResponse::command(response)
         .map(HandlerOutcome::Reply)
         .map_err(StructuredStoreReplyError::from)?;
     Ok(StructuredStoreReply {

@@ -2133,7 +2133,7 @@ mod tests {
     async fn dispatch_layered_request(
         fixture: &LayeredDispatchFixture,
         request: RemotingCommand,
-    ) -> rocketmq_transport::api::ResponsePlan {
+    ) -> rocketmq_transport::api::RemotingResponse {
         let harness = EmbeddedRequestHarness::new(
             Arc::clone(&fixture.dispatcher),
             fixture.service.task_group().clone(),

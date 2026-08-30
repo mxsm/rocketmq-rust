@@ -26,7 +26,7 @@ use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::ResponsePlan;
+use rocketmq_transport::api::RemotingResponse;
 use tokio::sync::mpsc;
 
 use super::request_command;
@@ -78,7 +78,7 @@ async fn pop_lite_deferred_execution_admission_rejects_before_processor_and_writ
                 executions_for_handler.fetch_add(1, Ordering::SeqCst);
                 let batch = reservation.commit();
                 batch.complete(&HashSet::new());
-                ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
                 .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
@@ -157,7 +157,7 @@ async fn pop_lite_deferred_handler_failure_drops_body_owner_once_and_rolls_back_
                     body: b"owner-backed-pop-lite-failure".to_vec(),
                     drops: owner_drops_for_handler,
                 });
-                Err::<ResponsePlan, _>(RocketMQError::illegal_argument("PopLite owner failure"))
+                Err::<RemotingResponse, _>(RocketMQError::illegal_argument("PopLite owner failure"))
             },
         )
         .await

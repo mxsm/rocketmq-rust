@@ -21,7 +21,7 @@ use crate::long_polling::pop_lite_deferred::index::PopLiteIndexErrorKind;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareError;
 use crate::long_polling::pop_lite_deferred::prepare::PreparedPopLiteRegistration;
 use crate::processor::pop_lite_message_processor::core::PopLiteCoreResult;
-use crate::processor::pop_lite_message_processor::response::compose_pop_lite_response_plan;
+use crate::processor::pop_lite_message_processor::response::compose_pop_lite_response;
 use crate::processor::pop_lite_message_processor::response::PopLiteResponseKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,7 +42,7 @@ fn polling_full_reply(request: &RemotingRequest) -> rocketmq_error::RocketMQResu
     let request_header = request
         .command()
         .decode_command_custom_header::<PopLiteMessageRequestHeader>()?;
-    compose_pop_lite_response_plan(
+    compose_pop_lite_response(
         &application_remoting_command_factory(),
         &request_header,
         PopLiteCoreResult {
@@ -56,7 +56,7 @@ fn polling_full_reply(request: &RemotingRequest) -> rocketmq_error::RocketMQResu
 }
 
 fn held_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-    ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)

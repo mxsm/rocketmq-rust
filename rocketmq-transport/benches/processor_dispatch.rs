@@ -30,8 +30,8 @@ use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::ResponsePlan;
 use rocketmq_transport::api::TransportSecurity;
 
 #[path = "support/criterion_profile.rs"]
@@ -44,7 +44,7 @@ struct InlineReplyProcessor;
 
 impl RequestProcessor for InlineReplyProcessor {
     async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        Ok(HandlerOutcome::Reply(ResponsePlan::empty_response(0)))
+        Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(0)))
     }
 }
 

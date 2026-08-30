@@ -40,8 +40,8 @@ use super::DeferredWaitLimits;
 use super::DeferredWakeReason;
 use super::HandlerOutcome;
 use super::RemotingRequest;
+use super::RemotingResponse;
 use super::RequestProcessor;
-use super::ResponsePlan;
 use super::TransportServer;
 use crate::dispatch::DeferredExpiryMargins;
 use crate::dispatch::DeferredTerminalReason;
@@ -90,7 +90,7 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if request.command().code() == 12 {
             self.state.committed.notify_one();
-            return ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+            return RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
             .map(HandlerOutcome::Reply)
@@ -265,7 +265,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
                 resumed.resumes.fetch_add(1, Ordering::SeqCst);
                 assert_eq!(reason, DeferredWakeReason::Timeout);
                 assert_eq!(opaque, 9_001);
-                ResponsePlan::bytes(
+                RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                     Bytes::from_static(b"protocol-timeout"),
                 )
@@ -384,7 +384,7 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
     let resume = claim.resume(DeferredResumeRetainedSize::default(), move |_, _| async move {
         handler_entered.notify_one();
         handler_release.notified().await;
-        ResponsePlan::command(RemotingCommand::create_response_command_with_code(
+        RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
         ))
         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))

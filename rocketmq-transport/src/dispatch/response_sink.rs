@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod plan;
+mod delivery;
 
 use std::sync::Arc;
 
@@ -21,14 +21,14 @@ use crate::server::SessionHandle;
 use crate::session_view::SessionStateView;
 use rocketmq_runtime::TaskGroup;
 
-use plan::LocalPlanSenderState;
-pub(crate) use plan::NetworkResponsePlanContext;
-pub(crate) use plan::ResponseTransportDropHandle;
+use delivery::LocalResponseSenderState;
+pub(crate) use delivery::ResponseDeliveryContext;
+pub(crate) use delivery::ResponseTransportDropHandle;
 
 #[derive(Clone)]
 /// Cloneable single-response capability used by in-process dispatch.
 pub(crate) struct LocalResponseSink {
-    state: Arc<LocalPlanSenderState>,
+    state: Arc<LocalResponseSenderState>,
 }
 
 impl Drop for LocalResponseSink {
@@ -49,9 +49,9 @@ pub(crate) enum ResponseSink {
 }
 
 impl ResponseSink {
-    /// Proves that this is the local plan capability whose control observes
+    /// Proves that this is the local response capability whose control observes
     /// the supplied embedded lifecycle owners.
-    pub(crate) fn is_local_plan_owner(&self, session: &SessionStateView, task_group: &TaskGroup) -> bool {
+    pub(crate) fn is_local_owner(&self, session: &SessionStateView, task_group: &TaskGroup) -> bool {
         matches!(
             self,
             Self::Local(LocalResponseSink { state })
@@ -59,7 +59,7 @@ impl ResponseSink {
         )
     }
 
-    /// Builds the deferred responder seed for a canonical embedded local-plan
+    /// Builds the deferred responder seed for a canonical embedded response
     /// owner. The lifecycle proof prevents a sink, session view, and task group
     /// from unrelated dispatches being combined.
     pub(crate) fn local_deferred_seed_with_resume(
@@ -72,37 +72,32 @@ impl ResponseSink {
         executor: crate::session_executor::DeferredResumeExecutor,
     ) -> Option<DeferredResponseSeed> {
         if !matches!(session, crate::session_view::SessionView::Embedded { .. })
-            || !self.is_local_plan_owner(session.state(), task_group)
+            || !self.is_local_owner(session.state(), task_group)
         {
             return None;
         }
         Some(
-            DeferredResponseSeed::new(
-                self.clone(),
-                telemetry,
-                session.id(),
-                self.local_plan_control()?.clone(),
-            )
-            .with_resume_context(ordering, class, executor),
+            DeferredResponseSeed::new(self.clone(), telemetry, session.id(), self.local_control()?.clone())
+                .with_resume_context(ordering, class, executor),
         )
     }
 
-    fn local_plan_control(&self) -> Option<&crate::dispatch::RequestControlView> {
+    fn local_control(&self) -> Option<&crate::dispatch::RequestControlView> {
         match self {
             Self::Local(LocalResponseSink { state }) => Some(state.control()),
             Self::Network(_) => None,
         }
     }
 
-    /// Proves this is the plan-bound view of a canonical network session. A bare
+    /// Proves this is the response-bound view of a canonical network session. A bare
     /// command sink is insufficient because it has no shared completion slot.
-    pub(crate) fn is_canonical_network_plan_owner(&self, session: &SessionHandle) -> bool {
+    pub(crate) fn is_canonical_network_owner(&self, session: &SessionHandle) -> bool {
         matches!(
             self,
             Self::Network(owner)
                 if owner.same_canonical_owner(session)
                     && owner
-                        .response_plan_context()
+                        .response_context()
                         .is_some_and(|context| context.same_lifecycle_owner(session))
         )
     }
@@ -114,13 +109,13 @@ impl ResponseSink {
         class: crate::admission::AdmissionClass,
         executor: crate::session_executor::DeferredResumeExecutor,
     ) -> Option<DeferredResponseSeed> {
-        if !self.is_canonical_network_plan_owner(session) {
+        if !self.is_canonical_network_owner(session) {
             return None;
         }
         let Self::Network(owner) = self else {
             return None;
         };
-        let context = owner.response_plan_context()?;
+        let context = owner.response_context()?;
         Some(
             DeferredResponseSeed::new(
                 self.clone(),
@@ -134,13 +129,13 @@ impl ResponseSink {
 
     #[cfg(test)]
     pub(crate) fn network_deferred_seed(&self, session: &SessionHandle) -> Option<DeferredResponseSeed> {
-        if !self.is_canonical_network_plan_owner(session) {
+        if !self.is_canonical_network_owner(session) {
             return None;
         }
         let Self::Network(owner) = self else {
             return None;
         };
-        let context = owner.response_plan_context()?;
+        let context = owner.response_context()?;
         Some(DeferredResponseSeed::new(
             self.clone(),
             session.connection().telemetry(),

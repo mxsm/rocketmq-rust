@@ -12,26 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Private ownership boundary between a response plan and ingress identity.
+//! Private ownership boundary between a remoting response and ingress identity.
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
+use super::RemotingResponse;
 use super::ResponseBody;
-use super::ResponsePlan;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestId;
 
-/// A response plan that is bound to immutable ingress identity.
+/// A remoting response bound to immutable ingress identity.
 ///
 /// This capability is intentionally crate-private. It is the only value that
 /// the response transport uses to recover the response head and body.
-pub(crate) struct BoundResponsePlan {
+pub(crate) struct BoundResponse {
     request_id: RequestId,
-    plan: ResponsePlan,
+    response: RemotingResponse,
     opaque_was_corrected: bool,
 }
 
-impl BoundResponsePlan {
+impl BoundResponse {
     /// Returns the ingress-assigned process-local request identity.
     pub(crate) const fn request_id(&self) -> RequestId {
         self.request_id
@@ -49,7 +49,7 @@ impl BoundResponsePlan {
     /// Consumes the binding capability at the private encoder seam.
     #[allow(dead_code, reason = "the later private response encoder owns the response parts")]
     pub(crate) fn into_parts(self) -> (RequestId, RemotingCommand, ResponseBody) {
-        (self.request_id, self.plan.head, self.plan.body)
+        (self.request_id, self.response.head, self.response.body)
     }
 }
 
@@ -61,21 +61,21 @@ impl BoundResponsePlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum ResponseBindingError {
     /// The captured inbound request was one-way and cannot produce a response.
-    #[error("a one-way request cannot produce a bound response plan")]
+    #[error("a one-way request cannot produce a bound remoting response")]
     OneWayRequest,
 }
 
-impl ResponsePlan {
-    /// Binds this owned plan to the immutable identity captured at ingress.
+impl RemotingResponse {
+    /// Binds this owned response to the immutable identity captured at ingress.
     ///
-    /// The one-way decision precedes every plan mutation. Successful binding
+    /// The one-way decision precedes every response mutation. Successful binding
     /// overwrites only the raw opaque and ORs in the response-type flag, so
     /// processor-provided response metadata and body ownership stay intact.
     #[allow(
         dead_code,
         reason = "the later private dispatcher creates this response binding before encoding"
     )]
-    pub(crate) fn bind(mut self, original: OriginalRequestIdentity) -> Result<BoundResponsePlan, ResponseBindingError> {
+    pub(crate) fn bind(mut self, original: OriginalRequestIdentity) -> Result<BoundResponse, ResponseBindingError> {
         if original.is_one_way() {
             return Err(ResponseBindingError::OneWayRequest);
         }
@@ -84,9 +84,9 @@ impl ResponsePlan {
         self.head.set_opaque_mut(original.original_opaque());
         self.head.mark_response_type_ref();
 
-        Ok(BoundResponsePlan {
+        Ok(BoundResponse {
             request_id: original.request_id(),
-            plan: self,
+            response: self,
             opaque_was_corrected,
         })
     }
@@ -134,20 +134,20 @@ mod tests {
     #[test]
     fn binding_uses_the_captured_request_id_and_opaque_for_matched_mismatched_and_negative_values() {
         let matched_original = original_identity(7, 41);
-        let matched = ResponsePlan::command(response_head(41))
-            .expect("valid response plan")
+        let matched = RemotingResponse::command(response_head(41))
+            .expect("valid remoting response")
             .bind(matched_original)
             .expect("non-one-way requests bind");
         assert_eq!(matched.request_id(), matched_original.request_id());
         assert!(!matched.opaque_was_corrected());
         let (_, matched_head, ResponseBody::Empty) = matched.into_parts() else {
-            panic!("empty response plan must retain its empty body");
+            panic!("empty remoting response must retain its empty body");
         };
         assert_eq!(matched_head.opaque(), 41);
 
         let mismatched_original = original_identity(8, 42);
-        let mismatched = ResponsePlan::command(response_head(99))
-            .expect("valid response plan")
+        let mismatched = RemotingResponse::command(response_head(99))
+            .expect("valid remoting response")
             .bind(mismatched_original)
             .expect("non-one-way requests bind");
         assert_eq!(mismatched.request_id(), mismatched_original.request_id());
@@ -156,8 +156,8 @@ mod tests {
         assert_eq!(mismatched_head.opaque(), 42);
 
         let negative_original = original_identity(9, -1_234_567);
-        let negative = ResponsePlan::command(response_head(99))
-            .expect("valid response plan")
+        let negative = RemotingResponse::command(response_head(99))
+            .expect("valid remoting response")
             .bind(negative_original)
             .expect("non-one-way requests bind");
         assert!(negative.opaque_was_corrected());
@@ -166,11 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn binding_rejects_captured_one_way_requests_before_plan_canonicalization() {
-        let plan = ResponsePlan::command(response_head(-91)).expect("valid response plan");
+    fn binding_rejects_captured_one_way_requests_before_response_canonicalization() {
+        let response = RemotingResponse::command(response_head(-91)).expect("valid remoting response");
 
         assert!(matches!(
-            plan.bind(one_way_original_identity(123)),
+            response.bind(one_way_original_identity(123)),
             Err(ResponseBindingError::OneWayRequest)
         ));
     }
@@ -180,13 +180,13 @@ mod tests {
         const RESPONSE_TYPE_BIT: i32 = 1;
         let preserved_flags = i32::MIN | (1 << 9) | (1 << 24);
         let original = original_identity(10, 53);
-        let mut plan = ResponsePlan::command(response_head(53).set_flag(preserved_flags | RESPONSE_TYPE_BIT))
-            .expect("valid response plan");
+        let mut response = RemotingResponse::command(response_head(53).set_flag(preserved_flags | RESPONSE_TYPE_BIT))
+            .expect("valid remoting response");
 
         // Only this private test can imitate a malformed post-construction
-        // plan, which exercises the binding layer's defense-in-depth bit set.
-        plan.head = plan.head.set_flag(preserved_flags);
-        let bound = plan.bind(original).expect("non-one-way requests bind");
+        // response, which exercises the binding layer's defense-in-depth bit set.
+        response.head = response.head.set_flag(preserved_flags);
+        let bound = response.bind(original).expect("non-one-way requests bind");
 
         assert!(!bound.opaque_was_corrected());
         let (_, head, _) = bound.into_parts();
@@ -214,12 +214,12 @@ mod tests {
         head.add_ext_field("extension-key", "extension-value");
         let original = original_identity(11, 88);
 
-        let bound = ResponsePlan::command(head)
-            .expect("valid response plan")
+        let bound = RemotingResponse::command(head)
+            .expect("valid remoting response")
             .bind(original)
             .expect("non-one-way requests bind");
         let (request_id, head, ResponseBody::Empty) = bound.into_parts() else {
-            panic!("empty response plan must retain its empty body");
+            panic!("empty remoting response must retain its empty body");
         };
 
         assert_eq!(request_id, original.request_id());
@@ -250,8 +250,8 @@ mod tests {
         let original = OriginalRequestIdentity::capture(12, &sequence, &ingress).expect("identity should be allocated");
         let processor_mutated = ingress.set_opaque(-999).set_code(987).mark_response_type();
 
-        let bound = ResponsePlan::command(processor_mutated)
-            .expect("processor created a valid response-shaped plan")
+        let bound = RemotingResponse::command(processor_mutated)
+            .expect("processor created a valid response command")
             .bind(original)
             .expect("non-one-way requests bind");
         let (request_id, head, _) = bound.into_parts();
@@ -265,12 +265,12 @@ mod tests {
     fn matching_opaque_values_do_not_substitute_a_distinct_request_identity() {
         let first_original = original_identity(13, 66);
         let second_original = original_identity(14, 66);
-        let first = ResponsePlan::command(response_head(66))
-            .expect("valid response plan")
+        let first = RemotingResponse::command(response_head(66))
+            .expect("valid remoting response")
             .bind(first_original)
             .expect("non-one-way requests bind");
-        let second = ResponsePlan::command(response_head(66))
-            .expect("valid response plan")
+        let second = RemotingResponse::command(response_head(66))
+            .expect("valid remoting response")
             .bind(second_original)
             .expect("non-one-way requests bind");
 
@@ -285,12 +285,12 @@ mod tests {
     fn binding_moves_bytes_and_segments_without_reallocating_or_reordering() {
         let bytes = Bytes::from_static(b"bound bytes");
         let bytes_pointer = bytes.as_ptr();
-        let bound_bytes = ResponsePlan::bytes(response_head(1), bytes)
+        let bound_bytes = RemotingResponse::bytes(response_head(1), bytes)
             .expect("valid bytes response")
             .bind(original_identity(15, 2))
             .expect("non-one-way requests bind");
         let (_, head, ResponseBody::Bytes(bytes)) = bound_bytes.into_parts() else {
-            panic!("bytes response plan must retain its bytes owner");
+            panic!("bytes remoting response must retain its bytes owner");
         };
         assert_eq!(head.opaque(), 2);
         assert_eq!(bytes.as_ptr(), bytes_pointer);
@@ -300,14 +300,17 @@ mod tests {
         let second = Bytes::from_static(b"second");
         let first_pointer = first.as_ptr();
         let second_pointer = second.as_ptr();
-        let plan = ResponsePlan::segments(response_head(3), vec![first, second]).expect("valid segments response");
-        let (segments_pointer, segments_capacity) = match &plan.body {
+        let response =
+            RemotingResponse::segments(response_head(3), vec![first, second]).expect("valid segments response");
+        let (segments_pointer, segments_capacity) = match &response.body {
             ResponseBody::Segments(segments) => (segments.as_ptr(), segments.capacity()),
-            _ => panic!("segments response plan must retain its segments owner"),
+            _ => panic!("segments remoting response must retain its segments owner"),
         };
-        let bound_segments = plan.bind(original_identity(16, 4)).expect("non-one-way requests bind");
+        let bound_segments = response
+            .bind(original_identity(16, 4))
+            .expect("non-one-way requests bind");
         let (_, head, ResponseBody::Segments(segments)) = bound_segments.into_parts() else {
-            panic!("segments response plan must retain its segments owner");
+            panic!("segments remoting response must retain its segments owner");
         };
         assert_eq!(head.opaque(), 4);
         assert_eq!(segments.as_ptr(), segments_pointer);
@@ -364,7 +367,7 @@ mod tests {
         assert_eq!(regions.regions_capacity(), input_capacity);
         let regions_pointer = regions.regions().as_ptr();
 
-        let bound = ResponsePlan::file_regions(response_head(5), regions)
+        let bound = RemotingResponse::file_regions(response_head(5), regions)
             .expect("valid file-region response")
             .bind(original_identity(17, 6))
             .expect("non-one-way requests bind");
@@ -372,7 +375,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&lease), 3);
 
         let (_, head, ResponseBody::FileRegions(regions)) = bound.into_parts() else {
-            panic!("file-region response plan must retain its file-region owner");
+            panic!("file-region remoting response must retain its file-region owner");
         };
         assert_eq!(head.opaque(), 6);
         assert_eq!(regions.regions().as_ptr(), regions_pointer);
