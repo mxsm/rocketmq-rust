@@ -900,6 +900,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeAdapter {
         fail: bool,
+        partial: bool,
     }
 
     impl ReadOnlyQuery for FakeAdapter {
@@ -912,14 +913,25 @@ mod tests {
                     "nameserver 10.24.7.9:9876 unavailable token=super-secret",
                 ));
             }
-            Ok(QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
+            let mut result = QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 brokers: vec![broker_summary()],
                 topic_count: 2,
                 consumer_group_count: 1,
                 generated_at: "1".to_string(),
-            }))
+            });
+            if self.partial {
+                result.partial = true;
+                result.warnings = vec!["source_failures_present".to_string()];
+                result.source_failures = vec![crate::model::contract::SourceFailure::new(
+                    crate::model::contract::QuerySource::BrokerRuntime,
+                    crate::model::contract::SourceFailureCode::Timeout,
+                    true,
+                    "broker-b",
+                )];
+            }
+            Ok(result)
         }
 
         async fn list_topics(
@@ -986,19 +998,25 @@ mod tests {
     #[tokio::test]
     async fn call_returns_summary_and_structured_content() {
         let guard = test_guard("diagnose");
-        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
-            .call(
-                CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name).with_arguments(
-                    serde_json::json!({
-                        "cluster": "local-dev",
-                    })
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-                ),
-            )
-            .await
-            .unwrap();
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster": "local-dev",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.is_error, Some(false));
         let structured = result.structured_content.as_ref().unwrap();
@@ -1019,21 +1037,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_response_propagates_partial_source_failures() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: true,
+            },
+            test_guard("diagnose"),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name)
+                .with_arguments(serde_json::json!({"cluster": "local-dev"}).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["partial"], true);
+        assert_eq!(structured["warnings"], serde_json::json!(["source_failures_present"]));
+        assert_eq!(structured["source_failures"][0]["source"], "broker_runtime");
+        assert_eq!(structured["source_failures"][0]["logical_target"], "broker-b");
+    }
+
+    #[tokio::test]
     async fn backend_error_is_returned_as_source_unavailable() {
         let guard = test_guard("diagnose");
-        let result = ToolExecutor::new(FakeAdapter { fail: true }, guard.clone())
-            .call(
-                CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name).with_arguments(
-                    serde_json::json!({
-                        "cluster": "local-dev",
-                    })
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-                ),
-            )
-            .await
-            .unwrap();
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: true,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster": "local-dev",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.is_error, Some(true));
         assert!(result.structured_content.is_none());
@@ -1052,10 +1099,16 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_arguments_are_actionable_tool_errors() {
-        let result = ToolExecutor::new(FakeAdapter { fail: false }, test_guard("diagnose"))
-            .call(CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name))
-            .await
-            .unwrap();
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name))
+        .await
+        .unwrap();
 
         assert_eq!(result.is_error, Some(true));
         assert!(result.structured_content.is_none());
@@ -1068,10 +1121,16 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_tool_returns_protocol_error() {
-        let err = ToolExecutor::new(FakeAdapter { fail: false }, test_guard("diagnose"))
-            .call(CallToolRequestParams::new("unknown_tool"))
-            .await
-            .unwrap_err();
+        let err = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(CallToolRequestParams::new("unknown_tool"))
+        .await
+        .unwrap_err();
 
         assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
@@ -1079,21 +1138,27 @@ mod tests {
     #[tokio::test]
     async fn read_only_guard_denies_diagnosis_tool() {
         let guard = test_guard("read_only");
-        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
-            .call(
-                CallToolRequestParams::new(ToolId::DiagnoseConsumerLag.descriptor().name).with_arguments(
-                    serde_json::json!({
-                        "cluster": "local-dev",
-                        "topic": "orders",
-                        "consumer_group": "order-service",
-                    })
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-                ),
-            )
-            .await
-            .unwrap();
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::DiagnoseConsumerLag.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "topic": "orders",
+                    "consumer_group": "order-service",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
@@ -1109,10 +1174,16 @@ mod tests {
     #[tokio::test]
     async fn runtime_policy_denies_change_planning_by_default() {
         let guard = test_guard_with_policy("operator", false);
-        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
-            .call(plan_create_topic_request())
-            .await
-            .unwrap();
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(plan_create_topic_request())
+        .await
+        .unwrap();
 
         assert_eq!(result.is_error, Some(true));
         assert!(content_text(&result).contains("change planning disabled"));
@@ -1123,10 +1194,16 @@ mod tests {
     #[tokio::test]
     async fn change_plan_is_non_mutating_and_schema_validated() {
         let guard = test_guard_with_policy("operator", true);
-        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
-            .call(plan_create_topic_request())
-            .await
-            .unwrap();
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(plan_create_topic_request())
+        .await
+        .unwrap();
 
         assert_eq!(result.is_error, Some(false));
         let structured = result.structured_content.as_ref().unwrap();
@@ -1150,6 +1227,9 @@ mod tests {
             observed_at: "first".to_string(),
             freshness_ms: 0,
             cache_status: crate::model::contract::CacheStatus::Bypass,
+            partial: false,
+            warnings: Vec::new(),
+            source_failures: Vec::new(),
         };
         let second = QueryResult {
             data: serde_json::json!({
@@ -1160,6 +1240,9 @@ mod tests {
             observed_at: "second".to_string(),
             freshness_ms: 100,
             cache_status: crate::model::contract::CacheStatus::Hit,
+            partial: false,
+            warnings: Vec::new(),
+            source_failures: Vec::new(),
         };
 
         let first = canonical_current_state(&first).unwrap();

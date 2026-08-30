@@ -30,6 +30,7 @@ use rocketmq_observability::metrics::mcp::McpCacheEvent;
 
 use crate::model::contract::observed_at;
 use crate::model::contract::CacheStatus;
+use crate::model::contract::QueryPayload;
 use crate::model::contract::QueryResult;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -106,8 +107,14 @@ impl QueryCache {
         LoadFuture: Future<Output = Result<T, E>>,
     {
         let cancellation = CancellationToken::new();
-        self.get_or_try_init_cancellable(key, ttl, &cancellation, || unreachable!(), load)
-            .await
+        self.get_or_try_init_cancellable(
+            key,
+            ttl,
+            &cancellation,
+            || unreachable!(),
+            || async { load().await.map(QueryPayload::complete) },
+        )
+        .await
     }
 
     pub(crate) async fn get_or_try_init_cancellable<T, E, Load, LoadFuture, Cancelled>(
@@ -121,18 +128,15 @@ impl QueryCache {
     where
         T: Clone + Send + Sync + 'static,
         Load: FnOnce() -> LoadFuture,
-        LoadFuture: Future<Output = Result<T, E>>,
+        LoadFuture: Future<Output = Result<QueryPayload<T>, E>>,
         Cancelled: FnOnce() -> E,
     {
         if !self.inner.enabled || self.inner.capacity == 0 || ttl.is_zero() {
             self.inner.metrics.bypasses.fetch_add(1, Ordering::Relaxed);
             rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Bypass);
-            return load().await.map(|data| QueryResult {
-                data,
-                observed_at: observed_at(),
-                freshness_ms: 0,
-                cache_status: CacheStatus::Bypass,
-            });
+            return load()
+                .await
+                .map(|payload| QueryResult::from_payload(payload, observed_at(), 0, CacheStatus::Bypass));
         }
 
         if let Some(result) = self.get(&key).await {
@@ -154,18 +158,13 @@ impl QueryCache {
         }
 
         let generation = self.inner.generation.load(Ordering::Acquire);
-        let data = load().await?;
+        let payload = load().await?;
         let observed_at = observed_at();
-        self.insert_if_current(key, data.clone(), observed_at.clone(), ttl, generation)
+        self.insert_if_current(key, payload.clone(), observed_at.clone(), ttl, generation)
             .await;
         self.inner.metrics.misses.fetch_add(1, Ordering::Relaxed);
         rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Miss);
-        Ok(QueryResult {
-            data,
-            observed_at,
-            freshness_ms: 0,
-            cache_status: CacheStatus::Miss,
-        })
+        Ok(QueryResult::from_payload(payload, observed_at, 0, CacheStatus::Miss))
     }
 
     pub(crate) fn metrics(&self) -> CacheMetricsSnapshot {
@@ -202,18 +201,13 @@ impl QueryCache {
             return None;
         }
         let entry = state.entries.get(key)?;
-        let data = entry.value.downcast_ref::<T>()?.clone();
+        let payload = entry.value.downcast_ref::<QueryPayload<T>>()?.clone();
         let freshness_ms = now
             .saturating_duration_since(entry.inserted_at)
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
-        let result = QueryResult {
-            data,
-            observed_at: entry.observed_at.clone(),
-            freshness_ms,
-            cache_status: CacheStatus::Hit,
-        };
+        let result = QueryResult::from_payload(payload, entry.observed_at.clone(), freshness_ms, CacheStatus::Hit);
         self.inner.metrics.hits.fetch_add(1, Ordering::Relaxed);
         rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Hit);
         Some(result)
@@ -283,6 +277,9 @@ mod tests {
     use tokio::sync::Notify;
 
     use crate::model::contract::CacheStatus;
+    use crate::model::contract::QuerySource;
+    use crate::model::contract::SourceFailure;
+    use crate::model::contract::SourceFailureCode;
 
     use super::*;
 
@@ -298,6 +295,51 @@ mod tests {
         assert_eq!(second.cache_status, CacheStatus::Hit);
         assert_eq!(first.data, second.data);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_preserves_partial_evidence_exactly() {
+        let cache = QueryCache::new(true, 8);
+        let cancellation = CancellationToken::new();
+        let payload = QueryPayload::new(
+            "usable".to_string(),
+            true,
+            vec!["enrichment_incomplete".to_string()],
+            vec![SourceFailure::new(
+                QuerySource::ConsumerStatistics,
+                SourceFailureCode::Timeout,
+                true,
+                "broker-b",
+            )],
+        );
+        let first = cache
+            .get_or_try_init_cancellable(
+                "group:orders".to_string(),
+                Duration::from_secs(1),
+                &cancellation,
+                || (),
+                || async { Ok::<_, ()>(payload) },
+            )
+            .await
+            .unwrap();
+        let second: QueryResult<String> = cache
+            .get_or_try_init_cancellable(
+                "group:orders".to_string(),
+                Duration::from_secs(1),
+                &cancellation,
+                || (),
+                || async { panic!("cache hit must not reload") },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(first.cache_status, CacheStatus::Miss);
+        assert_eq!(second.cache_status, CacheStatus::Hit);
+        assert_eq!(first.data, second.data);
+        assert_eq!(first.partial, second.partial);
+        assert_eq!(first.warnings, second.warnings);
+        assert_eq!(first.source_failures, second.source_failures);
+        assert_eq!(first.observed_at, second.observed_at);
     }
 
     #[tokio::test]

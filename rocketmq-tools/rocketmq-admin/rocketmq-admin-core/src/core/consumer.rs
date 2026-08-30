@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::core::error::required;
+use crate::core::query::AdminQueryResult;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
@@ -1003,6 +1004,20 @@ pub trait ConsumerAdmin: Send {
         request: &'a QueryConsumerLagRequest,
     ) -> AdminFuture<'a, QueryConsumerLagResult>;
 
+    fn list_consumer_groups_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
+        Box::pin(async move { self.list_consumer_groups(request).await.map(AdminQueryResult::complete) })
+    }
+
+    fn query_consumer_lag_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerLagResult>> {
+        Box::pin(async move { self.query_consumer_lag(request).await.map(AdminQueryResult::complete) })
+    }
+
     fn query_dashboard_consumer_groups<'a>(
         &'a mut self,
         request: &'a DashboardConsumerGroupListRequest,
@@ -1066,6 +1081,20 @@ pub trait ConsumerQueryAdmin: Send {
         &'a mut self,
         request: &'a QueryConsumerLagRequest,
     ) -> AdminFuture<'a, QueryConsumerLagResult>;
+    /// Evidence-aware sibling of [`Self::list_consumer_groups`].
+    fn list_consumer_groups_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
+        Box::pin(async move { self.list_consumer_groups(request).await.map(AdminQueryResult::complete) })
+    }
+    /// Evidence-aware sibling of [`Self::query_consumer_lag`].
+    fn query_consumer_lag_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerLagResult>> {
+        Box::pin(async move { self.query_consumer_lag(request).await.map(AdminQueryResult::complete) })
+    }
     fn query_dashboard_consumer_groups<'a>(
         &'a mut self,
         request: &'a DashboardConsumerGroupListRequest,
@@ -1168,6 +1197,18 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerQueryAdmin for T {
         request: &'a QueryConsumerLagRequest,
     ) -> AdminFuture<'a, QueryConsumerLagResult> {
         ConsumerAdmin::query_consumer_lag(self, request)
+    }
+    fn list_consumer_groups_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
+        ConsumerAdmin::list_consumer_groups_with_evidence(self, request)
+    }
+    fn query_consumer_lag_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerLagResult>> {
+        ConsumerAdmin::query_consumer_lag_with_evidence(self, request)
     }
     fn query_dashboard_consumer_groups<'a>(
         &'a mut self,

@@ -19,6 +19,8 @@
 //! `admin-mutation` capability is enabled.
 
 use std::future::Future;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
@@ -37,6 +39,7 @@ use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -67,6 +70,58 @@ pub struct TopicConfigVersioned {
 pub struct SubscriptionGroupConfigVersioned {
     pub version: u64,
     pub config: SubscriptionGroupConfig,
+}
+
+/// Stable failure classification for one exact Broker read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ReadFailureCode {
+    SourceUnavailable,
+    Timeout,
+    PermissionDenied,
+    NotFound,
+    RateLimited,
+    InvalidResponse,
+}
+
+/// Address-free evidence for one failed Broker read.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct BrokerReadFailure {
+    broker_name: String,
+    code: ReadFailureCode,
+    retryable: bool,
+}
+
+impl BrokerReadFailure {
+    /// Creates failure evidence while reducing the target to a bounded logical
+    /// Broker identifier.
+    pub fn new(broker_name: impl AsRef<str>, code: ReadFailureCode, retryable: bool) -> Self {
+        Self {
+            broker_name: sanitize_broker_logical_target(broker_name.as_ref()),
+            code,
+            retryable,
+        }
+    }
+
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+
+    pub const fn code(&self) -> ReadFailureCode {
+        self.code
+    }
+
+    pub const fn retryable(&self) -> bool {
+        self.retryable
+    }
+}
+
+/// Multi-Broker consumer statistics together with completeness evidence.
+#[derive(Debug)]
+pub struct ConsumeStatsReadResult {
+    pub stats: ConsumeStats,
+    pub attempted_brokers: usize,
+    pub successful_brokers: usize,
+    pub failures: Vec<BrokerReadFailure>,
 }
 
 /// Fixed, body-free metadata returned by the read-only message lookup.
@@ -121,6 +176,27 @@ pub trait MQAdminReadExt: Send {
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats>;
+
+    /// Reads consumer statistics without discarding an individual Broker
+    /// failure. Broker addresses and backend error strings never enter the
+    /// returned evidence.
+    async fn examine_consume_stats_with_evidence(
+        &self,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+        broker_addr: Option<CheetahString>,
+        timeout_millis: Option<u64>,
+    ) -> rocketmq_error::RocketMQResult<ConsumeStatsReadResult> {
+        let stats = self
+            .examine_consume_stats(consumer_group, topic, None, broker_addr, timeout_millis)
+            .await?;
+        Ok(ConsumeStatsReadResult {
+            stats,
+            attempted_brokers: 1,
+            successful_brokers: 1,
+            failures: Vec::new(),
+        })
+    }
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo>;
 
@@ -325,6 +401,73 @@ impl MQAdminReadExt for DefaultMQAdminExt {
                 }
             }
         }
+        Ok(result)
+    }
+
+    async fn examine_consume_stats_with_evidence(
+        &self,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+        broker_addr: Option<CheetahString>,
+        timeout_millis: Option<u64>,
+    ) -> rocketmq_error::RocketMQResult<ConsumeStatsReadResult> {
+        let timeout = timeout_millis.unwrap_or(self.inner().remoting_timeout_millis()?);
+        let topic = topic.unwrap_or_default();
+        let targets = match broker_addr {
+            Some(broker_addr) => vec![ConsumeStatsReadTarget::Ready {
+                broker_name: "selected-broker".to_string(),
+                address: broker_addr,
+            }],
+            None => {
+                let retry_topic: CheetahString = mix_all::get_retry_topic(&consumer_group).into();
+                let route = self
+                    .inner()
+                    .mq_client_api()?
+                    .get_topic_route_info_from_name_server(&retry_topic, timeout)
+                    .await?;
+                consume_stats_read_targets(route.map(|route| route.broker_datas).unwrap_or_default())
+            }
+        };
+        let mut result = ConsumeStatsReadResult {
+            stats: ConsumeStats::new(),
+            attempted_brokers: targets.len(),
+            successful_brokers: 0,
+            failures: Vec::new(),
+        };
+        for target in targets {
+            let (broker_name, address) = match target {
+                ConsumeStatsReadTarget::Ready { broker_name, address } => (broker_name, address),
+                ConsumeStatsReadTarget::Failed(failure) => {
+                    result.failures.push(failure);
+                    continue;
+                }
+            };
+            match self
+                .inner()
+                .mq_client_api()?
+                .get_consume_stats(
+                    &address,
+                    GetConsumeStatsRequestHeader {
+                        consumer_group: consumer_group.clone(),
+                        topic: topic.clone(),
+                        topic_list: None,
+                        topic_request_header: None,
+                    },
+                    timeout,
+                )
+                .await
+            {
+                Ok(stats) => {
+                    result.successful_brokers += 1;
+                    result.stats.get_offset_table_mut().extend(stats.offset_table);
+                    result
+                        .stats
+                        .set_consume_tps(result.stats.get_consume_tps() + stats.consume_tps);
+                }
+                Err(error) => result.failures.push(broker_read_failure(broker_name, &error)),
+            }
+        }
+        result.failures.sort();
         Ok(result)
     }
 
@@ -625,6 +768,98 @@ where
         .transpose()
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum ConsumeStatsReadTarget {
+    Ready {
+        broker_name: String,
+        address: CheetahString,
+    },
+    Failed(BrokerReadFailure),
+}
+
+fn consume_stats_read_targets(brokers: Vec<BrokerData>) -> Vec<ConsumeStatsReadTarget> {
+    brokers
+        .into_iter()
+        .map(|broker| {
+            let broker_name = broker.broker_name().to_string();
+            match broker.broker_addrs().get(&mix_all::MASTER_ID).cloned() {
+                Some(address) if !address.as_str().trim().is_empty() => {
+                    ConsumeStatsReadTarget::Ready { broker_name, address }
+                }
+                Some(_) | None => ConsumeStatsReadTarget::Failed(BrokerReadFailure::new(
+                    broker_name,
+                    ReadFailureCode::InvalidResponse,
+                    false,
+                )),
+            }
+        })
+        .collect()
+}
+
+fn broker_read_failure(broker_name: String, error: &rocketmq_error::RocketMQError) -> BrokerReadFailure {
+    let view = error.boundary_view();
+    let status = view.http().status.as_u16();
+    let code = match status {
+        401 | 403 => ReadFailureCode::PermissionDenied,
+        404 => ReadFailureCode::NotFound,
+        408 | 504 => ReadFailureCode::Timeout,
+        429 => ReadFailureCode::RateLimited,
+        400 | 413 | 422 => ReadFailureCode::InvalidResponse,
+        _ => ReadFailureCode::SourceUnavailable,
+    };
+    BrokerReadFailure::new(broker_name, code, view.is_retryable())
+}
+
+fn sanitize_broker_logical_target(target: &str) -> String {
+    const UNKNOWN_TARGET: &str = "unknown";
+    const MAX_TARGET_BYTES: usize = 128;
+    const SENSITIVE_OR_ERROR_MARKERS: &[&str] = &[
+        "access_key",
+        "accesskey",
+        "authorization",
+        "bearer",
+        "credential",
+        "denied",
+        "error",
+        "exception",
+        "failed",
+        "failure",
+        "password",
+        "passwd",
+        "refused",
+        "secret",
+        "signature",
+        "source_unavailable",
+        "timed_out",
+        "timeout",
+        "token",
+    ];
+
+    let raw_target = target;
+    let target = raw_target.trim();
+    let lowercase = target.to_ascii_lowercase();
+    let invalid = target.is_empty()
+        || raw_target.len() > MAX_TARGET_BYTES
+        || !target.is_ascii()
+        || target.parse::<IpAddr>().is_ok()
+        || target.parse::<SocketAddr>().is_ok()
+        || target.contains([':', '/', '\\', '@', '=', '&', '?', '#'])
+        || raw_target.chars().any(char::is_control)
+        || !target
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        || lowercase.starts_with("akia")
+        || lowercase.starts_with("sk-")
+        || SENSITIVE_OR_ERROR_MARKERS
+            .iter()
+            .any(|marker| lowercase.contains(marker));
+    if invalid {
+        UNKNOWN_TARGET.to_string()
+    } else {
+        target.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -633,10 +868,28 @@ mod tests {
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
+    use rocketmq_model::common::mix_all;
     use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 
+    use super::consume_stats_read_targets;
     use super::fetch_topic_inventory_from;
     use super::parse_allowlisted_value;
+    use super::BrokerReadFailure;
+    use super::ConsumeStatsReadTarget;
+    use super::ReadFailureCode;
+
+    fn route_broker(name: &str, master: Option<&str>) -> BrokerData {
+        let broker_addrs = master
+            .map(|address| HashMap::from([(mix_all::MASTER_ID, CheetahString::from_string(address.to_string()))]))
+            .unwrap_or_default();
+        BrokerData::new(
+            CheetahString::from_static_str("cluster-a"),
+            CheetahString::from_string(name.to_string()),
+            broker_addrs,
+            None,
+        )
+    }
 
     #[tokio::test]
     async fn cluster_topic_inventory_selects_exactly_one_cluster_source_call() {
@@ -735,5 +988,80 @@ mod tests {
 
         let error = parse_allowlisted_value::<u64>(&properties, "flushDelayOffsetInterval").unwrap_err();
         assert!(error.to_string().contains("flushDelayOffsetInterval"));
+    }
+
+    #[test]
+    fn consume_stats_targets_preserve_mixed_valid_and_unusable_route_entries() {
+        let targets = consume_stats_read_targets(vec![
+            route_broker("broker-a", Some("127.0.0.1:10911")),
+            route_broker("broker-b", None),
+            route_broker("broker-c", Some("  ")),
+        ]);
+
+        assert_eq!(targets.len(), 3);
+        assert!(matches!(
+            &targets[0],
+            ConsumeStatsReadTarget::Ready { broker_name, .. } if broker_name == "broker-a"
+        ));
+        for target in &targets[1..] {
+            let ConsumeStatsReadTarget::Failed(failure) = target else {
+                panic!("unusable master must remain a failed routed attempt");
+            };
+            assert_eq!(failure.code(), ReadFailureCode::InvalidResponse);
+            assert!(!failure.retryable());
+        }
+    }
+
+    #[test]
+    fn consume_stats_targets_preserve_all_missing_masters_as_failures() {
+        let targets = consume_stats_read_targets(vec![route_broker("broker-a", None), route_broker("broker-b", None)]);
+
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| matches!(
+            target,
+            ConsumeStatsReadTarget::Failed(failure)
+                if failure.code() == ReadFailureCode::InvalidResponse && !failure.retryable()
+        )));
+    }
+
+    #[test]
+    fn consume_stats_targets_keep_zero_broker_route_authoritatively_empty() {
+        assert!(consume_stats_read_targets(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn broker_read_failure_preserves_valid_logical_targets() {
+        let failure = BrokerReadFailure::new(" broker-a_1.prod ", ReadFailureCode::Timeout, true);
+
+        assert_eq!(failure.broker_name(), "broker-a_1.prod");
+        assert_eq!(failure.code(), ReadFailureCode::Timeout);
+        assert!(failure.retryable());
+    }
+
+    #[test]
+    fn broker_read_failure_replaces_unsafe_targets_with_one_safe_token() {
+        let overlong = "a".repeat(129);
+        let unsafe_targets = [
+            "127.0.0.1",
+            "::1",
+            "127.0.0.1:10911",
+            "[::1]:10911",
+            "https://broker.example.invalid/runtime",
+            "broker\nname",
+            "broker-a\r",
+            overlong.as_str(),
+            "password-secret-value",
+            "AKIAIOSFODNN7EXAMPLE",
+            "connection_error_from_backend",
+        ];
+
+        for target in unsafe_targets {
+            let failure = BrokerReadFailure::new(target, ReadFailureCode::SourceUnavailable, true);
+            assert_eq!(
+                failure.broker_name(),
+                "unknown",
+                "target should be rejected: {target:?}"
+            );
+        }
     }
 }

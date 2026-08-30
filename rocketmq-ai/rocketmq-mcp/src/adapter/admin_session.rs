@@ -17,8 +17,9 @@ use std::future::Future;
 use std::sync::Arc;
 
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
+use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
-use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeRequest;
+use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeTargetRequest;
 use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
 use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
@@ -32,6 +33,7 @@ use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminGuard;
 
 use crate::model::contract::observed_at_from_millis;
+use crate::model::contract::QueryPayload;
 use crate::tools::cluster_tools::BrokerSummary;
 use crate::tools::consumer_tools::ConsumerGroupSummary;
 use crate::tools::consumer_tools::QueueLag;
@@ -62,7 +64,9 @@ pub(crate) struct SessionConsumerLag {
 }
 
 pub(crate) trait AdminSession: Send {
-    fn broker_rows(&mut self) -> impl Future<Output = Result<Vec<BrokerSummary>, ToolExecutionError>> + Send;
+    fn broker_rows(
+        &mut self,
+    ) -> impl Future<Output = Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError>> + Send;
 
     fn topic_inventory(&mut self) -> impl Future<Output = Result<Vec<String>, ToolExecutionError>> + Send;
 
@@ -71,16 +75,20 @@ pub(crate) trait AdminSession: Send {
         topic: &str,
     ) -> impl Future<Output = Result<SessionTopicRoute, ToolExecutionError>> + Send;
 
-    fn consumer_groups(&mut self)
-        -> impl Future<Output = Result<Vec<ConsumerGroupSummary>, ToolExecutionError>> + Send;
+    fn consumer_groups(
+        &mut self,
+    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError>> + Send;
 
     fn consumer_lag(
         &mut self,
         topic: &str,
         consumer_group: &str,
-    ) -> impl Future<Output = Result<SessionConsumerLag, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerLag>, ToolExecutionError>> + Send;
 
-    fn probe_broker_runtime(&mut self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
+    fn probe_broker_runtime_target(
+        &mut self,
+        broker_name: &str,
+    ) -> impl Future<Output = Result<BrokerRuntimeTargetStatus, ToolExecutionError>> + Send;
 
     fn shutdown(self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
 }
@@ -142,15 +150,15 @@ impl AdminCoreSession {
 }
 
 impl AdminSession for AdminCoreSession {
-    async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError> {
+    async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
         let request = ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
             .map_err(ToolExecutionError::backend)?;
         let result = self
             .admin_mut()?
-            .list_brokers(&request)
+            .list_brokers_with_evidence(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
-        Ok(result.brokers.iter().map(map_broker_summary).collect())
+        Ok(QueryPayload::from_admin(result).map(|result| result.brokers.iter().map(map_broker_summary).collect()))
     }
 
     async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
@@ -202,74 +210,83 @@ impl AdminSession for AdminCoreSession {
         Ok(SessionTopicRoute { brokers, queues })
     }
 
-    async fn consumer_groups(&mut self) -> Result<Vec<ConsumerGroupSummary>, ToolExecutionError> {
+    async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
         let result = self
             .admin_mut()?
-            .list_consumer_groups(&ListConsumerGroupsRequest)
+            .list_consumer_groups_with_evidence(&ListConsumerGroupsRequest)
             .await
             .map_err(ToolExecutionError::backend)?;
-        Ok(result
-            .groups
-            .into_iter()
-            .map(|group| ConsumerGroupSummary {
-                group: group.group,
-                version: group.version,
-                client_count: group.client_count,
-                consume_type: group.consume_type,
-                message_model: group.message_model,
-                consume_tps: group.consume_tps,
-                diff_total: group.diff_total,
-            })
-            .collect())
+        Ok(QueryPayload::from_admin(result).map(|result| {
+            result
+                .groups
+                .into_iter()
+                .map(|group| ConsumerGroupSummary {
+                    group: group.group,
+                    version: group.version,
+                    client_count: group.client_count,
+                    consume_type: group.consume_type,
+                    message_model: group.message_model,
+                    consume_tps: group.consume_tps,
+                    diff_total: group.diff_total,
+                })
+                .collect()
+        }))
     }
 
     async fn consumer_lag(
         &mut self,
         topic: &str,
         consumer_group: &str,
-    ) -> Result<SessionConsumerLag, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
         let request =
             QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ToolExecutionError::backend)?;
         let result = self
             .admin_mut()?
-            .query_consumer_lag(&request)
+            .query_consumer_lag_with_evidence(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
-        let mut queues = result
-            .rows
-            .iter()
-            .map(|row| QueueLag {
-                topic: row.topic.to_string(),
-                broker_name: row.broker_name.to_string(),
-                queue_id: row.queue_id,
-                broker_offset: row.broker_offset,
-                consumer_offset: row.consumer_offset,
-                lag: row.lag,
-                inflight: row.inflight,
-                last_observed_at: observed_at_from_millis(row.last_timestamp),
-                client_ip: row.client_ip.clone(),
-            })
-            .collect::<Vec<_>>();
-        queues.sort_by(|left, right| {
-            left.broker_name
-                .cmp(&right.broker_name)
-                .then(left.queue_id.cmp(&right.queue_id))
-        });
-        Ok(SessionConsumerLag {
-            queues,
-            total_lag: result.total_lag,
-            consume_tps: result.consume_tps,
-            inflight_total: result.inflight_total,
-        })
+        Ok(QueryPayload::from_admin(result).map(|result| {
+            let mut queues = result
+                .rows
+                .iter()
+                .map(|row| QueueLag {
+                    topic: row.topic.to_string(),
+                    broker_name: row.broker_name.to_string(),
+                    queue_id: row.queue_id,
+                    broker_offset: row.broker_offset,
+                    consumer_offset: row.consumer_offset,
+                    lag: row.lag,
+                    inflight: row.inflight,
+                    last_observed_at: observed_at_from_millis(row.last_timestamp),
+                    client_ip: row.client_ip.clone(),
+                })
+                .collect::<Vec<_>>();
+            queues.sort_by(|left, right| {
+                left.broker_name
+                    .cmp(&right.broker_name)
+                    .then(left.queue_id.cmp(&right.queue_id))
+            });
+            SessionConsumerLag {
+                queues,
+                total_lag: result.total_lag,
+                consume_tps: result.consume_tps,
+                inflight_total: result.inflight_total,
+            }
+        }))
     }
 
-    async fn probe_broker_runtime(&mut self) -> Result<(), ToolExecutionError> {
-        let request = ProbeBrokerRuntimeRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
-            .map_err(ToolExecutionError::backend)?;
+    async fn probe_broker_runtime_target(
+        &mut self,
+        broker_name: &str,
+    ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        let request = ProbeBrokerRuntimeTargetRequest::try_new(
+            self.cluster.rocketmq_cluster_name.clone(),
+            broker_name.to_string(),
+        )
+        .map_err(ToolExecutionError::backend)?;
         self.admin_mut()?
-            .probe_broker_runtime(&request)
+            .probe_broker_runtime_target(&request)
             .await
-            .map(|_| ())
             .map_err(ToolExecutionError::backend)
     }
 
