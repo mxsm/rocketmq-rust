@@ -16,6 +16,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -99,6 +100,7 @@ struct SessionExecutorInner {
     operation: OperationContext,
     sequencer: RequestSequencer,
     accepting: AtomicBool,
+    task_counts: Arc<SessionTaskCounts>,
     #[cfg(test)]
     close_resume_operation_before_spawn: AtomicBool,
     #[cfg(any(test, feature = "test-support"))]
@@ -114,6 +116,7 @@ impl SessionExecutor {
                 operation: OperationContext::without_deadline(TaskKind::Worker),
                 sequencer: RequestSequencer::default(),
                 accepting: AtomicBool::new(true),
+                task_counts: Arc::new(SessionTaskCounts::default()),
                 #[cfg(test)]
                 close_resume_operation_before_spawn: AtomicBool::new(false),
                 #[cfg(any(test, feature = "test-support"))]
@@ -178,8 +181,10 @@ impl SessionExecutor {
         let request_operation = self.inner.operation.clone();
         let request_operation_for_task = request_operation.clone();
         let spawn_group = self.inner.request_group.clone();
+        let task_count = SessionTaskCountGuard::inline(Arc::clone(&self.inner.task_counts));
         spawn_group
             .spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", async move {
+                let _task_count = task_count;
                 let ordering_guard = sequencer.acquire(ordering).await;
                 let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
                     Ok(processor) => processor,
@@ -234,10 +239,12 @@ impl SessionExecutor {
         *self.inner.legacy_execution_first_poll_gate.lock() = Some((entered, release));
     }
 
-    pub(crate) async fn drain_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
+    pub(crate) async fn drain_report_until(&self, deadline: ShutdownDeadline) -> SessionExecutorDrainReport {
         let started_at = Instant::now();
         self.stop_admission();
-        let active_before = self.inner.operation.active_task_count();
+        let active_inline_tasks = self.inner.task_counts.inline.load(Ordering::Acquire);
+        let active_resume_tasks = self.inner.task_counts.resume.load(Ordering::Acquire);
+        let active_before = active_inline_tasks.saturating_add(active_resume_tasks);
         let joined = self
             .inner
             .operation
@@ -251,7 +258,77 @@ impl SessionExecutor {
             report.aborted = active_before;
             report.timed_out = usize::from(active_before > 0);
         }
-        report
+        SessionExecutorDrainReport {
+            shutdown: report,
+            active_inline_tasks,
+            active_resume_tasks,
+            remaining_inline_tasks: self.inner.task_counts.inline.load(Ordering::Acquire),
+            remaining_resume_tasks: self.inner.task_counts.resume.load(Ordering::Acquire),
+        }
+    }
+
+    pub(crate) async fn drain_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
+        self.drain_report_until(deadline).await.shutdown
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionExecutorDrainReport {
+    pub(crate) shutdown: ShutdownReport,
+    pub(crate) active_inline_tasks: usize,
+    pub(crate) active_resume_tasks: usize,
+    pub(crate) remaining_inline_tasks: usize,
+    pub(crate) remaining_resume_tasks: usize,
+}
+
+impl SessionExecutorDrainReport {
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.shutdown.is_healthy() && self.remaining_inline_tasks == 0 && self.remaining_resume_tasks == 0
+    }
+}
+
+#[derive(Default)]
+struct SessionTaskCounts {
+    inline: AtomicUsize,
+    resume: AtomicUsize,
+}
+
+enum SessionTaskCountKind {
+    Inline,
+    Resume,
+}
+
+struct SessionTaskCountGuard {
+    counts: Arc<SessionTaskCounts>,
+    kind: SessionTaskCountKind,
+}
+
+impl SessionTaskCountGuard {
+    fn inline(counts: Arc<SessionTaskCounts>) -> Self {
+        counts.inline.fetch_add(1, Ordering::AcqRel);
+        Self {
+            counts,
+            kind: SessionTaskCountKind::Inline,
+        }
+    }
+
+    fn resume(counts: Arc<SessionTaskCounts>) -> Self {
+        counts.resume.fetch_add(1, Ordering::AcqRel);
+        Self {
+            counts,
+            kind: SessionTaskCountKind::Resume,
+        }
+    }
+}
+
+impl Drop for SessionTaskCountGuard {
+    fn drop(&mut self) {
+        let counter = match self.kind {
+            SessionTaskCountKind::Inline => &self.counts.inline,
+            SessionTaskCountKind::Resume => &self.counts.resume,
+        };
+        let previous = counter.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "session task count guard owns one active count");
     }
 }
 
@@ -308,12 +385,14 @@ impl DeferredResumeExecutor {
         let operation_for_task = operation.clone();
         let spawn_group = inner.request_group.clone();
         let task_cell = Arc::clone(&cell);
+        let task_count = SessionTaskCountGuard::resume(Arc::clone(&inner.task_counts));
         #[cfg(test)]
         if inner.close_resume_operation_before_spawn.swap(false, Ordering::AcqRel) {
             operation.close_admission();
         }
         spawn_group
             .spawn_draining_operation(&operation, "rocketmq.transport.session.deferred-resume", async move {
+                let _task_count = task_count;
                 #[cfg(test)]
                 task_cell.wait_first_poll_gate().await;
                 let Some(job) = task_cell.take() else {

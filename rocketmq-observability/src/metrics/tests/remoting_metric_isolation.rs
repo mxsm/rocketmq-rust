@@ -20,13 +20,25 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::metrics::remoting::RemotingMetrics;
+use crate::metrics::remoting::RequestCodeClass;
 use crate::metrics::remoting::RequestMetricsGuard;
+use crate::metrics::remoting::RequestOutcome;
+use crate::metrics::remoting::ResponseAbandonedReason;
+use crate::metrics::remoting::ResponseMode;
+use crate::metrics::remoting::ResponseResult;
 use crate::metrics::remoting::RPC_LATENCY;
+use crate::metrics::remoting::TRANSPORT_DEFERRED_INFLIGHT;
+use crate::metrics::remoting::TRANSPORT_DEFERRED_RETAINED_BYTES;
 use crate::metrics::remoting::TRANSPORT_DEFERRED_TERMINAL_TOTAL;
 use crate::metrics::remoting::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
 use crate::metrics::remoting::TRANSPORT_LEGACY_PROCESSOR_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUESTS_TOTAL;
+use crate::metrics::remoting::TRANSPORT_REQUEST_DURATION_SECONDS;
 use crate::metrics::remoting::TRANSPORT_REQUEST_LATENCY;
+use crate::metrics::remoting::TRANSPORT_RESPONSE_ABANDONED_TOTAL;
+use crate::metrics::remoting::TRANSPORT_RESPONSE_DUPLICATE_TOTAL;
+use crate::metrics::remoting::TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS;
+use crate::metrics::remoting::TRANSPORT_RESPONSE_TOTAL;
 use crate::TelemetryHandle;
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider;
@@ -49,10 +61,23 @@ enum CapturedValue {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CapturedNumber {
+    U64(u64),
+    I64(i64),
+    HistogramCount(u64),
+}
+
+impl PartialEq<u64> for CapturedNumber {
+    fn eq(&self, other: &u64) -> bool {
+        matches!(self, Self::U64(value) | Self::HistogramCount(value) if value == other)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct CapturedPoint {
     metric: String,
-    value: u64,
+    value: CapturedNumber,
     attributes: BTreeMap<String, CapturedValue>,
 }
 
@@ -77,7 +102,7 @@ impl PushMetricExporter for CapturingExporter {
                         for point in sum.data_points() {
                             captured.push(CapturedPoint {
                                 metric: metric.name().to_string(),
-                                value: point.value(),
+                                value: CapturedNumber::U64(point.value()),
                                 attributes: attributes(point.attributes()),
                             });
                         }
@@ -86,7 +111,25 @@ impl PushMetricExporter for CapturingExporter {
                         for point in histogram.data_points() {
                             captured.push(CapturedPoint {
                                 metric: metric.name().to_string(),
-                                value: point.count(),
+                                value: CapturedNumber::HistogramCount(point.count()),
+                                attributes: attributes(point.attributes()),
+                            });
+                        }
+                    }
+                    AggregatedMetrics::I64(MetricData::Sum(sum)) => {
+                        for point in sum.data_points() {
+                            captured.push(CapturedPoint {
+                                metric: metric.name().to_string(),
+                                value: CapturedNumber::I64(point.value()),
+                                attributes: attributes(point.attributes()),
+                            });
+                        }
+                    }
+                    AggregatedMetrics::F64(MetricData::Histogram(histogram)) => {
+                        for point in histogram.data_points() {
+                            captured.push(CapturedPoint {
+                                metric: metric.name().to_string(),
+                                value: CapturedNumber::HistogramCount(point.count()),
                                 attributes: attributes(point.attributes()),
                             });
                         }
@@ -137,7 +180,21 @@ fn metric_value(points: &[CapturedPoint], metric: &str) -> u64 {
     points
         .iter()
         .filter(|point| point.metric == metric)
-        .map(|point| point.value)
+        .map(|point| match point.value {
+            CapturedNumber::U64(value) | CapturedNumber::HistogramCount(value) => value,
+            CapturedNumber::I64(_) => 0,
+        })
+        .sum()
+}
+
+fn signed_metric_value(points: &[CapturedPoint], metric: &str) -> i64 {
+    points
+        .iter()
+        .filter(|point| point.metric == metric)
+        .map(|point| match point.value {
+            CapturedNumber::I64(value) => value,
+            CapturedNumber::U64(_) | CapturedNumber::HistogramCount(_) => 0,
+        })
         .sum()
 }
 
@@ -155,6 +212,13 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     first.record_legacy_processor_request("broker-send", 10);
     first.record_deferred_terminal("pull_message", "owner_deadline");
     first.record_deferred_terminal("pull_message", "owner_deadline");
+    first.record_response(ResponseMode::Inline, ResponseResult::TransportWritten);
+    first.record_response(ResponseMode::Deferred, ResponseResult::TransportWritten);
+    first.record_response_duplicate(RequestCodeClass::PullMessage);
+    first.record_response_abandoned(ResponseAbandonedReason::Abandoned);
+    first.adjust_deferred(RequestCodeClass::PullMessage, 1, 512);
+    first.adjust_deferred(RequestCodeClass::PullMessage, -1, -512);
+    first.record_response_queue_wait(0.125);
     second.record_legacy_processor_request("namesrv-route", 20);
     second.record_deferred_terminal("other", "service_stopping");
 
@@ -170,6 +234,13 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     legacy_ambiguous_none.complete_cancelled();
     drop(legacy_ambiguous_none);
 
+    let mut deferred = RequestMetricsGuard::start_v2(first.clone(), 11, 13, true, RequestCodeClass::PullMessage);
+    deferred.record_v2_deferred_registered();
+    deferred.record_v2_deferred_registered();
+    deferred.complete_v2(0, RequestOutcome::DeferredResumed);
+    deferred.complete_v2(1, RequestOutcome::Failed);
+    drop(deferred);
+
     let mut failure = RequestMetricsGuard::start(first, 13, 11, false);
     failure.complete_process_request_failed(1);
     failure.complete_response(0);
@@ -184,13 +255,20 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
 
     let first_points = first_exporter.points();
     let second_points = second_exporter.points();
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 4);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 6);
     assert_eq!(
         metric_value(&first_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
         21
     );
-    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 4);
-    assert_eq!(metric_value(&first_points, RPC_LATENCY), 4);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 5);
+    assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_DURATION_SECONDS), 6);
+    assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS), 1);
+    assert_eq!(signed_metric_value(&first_points, TRANSPORT_DEFERRED_INFLIGHT), 0);
+    assert_eq!(signed_metric_value(&first_points, TRANSPORT_DEFERRED_RETAINED_BYTES), 0);
+    assert_eq!(metric_value(&first_points, RPC_LATENCY), 5);
+    assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_TOTAL), 2);
+    assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_DUPLICATE_TOTAL), 1);
+    assert_eq!(metric_value(&first_points, TRANSPORT_RESPONSE_ABANDONED_TOTAL), 1);
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUESTS_TOTAL), 1);
     assert_eq!(
         metric_value(&second_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
@@ -198,6 +276,55 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     );
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUEST_LATENCY), 1);
     assert_eq!(metric_value(&second_points, RPC_LATENCY), 1);
+
+    for metric in [TRANSPORT_DEFERRED_INFLIGHT, TRANSPORT_DEFERRED_RETAINED_BYTES] {
+        let matching = first_points
+            .iter()
+            .filter(|point| point.metric == metric)
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "deferred metric {metric}");
+        assert_eq!(matching[0].value, CapturedNumber::I64(0));
+        assert_eq!(
+            matching[0].attributes,
+            BTreeMap::from([("code".to_owned(), CapturedValue::String("pull_message".to_owned()),)])
+        );
+    }
+    let queue_wait = first_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS)
+        .collect::<Vec<_>>();
+    assert_eq!(queue_wait.len(), 1);
+    assert_eq!(queue_wait[0].value, CapturedNumber::HistogramCount(1));
+    assert!(queue_wait[0].attributes.is_empty());
+
+    let request_outcomes = first_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_REQUESTS_TOTAL)
+        .collect::<Vec<_>>();
+    assert!(request_outcomes
+        .iter()
+        .all(|point| point.attributes.contains_key("code")
+            && point.attributes.contains_key("outcome")
+            && point.attributes.len() == 2));
+    for outcome in ["deferred_registered", "deferred_resumed"] {
+        let matching = request_outcomes
+            .iter()
+            .filter(|point| {
+                point.attributes.get("code") == Some(&CapturedValue::String("pull_message".to_owned()))
+                    && point.attributes.get("outcome") == Some(&CapturedValue::String(outcome.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "request outcome {outcome}");
+        assert_eq!(matching[0].value, 1, "request outcome {outcome}");
+    }
+    let response_outcomes = first_points
+        .iter()
+        .filter(|point| point.metric == TRANSPORT_RESPONSE_TOTAL)
+        .collect::<Vec<_>>();
+    assert!(response_outcomes.iter().any(|point| {
+        point.attributes.get("mode") == Some(&CapturedValue::String("deferred".to_owned()))
+            && point.attributes.get("result") == Some(&CapturedValue::String("transport_written".to_owned()))
+    }));
 
     let first_deferred = first_points
         .iter()
@@ -269,7 +396,7 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
         .iter()
         .filter(|point| point.metric == RPC_LATENCY)
         .collect::<Vec<_>>();
-    assert_eq!(first_rpc.len(), 4);
+    assert_eq!(first_rpc.len(), 5);
     assert!(first_rpc.iter().any(|point| {
         point.attributes.get("request_code") == Some(&CapturedValue::I64(10))
             && point.attributes.get("response_code") == Some(&CapturedValue::I64(0))

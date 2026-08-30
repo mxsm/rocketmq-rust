@@ -364,6 +364,62 @@ async fn typed_response_admission_saturation_is_not_started_before_lane_enqueue(
 }
 
 #[tokio::test]
+async fn queued_legacy_response_apis_record_queue_wait_but_generic_commands_do_not() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let physical_connection = Connection::new_with_plaintext_stream(CountingTransport {
+        writes: Arc::new(AtomicUsize::new(0)),
+        flushes: Arc::new(AtomicUsize::new(0)),
+    });
+    let (frame_writer, _reader) = physical_connection.into_session_io(admission.clone());
+    let config = WriterQueueConfig::default();
+    let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
+    let (lanes, receivers) = writer_lanes(config);
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let (telemetry, capture) = TransportTelemetry::with_v2_boundary_metric_capture();
+    let mut connection = Connection::new_queued(
+        lanes,
+        Arc::clone(&diagnostics),
+        admission,
+        state_tx.clone(),
+        state_rx,
+        CheetahString::from_string("queued-response-observation-test".to_string()),
+        FrameLimits::default(),
+        Some(AdmissionClass::Data),
+        Arc::new(SessionLifecycle::new()),
+        telemetry.clone(),
+    );
+    let writer = tokio::spawn(run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state_tx,
+        CancellationToken::new(),
+        telemetry,
+    ));
+
+    connection
+        .send_command(RemotingCommand::create_remoting_command(7))
+        .await
+        .expect("generic command write");
+    connection
+        .send_response(RemotingCommand::create_response_command_with_code(0))
+        .await
+        .expect("owned legacy response write");
+    let mut borrowed = RemotingCommand::create_response_command_with_code(0);
+    connection
+        .send_response_ref(&mut borrowed)
+        .await
+        .expect("borrowed legacy response write");
+
+    assert_eq!(capture.response_queue_waits(), 2);
+    drop(connection);
+    writer.await.expect("writer exits after the last queue handle drops");
+}
+
+#[tokio::test]
 async fn actual_dropped_queued_completion_before_start_maps_to_typed_not_started() {
     let controller = AdmissionController::new(AdmissionLimits::default());
     let admission = controller

@@ -113,7 +113,6 @@ async fn owner_cutoff_cancels_an_ordered_waiter_before_processor_execution() {
     );
     assert_eq!(first_executions.load(Ordering::Acquire), 1);
     assert_eq!(second_executions.load(Ordering::Acquire), 0);
-
     release_first.notify_one();
     assert_eq!(
         first_completion.wait().await.expect_err("probe response").kind(),

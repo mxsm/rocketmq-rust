@@ -32,14 +32,15 @@ MIG-07 is complete when every application production consumer listed below is
 only remaining V1 inventory is the explicitly listed Transport compatibility
 surface.
 
-This cutover is an intentional source-breaking API migration. Public
-application-facing V1 registration, lifecycle, and processor entry points are
-not preserved as deprecated shims because doing so would retain the production
-authority this stage removes. Downstream source consumers must migrate to the
-typed V2 contracts before adopting the release that contains MIG-07, and that
-release must be classified and communicated as breaking by the release
-process. Wire-level RocketMQ framing, request codes, headers, and valid-input
-response semantics are unchanged. Controller heartbeat leases are now bounded
+This cutover is an intentional source-breaking API migration. Application
+composition roots do not preserve V1 registration or lifecycle shims because
+doing so would retain the production authority this stage removes. The frozen
+Transport-only compatibility API is deprecated with concrete V2 replacements
+until FIN-05 removes it. Downstream source consumers must migrate to the typed
+V2 contracts before adopting the release that contains MIG-07, and that release
+must be classified and communicated as breaking by the release process.
+Wire-level RocketMQ framing, request codes, headers, and valid-input response
+semantics are unchanged. Controller heartbeat leases are now bounded
 to 24 hours so untrusted values cannot pin the generation-fencing table
 indefinitely. Broker Controller-mode configuration enforces the same shared
 limit at startup; deployments with a larger
@@ -110,6 +111,48 @@ No V1 compatibility item is retained in Broker, Client, Namesrv, Controller,
 Auth, Proxy, or Proxy-local production ownership. FIN-05 may remove the
 Transport inventory as a separate compatibility cleanup without changing the
 V2 application contract.
+
+## V1 deprecation and migration map
+
+The remaining `api::v1` processor surface emits specific deprecation guidance;
+it is not a second production composition choice. Migrate each capability as a
+design change rather than mechanically renaming a parameter:
+
+| Deprecated V1 surface | V2 replacement |
+|---|---|
+| `RequestProcessor` / `LocalRequestProcessor` | `RequestProcessorV2` / `LocalRequestProcessorV2` |
+| `AuthorizedCommandDispatcher` | `AuthorizedCommandDispatcherV2` |
+| `ConnectionHandlerContext` / `ConnectionHandlerContextWrapper` | the owned `RemotingRequest` aggregate |
+| `ConnectionHandlerContext::channel()` / `connection_ref()` | `RemotingRequest::session()` and `RequestControlView` for read-only facts; composition-owned `ServerPushSender` or `SessionCloseHandle` only when that authority is required |
+| swallowing `write_response*` / `write*` methods | return `HandlerOutcome::Reply(ResponsePlan)` or claim one `DeferredResponder` and call `respond` |
+
+An inline processor moves response ownership into its return value:
+
+```rust,ignore
+impl RequestProcessorV2 for Processor {
+    async fn process(
+        &mut self,
+        request: &mut RemotingRequest,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        let response = RemotingCommand::create_success_response_command();
+        Ok(HandlerOutcome::Reply(ResponsePlan::command(response)?))
+    }
+}
+```
+
+A deferred processor reserves and transfers exactly one response capability;
+it does not retain a channel or handler context:
+
+```rust,ignore
+let responder = request.take_deferred_responder()?;
+let registration = registry.register(request, responder)?;
+Ok(HandlerOutcome::Deferred(registration))
+```
+
+Server-initiated pushes and closes are resolved from the session registry by a
+composition root and stored only where those explicit capabilities are needed.
+Ordinary processors cannot recover either capability from `RemotingRequest` or
+its extension store.
 
 ## Removed production seams
 

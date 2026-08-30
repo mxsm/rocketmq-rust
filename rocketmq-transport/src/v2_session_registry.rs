@@ -14,6 +14,10 @@
 
 //! Composition-owned V2 server session lifecycle control.
 
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -228,7 +232,7 @@ impl SessionCloseError {
 /// Narrow sender for explicitly typed server pushes on one canonical V2 session.
 ///
 /// This capability cannot expose the session writer, send arbitrary commands,
-/// close the session, or recover a raw [`SessionHandle`].
+/// close the session, or recover a raw `SessionHandle`.
 #[derive(Clone)]
 pub struct ServerPushSender {
     session: SessionHandle,
@@ -254,6 +258,10 @@ impl ServerPushSender {
     ) -> Result<ServerPushReceipt, ServerPushError> {
         let session_id = self.session_id();
         let kind = command.kind();
+        let _outbound_lease = self
+            .session
+            .acquire_server_outbound("v2-server-push")
+            .map_err(|source| ServerPushError { session_id, source })?;
         let mut connection = self.session.connection();
         connection
             .send_command_with_deadline(
@@ -499,7 +507,9 @@ impl Drop for ServerRequestFailClosedGuard {
     fn drop(&mut self) {
         if self.armed {
             self.response_table.retire_owner(&self.response_owner);
-            self.session.abort();
+            if !self.session.close_requested() {
+                self.session.abort();
+            }
         }
     }
 }
@@ -546,6 +556,15 @@ impl ServerRequestSender {
     ) -> Result<ServerRequestResponse, ServerRequestError> {
         let session_id = self.session_id();
         let kind = command.kind();
+        let outbound_lease = self
+            .session
+            .acquire_server_outbound("v2-server-request")
+            .map_err(|source| ServerRequestError {
+                session_id,
+                kind,
+                stage: ServerRequestErrorStage::Register,
+                source,
+            })?;
         let deadline = RequestDeadline::after(timeout);
         let mut command = command.into_command();
         let opaque = command.opaque();
@@ -566,6 +585,7 @@ impl ServerRequestSender {
         let write_result = connection
             .send_command_with_deadline(command, deadline, "v2-server-request")
             .await;
+        drop(outbound_lease);
         if let Err(source) = write_result {
             if !write_failure_may_have_reached_socket(&source) {
                 fail_closed.complete();
@@ -619,7 +639,7 @@ impl ServerRequestSender {
 /// Narrow close authority for one canonical V2 session.
 ///
 /// This capability cannot send data, recover a writer, or expose a raw
-/// [`SessionHandle`]. Graceful close reuses the transport session's existing
+/// `SessionHandle`. Graceful close reuses the transport session's existing
 /// close owner.
 #[derive(Clone)]
 pub struct SessionCloseHandle {
@@ -633,19 +653,32 @@ impl SessionCloseHandle {
         self.session.session_view().id()
     }
 
-    /// Gracefully retires the session writer.
+    /// Requests the server-owned ordered close and waits for its full completion.
     ///
     /// # Errors
     ///
-    /// Returns [`SessionCloseError`] when the canonical writer cannot finish
-    /// retirement before its transport-owned deadline.
+    /// Returns [`SessionCloseError`] when deferred cleanup, executor drain, disconnect handling,
+    /// or the canonical writer cannot complete healthily.
     pub async fn close(&self, reason: SessionCloseReason) -> Result<(), SessionCloseError> {
         let session_id = self.session_id();
-        self.session.retire().await.map_err(|source| SessionCloseError {
-            session_id,
-            reason,
-            source,
-        })
+        self.session.request_close();
+        self.session
+            .wait_for_close_completion()
+            .await
+            .map(|_| ())
+            .map_err(|source| SessionCloseError {
+                session_id,
+                reason,
+                source,
+            })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn completion_snapshot(&self) -> crate::server::SessionCloseCompletionSnapshot {
+        self.session
+            .close_completion_snapshot()
+            .await
+            .expect("test close coordinator must publish completion")
     }
 }
 
@@ -686,6 +719,8 @@ pub struct V2SessionRegistry {
     sessions: DashMap<SessionId, RegisteredV2Session>,
     events: broadcast::Sender<V2SessionEvent>,
     lifecycle_listener: Option<Arc<dyn V2SessionLifecycleListener>>,
+    #[cfg(test)]
+    panic_next_cleanup: AtomicBool,
 }
 
 impl V2SessionRegistry {
@@ -697,6 +732,8 @@ impl V2SessionRegistry {
             sessions: DashMap::new(),
             events,
             lifecycle_listener: None,
+            #[cfg(test)]
+            panic_next_cleanup: AtomicBool::new(false),
         }
     }
 
@@ -730,6 +767,16 @@ impl V2SessionRegistry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn panic_next_cleanup_for_test(&self) {
+        self.panic_next_cleanup.store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_cleanup_panic_for_test(&self) -> bool {
+        self.panic_next_cleanup.swap(false, Ordering::AcqRel)
     }
 
     /// Resolves the independent push and close capabilities for `id`.
@@ -768,16 +815,15 @@ impl V2SessionRegistry {
 
     /// Closes the session identified by `id` when it is still registered.
     ///
-    /// Returns `false` when the session is already absent. A retirement error
-    /// falls back to aborting the same canonical session before returning
-    /// `true`, so the caller never receives raw transport authority.
+    /// Returns `false` when the session is already absent. The close
+    /// coordinator publishes an unhealthy typed completion and aborts the
+    /// canonical session if ordered finalization cannot finish.
     pub async fn close(&self, id: SessionId) -> bool {
         let Some(session) = self.sessions.get(&id).map(|entry| entry.value().handle.clone()) else {
             return false;
         };
-        if session.retire().await.is_err() {
-            session.abort();
-        }
+        let close = SessionCloseHandle { session };
+        let _ = close.close(SessionCloseReason::Administrative).await;
         true
     }
 
@@ -799,7 +845,7 @@ impl V2SessionRegistry {
         session: &SessionHandle,
         response_table: PendingRequestTable,
         response_owner: PendingRequestOwner,
-    ) {
+    ) -> bool {
         let view = session.session_view();
         let id = view.id();
         self.sessions.insert(
@@ -813,7 +859,16 @@ impl V2SessionRegistry {
                 },
             },
         );
-        self.publish_connected(&view);
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.publish_connected(&view))).is_err() {
+            self.sessions
+                .remove_if(&id, |_, registered| registered.handle.is_same_session(session));
+            tracing::warn!(
+                session_id = ?id,
+                "V2 session connected listener panicked; rolled back exact registration"
+            );
+            return false;
+        }
+        true
     }
 
     fn publish_connected(&self, view: &SessionView) {

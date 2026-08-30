@@ -165,6 +165,13 @@ pub(crate) struct QueuedWrite {
     pub(crate) target: String,
     pub(crate) progress: Arc<QueuedWriteProgress>,
     pub(crate) enqueued_at: Option<Instant>,
+    pub(crate) response_queue_wait_observation: ResponseQueueWaitObservation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseQueueWaitObservation {
+    Ineligible,
+    Response,
 }
 
 impl QueuedWrite {
@@ -185,7 +192,13 @@ impl QueuedWrite {
             target,
             progress,
             enqueued_at: Some(enqueued_at),
+            response_queue_wait_observation: ResponseQueueWaitObservation::Ineligible,
         }
+    }
+
+    pub(crate) fn with_response_queue_wait_observation(mut self, observation: ResponseQueueWaitObservation) -> Self {
+        self.response_queue_wait_observation = observation;
+        self
     }
 
     pub(crate) fn encoded_len(&self) -> usize {

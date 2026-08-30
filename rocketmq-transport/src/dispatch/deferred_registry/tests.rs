@@ -1054,10 +1054,14 @@ fn session_cleanup_detaches_multiple_registries_once_and_preserves_other_session
     other_registration.commit().expect("other session commit");
 
     harness.session.close();
+    let cleanup_report = cleanup.close();
     assert_eq!(
-        cleanup.close(),
+        cleanup_report.outcome,
         crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
     );
+    assert_eq!(cleanup_report.registered_waiters, 3);
+    assert_eq!(cleanup_report.removed_waiters, 3);
+    assert_eq!(cleanup_report.remaining_wait_permits, 0);
     assert_eq!(first.inner.session_member_count(harness.session.view().id()), 0);
     assert_eq!(second.inner.session_member_count(harness.session.view().id()), 0);
     assert_eq!(first.inner.session_cleanup_call_count(), 1);

@@ -154,7 +154,7 @@ async fn network_bridge_uses_one_real_session_and_the_adapter_stable_response_ta
         bridge.canonical_session_id,
         SessionId::from_session_owner(harness.first.session_id())
     );
-    assert!(bridge.channel.shares_inner(bridge.context.channel()));
+    assert!(bridge.channel.shares_inner(bridge.context.legacy_channel()));
     assert!(bridge.channel.is_canonical_network_owner(&harness.first));
 
     let owner = bridge

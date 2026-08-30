@@ -114,6 +114,7 @@ pub(crate) use deferred_response::ResponseStateSnapshot;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupCloseOutcome;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupOwner;
 pub(crate) use deferred_session_cleanup::DeferredSessionCleanupRegistration;
+pub(crate) use deferred_session_cleanup::DeferredSessionCleanupReport;
 pub(crate) use deferred_session_cleanup::LegacySessionCleanupCapability;
 pub use deferred_session_cleanup::LegacySessionCleanupEnrollment;
 pub use deferred_session_cleanup::LegacySessionCleanupInstallError;

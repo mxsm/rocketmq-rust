@@ -58,6 +58,7 @@ use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::QueuedWriteProgress;
+use crate::write_strategy::ResponseQueueWaitObservation;
 use crate::writer_runtime::WriterLanes;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::BlockingExecutor;
@@ -961,6 +962,32 @@ impl Connection {
         deferred_drop: Option<DeferredTransportDropHandle>,
         target: String,
     ) -> Result<(), SendFailure> {
+        self.send_payload_inner_with_response_observation(
+            payload,
+            class,
+            reservation,
+            deadline,
+            control,
+            stop_policy,
+            deferred_drop,
+            ResponseQueueWaitObservation::Ineligible,
+            target,
+        )
+        .await
+    }
+
+    async fn send_payload_inner_with_response_observation(
+        &mut self,
+        payload: OutboundPayload,
+        class: AdmissionClass,
+        reservation: Option<ResourcePermit>,
+        deadline: Option<RequestDeadline>,
+        control: Option<&RequestControlView>,
+        stop_policy: RequestStopPolicy,
+        deferred_drop: Option<DeferredTransportDropHandle>,
+        response_queue_wait_observation: ResponseQueueWaitObservation,
+        target: String,
+    ) -> Result<(), SendFailure> {
         let response_plan_drop = self.response_plan_drop.clone();
         let encoded_len = payload.encoded_len();
         let legacy_reason = match &self.outbound {
@@ -1039,7 +1066,8 @@ impl Connection {
                     target.clone(),
                     progress.clone(),
                     enqueued_at,
-                ),
+                )
+                .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
                 Ok(()) => {
                     queued.writer_diagnostics.record_accepted();
@@ -1216,7 +1244,7 @@ impl Connection {
             return Err(ResponseError::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
-        self.send_payload_inner(
+        self.send_payload_inner_with_response_observation(
             payload,
             class,
             None,
@@ -1224,6 +1252,7 @@ impl Connection {
             Some(control),
             RequestStopPolicy::All,
             None,
+            ResponseQueueWaitObservation::Response,
             "transport-session-writer".to_string(),
         )
         .await
@@ -1246,7 +1275,7 @@ impl Connection {
             return Err(ResponseError::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
-        self.send_payload_inner(
+        self.send_payload_inner_with_response_observation(
             payload,
             class,
             None,
@@ -1254,6 +1283,7 @@ impl Connection {
             Some(control),
             RequestStopPolicy::All,
             Some(deferred_drop),
+            ResponseQueueWaitObservation::Response,
             "transport-session-writer".to_string(),
         )
         .await
@@ -1271,7 +1301,7 @@ impl Connection {
             .limits
             .encode_command(command)
             .map_err(|source| ResponseError::Encode { source })?;
-        self.send_payload_inner(
+        self.send_payload_inner_with_response_observation(
             OutboundPayload::Frame(frame),
             class,
             None,
@@ -1279,6 +1309,7 @@ impl Connection {
             None,
             RequestStopPolicy::All,
             None,
+            ResponseQueueWaitObservation::Response,
             "transport-session-writer".to_string(),
         )
         .await
@@ -1296,7 +1327,7 @@ impl Connection {
             .encode_command(command.clone())
             .map_err(|source| ResponseError::Encode { source })?;
         let _ = command.take_body();
-        self.send_payload_inner(
+        self.send_payload_inner_with_response_observation(
             OutboundPayload::Frame(frame),
             class,
             None,
@@ -1304,6 +1335,7 @@ impl Connection {
             None,
             RequestStopPolicy::All,
             None,
+            ResponseQueueWaitObservation::Response,
             "transport-session-writer".to_string(),
         )
         .await

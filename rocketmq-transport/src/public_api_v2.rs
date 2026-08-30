@@ -99,6 +99,10 @@ pub use crate::request_processor::default_request_processor::DefaultRequestProce
 pub use crate::runtime::processor_v2::LocalRequestProcessorV2;
 pub use crate::runtime::processor_v2::RejectRequestDecision;
 pub use crate::runtime::processor_v2::RequestProcessorV2;
+pub use crate::runtime::processor_v2::ResponseMetadataV2;
+pub use crate::runtime::processor_v2::ResponseObservationModeV2;
+pub use crate::runtime::processor_v2::ResponseObservationOutcomeV2;
+pub use crate::runtime::processor_v2::ResponseObservationV2;
 pub use crate::runtime::processor_v2::ResponseWriteObservationV2;
 pub use crate::runtime::processor_v2::ResponseWriteOutcomeV2;
 pub use crate::runtime::processor_v2::ResponseWritePath;

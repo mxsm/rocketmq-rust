@@ -13,6 +13,10 @@
 // limitations under the License.
 
 #![cfg(feature = "test-support")]
+#![allow(
+    deprecated,
+    reason = "this integration test intentionally freezes deprecated V1 processor behavior"
+)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

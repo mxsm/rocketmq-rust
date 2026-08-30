@@ -98,7 +98,7 @@ rust	96	"rocketmq_store_append_latency"	Histogram	"ms"	[]	Store
 rust	97	"rocketmq_store_flush_latency"	Histogram	"ms"	[]	Store
 rust	98	"rocketmq_store_dispatch_latency"	Histogram	"ms"	[]	Store
 rust	99	"rocketmq_store_disk_usage"	ObservableGauge	"By"	[]	Store
-rust	100	"rocketmq_transport_requests_total"	Counter	"{request}"	[]	Remoting
+rust	100	"rocketmq_transport_requests_total"	Counter	"{request}"	["code","outcome"]	Remoting
 rust	101	"rocketmq_transport_request_latency"	Histogram	"ms"	[]	Remoting
 rust	102	"rocketmq_transport_outbound_attempted_plaintext_bytes"	Counter	"By"	[]	Remoting
 rust	103	"rocketmq_transport_outbound_accepted_plaintext_bytes"	Counter	"By"	[]	Remoting
@@ -214,3 +214,10 @@ rust	212	"rocketmq_dashboard_storage_operation_errors_total"	Counter	""	["backen
 rust	213	"rocketmq_dashboard_storage_capacity_bytes"	Gauge	"By"	["backend"]	Observability
 rust	214	"rocketmq_dashboard_storage_pool_connections"	Gauge	""	["backend","state"]	Observability
 rust	215	"rocketmq_transport_legacy_processor_requests_total"	Counter	"{request}"	["processor","request_code"]	Remoting
+rust	216	"rocketmq_transport_request_duration_seconds"	Histogram	"s"	["code","outcome"]	Remoting
+rust	217	"rocketmq_transport_response_total"	Counter	"{response}"	["mode","result"]	Remoting
+rust	218	"rocketmq_transport_deferred_inflight"	UpDownCounter	"{request}"	["code"]	Remoting
+rust	219	"rocketmq_transport_deferred_retained_bytes"	UpDownCounter	"By"	["code"]	Remoting
+rust	220	"rocketmq_transport_response_queue_wait_seconds"	Histogram	"s"	[]	Remoting
+rust	221	"rocketmq_transport_response_duplicate_total"	Counter	"{response}"	["code"]	Remoting
+rust	222	"rocketmq_transport_response_abandoned_total"	Counter	"{response}"	["reason"]	Remoting

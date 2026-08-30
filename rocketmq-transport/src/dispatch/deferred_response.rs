@@ -113,6 +113,10 @@ impl DeferredSystemCancellationReason {
     pub(crate) const PARENT_CANCELLED: Self = Self(DeferredTerminalReason::ParentCancelled);
     pub(crate) const PROCESSOR_UNAVAILABLE: Self = Self(DeferredTerminalReason::ProcessorUnavailable);
     pub(crate) const SERVICE_STOPPING: Self = Self(DeferredTerminalReason::ServiceStopping);
+
+    pub(crate) const fn terminal_reason(self) -> DeferredTerminalReason {
+        self.0
+    }
 }
 
 /// Sealed system-owned reasons that project to `Closed`.
@@ -121,6 +125,10 @@ pub(crate) struct DeferredSystemCloseReason(DeferredTerminalReason);
 
 impl DeferredSystemCloseReason {
     pub(crate) const SESSION_CLOSED: Self = Self(DeferredTerminalReason::SessionClosed);
+
+    pub(crate) const fn terminal_reason(self) -> DeferredTerminalReason {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy)]

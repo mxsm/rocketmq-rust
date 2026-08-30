@@ -76,6 +76,11 @@ where
     }
 
     /// Applies one validated frame profile to every connection created by this client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the frame limits are internally inconsistent or
+    /// exceed the supported protocol envelope.
     pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
@@ -89,6 +94,12 @@ where
         self
     }
 
+    /// Builds the legacy-processor transport client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transport configuration, admission limits,
+    /// frame limits, or owned runtime composition is invalid.
     pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
         let mut client = TransportClient::build_inner(
             self.config,
@@ -138,6 +149,11 @@ where
     }
 
     /// Applies one validated frame profile to every connection created by this client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the frame limits are internally inconsistent or
+    /// exceed the supported protocol envelope.
     pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
@@ -151,6 +167,12 @@ where
         self
     }
 
+    /// Builds the V2 transport client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transport configuration, admission limits,
+    /// frame limits, or owned runtime composition is invalid.
     pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
         let mut client = TransportClient::build_inner_v2(
             self.config,
@@ -215,6 +237,12 @@ where
         Arc::clone(&self.transport)
     }
 
+    /// Starts the nameserver-aware client lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an owned background service cannot be started or
+    /// the client lifecycle has already entered an incompatible terminal state.
     pub async fn start(self: &Arc<Self>) -> RocketMQResult<ClientStartReport> {
         self.transport.start().await
     }
@@ -223,6 +251,12 @@ where
     ///
     /// This forwards the same deadline without converting it to a new duration,
     /// so nested lifecycle owners share one drain budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the canonical transport cannot complete its
+    /// lifecycle transition. Timeout and aborted work remain available in the
+    /// returned report when shutdown itself completes successfully.
     pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> RocketMQResult<ClientShutdownReport> {
         Ok(self.transport.shutdown_graceful(deadline).await)
     }
@@ -260,6 +294,11 @@ where
     }
 
     /// Applies one validated frame profile to every connection created by this client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the frame limits are internally inconsistent or
+    /// exceed the supported protocol envelope.
     pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         self.transport = self.transport.frame_limits(frame_limits)?;
         Ok(self)
@@ -272,6 +311,12 @@ where
         self
     }
 
+    /// Builds the legacy-processor nameserver-aware remoting client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying V2 transport configuration,
+    /// admission limits, frame limits, or owned runtime composition is invalid.
     pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
         Ok(RemotingClient {
             transport: Arc::new(self.transport.build()?),
@@ -303,6 +348,11 @@ where
     }
 
     /// Applies one validated frame profile to every connection created by this client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the frame limits are internally inconsistent or
+    /// exceed the supported protocol envelope.
     pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         self.transport = self.transport.frame_limits(frame_limits)?;
         Ok(self)
@@ -315,6 +365,12 @@ where
         self
     }
 
+    /// Builds the V2 nameserver-aware remoting client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying V2 transport configuration,
+    /// admission limits, frame limits, or owned runtime composition is invalid.
     pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
         Ok(RemotingClient {
             transport: Arc::new(self.transport.build()?),
@@ -499,6 +555,12 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     }
 
     /// Sends one canonical request under an absolute deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target cannot be resolved or connected, the
+    /// deadline expires, request admission or signing fails, the writer cannot
+    /// send the command, or response correlation terminates without a response.
     pub async fn request(
         &self,
         target: RequestTarget,
@@ -509,6 +571,12 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     }
 
     /// Sends one command and resolves only after the sole writer has completed it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target cannot be resolved or connected, the
+    /// deadline expires, request admission or signing fails, or the sole writer
+    /// cannot complete the command.
     pub async fn send_oneway(
         &self,
         target: RequestTarget,
@@ -527,7 +595,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// 3. Record latency / error metrics       (~10ns)
     /// ```
     ///
-    /// # Error Handling
+    /// # Errors
     ///
     /// Returns `RocketMQError` for all failures:
     /// - Client unavailable (no connection)
@@ -567,6 +635,12 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 
     /// Sends a one-way command while transferring an existing process-budget
     /// reservation into the transport writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the address cannot be connected, the deadline
+    /// expires, request signing fails, or the session writer rejects or fails
+    /// the command. The supplied permit is consumed by the attempted send.
     pub async fn invoke_oneway_with_permit(
         &self,
         addr: &CheetahString,
@@ -577,6 +651,13 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         self.invoke_oneway_until(addr, request, deadline, Some(permit)).await
     }
 
+    /// Sends a one-way request under the caller's absolute deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the address cannot be connected, the deadline
+    /// expires, request admission or signing fails, or the session writer
+    /// rejects or fails the command.
     pub async fn invoke_request_oneway_with_deadline(
         &self,
         addr: &CheetahString,
@@ -586,6 +667,13 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         self.invoke_oneway_until(addr, request, deadline, None).await
     }
 
+    /// Sends a one-way request under a timeout relative to the current instant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the address cannot be connected, request admission
+    /// or signing fails, the timeout expires, or the session writer rejects or
+    /// fails the command.
     pub async fn invoke_request_oneway(
         &self,
         addr: &CheetahString,

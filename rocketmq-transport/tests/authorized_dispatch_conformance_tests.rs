@@ -13,6 +13,10 @@
 // limitations under the License.
 
 #![cfg(feature = "test-support")]
+#![allow(
+    deprecated,
+    reason = "this conformance test intentionally compares the deprecated V1 dispatcher with V2"
+)]
 
 use std::future;
 use std::net::IpAddr;

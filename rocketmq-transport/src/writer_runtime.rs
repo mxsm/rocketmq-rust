@@ -35,6 +35,7 @@ use crate::write_result::WriterFailure;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteCancellation;
+use crate::write_strategy::ResponseQueueWaitObservation;
 use crate::write_strategy::WriterOperation;
 
 /// Hard bounds for one writer micro-batch.
@@ -606,6 +607,7 @@ async fn write_batch(
             progress: &write.progress,
             enqueued_at: write.enqueued_at,
             encoded_len: write.encoded_len(),
+            response_queue_wait_observation: write.response_queue_wait_observation,
         })
         .collect::<Vec<_>>();
     let mut started_at = vec![None; ready.len()];
@@ -618,6 +620,11 @@ async fn write_batch(
             write_started = true;
             for (start, started_at) in start_data.iter().zip(started_at.iter_mut()) {
                 start.progress.start_write();
+                if let (ResponseQueueWaitObservation::Response, Some(enqueued_at)) =
+                    (start.response_queue_wait_observation, start.enqueued_at)
+                {
+                    telemetry.record_response_queue_wait(Instant::now().saturating_duration_since(enqueued_at));
+                }
                 *started_at = Some(diagnostics.start_write(start.enqueued_at, start.encoded_len));
             }
         };
@@ -687,6 +694,7 @@ struct ActiveWriteStart<'a> {
     progress: &'a crate::write_strategy::QueuedWriteProgress,
     enqueued_at: Option<Instant>,
     encoded_len: usize,
+    response_queue_wait_observation: ResponseQueueWaitObservation,
 }
 
 #[cfg(test)]

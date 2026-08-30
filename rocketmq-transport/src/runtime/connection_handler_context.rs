@@ -169,6 +169,10 @@ impl ConnectionHandlerContextWrapper {
     /// # Use Case
     ///
     /// Checking connection health, reading connection ID, etc.
+    #[deprecated(
+        since = "1.0.0",
+        note = "Use `api::v2::RemotingRequest::session()` and `RequestControlView` instead"
+    )]
     pub fn connection_ref(&self) -> &ConnectionStateHandle {
         self.channel.connection_ref()
     }
@@ -234,6 +238,10 @@ impl ConnectionHandlerContextWrapper {
     ///     ctx.write(response).await;
     /// }
     /// ```
+    #[deprecated(
+        since = "1.0.0",
+        note = "Return `HandlerOutcome::Reply(ResponsePlan)` or use `DeferredResponder::respond` instead"
+    )]
     pub async fn write_response(&self, cmd: RemotingCommand) {
         match self.try_write_response(cmd).await {
             Ok(_) => {}
@@ -265,6 +273,10 @@ impl ConnectionHandlerContextWrapper {
     /// # Note
     ///
     /// The command's body may be consumed during sending (`take_body()`).
+    #[deprecated(
+        since = "1.0.0",
+        note = "Return `HandlerOutcome::Reply(ResponsePlan)` or use `DeferredResponder::respond` instead"
+    )]
     pub async fn write_response_ref(&self, cmd: &mut RemotingCommand) {
         match self.try_write_response_ref(cmd).await {
             Ok(_) => {}
@@ -283,20 +295,50 @@ impl ConnectionHandlerContextWrapper {
     ///
     /// # Deprecated
     ///
-    /// Use `write_response()` for clearer semantics.
-    #[deprecated(since = "0.6.0", note = "Use `write_response()` instead")]
+    /// Return a V2 [`crate::api::v2::ResponsePlan`] through
+    /// [`crate::api::v2::HandlerOutcome::Reply`], or claim a
+    /// [`crate::api::v2::DeferredResponder`] for deferred completion.
+    #[deprecated(
+        since = "1.0.0",
+        note = "Return `HandlerOutcome::Reply(ResponsePlan)` or use `DeferredResponder::respond` instead"
+    )]
     pub async fn write(&self, cmd: RemotingCommand) {
-        self.write_response(cmd).await;
+        match self.try_write_response(cmd).await {
+            Ok(_) => {}
+            Err(error) => {
+                error!(
+                    kind = error.kind().as_str(),
+                    progress = error.write_progress().map_or("none", |progress| progress.as_str()),
+                    retryable = error.retryable(),
+                    "response write failed"
+                );
+            }
+        }
     }
 
     /// Legacy alias for `write_response_ref()` - kept for backward compatibility.
     ///
     /// # Deprecated
     ///
-    /// Use `write_response_ref()` for clearer semantics.
-    #[deprecated(since = "0.6.0", note = "Use `write_response_ref()` instead")]
+    /// Return a V2 [`crate::api::v2::ResponsePlan`] through
+    /// [`crate::api::v2::HandlerOutcome::Reply`], or claim a
+    /// [`crate::api::v2::DeferredResponder`] for deferred completion.
+    #[deprecated(
+        since = "1.0.0",
+        note = "Return `HandlerOutcome::Reply(ResponsePlan)` or use `DeferredResponder::respond` instead"
+    )]
     pub async fn write_ref(&self, cmd: &mut RemotingCommand) {
-        self.write_response_ref(cmd).await;
+        match self.try_write_response_ref(cmd).await {
+            Ok(_) => {}
+            Err(error) => {
+                error!(
+                    kind = error.kind().as_str(),
+                    progress = error.write_progress().map_or("none", |progress| progress.as_str()),
+                    retryable = error.retryable(),
+                    "response write failed"
+                );
+            }
+        }
     }
 
     // === Channel Access ===
@@ -310,7 +352,15 @@ impl ConnectionHandlerContextWrapper {
     /// # Use Case
     ///
     /// Accessing channel metadata (ID, addresses, etc.)
+    #[deprecated(
+        since = "1.0.0",
+        note = "Use `api::v2::RemotingRequest::session()` for read-only facts and composition-owned session capabilities for push or close"
+    )]
     pub fn channel(&self) -> &Channel {
+        &self.channel
+    }
+
+    pub(crate) const fn legacy_channel(&self) -> &Channel {
         &self.channel
     }
 
@@ -436,8 +486,8 @@ mod tests {
         opaque_ids.sort_unstable();
         assert_eq!(opaque_ids, [101, 101]);
 
-        context.connection_ref().close();
-        assert!(!context_clone.connection_ref().is_healthy());
+        channel.connection_ref().close();
+        assert!(!channel.connection_ref().is_healthy());
         let report = channel.close_with_report(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
@@ -461,6 +511,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        deprecated,
+        reason = "the compatibility test intentionally verifies the deprecated swallow-error facade"
+    )]
     async fn borrowed_response_write_consumes_the_body_before_a_late_error() {
         let runtime = rocketmq_runtime::RuntimeContext::from_current("borrowed-context-receipt-test");
         let (context, receiver) = embedded_context(&runtime, "borrowed-context-success");

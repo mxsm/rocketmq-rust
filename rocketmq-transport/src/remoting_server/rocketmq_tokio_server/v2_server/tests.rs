@@ -576,14 +576,337 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(reset.body(), Some(&Bytes::from_static(b"reset-offsets")));
     assert!(reset.is_oneway_rpc());
 
+    let concurrent_close = close.clone();
+    let (first_close, second_close) = tokio::join!(
+        close.close(SessionCloseReason::Administrative),
+        concurrent_close.close(SessionCloseReason::HeartbeatTimeout),
+    );
+    first_close.expect("first typed close should complete the server-owned finalizer");
+    second_close.expect("cloned typed close should share the same completion");
+    let completion = close.completion_snapshot().await;
+    assert!(completion.healthy);
+    assert_eq!(completion.remaining_inline_tasks, 0);
+    assert_eq!(completion.remaining_resume_tasks, 0);
+    assert_eq!(completion.removed_waiters, 0);
+    assert_eq!(completion.cleanup_panicked_targets, 0);
+    assert_eq!(completion.remaining_wait_permits, 0);
+    assert_eq!(completion.remaining_server_outbound_leases, 0);
+    assert!(!completion.disconnected_panicked);
+    assert!(completion.writer_healthy);
+    assert_eq!(completion.writer_queued_items, 0);
+    assert_eq!(completion.writer_queued_bytes, 0);
+    assert!(!registry.contains(session_id));
     close
         .close(SessionCloseReason::Administrative)
         .await
-        .expect("typed close should retire the canonical writer");
+        .expect("repeated typed close should reuse completed shutdown");
     let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
         .await
         .expect("typed close EOF deadline");
     assert!(eof.is_none());
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+struct PanickingDisconnectListener;
+
+impl crate::v2_session_registry::V2SessionLifecycleListener for PanickingDisconnectListener {
+    fn on_session_connected(&self, _session: &crate::session_view::SessionView) {}
+
+    fn on_session_disconnected(&self, _session_id: SessionId) {
+        panic!("test disconnected listener panic");
+    }
+}
+
+struct PanickingConnectListener;
+
+impl crate::v2_session_registry::V2SessionLifecycleListener for PanickingConnectListener {
+    fn on_session_connected(&self, _session: &crate::session_view::SessionView) {
+        panic!("test connected listener panic");
+    }
+
+    fn on_session_disconnected(&self, _session_id: SessionId) {}
+}
+
+#[tokio::test]
+async fn connected_listener_panic_rolls_back_registration_and_finishes_session() {
+    let runtime = V2TestRuntime::new("transport-v2-connected-listener-panic");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::with_lifecycle_listener(Arc::new(
+        PanickingConnectListener,
+    )));
+    let processor = TcpV2Processor { state, admission: None };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+
+    let _ = client.send_command(RemotingCommand::create_remoting_command(701)).await;
+    let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("connected-listener panic session completion deadline");
+    assert!(eof.is_none());
+    assert!(registry.is_empty());
+
+    running.begin_shutdown();
+    tokio::time::timeout(Duration::from_secs(1), running.finish())
+        .await
+        .expect("connected-listener panic server shutdown deadline");
+}
+
+struct BlockingDisconnectListener {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl crate::v2_session_registry::V2SessionLifecycleListener for BlockingDisconnectListener {
+    fn on_session_connected(&self, _session: &crate::session_view::SessionView) {}
+
+    fn on_session_disconnected(&self, _session_id: SessionId) {
+        if let Some(entered) = self.entered.lock().expect("blocking listener entered lock").take() {
+            let _ = entered.send(());
+        }
+        self.release
+            .lock()
+            .expect("blocking listener release lock")
+            .recv()
+            .expect("release blocked disconnect listener");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn close_transition_rejects_retained_push_and_request_capabilities() {
+    let runtime = V2TestRuntime::new("transport-v2-close-outbound-admission");
+    let state = Arc::new(ProcessorState::default());
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let registry = Arc::new(V2SessionRegistry::with_lifecycle_listener(Arc::new(
+        BlockingDisconnectListener {
+            entered: Mutex::new(Some(entered_tx)),
+            release: Mutex::new(release_rx),
+        },
+    )));
+    let processor = TcpV2Processor {
+        state: Arc::clone(&state),
+        admission: None,
+    };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut client).await;
+    let session_id = state
+        .session
+        .lock()
+        .expect("outbound admission session lock")
+        .expect("outbound admission session id");
+    let (push, close) = registry.capabilities(session_id).expect("retained push capability");
+    let request = registry
+        .server_request_sender(session_id)
+        .expect("retained request capability");
+    let close_task = tokio::spawn(async move { close.close(SessionCloseReason::Administrative).await });
+
+    tokio::time::timeout(Duration::from_secs(1), entered_rx)
+        .await
+        .expect("close must reach blocked disconnect listener")
+        .expect("blocked disconnect listener entry signal");
+    push.send(
+        ServerPushCommand::NotifyConsumerIdsChanged {
+            header: NotifyConsumerIdsChangedRequestHeader {
+                consumer_group: CheetahString::from_static_str("GroupA"),
+                rpc_request_header: None,
+            },
+            opaque: Some(9_860),
+        },
+        Duration::from_secs(1),
+    )
+    .await
+    .expect_err("retained push must fail after the close transition");
+    let request_error = request
+        .request(consumer_status_request(), Duration::from_secs(1))
+        .await
+        .expect_err("retained request must fail after the close transition");
+    assert_eq!(request_error.stage(), ServerRequestErrorStage::Register);
+    assert_eq!(request.pending_usage().count, 0);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), client.receive_command())
+            .await
+            .is_err(),
+        "rejected retained capabilities must not enqueue a client frame"
+    );
+
+    release_tx.send(()).expect("release blocked disconnect listener");
+    close_task
+        .await
+        .expect("close task join")
+        .expect("ordered close after listener release");
+    assert!(client.receive_command().await.is_none());
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_completion() {
+    const OPAQUE: i32 = 9_859;
+
+    let runtime = V2TestRuntime::new("transport-v2-typed-close-coordinator");
+    let deferred_registry = DeferredRegistry::<usize>::new();
+    let admission_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+    let deferred_admission =
+        DeferredAdmission::try_configure(&admission_controller, DeferredWaitLimits::new(4, 4 * 1024 * 1024))
+            .expect("typed-close deferred admission");
+    let session_registry = Arc::new(V2SessionRegistry::new());
+    let (registered_tx, mut registered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let processor = NetworkDeferredCleanupProcessor {
+        registry: deferred_registry.clone(),
+        admission: deferred_admission.clone(),
+        registered: registered_tx,
+        precommit_opaque: -1,
+        release_precommit: Arc::new(tokio::sync::Notify::new()),
+    };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_admission_controller(Arc::clone(&admission_controller))
+        .with_session_registry(Arc::clone(&session_registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+
+    client
+        .send_command(RemotingCommand::create_remoting_command(705).set_opaque(OPAQUE))
+        .await
+        .expect("send typed-close deferred request");
+    let registered = receive_deferred_registration(&mut registered_rx, OPAQUE).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !deferred_registry.test_contains(registered.id) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("deferred registration commit deadline");
+    let (_, close) = session_registry
+        .capabilities(registered.session_id)
+        .expect("typed close capability");
+    let cloned = close.clone();
+
+    let (first, second) = tokio::join!(
+        close.close(SessionCloseReason::Administrative),
+        cloned.close(SessionCloseReason::ServiceShutdown),
+    );
+    first.expect("first typed close completion");
+    second.expect("cloned typed close completion");
+    let completion = close.completion_snapshot().await;
+    assert!(completion.healthy);
+    assert_eq!(completion.remaining_inline_tasks, 0);
+    assert_eq!(completion.remaining_resume_tasks, 0);
+    assert_eq!(completion.removed_waiters, 1);
+    assert_eq!(completion.cleanup_panicked_targets, 0);
+    assert_eq!(completion.remaining_wait_permits, 0);
+    assert_eq!(completion.remaining_server_outbound_leases, 0);
+    assert!(!completion.disconnected_panicked);
+    assert!(completion.writer_healthy);
+    assert_eq!(completion.writer_queued_items, 0);
+    assert_eq!(completion.writer_queued_bytes, 0);
+    assert!(!session_registry.contains(registered.session_id));
+    assert_eq!(deferred_registry.test_index_counts(), (0, 0, 0));
+    assert_eq!(deferred_registry.test_claim_marker_count(), 0);
+    assert_eq!(deferred_admission.snapshot().waiting_count(), 0);
+    assert_eq!(deferred_admission.snapshot().retained_bytes(), 0);
+    let admission = admission_controller.snapshot();
+    assert_eq!(admission.queued.current_count, 0);
+    assert_eq!(admission.inflight.current_count, 0);
+    assert_eq!(admission.processors.current_count, 0);
+    assert!(client.receive_command().await.is_none());
+
+    close
+        .close(SessionCloseReason::Administrative)
+        .await
+        .expect("repeated typed close completion");
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn cleanup_callback_panic_returns_typed_unhealthy_close_after_writer_completion() {
+    let runtime = V2TestRuntime::new("transport-v2-cleanup-panic-close");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::new());
+    registry.panic_next_cleanup_for_test();
+    let processor = TcpV2Processor {
+        state: Arc::clone(&state),
+        admission: None,
+    };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut client).await;
+    let session_id = state
+        .session
+        .lock()
+        .expect("cleanup panic session lock")
+        .expect("cleanup panic session id");
+    let (_, close) = registry
+        .capabilities(session_id)
+        .expect("cleanup panic close capability");
+
+    let error = tokio::time::timeout(Duration::from_secs(1), close.close(SessionCloseReason::Administrative))
+        .await
+        .expect("cleanup panic typed close deadline")
+        .expect_err("cleanup panic must produce typed unhealthy close");
+    assert_eq!(error.session_id(), session_id);
+    assert_eq!(error.reason(), SessionCloseReason::Administrative);
+    let completion = close.completion_snapshot().await;
+    assert!(!completion.healthy);
+    assert_eq!(completion.cleanup_panicked_targets, 1);
+    assert_eq!(completion.remaining_inline_tasks, 0);
+    assert_eq!(completion.remaining_resume_tasks, 0);
+    assert_eq!(completion.remaining_wait_permits, 0);
+    assert_eq!(completion.remaining_server_outbound_leases, 0);
+    assert!(!completion.disconnected_panicked);
+    assert!(completion.writer_healthy);
+    assert_eq!(completion.writer_queued_items, 0);
+    assert_eq!(completion.writer_queued_bytes, 0);
+    assert!(!registry.contains(session_id));
+    assert!(client.receive_command().await.is_none());
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn disconnected_panic_cannot_leave_typed_close_waiting_forever() {
+    let runtime = V2TestRuntime::new("transport-v2-disconnected-panic-close");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::with_lifecycle_listener(Arc::new(
+        PanickingDisconnectListener,
+    )));
+    let processor = TcpV2Processor {
+        state: Arc::clone(&state),
+        admission: None,
+    };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut client).await;
+    let session_id = state
+        .session
+        .lock()
+        .expect("disconnect panic session lock")
+        .expect("disconnect panic session id");
+    let (_, close) = registry
+        .capabilities(session_id)
+        .expect("disconnect panic close capability");
+
+    let error = tokio::time::timeout(Duration::from_secs(1), close.close(SessionCloseReason::Administrative))
+        .await
+        .expect("finalizer guard must bound typed close")
+        .expect_err("disconnected panic must publish unhealthy completion");
+    assert_eq!(error.session_id(), session_id);
+    let completion = close.completion_snapshot().await;
+    assert!(!completion.healthy);
+    assert!(completion.disconnected_panicked);
+    assert_eq!(completion.remaining_server_outbound_leases, 0);
+    assert!(completion.writer_healthy);
+    assert_eq!(completion.writer_queued_items, 0);
+    assert_eq!(completion.writer_queued_bytes, 0);
+    assert!(!registry.contains(session_id));
+    assert!(client.receive_command().await.is_none());
 
     running.begin_shutdown();
     running.finish().await;
@@ -730,10 +1053,6 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     std::future::poll_fn(|context| match timed_out.as_mut().poll(context) {
         Poll::Pending if registry.capabilities(first_session).is_some() => Poll::Pending,
         Poll::Pending => {
-            assert!(
-                registry.contains(first_session),
-                "timeout transition must fail closed before disconnect cleanup"
-            );
             assert!(registry.server_request_sender(first_session).is_none());
             Poll::Ready(())
         }
@@ -786,6 +1105,62 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
 }
 
 #[tokio::test]
+async fn typed_close_completes_healthily_with_a_written_pending_server_request() {
+    let runtime = V2TestRuntime::new("transport-v2-close-pending-server-request");
+    let state = Arc::new(ProcessorState::default());
+    let registry = Arc::new(V2SessionRegistry::new());
+    let mut events = registry.subscribe();
+    let processor = TcpV2Processor { state, admission: None };
+    let server = TransportServerV2::new(loopback_server_config(), runtime.service_context(), processor)
+        .with_session_registry(Arc::clone(&registry));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+    establish_v2_session(&mut client).await;
+    let session_id = next_connected_session(&mut events).await;
+    let (_, close) = registry
+        .capabilities(session_id)
+        .expect("pending request close capability");
+    let sender = registry
+        .server_request_sender(session_id)
+        .expect("pending request sender");
+    let request_task = {
+        let sender = sender.clone();
+        tokio::spawn(async move { sender.request(consumer_status_request(), Duration::from_secs(5)).await })
+    };
+    let wire = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+        .await
+        .expect("pending server request write deadline")
+        .expect("pending server request connection")
+        .expect("pending server request frame");
+    assert_eq!(RequestCode::from(wire.code()), RequestCode::GetConsumerStatusFromClient);
+    assert_eq!(sender.pending_usage().count, 1);
+
+    close
+        .close(SessionCloseReason::Administrative)
+        .await
+        .expect("pending server request must not make ordered close unhealthy");
+    let request_error = tokio::time::timeout(Duration::from_secs(1), request_task)
+        .await
+        .expect("pending request close completion deadline")
+        .expect("pending request task join")
+        .expect_err("session close must fail the pending response wait");
+    assert_eq!(request_error.stage(), ServerRequestErrorStage::AwaitResponse);
+    assert_eq!(request_error.session_id(), session_id);
+    let completion = close.completion_snapshot().await;
+    assert!(completion.healthy);
+    assert_eq!(completion.remaining_server_outbound_leases, 0);
+    assert!(!completion.disconnected_panicked);
+    assert!(completion.writer_healthy);
+    assert_eq!(completion.writer_queued_items, 0);
+    assert_eq!(completion.writer_queued_bytes, 0);
+    assert_eq!(sender.pending_usage().count, 0);
+    assert!(!registry.contains(session_id));
+    assert!(client.receive_command().await.is_none());
+
+    running.begin_shutdown();
+    running.finish().await;
+}
+
+#[tokio::test]
 async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_response_reuse() {
     let runtime = V2TestRuntime::new("transport-v2-server-request-cancellation");
     let state = Arc::new(ProcessorState::default());
@@ -816,7 +1191,6 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
         .await
         .expect_err("request caller must be aborted")
         .is_cancelled());
-    assert!(registry.contains(session_id));
     assert!(registry.capabilities(session_id).is_none());
     assert!(registry.server_request_sender(session_id).is_none());
     assert_eq!(sender.pending_usage().count, 0);
@@ -835,7 +1209,9 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
                 .set_body(Bytes::from_static(b"late-response")),
         )
         .await;
-    assert!(client.receive_command().await.is_none());
+    if let Some(Ok(_frame)) = client.receive_command().await {
+        panic!("cancelled request owner produced an unexpected frame");
+    }
     loop {
         let event = events.recv().await.expect("V2 session event stream");
         if matches!(event, V2SessionEvent::Disconnected(id) if id == session_id) {

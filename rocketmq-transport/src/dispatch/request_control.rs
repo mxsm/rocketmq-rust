@@ -213,6 +213,19 @@ impl RequestControlView {
         self.parent_cancellation.is_cancelled()
     }
 
+    /// Derives the lifecycle-only control used to deliver a boundary rejection.
+    ///
+    /// The rejected request deadline has already reached its terminal decision,
+    /// so it must not suppress the corresponding protocol response. Session and
+    /// parent cancellation remain authoritative for the write.
+    pub(crate) fn boundary_response_control(&self) -> Self {
+        Self {
+            deadline: None,
+            session: self.session.clone(),
+            parent_cancellation: self.parent_cancellation.clone(),
+        }
+    }
+
     /// Waits until the deadline expires, the session closes, or the parent
     /// task group is cancelled.
     ///

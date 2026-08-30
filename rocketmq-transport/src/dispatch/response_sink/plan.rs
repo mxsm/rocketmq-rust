@@ -78,7 +78,6 @@ impl NetworkResponsePlanContext {
             .same_lifecycle_owner(session.session_view().state(), session.task_group())
     }
 
-    #[cfg(test)]
     pub(crate) fn terminal_state(&self) -> Option<ResponseTerminalState> {
         self.slot.terminal_state()
     }
@@ -150,7 +149,6 @@ impl LocalPlanSenderState {
         &self.control
     }
 
-    #[cfg(test)]
     pub(super) fn terminal_state(&self) -> Option<ResponseTerminalState> {
         self.slot.terminal_state()
     }
@@ -622,7 +620,6 @@ impl ResponseCompletionSlot {
         }
     }
 
-    #[cfg(test)]
     fn terminal_state(&self) -> Option<ResponseTerminalState> {
         match &*self.state.lock() {
             ResponseCompletionState::Terminal { state, .. } => Some(*state),

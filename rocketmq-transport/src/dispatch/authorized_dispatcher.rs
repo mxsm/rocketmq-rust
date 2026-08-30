@@ -212,7 +212,11 @@ where
     ) -> Self {
         Self {
             boundary: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
-            core: Arc::new(AuthorizedDispatcherCore::new(request_processor, rpc_hooks)),
+            core: Arc::new(AuthorizedDispatcherCore::new_with_telemetry(
+                request_processor,
+                rpc_hooks,
+                telemetry.clone(),
+            )),
             telemetry,
         }
     }
@@ -241,10 +245,11 @@ where
         )?;
         Ok(Self {
             boundary: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
-            core: Arc::new(AuthorizedDispatcherCore::new_with_pending_requests(
+            core: Arc::new(AuthorizedDispatcherCore::new_with_pending_requests_and_telemetry(
                 request_processor,
                 rpc_hooks,
                 response_table,
+                telemetry.clone(),
             )),
             telemetry,
         })
@@ -426,6 +431,13 @@ impl AuthorizedDispatchSession {
 
     pub(crate) async fn drain_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         self.executor.drain_until(deadline).await
+    }
+
+    pub(crate) async fn drain_report_until(
+        &self,
+        deadline: ShutdownDeadline,
+    ) -> crate::session_executor::SessionExecutorDrainReport {
+        self.executor.drain_report_until(deadline).await
     }
 }
 

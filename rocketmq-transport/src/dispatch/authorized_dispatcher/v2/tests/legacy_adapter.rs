@@ -432,6 +432,59 @@ async fn admitted_reply_preserves_order_clone_hooks_body_and_immutable_binding()
 }
 
 #[tokio::test]
+async fn legacy_reply_direct_write_and_ambiguous_none_record_one_response_terminal_each() {
+    for (name, behavior, expected_frame, expected_metric) in [
+        (
+            "dsp05-observe-returned-reply",
+            LegacyBehavior::Reply,
+            true,
+            ("inline", "transport_written"),
+        ),
+        (
+            "dsp05-observe-direct-write",
+            LegacyBehavior::DirectChannelThenNone,
+            true,
+            ("inline", "transport_written"),
+        ),
+        (
+            "dsp05-observe-ambiguous-none",
+            LegacyBehavior::NoneThenSentinel,
+            false,
+            ("no_response", "protocol_no_response"),
+        ),
+    ] {
+        let mut harness = DispatchHarness::new(name).await;
+        let state = Arc::new(LegacyState::default());
+        let processor = LegacyProcessor {
+            behavior,
+            state: Arc::clone(&state),
+        };
+        let (telemetry, response_metrics) = TransportTelemetry::with_v2_boundary_metric_capture();
+        let dispatcher = Arc::new(AuthorizedCommandDispatcherV2::new_legacy(
+            LegacyProcessorAdapter::new(processor, PROCESSOR_NAME, telemetry, PendingRequestTable::new()),
+            Vec::new(),
+        ));
+
+        let (outcome, _) = dispatch(&harness, &dispatcher, command(PRIMARY_CODE, false), None).await;
+        assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+        harness.drain_requests().await;
+        if expected_frame {
+            let response = harness.receive().await;
+            assert!(response.is_response_type());
+        } else {
+            harness.assert_no_response().await;
+        }
+
+        assert_eq!(response_metrics.response_events(), vec![expected_metric]);
+        assert_eq!(response_metrics.snapshot().3, 1);
+        assert_eq!(state.clones.load(Ordering::SeqCst), 1);
+
+        finish_harness(&mut harness).await;
+        harness.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn rejection_tuple_is_exact_and_each_admitted_path_records_one_metric_and_observation() {
     for (name, behavior, expected_code, expected_processes) in [
         (
