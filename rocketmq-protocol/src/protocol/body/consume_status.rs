@@ -43,7 +43,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn consume_status_serialization() {
+    fn consume_status_uses_java_field_names_and_round_trips() {
         let consume_status = ConsumeStatus {
             pull_rt: 1.1,
             pull_tps: 1.2,
@@ -53,19 +53,11 @@ mod tests {
             consume_failed_msgs: 6,
         };
         let serialized = serde_json::to_string(&consume_status).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"pullRT":1.1,"pullTPS":1.2,"consumeRT":1.3,"consumeOKTPS":1.4,"consumeFailedTPS":1.5,"consumeFailedMsgs":6}"#
+        );
         let deserialized: ConsumeStatus = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.pull_rt, 1.1);
-        assert_eq!(deserialized.pull_tps, 1.2);
-        assert_eq!(deserialized.consume_rt, 1.3);
-        assert_eq!(deserialized.consume_ok_tps, 1.4);
-        assert_eq!(deserialized.consume_failed_tps, 1.5);
-        assert_eq!(deserialized.consume_failed_msgs, 6);
-    }
-
-    #[test]
-    fn consume_status_deserialization() {
-        let serialized = r#"{"pullRT":1.1,"pullTPS":1.2,"consumeRT":1.3,"consumeOKTPS":1.4,"consumeFailedTPS":1.5,"consumeFailedMsgs":6}"#;
-        let deserialized: ConsumeStatus = serde_json::from_str(serialized).unwrap();
         assert_eq!(deserialized.pull_rt, 1.1);
         assert_eq!(deserialized.pull_tps, 1.2);
         assert_eq!(deserialized.consume_rt, 1.3);

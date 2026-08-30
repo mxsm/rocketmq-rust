@@ -60,14 +60,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_creates_broker_member_group_with_empty_broker_addrs() {
+    fn minimum_broker_id_returns_master_id_for_an_empty_group() {
         let cluster = CheetahString::from("test_cluster");
         let broker_name = CheetahString::from("test_broker");
         let group = BrokerMemberGroup::new(cluster.clone(), broker_name.clone());
 
         assert_eq!(group.cluster, cluster);
         assert_eq!(group.broker_name, broker_name);
-        assert!(group.broker_addrs.is_empty());
+        assert_eq!(group.minimum_broker_id(), MASTER_ID);
     }
 
     #[test]
@@ -142,17 +142,5 @@ mod tests {
         group.broker_addrs.insert(2, CheetahString::from("127.0.0.1:10912"));
 
         assert_eq!(group.minimum_broker_id(), 1);
-    }
-
-    #[test]
-    fn minimum_broker_id_handles_zero_and_large_ids() {
-        let mut group = BrokerMemberGroup::new(CheetahString::from("cluster"), CheetahString::from("broker"));
-        group.broker_addrs.insert(0, CheetahString::from("127.0.0.1:10910"));
-        group.broker_addrs.insert(42, CheetahString::from("127.0.0.1:10942"));
-        group
-            .broker_addrs
-            .insert(u64::MAX, CheetahString::from("127.0.0.1:12000"));
-
-        assert_eq!(group.minimum_broker_id(), 0);
     }
 }

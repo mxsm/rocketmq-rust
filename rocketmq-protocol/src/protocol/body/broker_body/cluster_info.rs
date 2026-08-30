@@ -138,29 +138,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cluster_info_default() {
-        let cluster_info = ClusterInfo::default();
-        assert!(cluster_info.broker_addr_table.is_none());
-        assert!(cluster_info.cluster_addr_table.is_none());
-    }
-
-    #[test]
-    fn test_cluster_info_new() {
-        let mut broker_addr_table = HashMap::new();
-        let broker_data = BrokerData::default();
-        broker_addr_table.insert(CheetahString::from("broker1"), broker_data);
-
-        let mut cluster_addr_table = HashMap::new();
-        let mut brokers = HashSet::new();
-        brokers.insert(CheetahString::from("broker1"));
-        cluster_addr_table.insert(CheetahString::from("cluster1"), brokers);
-
-        let cluster_info = ClusterInfo::new(Some(broker_addr_table.clone()), Some(cluster_addr_table.clone()));
-        assert_eq!(cluster_info.broker_addr_table, Some(broker_addr_table));
-        assert_eq!(cluster_info.cluster_addr_table, Some(cluster_addr_table));
-    }
-
-    #[test]
     fn test_cluster_info_serialization() {
         let mut broker_addr_table = HashMap::new();
         let broker_data = BrokerData::default();

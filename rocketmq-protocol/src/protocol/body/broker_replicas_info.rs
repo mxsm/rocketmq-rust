@@ -229,219 +229,94 @@ impl fmt::Display for ReplicaIdentity {
 mod tests {
     use super::*;
 
-    #[test]
-    fn new_creates_instance_with_default_alive() {
-        let replica = ReplicaIdentity::new("broker1", 1, "address1");
-        assert_eq!(replica.get_broker_name(), &CheetahString::from("broker1"));
-        assert_eq!(replica.get_broker_id(), 1);
-        assert_eq!(replica.get_broker_address(), &CheetahString::from("address1"));
-        assert!(!replica.get_alive());
-    }
-
-    #[test]
-    fn new_with_alive_creates_instance_with_specified_alive() {
-        let replica = ReplicaIdentity::new_with_alive("broker1", 1, "address1", true);
-        assert_eq!(replica.get_broker_name(), &CheetahString::from("broker1"));
-        assert_eq!(replica.get_broker_id(), 1);
-        assert_eq!(replica.get_broker_address(), &CheetahString::from("address1"));
-        assert!(replica.get_alive());
-    }
-
-    #[test]
-    fn set_broker_name_updates_broker_name() {
-        let mut replica = ReplicaIdentity::new("broker1", 1, "address1");
-        replica.set_broker_name("broker2");
-        assert_eq!(replica.get_broker_name(), &CheetahString::from("broker2"));
-    }
-
-    #[test]
-    fn set_broker_address_updates_broker_address() {
-        let mut replica = ReplicaIdentity::new("broker1", 1, "address1");
-        replica.set_broker_address("address2");
-        assert_eq!(replica.get_broker_address(), &CheetahString::from("address2"));
-    }
-
-    #[test]
-    fn set_broker_id_updates_broker_id() {
-        let mut replica = ReplicaIdentity::new("broker1", 1, "address1");
-        replica.set_broker_id(2);
-        assert_eq!(replica.get_broker_id(), 2);
-    }
-
-    #[test]
-    fn set_alive_updates_alive_status() {
-        let mut replica = ReplicaIdentity::new("broker1", 1, "address1");
-        replica.set_alive(true);
-        assert!(replica.get_alive());
-    }
-
-    #[test]
-    fn display_formats_correctly() {
-        let replica = ReplicaIdentity::new_with_alive("broker1", 1, "address1", true);
-        let display = format!("{}", replica);
-        assert_eq!(
-            display,
-            "ReplicaIdentity{ broker_name: 'broker1', broker_id: 1, broker_address: 'address1', alive: true }"
-        );
-    }
-
-    #[test]
-    fn new_creates_instance_with_all_fields() {
-        let in_sync_replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-        let not_in_sync_replicas = vec![ReplicaIdentity::new("broker2", 2, "address2")];
-        let replicas_info = ReplicasInfo::new(
+    fn replicas_info() -> ReplicasInfo {
+        ReplicasInfo::new(
             1,
-            "master_address",
-            100,
-            200,
-            in_sync_replicas.clone(),
-            not_in_sync_replicas.clone(),
+            "master-address",
+            10,
+            20,
+            vec![ReplicaIdentity::new("broker-a", 1, "address-a")],
+            vec![ReplicaIdentity::new("broker-b", 2, "address-b")],
+        )
+    }
+
+    #[test]
+    fn replica_identity_accessors_and_display_cover_all_fields() {
+        let mut replica = ReplicaIdentity::new("broker-a", 1, "address-a");
+        assert!(!replica.get_alive());
+
+        replica.set_broker_name("broker-b");
+        replica.set_broker_id(2);
+        replica.set_broker_address("address-b");
+        replica.set_alive(true);
+
+        assert_eq!(replica.get_broker_name(), "broker-b");
+        assert_eq!(replica.get_broker_id(), 2);
+        assert_eq!(replica.get_broker_address(), "address-b");
+        assert!(replica.get_alive());
+        assert_eq!(
+            replica.to_string(),
+            "ReplicaIdentity{ broker_name: 'broker-b', broker_id: 2, broker_address: 'address-b', alive: true }"
         );
-        assert_eq!(replicas_info.get_master_broker_id(), 1);
-        assert_eq!(replicas_info.get_master_address(), "master_address");
-        assert_eq!(replicas_info.get_master_epoch(), 100);
-        assert_eq!(replicas_info.get_sync_state_set_epoch(), 200);
+        assert!(ReplicaIdentity::new_with_alive("broker-c", 3, "address-c", true).get_alive());
     }
 
     #[test]
-    fn set_master_address_updates_master_address() {
-        let mut replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        replicas_info.set_master_address("new_master_address");
-        assert_eq!(replicas_info.get_master_address(), "new_master_address");
+    fn replicas_info_accessors_update_all_fields() {
+        let mut info = replicas_info();
+        assert_eq!(info.get_master_broker_id(), 1);
+        assert_eq!(info.get_master_address(), "master-address");
+        assert_eq!(info.get_master_epoch(), 10);
+        assert_eq!(info.get_sync_state_set_epoch(), 20);
+        assert_eq!(info.get_in_sync_replicas().len(), 1);
+        assert_eq!(info.get_not_in_sync_replicas().len(), 1);
+
+        let in_sync = vec![ReplicaIdentity::new("broker-c", 3, "address-c")];
+        let not_in_sync = vec![ReplicaIdentity::new("broker-d", 4, "address-d")];
+        info.set_master_broker_id(3);
+        info.set_master_address("new-master-address");
+        info.set_master_epoch(11);
+        info.set_sync_state_set_epoch(21);
+        info.set_in_sync_replicas(in_sync.clone());
+        info.set_not_in_sync_replicas(not_in_sync.clone());
+
+        assert_eq!(info.get_master_broker_id(), 3);
+        assert_eq!(info.get_master_address(), "new-master-address");
+        assert_eq!(info.get_master_epoch(), 11);
+        assert_eq!(info.get_sync_state_set_epoch(), 21);
+        assert_eq!(info.get_in_sync_replicas(), &in_sync);
+        assert_eq!(info.get_not_in_sync_replicas(), &not_in_sync);
     }
 
     #[test]
-    fn set_master_epoch_updates_master_epoch() {
-        let mut replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        replicas_info.set_master_epoch(101);
-        assert_eq!(replicas_info.get_master_epoch(), 101);
+    fn membership_queries_require_the_complete_replica_identity() {
+        let info = replicas_info();
+
+        assert!(info.is_exist_in_sync("broker-a", 1, "address-a"));
+        assert!(!info.is_exist_in_sync("other", 1, "address-a"));
+        assert!(!info.is_exist_in_sync("broker-a", 2, "address-a"));
+        assert!(!info.is_exist_in_sync("broker-a", 1, "other"));
+        assert!(info.is_exist_in_not_sync("broker-b", 2, "address-b"));
+        assert!(info.is_exist_in_all_replicas("broker-a", 1, "address-a"));
+        assert!(info.is_exist_in_all_replicas("broker-b", 2, "address-b"));
+        assert!(!info.is_exist_in_all_replicas("broker-c", 3, "address-c"));
     }
 
     #[test]
-    fn set_sync_state_set_epoch_updates_sync_state_set_epoch() {
-        let mut replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        replicas_info.set_sync_state_set_epoch(201);
-        assert_eq!(replicas_info.get_sync_state_set_epoch(), 201);
-    }
+    fn broker_replicas_table_methods_add_and_replace_entries() {
+        let mut table = BrokerReplicasInfo::new();
+        assert!(table.get_replicas_info_table().is_empty());
 
-    #[test]
-    fn set_master_broker_id_updates_master_broker_id() {
-        let mut replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        replicas_info.set_master_broker_id(2);
-        assert_eq!(replicas_info.get_master_broker_id(), 2);
-    }
+        table.add_replica_info(CheetahString::from_static_str("broker-a"), replicas_info());
+        assert!(table
+            .get_replicas_info_table()
+            .contains_key(&CheetahString::from_static_str("broker-a")));
 
-    #[test]
-    fn is_exist_in_sync_returns_true_for_existing_replica() {
-        let in_sync_replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, in_sync_replicas, vec![]);
-        assert!(replicas_info.is_exist_in_sync("broker1", 1, "address1"));
-    }
-
-    #[test]
-    fn is_exist_in_sync_returns_false_for_non_existing_replica() {
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        assert!(!replicas_info.is_exist_in_sync("broker1", 1, "address1"));
-    }
-
-    #[test]
-    fn is_exist_in_not_sync_returns_true_for_existing_replica() {
-        let not_in_sync_replicas = vec![ReplicaIdentity::new("broker2", 2, "address2")];
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], not_in_sync_replicas);
-        assert!(replicas_info.is_exist_in_not_sync("broker2", 2, "address2"));
-    }
-
-    #[test]
-    fn is_exist_in_not_sync_returns_false_for_non_existing_replica() {
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        assert!(!replicas_info.is_exist_in_not_sync("broker2", 2, "address2"));
-    }
-
-    #[test]
-    fn is_exist_in_all_replicas_returns_true_for_existing_replica_in_sync() {
-        let in_sync_replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, in_sync_replicas, vec![]);
-        assert!(replicas_info.is_exist_in_all_replicas("broker1", 1, "address1"));
-    }
-
-    #[test]
-    fn is_exist_in_all_replicas_returns_true_for_existing_replica_in_not_sync() {
-        let not_in_sync_replicas = vec![ReplicaIdentity::new("broker2", 2, "address2")];
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], not_in_sync_replicas);
-        assert!(replicas_info.is_exist_in_all_replicas("broker2", 2, "address2"));
-    }
-
-    #[test]
-    fn is_exist_in_all_replicas_returns_false_for_non_existing_replica() {
-        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
-        assert!(!replicas_info.is_exist_in_all_replicas("broker1", 1, "address1"));
-    }
-    #[test]
-    fn broker_replicas_info_new_creates_empty_table() {
-        let info = BrokerReplicasInfo::new();
-        assert!(info.get_replicas_info_table().is_empty());
-    }
-
-    #[test]
-    fn broker_replicas_info_add_replica_info_inserts_entry() {
-        let mut info = BrokerReplicasInfo::new();
-
-        let replicas = ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]);
-        info.add_replica_info("broker1".into(), replicas);
-
-        assert_eq!(info.get_replicas_info_table().len(), 1);
-    }
-
-    #[test]
-    fn broker_replicas_info_set_replicas_info_table_replaces_table() {
-        let mut info = BrokerReplicasInfo::new();
-
-        let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from("broker1"),
-            ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]),
-        );
-
-        info.set_replicas_info_table(map);
-
-        assert_eq!(info.get_replicas_info_table().len(), 1);
-    }
-    #[test]
-    fn set_in_sync_replicas_updates_list() {
-        let mut info = ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]);
-
-        let replicas = vec![ReplicaIdentity::new("b1", 1, "a1")];
-
-        info.set_in_sync_replicas(replicas.clone());
-
-        assert_eq!(info.get_in_sync_replicas(), &replicas);
-    }
-
-    #[test]
-    fn set_not_in_sync_replicas_updates_list() {
-        let mut info = ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]);
-
-        let replicas = vec![ReplicaIdentity::new("b2", 2, "a2")];
-
-        info.set_not_in_sync_replicas(replicas.clone());
-
-        assert_eq!(info.get_not_in_sync_replicas(), &replicas);
-    }
-    #[test]
-    fn is_exist_in_sync_returns_false_if_id_differs() {
-        let replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-
-        let info = ReplicasInfo::new(1, "addr", 1, 1, replicas, vec![]);
-
-        assert!(!info.is_exist_in_sync("broker1", 2, "address1"));
-    }
-
-    #[test]
-    fn is_exist_in_sync_returns_false_if_address_differs() {
-        let replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-
-        let info = ReplicasInfo::new(1, "addr", 1, 1, replicas, vec![]);
-
-        assert!(!info.is_exist_in_sync("broker1", 1, "address2"));
+        let replacement = HashMap::from([(CheetahString::from_static_str("broker-b"), replicas_info())]);
+        table.set_replicas_info_table(replacement);
+        assert_eq!(table.get_replicas_info_table().len(), 1);
+        assert!(table
+            .get_replicas_info_table()
+            .contains_key(&CheetahString::from_static_str("broker-b")));
     }
 }

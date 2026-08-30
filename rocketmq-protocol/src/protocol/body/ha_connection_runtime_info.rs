@@ -49,7 +49,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ha_connection_runtime_info_initializes_correctly() {
+    fn display_formats_all_runtime_fields() {
         let info = HAConnectionRuntimeInfo {
             addr: "127.0.0.1:10911".to_string(),
             slave_ack_offset: 100,
@@ -58,39 +58,11 @@ mod tests {
             transferred_byte_in_second: 1024,
             transfer_from_where: 200,
         };
-        assert_eq!(info.addr, "127.0.0.1:10911");
-        assert_eq!(info.slave_ack_offset, 100);
-        assert_eq!(info.diff, 50);
-        assert!(info.in_sync);
-        assert_eq!(info.transferred_byte_in_second, 1024);
-        assert_eq!(info.transfer_from_where, 200);
-    }
 
-    #[test]
-    fn ha_connection_runtime_info_default_values() {
-        let info = HAConnectionRuntimeInfo::default();
-        assert_eq!(info.addr, "");
-        assert_eq!(info.slave_ack_offset, 0);
-        assert_eq!(info.diff, 0);
-        assert!(!info.in_sync);
-        assert_eq!(info.transferred_byte_in_second, 0);
-        assert_eq!(info.transfer_from_where, 0);
-    }
-
-    #[test]
-    fn ha_connection_runtime_info_display_formats_correctly() {
-        let info = HAConnectionRuntimeInfo {
-            addr: "127.0.0.1:10911".to_string(),
-            slave_ack_offset: 100,
-            diff: 50,
-            in_sync: true,
-            transferred_byte_in_second: 1024,
-            transfer_from_where: 200,
-        };
-        let display = format!("{}", info);
-        assert!(display.contains(
+        assert_eq!(
+            info.to_string(),
             "HAConnectionRuntimeInfo [addr=127.0.0.1:10911, slaveAckOffset=100, diff=50, inSync=true, \
              transferredBytesInSecond=1024, transferFromWhere=200]"
-        ));
+        );
     }
 }

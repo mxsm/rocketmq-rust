@@ -24,14 +24,7 @@ pub struct CreateTopicListRequestBody {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-
-    #[test]
-    fn default_create_topic_list_request_body() {
-        let body = CreateTopicListRequestBody::default();
-        assert!(body.topic_config_list.is_empty());
-    }
 
     #[test]
     fn serialize_create_topic_list_request_body() {

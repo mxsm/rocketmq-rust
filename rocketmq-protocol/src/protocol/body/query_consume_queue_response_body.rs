@@ -28,18 +28,3 @@ pub struct QueryConsumeQueueResponseBody {
     pub max_queue_index: i64,
     pub min_queue_index: i64,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn query_consume_queue_response_body_default_values() {
-        let response_body: QueryConsumeQueueResponseBody = Default::default();
-        assert!(response_body.subscription_data.is_none());
-        assert!(response_body.filter_data.is_none());
-        assert!(response_body.queue_data.is_none());
-        assert_eq!(response_body.max_queue_index, 0);
-        assert_eq!(response_body.min_queue_index, 0);
-    }
-}

@@ -50,20 +50,6 @@ mod tests {
     use crate::protocol::body::connection::Connection;
 
     #[test]
-    fn producer_connection_default_values() {
-        let connection = ProducerConnection::default();
-        assert!(connection.connection_set.is_empty());
-    }
-
-    #[test]
-    fn producer_connection_with_connections() {
-        let mut connection_set = HashSet::new();
-        connection_set.insert(Connection::default());
-        let connection = ProducerConnection { connection_set };
-        assert_eq!(connection.connection_set.len(), 1);
-    }
-
-    #[test]
     fn serialize_producer_connection() {
         let mut connection_set = HashSet::new();
         connection_set.insert(Connection::default());

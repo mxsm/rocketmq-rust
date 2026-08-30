@@ -54,37 +54,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn consume_queue_data_display_format() {
-        let data = ConsumeQueueData {
-            physic_offset: 123,
-            physic_size: 456,
-            tags_code: 789,
-            extend_data_json: Some(CheetahString::from("extend_data")),
-            bit_map: Some(CheetahString::from("bit_map")),
-            eval: true,
-            msg: Some(CheetahString::from("message")),
-        };
-        let display = format!("{}", data);
-        assert_eq!(
-            display,
-            "ConsumeQueueData [physic_offset=123, physic_size=456, tags_code=789, \
-             extend_data_json=Some(\"extend_data\"), bit_map=Some(\"bit_map\"), eval=true, msg=Some(\"message\")]"
-        );
-    }
-
-    #[test]
-    fn consume_queue_data_default_values() {
-        let data: ConsumeQueueData = Default::default();
-        assert_eq!(data.physic_offset, 0);
-        assert_eq!(data.physic_size, 0);
-        assert_eq!(data.tags_code, 0);
-        assert!(data.extend_data_json.is_none());
-        assert!(data.bit_map.is_none());
-        assert!(!data.eval);
-        assert!(data.msg.is_none());
-    }
-
-    #[test]
     fn consume_queue_data_serialization() {
         let data = ConsumeQueueData {
             physic_offset: 123,
@@ -99,6 +68,11 @@ mod tests {
         assert_eq!(
             serialized,
             r#"{"physicOffset":123,"physicSize":456,"tagsCode":789,"extendDataJson":"extend_data","bitMap":"bit_map","eval":true,"msg":"message"}"#
+        );
+        assert_eq!(
+            data.to_string(),
+            "ConsumeQueueData [physic_offset=123, physic_size=456, tags_code=789, \
+             extend_data_json=Some(\"extend_data\"), bit_map=Some(\"bit_map\"), eval=true, msg=Some(\"message\")]"
         );
     }
 

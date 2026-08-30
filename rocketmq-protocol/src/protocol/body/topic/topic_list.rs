@@ -28,22 +28,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn topic_list_creation_empty() {
-        let topic_list = TopicList::default();
-        assert!(topic_list.topic_list.is_empty());
-        assert!(topic_list.broker_addr.is_none());
-    }
-
-    #[test]
-    fn topic_list_creation_with_data() {
-        let topic_list = TopicList {
-            topic_list: vec!["topic1".into(), "topic2".into()],
-            broker_addr: Some("broker1".into()),
+    fn serde_contract_uses_java_field_names() {
+        let body = TopicList {
+            topic_list: vec!["topic-a".into(), "topic-b".into()],
+            broker_addr: Some("127.0.0.1:10911".into()),
         };
+
+        let value = serde_json::to_value(&body).expect("serialize topic list");
         assert_eq!(
-            topic_list.topic_list,
-            vec![<&str as Into<CheetahString>>::into("topic1"), "topic2".into()]
+            value,
+            serde_json::json!({
+                "topicList": ["topic-a", "topic-b"],
+                "brokerAddr": "127.0.0.1:10911"
+            })
         );
-        assert_eq!(topic_list.broker_addr, Some("broker1".into()));
+
+        let decoded: TopicList = serde_json::from_value(value).expect("deserialize topic list");
+        assert_eq!(decoded.topic_list, body.topic_list);
+        assert_eq!(decoded.broker_addr, body.broker_addr);
     }
 }

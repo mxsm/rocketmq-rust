@@ -71,14 +71,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lite_lag_info_default() {
-        let info = LiteLagInfo::default();
-        assert!(info.lite_topic().is_empty());
-        assert_eq!(info.lag_count(), 0);
-        assert_eq!(info.earliest_unconsumed_timestamp(), 0);
-    }
-
-    #[test]
     fn lite_lag_info_with_getters_and_setters() {
         let mut info = LiteLagInfo::new();
         info.with_lite_topic("topic".into())

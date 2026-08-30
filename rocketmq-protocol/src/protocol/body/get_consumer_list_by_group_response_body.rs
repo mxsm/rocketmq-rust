@@ -27,18 +27,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_consumer_list_by_group_response_body_serialization() {
+    fn consumer_id_list_uses_the_java_field_name_and_round_trips() {
         let body = GetConsumerListByGroupResponseBody {
             consumer_id_list: vec![CheetahString::from("id1"), CheetahString::from("id2")],
         };
         let json = serde_json::to_string(&body).unwrap();
-        assert!(json.contains("\"consumerIdList\":[\"id1\",\"id2\"]"));
-    }
-
-    #[test]
-    fn get_consumer_list_by_group_response_body_deserialization() {
-        let json = r#"{"consumerIdList":["id1","id2"]}"#;
-        let body: GetConsumerListByGroupResponseBody = serde_json::from_str(json).unwrap();
+        assert_eq!(json, r#"{"consumerIdList":["id1","id2"]}"#);
+        let body: GetConsumerListByGroupResponseBody = serde_json::from_str(&json).unwrap();
         assert_eq!(body.consumer_id_list.len(), 2);
         assert_eq!(body.consumer_id_list[0], "id1");
         assert_eq!(body.consumer_id_list[1], "id2");

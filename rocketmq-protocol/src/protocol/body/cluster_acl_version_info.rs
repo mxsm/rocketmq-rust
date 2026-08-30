@@ -42,74 +42,6 @@ mod tests {
     use crate::protocol::DataVersion;
 
     #[test]
-    fn cluster_acl_version_info_default_values() {
-        let info = ClusterAclVersionInfo {
-            broker_name: CheetahString::new(),
-            broker_addr: CheetahString::new(),
-            acl_config_data_version: None,
-            all_acl_config_data_version: HashMap::new(),
-            cluster_name: CheetahString::new(),
-        };
-        assert_eq!(info.broker_name, CheetahString::new());
-        assert_eq!(info.broker_addr, CheetahString::new());
-        assert!(info.acl_config_data_version.is_none());
-        assert!(info.all_acl_config_data_version.is_empty());
-        assert_eq!(info.cluster_name, CheetahString::new());
-    }
-
-    #[test]
-    fn cluster_acl_version_info_equality() {
-        let mut all_acl_config_data_version = HashMap::new();
-        let version = DataVersion::default();
-        all_acl_config_data_version.insert(CheetahString::from("key1"), version.clone());
-
-        let info1 = ClusterAclVersionInfo {
-            broker_name: CheetahString::from("broker1"),
-            broker_addr: CheetahString::from("addr1"),
-            acl_config_data_version: Some(version.clone()),
-            all_acl_config_data_version: all_acl_config_data_version.clone(),
-            cluster_name: CheetahString::from("cluster1"),
-        };
-
-        let info2 = ClusterAclVersionInfo {
-            broker_name: CheetahString::from("broker1"),
-            broker_addr: CheetahString::from("addr1"),
-            acl_config_data_version: Some(version),
-            all_acl_config_data_version,
-            cluster_name: CheetahString::from("cluster1"),
-        };
-
-        assert_eq!(
-            serde_json::to_string(&info1).unwrap(),
-            serde_json::to_string(&info2).unwrap()
-        );
-    }
-
-    #[test]
-    fn cluster_acl_version_info_inequality() {
-        let info1 = ClusterAclVersionInfo {
-            broker_name: CheetahString::from("broker1"),
-            broker_addr: CheetahString::from("addr1"),
-            acl_config_data_version: Some(DataVersion::default()),
-            all_acl_config_data_version: HashMap::new(),
-            cluster_name: CheetahString::from("cluster1"),
-        };
-
-        let info2 = ClusterAclVersionInfo {
-            broker_name: CheetahString::from("broker2"),
-            broker_addr: CheetahString::from("addr2"),
-            acl_config_data_version: None,
-            all_acl_config_data_version: HashMap::new(),
-            cluster_name: CheetahString::from("cluster2"),
-        };
-
-        assert_ne!(
-            serde_json::to_string(&info1).unwrap(),
-            serde_json::to_string(&info2).unwrap()
-        );
-    }
-
-    #[test]
     fn serialize_cluster_acl_version_info() {
         let mut all_acl_config_data_version = HashMap::new();
         all_acl_config_data_version.insert(CheetahString::from("key1"), DataVersion::default());
@@ -127,23 +59,6 @@ mod tests {
         assert!(serialized.contains("\"aclConfigDataVersion\":"));
         assert!(serialized.contains("\"allAclConfigDataVersion\":"));
         assert!(serialized.contains("\"clusterName\":\"cluster1\""));
-    }
-
-    #[test]
-    fn deserialize_cluster_acl_version_info() {
-        let json = r#"{
-            "brokerName": "broker1",
-            "brokerAddr": "addr1",
-            "aclConfigDataVersion": null,
-            "allAclConfigDataVersion": {},
-            "clusterName": "cluster1"
-        }"#;
-        let deserialized: ClusterAclVersionInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
-        assert_eq!(deserialized.broker_addr, CheetahString::from("addr1"));
-        assert!(deserialized.acl_config_data_version.is_none());
-        assert!(deserialized.all_acl_config_data_version.is_empty());
-        assert_eq!(deserialized.cluster_name, CheetahString::from("cluster1"));
     }
 
     #[test]

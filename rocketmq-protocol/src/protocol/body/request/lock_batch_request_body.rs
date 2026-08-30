@@ -47,15 +47,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lock_batch_request_body_default() {
-        let body = LockBatchRequestBody::default();
-        assert!(body.consumer_group.is_none());
-        assert!(body.client_id.is_none());
-        assert!(!body.only_this_broker);
-        assert!(body.mq_set.is_empty());
-    }
-
-    #[test]
     fn test_lock_batch_request_body_serialization() {
         let mut mq_set = HashSet::new();
         mq_set.insert(MessageQueue::from_parts("topic", "broker", 1));

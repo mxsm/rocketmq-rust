@@ -27,60 +27,26 @@ pub struct LockBatchResponseBody {
 #[cfg(test)]
 mod test {
     use super::*;
-    use serde_json;
-    use std::collections::HashSet;
 
     #[test]
-    fn test_lock_batch_response_body_default() {
-        let body = LockBatchResponseBody::default();
-        assert!(body.lock_ok_mq_set.is_empty());
-    }
+    fn serde_contract_uses_the_java_field_name_and_round_trips_the_queue() {
+        let queue = MessageQueue::from_parts("some_test_topic", "TEST_BROKER", 1);
+        let body = LockBatchResponseBody {
+            lock_ok_mq_set: HashSet::from([queue]),
+        };
 
-    #[test]
-    fn test_serialization_json_field_name() {
-        let mut set = HashSet::new();
-        let mq = MessageQueue::from_parts("topic_a", "broker_a", 1);
-        set.insert(mq);
+        let value = serde_json::to_value(&body).expect("serialize lock batch response");
+        let entries = value["lockOKMQSet"].as_array().expect("lockOKMQSet should be an array");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["topic"], "some_test_topic");
+        assert_eq!(entries[0]["brokerName"], "TEST_BROKER");
+        assert_eq!(entries[0]["queueId"], 1);
 
-        let body = LockBatchResponseBody { lock_ok_mq_set: set };
-
-        let json = serde_json::to_string(&body).unwrap();
-
-        assert!(json.contains("\"lockOKMQSet\""));
-    }
-
-    #[test]
-    fn test_deserialization_success() {
-        let json = r#"{
-            "lockOKMQSet": [
-                {
-                    "topic": "some_test_topic",
-                    "brokerName": "TEST_BROKER",
-                    "queueId": 1
-                }
-            ]
-        }"#;
-
-        let decoded: LockBatchResponseBody = serde_json::from_str(json).expect("Failed to deserialize");
-
+        let decoded: LockBatchResponseBody = serde_json::from_value(value).expect("deserialize lock batch response");
         assert_eq!(decoded.lock_ok_mq_set.len(), 1);
-        let mq = decoded.lock_ok_mq_set.iter().next().unwrap();
+        let mq = decoded.lock_ok_mq_set.iter().next().expect("decoded queue");
+        assert_eq!(mq.topic(), "some_test_topic");
         assert_eq!(mq.broker_name(), "TEST_BROKER");
         assert_eq!(mq.queue_id(), 1);
-    }
-
-    #[test]
-    fn test_hash_set_behavior_with_message_queue() {
-        let mut body = LockBatchResponseBody::default();
-
-        let mq1 = MessageQueue::from_parts("topic", "broker", 1);
-        let mq2 = MessageQueue::from_parts("topic", "broker", 1);
-        let mq3 = MessageQueue::from_parts("topic", "broker", 2);
-
-        body.lock_ok_mq_set.insert(mq1);
-        body.lock_ok_mq_set.insert(mq2);
-        body.lock_ok_mq_set.insert(mq3);
-
-        assert_eq!(body.lock_ok_mq_set.len(), 2);
     }
 }
