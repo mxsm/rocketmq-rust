@@ -174,7 +174,6 @@ pub use crate::store_error::HAError;
 pub use crate::store_error::HAResult;
 pub use crate::store_error::StoreComponent;
 pub use crate::store_error::StoreError;
-pub use crate::store_error::StoreErrorKind;
 pub use crate::store_error::StoreOperation;
 pub use crate::store_path_config_helper::get_abort_file;
 pub use crate::store_path_config_helper::get_delay_offset_store_path;

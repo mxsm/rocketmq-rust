@@ -92,7 +92,6 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 use crate::timer::timer_message_store::TimerMessageStore;
 
@@ -187,7 +186,7 @@ impl RocksDBMessageStore {
             service_context.component("rocksdb-derived"),
             telemetry.rocksdb().clone(),
         )
-        .map_err(message_store_adapter_error)?;
+        .map_err(|error| message_store_adapter_error(StoreOperation::Load, error))?;
         let consume_queue_store = derived.consume_queue_store().clone();
         let rocksdb_index_service = derived.rocksdb_index_service();
         let rocksdb_timer_service = derived.rocksdb_timer_service();
@@ -293,7 +292,7 @@ impl RocksDBMessageStore {
         self.root
             .derived()
             .max_offset(topic.as_str(), queue_id)
-            .map_err(message_store_adapter_error)
+            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
     }
 
     pub fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
@@ -310,7 +309,7 @@ impl RocksDBMessageStore {
         self.root
             .derived()
             .min_offset(topic.as_str(), queue_id)
-            .map_err(message_store_adapter_error)
+            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
     }
 
     pub fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
@@ -483,7 +482,7 @@ impl RocksDBMessageStore {
                 last_key,
                 self.get_message_store_config().max_rocksdb_index_query_days,
             )
-            .map_err(message_store_adapter_error)?;
+            .map_err(|error| message_store_adapter_error(StoreOperation::Read, error))?;
         let mut result = QueryMessageResult {
             index_last_update_timestamp: lookup.last_update_timestamp,
             index_last_update_phyoffset: lookup.last_update_physical_offset,
@@ -504,7 +503,7 @@ impl RocksDBMessageStore {
         self.root
             .derived()
             .consume_queue_value(topic.as_str(), queue_id, consume_queue_offset)
-            .map_err(message_store_adapter_error)
+            .map_err(|error| message_store_adapter_error(StoreOperation::Read, error))
     }
 
     fn sync_local_topic_queue_offsets(&self) -> Result<(), StoreError> {
@@ -512,7 +511,7 @@ impl RocksDBMessageStore {
             .root
             .derived()
             .topic_queue_offsets()
-            .map_err(message_store_adapter_error)?
+            .map_err(|error| message_store_adapter_error(StoreOperation::Load, error))?
             .into_iter()
             .map(|((topic, queue_id), offset)| (CheetahString::from_string(format!("{topic}-{queue_id}")), offset))
             .collect();
@@ -536,11 +535,30 @@ fn legacy_get_status(status: ApiGetStatus) -> GetMessageStatus {
     }
 }
 
-fn message_store_adapter_error(error: RocksDbMessageStoreError) -> StoreError {
+fn rocksdb_failure_descriptor(operation: StoreOperation) -> &'static rocketmq_error::ErrorDescriptor {
+    match operation {
+        StoreOperation::Load | StoreOperation::Start => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        StoreOperation::Read | StoreOperation::QueryOffset => &rocketmq_error::STORAGE_READ_FAILED,
+        StoreOperation::Append | StoreOperation::Flush | StoreOperation::Replicate | StoreOperation::AppendDerived => {
+            &rocketmq_error::STORAGE_WRITE_FAILED
+        }
+        StoreOperation::Shutdown | StoreOperation::Admin => &rocketmq_error::STORAGE_IO_FAILED,
+    }
+}
+
+fn message_store_adapter_error(operation: StoreOperation, error: RocksDbMessageStoreError) -> StoreError {
     match error {
-        RocksDbMessageStoreError::Config(message) => StoreError::config(StoreOperation::Load, message),
-        RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(StoreOperation::Load, source),
-        RocksDbMessageStoreError::Local { source } => StoreError::new(StoreErrorKind::Storage, StoreOperation::Load)
+        RocksDbMessageStoreError::Config(message) => {
+            StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
+                .in_component(StoreComponent::Configuration)
+                .with_detail(message)
+        }
+        RocksDbMessageStoreError::Backend { source } => {
+            StoreError::new(rocksdb_failure_descriptor(operation), operation)
+                .in_component(StoreComponent::RocksDb)
+                .with_source(source)
+        }
+        RocksDbMessageStoreError::Local { source } => StoreError::new(rocksdb_failure_descriptor(operation), operation)
             .in_component(StoreComponent::Store)
             .with_source(source),
     }
@@ -574,7 +592,7 @@ impl BackendOps for RocksDBMessageStore {
         self.close_rocksdb();
 
         let report = local_file_result?;
-        derived_maintenance_result.map_err(message_store_adapter_error)?;
+        derived_maintenance_result.map_err(|error| message_store_adapter_error(StoreOperation::Shutdown, error))?;
         Ok(report)
     }
 
@@ -709,7 +727,7 @@ impl BackendOps for RocksDBMessageStore {
         self.root
             .derived()
             .offset_by_time(topic.as_str(), queue_id, timestamp, RocksDbTimeBoundary::Lower)
-            .map_err(message_store_adapter_error)
+            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
     }
 
     async fn get_offset_in_queue_by_time_with_boundary_async(
@@ -726,7 +744,7 @@ impl BackendOps for RocksDBMessageStore {
         self.root
             .derived()
             .offset_by_time(topic.as_str(), queue_id, timestamp, boundary)
-            .map_err(message_store_adapter_error)
+            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
     }
 
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
@@ -962,7 +980,7 @@ impl BackendOps for RocksDBMessageStore {
 
     fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
         if let Err(error) = self.root.derived().flush_derived() {
-            let error = message_store_adapter_error(error);
+            let error = message_store_adapter_error(StoreOperation::Flush, error);
             self.local_file_store.record_flush_failure(&error);
             return Err(error);
         }
@@ -1335,5 +1353,61 @@ impl Deref for RocksDBMessageStore {
 impl DerefMut for RocksDBMessageStore {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.local_file_store.as_mut()
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+
+    fn backend_error() -> RocksDbMessageStoreError {
+        RocksDbMessageStoreError::Backend {
+            source: rocketmq_error::RocketMQError::storage_read_failed("rocksdb", "typed backend leaf"),
+        }
+    }
+
+    #[test]
+    fn rocksdb_adapter_preserves_operation_descriptor_and_typed_source() {
+        let cases = [
+            (StoreOperation::Load, &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
+            (StoreOperation::Read, &rocketmq_error::STORAGE_READ_FAILED),
+            (StoreOperation::QueryOffset, &rocketmq_error::STORAGE_READ_FAILED),
+            (StoreOperation::Flush, &rocketmq_error::STORAGE_WRITE_FAILED),
+            (StoreOperation::Shutdown, &rocketmq_error::STORAGE_IO_FAILED),
+        ];
+
+        for (operation, descriptor) in cases {
+            let error = message_store_adapter_error(operation, backend_error());
+            assert_eq!(error.descriptor(), descriptor);
+            assert_eq!(error.operation(), operation);
+            assert_eq!(error.component(), StoreComponent::RocksDb);
+            assert!(std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<rocketmq_error::RocketMQError>())
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn rocksdb_adapter_keeps_configuration_and_local_boundaries_distinct() {
+        let config = message_store_adapter_error(
+            StoreOperation::Start,
+            RocksDbMessageStoreError::Config("private configuration detail".to_string()),
+        );
+        assert_eq!(config.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(config.operation(), StoreOperation::Start);
+        assert_eq!(config.component(), StoreComponent::Configuration);
+        assert!(!config.to_string().contains("private configuration detail"));
+
+        let local_source = StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
+            .in_component(StoreComponent::CommitLog);
+        let local = message_store_adapter_error(
+            StoreOperation::Read,
+            RocksDbMessageStoreError::Local { source: local_source },
+        );
+        assert_eq!(local.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
+        assert_eq!(local.component(), StoreComponent::Store);
+        assert!(std::error::Error::source(&local)
+            .and_then(|source| source.downcast_ref::<StoreError>())
+            .is_some());
     }
 }

@@ -32,7 +32,6 @@ use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
 
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 
 const LOCK_FILE_NAME: &str = "lock";
@@ -120,23 +119,25 @@ impl StoreRootLease {
         // exclusive lock, and revalidated both configured-path bindings immediately above. Store
         // construction has not published or started any legacy component.
         unsafe { bootstrap_managed_lifecycle_under_exclusive_lock(&self.root) }.map_err(|error| {
-            let kind = match error.kind() {
+            let descriptor = match error.kind() {
                 rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::UnsupportedPlatform => {
-                    StoreErrorKind::Unsupported
+                    &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
                 }
-                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Io
-                | rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Inventory => {
-                    StoreErrorKind::Storage
+                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Io => {
+                    &rocketmq_error::STORAGE_IO_FAILED
+                }
+                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Inventory => {
+                    &rocketmq_error::STORAGE_READ_FAILED
                 }
                 rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::InvalidIdentity
                 | rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::InvalidArtifact => {
-                    StoreErrorKind::Corruption
+                    &rocketmq_error::STORAGE_STATE_CORRUPTED
                 }
                 rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::RecoveryRequired => {
-                    StoreErrorKind::Unavailable
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
                 }
             };
-            StoreError::new(kind, operation)
+            StoreError::new(descriptor, operation)
                 .in_component(StoreComponent::MappedFile)
                 .with_detail("explicit Wave-B bootstrap failed before Store component construction")
                 .with_source(error)
@@ -198,32 +199,32 @@ impl StoreRootLease {
             )
         })?;
         lock.try_lock_exclusive().map_err(|error| {
-            StoreError::storage(
-                operation,
-                format!(
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation)
+                .with_detail(format!(
                     "message store lock file is held by another instance: {}",
                     configured_root.join(LOCK_FILE_NAME).display()
-                ),
-            )
-            .with_source(error)
+                ))
+                .with_source(error)
         })?;
 
         // The target has already been opened without following links, verified as an ordinary
         // file, physically identified, and exclusively locked. Only now may diagnostic content be
         // replaced.
         lock.set_len(0).map_err(|error| {
-            StoreError::storage(
-                operation,
-                format!("failed to truncate Store lock under {}", configured_root.display()),
-            )
-            .with_source(error)
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .with_detail(format!(
+                    "failed to truncate Store lock under {}",
+                    configured_root.display()
+                ))
+                .with_source(error)
         })?;
         writeln!(lock, "pid={}", std::process::id()).map_err(|error| {
-            StoreError::storage(
-                operation,
-                format!("failed to write Store lock under {}", configured_root.display()),
-            )
-            .with_source(error)
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .with_detail(format!(
+                    "failed to write Store lock under {}",
+                    configured_root.display()
+                ))
+                .with_source(error)
         })?;
 
         Ok(Self {
@@ -271,7 +272,7 @@ impl StoreRootLease {
             )
         })?;
         if current_root_identity != self.root_identity {
-            return Err(StoreError::new(StoreErrorKind::Corruption, operation)
+            return Err(StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
                 .in_component(StoreComponent::MappedFile)
                 .with_detail(format!(
                     "configured Store root was replaced while its lease remained active: {}",
@@ -307,7 +308,7 @@ impl StoreRootLease {
             )
         })?;
         if current_lock_identity != self.lock_identity {
-            return Err(StoreError::new(StoreErrorKind::Corruption, operation)
+            return Err(StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
                 .in_component(StoreComponent::MappedFile)
                 .with_detail(format!(
                     "Store lock file was replaced while its lease remained active: {}",
@@ -339,7 +340,7 @@ impl StoreRootLease {
         if actual == mode {
             return Ok(());
         }
-        Err(StoreError::new(StoreErrorKind::Corruption, operation)
+        Err(StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
             .in_component(StoreComponent::MappedFile)
             .with_detail(format!(
                 "Store root lifecycle mode changed while its exclusive lease remained active: expected {mode:?}, observed {actual:?}"
@@ -431,19 +432,22 @@ fn root_io_error(operation: StoreOperation, detail: String, error: io::Error) ->
     if platform::is_unsafe_path_error(&error) {
         corruption_error(operation, detail, error)
     } else {
-        StoreError::storage(operation, detail).with_source(error)
+        StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail(detail)
+            .with_source(error)
     }
 }
 
 fn corruption_error(operation: StoreOperation, detail: String, error: io::Error) -> StoreError {
-    StoreError::new(StoreErrorKind::Corruption, operation)
+    StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
         .in_component(StoreComponent::MappedFile)
         .with_detail(detail)
         .with_source(error)
 }
 
 fn managed_lifecycle_fence(operation: StoreOperation, requirement: &'static str) -> StoreError {
-    StoreError::new(StoreErrorKind::Unsupported, operation)
+    StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, operation)
         .in_component(StoreComponent::MappedFile)
         .with_detail(format!(
             "managed mapped-file lifecycle state requires {requirement}; \
@@ -468,16 +472,16 @@ fn managed_lifecycle_read_error(
     configured_root: &Path,
     error: ManagedLifecycleReadError,
 ) -> StoreError {
-    let kind = match error.kind() {
-        ManagedLifecycleReadErrorKind::Io => StoreErrorKind::Io,
-        ManagedLifecycleReadErrorKind::InventoryChanged => StoreErrorKind::Unavailable,
-        ManagedLifecycleReadErrorKind::LimitExceeded => StoreErrorKind::Capacity,
-        ManagedLifecycleReadErrorKind::UnsupportedPlatform => StoreErrorKind::Unsupported,
+    let descriptor = match error.kind() {
+        ManagedLifecycleReadErrorKind::Io => &rocketmq_error::STORAGE_IO_FAILED,
+        ManagedLifecycleReadErrorKind::InventoryChanged => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        ManagedLifecycleReadErrorKind::LimitExceeded => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        ManagedLifecycleReadErrorKind::UnsupportedPlatform => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
         ManagedLifecycleReadErrorKind::UnsafeNamespace
         | ManagedLifecycleReadErrorKind::Corruption
-        | ManagedLifecycleReadErrorKind::UnknownVersionCorruption => StoreErrorKind::Corruption,
+        | ManagedLifecycleReadErrorKind::UnknownVersionCorruption => &rocketmq_error::STORAGE_STATE_CORRUPTED,
     };
-    StoreError::new(kind, operation)
+    StoreError::new(descriptor, operation)
         .in_component(StoreComponent::MappedFile)
         .with_detail(format!(
             "read-only lifecycle inspection failed under {}",

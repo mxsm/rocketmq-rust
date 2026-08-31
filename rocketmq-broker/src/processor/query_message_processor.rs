@@ -32,7 +32,6 @@ use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
@@ -63,7 +62,7 @@ impl<MS: BrokerReadStore> QueryMessageStoreCapability<MS> {
 }
 
 fn query_store_unavailable() -> StoreError {
-    StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Read)
+    StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Read)
 }
 
 /// Narrow storage operations required by [`QueryMessageProcessor`].
@@ -622,11 +621,14 @@ mod tests {
         let Err(query_error) = capability.query_message(&request).await else {
             panic!("closed provider must reject query");
         };
-        assert_eq!(StoreErrorKind::NotStarted, query_error.kind());
+        assert_eq!(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, query_error.descriptor());
         let Err(select_error) = capability.select_message_by_offset(0) else {
             panic!("closed provider must reject select");
         };
-        assert_eq!(StoreErrorKind::NotStarted, select_error.kind());
+        assert_eq!(
+            &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+            select_error.descriptor()
+        );
     }
 
     #[tokio::test]

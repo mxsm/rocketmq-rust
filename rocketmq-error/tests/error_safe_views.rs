@@ -27,7 +27,7 @@ use rocketmq_error::AUTH_CREDENTIALS_INVALID;
 use rocketmq_error::AUTH_PERMISSION_DENIED;
 use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
-use rocketmq_error::STORAGE_COMMIT_LOG_CORRUPT_RECORD;
+use rocketmq_error::STORAGE_STATE_CORRUPTED;
 use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
 
 const SENTINEL: &str = "Bearer token-secret secret_key=sk signature=sig password=pw\r\nsource-message";
@@ -97,13 +97,20 @@ fn visibility_and_value_kinds_are_exposed_only_when_catalog_allows_them() {
         ViewValueRef::Text("orders")
     );
 
-    let storage_context = ErrorContext::new().with_i64(fields::DECLARED_SIZE, -1);
-    let storage =
-        DiagnosticView::try_new(&STORAGE_COMMIT_LOG_CORRUPT_RECORD, &storage_context).expect("storage diagnostic view");
-    assert_eq!(
-        storage.fields().next().expect("declared size").value(),
-        ViewValueRef::I64(-1)
-    );
+    let storage_context = ErrorContext::new()
+        .with_text(fields::STORE_OPERATION, "read")
+        .with_text(fields::STORE_COMPONENT, "commit_log")
+        .with_secret_presence(fields::STORE_DETAIL_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT);
+    let public = PublicErrorView::try_new(&STORAGE_STATE_CORRUPTED, &storage_context).expect("storage public view");
+    let storage = DiagnosticView::try_new(&STORAGE_STATE_CORRUPTED, &storage_context).expect("storage diagnostic view");
+    assert!(public.fields().next().is_none());
+    let fields = storage.fields().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 4);
+    assert_eq!(fields[0].value(), ViewValueRef::Text("read"));
+    assert_eq!(fields[1].value(), ViewValueRef::Text("commit_log"));
+    assert_eq!(fields[2].value(), ViewValueRef::Redacted);
+    assert_eq!(fields[3].value(), ViewValueRef::Redacted);
 
     let secret_context = ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT);
     let public = PublicErrorView::try_new(&AUTH_CREDENTIALS_INVALID, &secret_context).expect("public view");

@@ -962,8 +962,11 @@ fn broker_shutdown_timeout_report_preserves_unfinished_components() {
 fn broker_store_shutdown_failure_preserves_typed_cause_and_remains_unfinished() {
     let progress = BrokerShutdownProgress::new();
     let mut report = BrokerBasicServiceShutdownReport::default();
-    let error =
-        rocketmq_store::StoreError::storage(rocketmq_store::StoreOperation::Shutdown, "injected final flush failure");
+    let error = rocketmq_store::StoreError::new(
+        &rocketmq_error::STORAGE_WRITE_FAILED,
+        rocketmq_store::StoreOperation::Shutdown,
+    )
+    .with_detail("injected final flush failure");
 
     record_message_store_shutdown_outcome(
         &mut report,
@@ -973,21 +976,20 @@ fn broker_store_shutdown_failure_preserves_typed_cause_and_remains_unfinished() 
     );
 
     assert!(!report.message_store.healthy);
-    assert_eq!(report.message_store.error_kind, Some("storage"));
-    assert!(report
-        .message_store
-        .detail
-        .as_deref()
-        .is_some_and(|detail| detail.contains("injected final flush failure")));
+    assert_eq!(report.message_store.error_kind, Some("storage.write.failed"));
+    assert_eq!(
+        report.message_store.detail.as_deref(),
+        Some("storage.write.failed: Storage write failed")
+    );
     assert!(progress.unfinished().contains(&"message_store"));
     let recorded = progress
         .message_store_report()
         .expect("store failure should remain available if a later phase reaches the deadline");
-    assert_eq!(recorded.error_kind, Some("storage"));
-    assert!(recorded
-        .detail
-        .as_deref()
-        .is_some_and(|detail| detail.contains("injected final flush failure")));
+    assert_eq!(recorded.error_kind, Some("storage.write.failed"));
+    assert_eq!(
+        recorded.detail.as_deref(),
+        Some("storage.write.failed: Storage write failed")
+    );
     assert!(!report.is_healthy());
 }
 
@@ -3083,7 +3085,7 @@ async fn admin_runtime_does_not_retain_message_store_root() {
     assert!(matches!(
         admin.set_commitlog_read_mode(CommitLogReadMode::Normal),
         Err(crate::broker::broker_admin_runtime::CommitLogReadModeUpdateError::Store(error))
-            if error.kind() == rocketmq_store::StoreErrorKind::NotStarted
+            if error.descriptor() == &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED
     ));
     assert!(admin.delete_topics(Vec::new()).is_err());
 

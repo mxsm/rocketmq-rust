@@ -21,6 +21,8 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
+use rocketmq_error::STORAGE_IO_FAILED;
+use rocketmq_error::STORAGE_REQUEST_INVALID;
 use sha2::Digest;
 use sha2::Sha256;
 use thiserror::Error;
@@ -39,7 +41,6 @@ pub struct CheckpointDirectoryDigest {
 
 use crate::StoreContractViolation;
 use crate::StoreError;
-use crate::StoreErrorKind;
 use crate::StoreOperation;
 
 /// Private filesystem failure while reading a checkpoint artifact.
@@ -198,11 +199,11 @@ fn portable_relative_path(path: &Path) -> String {
 }
 
 fn artifact_contract(source: StoreContractViolation) -> StoreError {
-    StoreError::new(StoreErrorKind::InvalidRequest, StoreOperation::Read).with_source(source)
+    StoreError::new(&STORAGE_REQUEST_INVALID, StoreOperation::Read).with_source(source)
 }
 
 fn io_error(operation: &'static str, path: &Path, source: std::io::Error) -> StoreError {
-    StoreError::new(StoreErrorKind::Io, StoreOperation::Read).with_source(CheckpointArtifactIoError {
+    StoreError::new(&STORAGE_IO_FAILED, StoreOperation::Read).with_source(CheckpointArtifactIoError {
         operation,
         path: path.to_path_buf(),
         source,

@@ -54,6 +54,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueFlushHandle;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 
@@ -325,10 +326,8 @@ impl DefaultFlushManager {
 
     fn try_flush_before_shutdown(&self) -> Result<FlushProgress, StoreError> {
         let Some(mapped_file_queue) = self.mapped_file_queue.as_ref() else {
-            let error = StoreError::invalid_state(
-                StoreOperation::Flush,
-                "flush manager mapped file queue is not initialized",
-            );
+            let error = StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Flush)
+                .with_detail("flush manager mapped file queue is not initialized");
             self.store_health_recorder.record_flush_failure(&error);
             return Err(error);
         };
@@ -336,7 +335,9 @@ impl DefaultFlushManager {
             mapped_file_queue.commit(0);
         }
         mapped_file_queue.try_flush(0).map_err(|error| {
-            let error = StoreError::mapped_file(StoreOperation::Flush, error);
+            let error = StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(error);
             self.store_health_recorder.record_flush_failure(&error);
             error
         })
@@ -733,9 +734,15 @@ pub(crate) async fn flush_mapped_file_queue(
     .await
     {
         Ok(Ok(result)) => Ok(result),
-        Ok(Err(error)) => Err(Arc::new(StoreError::mapped_file(StoreOperation::Flush, error))),
+        Ok(Err(error)) => Err(Arc::new(
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(error),
+        )),
         Err(error) => Err(Arc::new(
-            StoreError::invalid_state(StoreOperation::Flush, "commitlog flush task failed").with_source(error),
+            StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Flush)
+                .with_detail("commitlog flush task failed")
+                .with_source(error),
         )),
     }
 }
@@ -849,10 +856,10 @@ mod tests {
         let store_health_recorder = health_recorder();
         let (first, mut first_response) = GroupCommitRequest::new(64, 5_000);
         let (second, mut second_response) = GroupCommitRequest::new(96, 5_000);
-        let error = Arc::new(StoreError::invalid_state(
-            StoreOperation::Flush,
-            "injected flush failure",
-        ));
+        let error = Arc::new(
+            StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Flush)
+                .with_detail("injected flush failure"),
+        );
 
         store_health_recorder.record_flush_failure(error.as_ref());
         complete_group_commit_batch_error(vec![first, second], error.clone(), &sync_flush_stats);
@@ -866,8 +873,8 @@ mod tests {
             store_health_recorder
                 .last_flush_error()
                 .as_ref()
-                .map(|error| error.kind),
-            Some(crate::store_error::StoreErrorKind::Internal)
+                .map(|error| error.descriptor),
+            Some(&rocketmq_error::STORAGE_INTERNAL_FAILURE)
         );
     }
 
@@ -1020,10 +1027,11 @@ mod tests {
             worker_task: None,
             sync_flush_stats: SyncFlushStats::default(),
             store_health_recorder: health_recorder(),
-            forced_flush_error: Some(Arc::new(StoreError::mapped_file(
-                StoreOperation::Flush,
-                MappedFileError::ReferenceUnavailable,
-            ))),
+            forced_flush_error: Some(Arc::new(
+                StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_source(MappedFileError::ReferenceUnavailable),
+            )),
         };
         let store_health_recorder = service.store_health_recorder.clone();
         let forced_error = service.forced_flush_error.as_ref().unwrap().clone();
@@ -1043,8 +1051,8 @@ mod tests {
             store_health_recorder
                 .last_flush_error()
                 .as_ref()
-                .map(|error| error.kind),
-            Some(crate::store_error::StoreErrorKind::Storage)
+                .map(|error| error.descriptor),
+            Some(&rocketmq_error::STORAGE_IO_FAILED)
         );
 
         let (pending_request, pending_response) = GroupCommitRequest::new(2, 5_000);

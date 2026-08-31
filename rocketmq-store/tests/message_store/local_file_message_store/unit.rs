@@ -31,7 +31,6 @@ use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
 use crate::store_error::StoreComponent;
-use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 use bytes::BufMut;
 use bytes::Bytes;
@@ -364,7 +363,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
     let error = BackendOps::destroy_gracefully(&mut store)
         .await
         .expect_err("explicit destroy must wait for ordinary shutdown");
-    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
     assert!(commitlog.is_file());
     assert!(consume_queue.is_file());
 
@@ -648,12 +647,12 @@ async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation(
         .init()
         .await
         .expect_err("pending destroy must fence initialization");
-    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
     let error = store
         .start()
         .await
         .expect_err("pending destroy must fence service start");
-    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
 
     let error = match try_new_owned_test_store_with_broker(
         &temp_dir,
@@ -663,7 +662,7 @@ async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation(
         Ok(_) => panic!("destroy retry state must retain the Store root lease across shutdown"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 
     drop(store);
     drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
@@ -707,7 +706,7 @@ fn destroyed_store_outcome_is_idempotent_and_retains_root_lease_until_drop() {
         Ok(_) => panic!("terminal destroy state must retain the Store root lease until owner drop"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 
     drop(store);
     drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
@@ -806,7 +805,7 @@ fn assert_destroy_is_non_mutating_after_root_replacement(replacement_contents: O
         Ok(_) => panic!("the retained physical root must stay leased until owner drop"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 
     drop(store);
     drop(
@@ -882,11 +881,8 @@ async fn init_without_root_dependency_wiring_fails_closed() {
 
     let error = store.init().await.expect_err("unwired Local store must not initialize");
 
-    assert_eq!(error.kind(), StoreErrorKind::Internal);
-    assert_eq!(
-        error.detail(),
-        Some("message store root dependencies are not wired; call wire_owned_root_dependencies before init")
-    );
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+    assert_eq!(error.operation(), StoreOperation::Start);
 }
 
 fn new_owned_wiring_test_store(
@@ -1708,10 +1704,8 @@ async fn init_rejects_dledger_commit_log_configuration() {
     ] {
         let mut store = new_configured_test_store(&temp_dir, message_store_config);
         let error = store.init().await.expect_err("DLedger should be rejected explicitly");
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
         assert_eq!(error.component(), StoreComponent::DLedger);
-        assert!(error
-            .detail()
-            .is_some_and(|detail| detail.contains("DLedger commit log")));
     }
 }
 
@@ -1735,15 +1729,8 @@ async fn init_rejects_rocksdb_specific_flags_without_rocksdb_store_type() {
         .init()
         .await
         .expect_err("local file store should reject rocksdb-only configuration");
-    assert_eq!(error.kind(), StoreErrorKind::InvalidRequest);
-    let message = error.detail().expect("configuration detail");
-    assert!(message.contains("store_type=RocksDB"));
-    assert!(message.contains("clean_rocksdb_dirty_cq_interval_min"));
-    assert!(message.contains("stat_rocksdb_cq_interval_sec"));
-    assert!(message.contains("real_time_persist_rocksdb_config"));
-    assert!(message.contains("enable_rocksdb_log"));
-    assert!(message.contains("rocksdb_cq_double_write_enable"));
-    assert!(message.contains("trans_rocksdb_enable"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.component(), StoreComponent::Configuration);
 }
 
 #[tokio::test]
@@ -1763,11 +1750,8 @@ async fn init_rejects_strict_active_file_memory_lock_without_explicit_budget() {
         .init()
         .await
         .expect_err("strict active_file memory locking should require explicit budget");
-    assert_eq!(error.kind(), StoreErrorKind::InvalidRequest);
-    let message = error.detail().expect("configuration detail");
-    assert!(message.contains("active_file"));
-    assert!(message.contains("linux_memory_lock_budget_bytes"));
-    assert!(message.contains("linux_memory_lock_warn_only=true"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.component(), StoreComponent::Configuration);
 
     let warn_only_dir = tempdir().unwrap();
     let mut warn_only_store = new_configured_test_store(
@@ -2025,10 +2009,8 @@ async fn init_rejects_timer_rocksdb_backend_until_native_store_exists() {
         .init()
         .await
         .expect_err("timer rocksdb backend is not implemented");
-    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
-    let message = error.detail().expect("unsupported detail");
-    assert!(message.contains("Timer RocksDB backend"));
-    assert!(message.contains("timer_rocksdb_enable=false"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
+    assert_eq!(error.component(), StoreComponent::Configuration);
 }
 
 #[tokio::test]
@@ -2254,10 +2236,7 @@ async fn start_requires_init_before_services_begin() {
 
     let error = store.start().await.expect_err("start should require init first");
 
-    assert_eq!(error.kind(), StoreErrorKind::Internal);
-    assert!(error
-        .detail()
-        .is_some_and(|message| message.contains("initialized before start")));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
     assert!(
         temp_dir.path().join("lock").exists(),
         "construction must establish the Store lock before creating storage components"
@@ -2281,10 +2260,7 @@ async fn store_root_lease_outlives_shutdown_until_owner_drop() {
         Ok(_) => panic!("second store must not inspect the root while its lock is held"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
-    assert!(error
-        .detail()
-        .is_some_and(|message| message.contains("lock file is held")));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 
     first.shutdown().await;
 
@@ -2292,7 +2268,7 @@ async fn store_root_lease_outlives_shutdown_until_owner_drop() {
         Ok(_) => panic!("shutdown must not expose a stale Store object alongside a replacement owner"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 
     drop(first);
     let mut second = new_configured_test_store(&temp_dir, config);
@@ -2323,7 +2299,7 @@ fn constructor_checks_store_lock_before_checkpoint_creation() {
         Err(error) => error,
     };
 
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
     assert!(
         !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
         "checkpoint construction must remain behind the exclusive root lock"
@@ -2382,10 +2358,7 @@ fn recognized_lifecycle_directory_fences_legacy_construction_before_checkpoint()
         Err(error) => error,
     };
 
-    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
-    assert!(error.detail().is_some_and(
-        |detail| detail.contains("bootstrap recovery") && detail.contains("legacy numeric Store loading is fenced")
-    ));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
     assert!(
         !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
         "checkpoint construction must remain behind lifecycle artifact classification"
@@ -2413,7 +2386,7 @@ fn managed_lifecycle_session_owns_the_exclusive_root_lease() {
         Ok(_) => panic!("the managed session must keep the exclusive root lease alive"),
         Err(error) => error,
     };
-    assert_eq!(competing.kind(), StoreErrorKind::Storage);
+    assert_eq!(competing.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 
     drop(inspection);
     drop(
@@ -2439,11 +2412,8 @@ fn unknown_lifecycle_entry_is_corruption_before_checkpoint_construction() {
         Err(error) => error,
     };
 
-    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
     assert_eq!(error.component(), StoreComponent::MappedFile);
-    assert!(error
-        .detail()
-        .is_some_and(|detail| detail.contains("read-only lifecycle inspection failed")));
     assert_eq!(fs::read(&unknown).unwrap(), b"must-remain-intact");
     assert!(
         !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
@@ -2473,7 +2443,7 @@ fn constructor_rejects_lock_symlink_without_truncating_its_target() {
         Err(error) => error,
     };
 
-    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
     assert_eq!(fs::read(&target_path).unwrap(), b"must-remain-intact");
     assert!(!temp_dir.path().join("checkpoint").exists());
 }
@@ -2501,7 +2471,7 @@ fn constructor_rejects_a_symbolic_link_store_root() {
         Err(error) => error,
     };
 
-    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
     assert!(!real_root.join("lock").exists());
     assert!(!real_root.join("checkpoint").exists());
 }
@@ -2556,7 +2526,7 @@ async fn start_rejects_abort_link_without_truncating_its_target() {
         .await
         .expect_err("start must not follow an abort marker link");
 
-    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
     assert_eq!(fs::read(&target_path).unwrap(), b"must-remain-intact");
     assert_eq!(store.lifecycle_state(), LocalStoreState::Initialized);
 }
@@ -2606,7 +2576,7 @@ async fn lifecycle_artifact_created_after_shutdown_blocks_reinitialization_and_l
         .init()
         .await
         .expect_err("a current lifecycle artifact must invalidate the legacy root lease");
-    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
     assert!(
         !store.load().await,
         "managed lifecycle evidence must prevent numeric scanning"
@@ -2662,7 +2632,7 @@ async fn shutdown_with_new_lifecycle_evidence_stops_services_but_retains_abort_a
         .await
         .expect_err("managed lifecycle evidence must invalidate graceful shutdown persistence");
 
-    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
     assert_eq!(store.lifecycle_state(), LocalStoreState::Shutdown);
     assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
     assert!(
@@ -2709,7 +2679,7 @@ async fn shutdown_with_invalid_root_lease_stops_timer_without_path_persistence()
         .await
         .expect_err("managed lifecycle evidence must invalidate graceful shutdown persistence");
 
-    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
     assert_eq!(fs::read(&metrics_path).unwrap(), b"replacement-must-remain");
     assert!(!timer.has_scheduler_handle());
     assert_eq!(timer.scheduler_task_count(), 0);
@@ -3402,17 +3372,11 @@ async fn start_and_init_are_rejected_while_recovering() {
         .start()
         .await
         .expect_err("start should be rejected during recovery");
-    assert_eq!(start_error.kind(), StoreErrorKind::Internal);
-    assert!(start_error
-        .detail()
-        .is_some_and(|message| message.contains("recovering")));
+    assert_eq!(start_error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
 
     store.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
     let init_error = store.init().await.expect_err("init should be rejected during recovery");
-    assert_eq!(init_error.kind(), StoreErrorKind::Internal);
-    assert!(init_error
-        .detail()
-        .is_some_and(|message| message.contains("recovering")));
+    assert_eq!(init_error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
 }
 
 #[test]
@@ -3698,13 +3662,13 @@ fn failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_waterma
     let health = store.health_snapshot();
     assert!(!health.writeable);
     assert_eq!(
-        health.last_flush_error.as_ref().map(|error| error.kind),
-        Some(crate::store_error::StoreErrorKind::Storage)
+        health.last_flush_error.map(|error| error.descriptor),
+        Some(&rocketmq_error::STORAGE_IO_FAILED)
     );
-    assert!(health
-        .last_flush_error
-        .as_ref()
-        .is_some_and(|error| error.detail.contains("mapped_file")));
+    assert_eq!(
+        health.last_flush_error.map(|error| error.component),
+        Some(StoreComponent::MappedFile)
+    );
     assert_eq!(store.flush(), durable_before);
     assert_eq!(store.get_flushed_where(), durable_before);
 }
@@ -3734,8 +3698,8 @@ async fn graceful_shutdown_reports_typed_final_flush_failure() {
     let health = store.health_snapshot();
     assert!(!health.writeable);
     assert_eq!(
-        health.last_flush_error.as_ref().map(|error| error.kind),
-        Some(crate::store_error::StoreErrorKind::Storage)
+        health.last_flush_error.map(|error| error.descriptor),
+        Some(&rocketmq_error::STORAGE_IO_FAILED)
     );
 }
 

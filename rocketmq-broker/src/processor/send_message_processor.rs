@@ -76,6 +76,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreHealthError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
@@ -602,10 +603,16 @@ where
         let completion_facts = SendCompletionFacts::capture(request);
         if transactional {
             let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
-            let result = await_store(StoreAwaitControl::Request(control), store.append_message(message_ext))
+            let result = match await_store(StoreAwaitControl::Request(control), store.append_message(message_ext))
                 .await
                 .map_err(|StoreAwaitStopped| RocketMQError::invariant_violated("message store await stopped"))?
-                .map_err(map_store_api_error)?;
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    let response = map_store_api_error(error).apply_to(response);
+                    return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                }
+            };
             let (max_phy_offset, flushed_where) = self
                 .inner
                 .context
@@ -661,10 +668,8 @@ where
                     send_message_context,
                 )
             }
-            Err(_) => (
-                response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("message store not available"),
+            Err(error) => (
+                map_store_api_error(error).apply_to(response),
                 StoreHookCompletion::NoAfterHook,
             ),
         })
@@ -820,10 +825,8 @@ where
                             send_message_context,
                         )
                     }
-                    Err(_) => (
-                        response
-                            .set_code(ResponseCode::SystemError)
-                            .set_remark("message store not available"),
+                    Err(error) => (
+                        map_store_api_error(error).apply_to(response),
                         StoreHookCompletion::NoAfterHook,
                     ),
                 },
@@ -855,10 +858,8 @@ where
                         send_message_context,
                     )
                 }
-                Err(_) => (
-                    response
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark("message store not available"),
+                Err(error) => (
+                    map_store_api_error(error).apply_to(response),
                     StoreHookCompletion::NoAfterHook,
                 ),
             })
@@ -1494,41 +1495,72 @@ fn map_legacy_store_wait_stopped(_: StoreAwaitStopped) -> RocketMQError {
     RocketMQError::invariant_violated("legacy message store await cannot observe request cancellation")
 }
 
-fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
-    use rocketmq_store_api::StoreErrorKind;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoreApiRetryDisposition {
+    SwitchBroker,
+    Immediate,
+    AfterBackoff,
+    Never,
+}
+
+impl StoreApiRetryDisposition {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::SwitchBroker => "switch_broker",
+            Self::Immediate => "immediate",
+            Self::AfterBackoff => "after_backoff",
+            Self::Never => "never",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StoreApiErrorProjection {
+    response_code: i32,
+    public_message: &'static str,
+    retry: StoreApiRetryDisposition,
+}
+
+impl StoreApiErrorProjection {
+    fn apply_to(self, response: RemotingCommand) -> RemotingCommand {
+        debug!(
+            response_code = self.response_code,
+            retry = self.retry.as_str(),
+            "mapped canonical storage failure to legacy send response"
+        );
+        response.set_code(self.response_code).set_remark(self.public_message)
+    }
+}
+
+fn map_store_api_error(error: rocketmq_store_api::StoreError) -> StoreApiErrorProjection {
+    use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
+    use rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND;
+    use rocketmq_error::STORAGE_OPERATION_TIMED_OUT;
+    use rocketmq_error::STORAGE_OPERATION_UNSUPPORTED;
     use rocketmq_store_api::StoreOperation;
 
-    let operation = error.operation();
-    let operation_name = operation.as_str();
-    match (operation, error.kind()) {
-        (StoreOperation::Append, StoreErrorKind::Unavailable) => {
-            RocketMQError::broker_operation_failed(operation_name, -1, "store temporarily unavailable")
-        }
-        (StoreOperation::Append, StoreErrorKind::NotFound) => {
-            RocketMQError::broker_operation_failed(operation_name, -1, "append target unavailable")
-        }
-        (_, StoreErrorKind::NotStarted) => RocketMQError::not_initialized(operation_name),
-        (_, StoreErrorKind::Unavailable) => RocketMQError::Service(rocketmq_error::UnifiedServiceError::StartupFailed(
-            operation_name.to_string(),
-        )),
-        (_, StoreErrorKind::InvalidRequest) => RocketMQError::illegal_argument(operation_name),
-        (_, StoreErrorKind::NotFound) => RocketMQError::query_not_found(operation_name),
-        (_, StoreErrorKind::Capacity) => RocketMQError::StorageOutOfSpace {
-            path: operation_name.to_string(),
-        },
-        (_, StoreErrorKind::Storage) => RocketMQError::storage_write_failed(operation_name, "storage operation failed"),
-        (_, StoreErrorKind::Io) => RocketMQError::IO(std::io::Error::other(operation_name)),
-        (_, StoreErrorKind::Corruption) => RocketMQError::StorageCorrupted {
-            path: operation_name.to_string(),
-        },
-        (_, StoreErrorKind::Timeout) => RocketMQError::Timeout {
-            operation: operation_name,
-            timeout_ms: 0,
-        },
-        (_, StoreErrorKind::Unsupported) => {
-            RocketMQError::broker_operation_failed(operation_name, -1, "unsupported store operation")
-        }
-        (_, StoreErrorKind::Internal) => RocketMQError::internal(operation_name, error),
+    let descriptor = error.descriptor();
+    let retry = if (descriptor == &STORAGE_BACKEND_UNAVAILABLE && error.operation() == StoreOperation::Append)
+        || (descriptor == &STORAGE_MAPPED_FILE_NOT_FOUND && error.operation() == StoreOperation::Append)
+        || descriptor == &STORAGE_OPERATION_UNSUPPORTED
+    {
+        StoreApiRetryDisposition::SwitchBroker
+    } else if descriptor == &STORAGE_MAPPED_FILE_NOT_FOUND {
+        StoreApiRetryDisposition::Immediate
+    } else if descriptor == &STORAGE_OPERATION_TIMED_OUT {
+        StoreApiRetryDisposition::AfterBackoff
+    } else {
+        StoreApiRetryDisposition::Never
+    };
+
+    // This is the single intentional source-termination boundary. The broker
+    // carries only the descriptor-owned remoting code and fixed public message.
+    // Retry disposition preserves the legacy send decision independently from
+    // catalog RecoveryHint metadata. Private detail and source are dropped here.
+    StoreApiErrorProjection {
+        response_code: descriptor.projection().remoting().code.as_i32(),
+        public_message: descriptor.public_message(),
+        retry,
     }
 }
 
@@ -1545,9 +1577,9 @@ fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: St
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
     if !snapshot.writable {
-        let error_kind = snapshot.last_error.map_or("unknown", |error| error.backend_token());
+        let error_code = snapshot.last_error.map_or("unknown", StoreHealthError::code);
         return Some(format!(
-            "store_backpressure reason=store_not_writeable, lastFlushErrorKind={error_kind}"
+            "store_backpressure reason=store_not_writeable, lastFlushErrorCode={error_code}"
         ));
     }
     if snapshot.page_cache_busy {
@@ -2143,6 +2175,7 @@ fn no_retry_queue_response(command_factory: &RemotingCommandFactory) -> Remoting
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::sync::Arc;
 
     use std::collections::HashMap;
@@ -2186,6 +2219,7 @@ mod tests {
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
+    use super::StoreApiRetryDisposition;
     use crate::send_message_constants::apply_topic_delivery_properties;
 
     #[test]
@@ -2314,7 +2348,7 @@ mod tests {
         fn append_message(&mut self, (): ()) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send {
             let result = self.receipt.take().ok_or_else(|| {
                 rocketmq_store_api::StoreError::new(
-                    rocketmq_store_api::StoreErrorKind::Unavailable,
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
                     rocketmq_store_api::StoreOperation::Append,
                 )
             });
@@ -2470,107 +2504,191 @@ mod tests {
     }
 
     #[test]
-    fn every_store_api_error_kind_preserves_typed_semantics_and_operation() {
-        use rocketmq_error::RedactionPolicy;
-        use rocketmq_error::RetryClass;
-        use rocketmq_store_api::StoreErrorKind;
+    fn store_api_error_every_descriptor_has_one_fixed_legacy_boundary_mapping() {
+        use rocketmq_error::RemotingResponseCode;
 
         let cases = [
             (
-                StoreErrorKind::NotStarted,
-                rocketmq_error::ErrorKind::NotInitialized,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+                RemotingResponseCode::SystemError,
+                "Storage service is not started",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::Unavailable,
-                rocketmq_error::ErrorKind::BrokerOperationFailed,
-                RetryClass::SwitchBroker,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                RemotingResponseCode::SystemError,
+                "Storage backend is unavailable",
+                StoreApiRetryDisposition::SwitchBroker,
             ),
             (
-                StoreErrorKind::InvalidRequest,
-                rocketmq_error::ErrorKind::IllegalArgument,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_REQUEST_INVALID,
+                RemotingResponseCode::InvalidParameter,
+                "Storage request is invalid",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::NotFound,
-                rocketmq_error::ErrorKind::BrokerOperationFailed,
-                RetryClass::SwitchBroker,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND,
+                RemotingResponseCode::QueryNotFound,
+                "Mapped file was not found",
+                StoreApiRetryDisposition::SwitchBroker,
             ),
             (
-                StoreErrorKind::Capacity,
-                rocketmq_error::ErrorKind::StorageOutOfSpace,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+                RemotingResponseCode::SystemError,
+                "Storage capacity is exhausted",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::Storage,
-                rocketmq_error::ErrorKind::StorageWriteFailed,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_READ_FAILED,
+                RemotingResponseCode::SystemError,
+                "Storage read failed",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::Io,
-                rocketmq_error::ErrorKind::Io,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_WRITE_FAILED,
+                RemotingResponseCode::SystemError,
+                "Storage write failed",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::Corruption,
-                rocketmq_error::ErrorKind::StorageCorrupted,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_IO_FAILED,
+                RemotingResponseCode::SystemError,
+                "Storage I/O operation failed",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::Timeout,
-                rocketmq_error::ErrorKind::Timeout,
-                RetryClass::AfterBackoff,
-                RedactionPolicy::Public,
+                &rocketmq_error::STORAGE_STATE_CORRUPTED,
+                RemotingResponseCode::SystemError,
+                "Storage state is corrupted",
+                StoreApiRetryDisposition::Never,
             ),
             (
-                StoreErrorKind::Unsupported,
-                rocketmq_error::ErrorKind::BrokerOperationFailed,
-                RetryClass::SwitchBroker,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+                RemotingResponseCode::SystemBusy,
+                "Storage operation timed out",
+                StoreApiRetryDisposition::AfterBackoff,
             ),
             (
-                StoreErrorKind::Internal,
-                rocketmq_error::ErrorKind::Internal,
-                RetryClass::Never,
-                RedactionPolicy::RedactSensitive,
+                &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+                RemotingResponseCode::RequestCodeNotSupported,
+                "Storage operation is unsupported",
+                StoreApiRetryDisposition::SwitchBroker,
+            ),
+            (
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                RemotingResponseCode::SystemError,
+                "Internal storage failure",
+                StoreApiRetryDisposition::Never,
             ),
         ];
 
-        for (kind, expected_kind, expected_retry, expected_redaction) in cases {
-            let operation = rocketmq_store_api::StoreOperation::Append;
-            let mapped = map_store_api_error(rocketmq_store_api::StoreError::new(kind, operation));
+        for (descriptor, expected_code, expected_message, expected_retry) in cases {
+            let mapped = map_store_api_error(
+                rocketmq_store_api::StoreError::new(descriptor, rocketmq_store_api::StoreOperation::Append)
+                    .with_detail("backend-secret")
+                    .with_source(std::io::Error::other("source-secret")),
+            );
 
-            assert_eq!(expected_kind, mapped.kind(), "neutral kind {kind:?}");
-            assert_eq!(expected_retry, mapped.spec().recovery.retry, "neutral kind {kind:?}");
-            assert_eq!(expected_redaction, mapped.spec().redact, "neutral kind {kind:?}");
-            assert!(mapped.to_string().contains(operation.as_str()), "neutral kind {kind:?}");
-            let public = mapped.boundary_view();
-            assert_eq!(expected_kind, public.kind(), "neutral kind {kind:?}");
-            assert_eq!(expected_retry, public.retry(), "neutral kind {kind:?}");
-            assert_eq!(mapped.public_message(), public.message(), "neutral kind {kind:?}");
-            assert_ne!(mapped.to_string(), public.message(), "neutral kind {kind:?}");
-            assert!(!format!("{:?}", public.context()).contains("backend-secret"));
+            assert_eq!(mapped.retry, expected_retry, "descriptor {}", descriptor.code());
+            let response = mapped.apply_to(RemotingCommand::create_success_response_command());
+            assert_eq!(
+                response.code(),
+                expected_code.as_i32(),
+                "descriptor {}",
+                descriptor.code()
+            );
+            assert_eq!(
+                response.remark().map(|remark| remark.as_str()),
+                Some(expected_message),
+                "descriptor {}",
+                descriptor.code()
+            );
+            let remark = response.remark().expect("storage response has a fixed public remark");
+            assert!(!remark.contains("backend-secret"));
+            assert!(!remark.contains("source-secret"));
+        }
+    }
+
+    #[test]
+    fn store_api_error_retry_mapping_preserves_operation_sensitive_legacy_policy() {
+        use rocketmq_store_api::StoreOperation;
+
+        let cases = [
+            (
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                StoreOperation::Append,
+                StoreApiRetryDisposition::SwitchBroker,
+            ),
+            (
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                StoreOperation::Read,
+                StoreApiRetryDisposition::Never,
+            ),
+            (
+                &rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND,
+                StoreOperation::Append,
+                StoreApiRetryDisposition::SwitchBroker,
+            ),
+            (
+                &rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND,
+                StoreOperation::Read,
+                StoreApiRetryDisposition::Immediate,
+            ),
+            (
+                &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+                StoreOperation::Admin,
+                StoreApiRetryDisposition::SwitchBroker,
+            ),
+            (
+                &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+                StoreOperation::Flush,
+                StoreApiRetryDisposition::AfterBackoff,
+            ),
+            (
+                &rocketmq_error::STORAGE_WRITE_FAILED,
+                StoreOperation::Append,
+                StoreApiRetryDisposition::Never,
+            ),
+        ];
+
+        for (descriptor, operation, expected_retry) in cases {
+            let mapped = map_store_api_error(rocketmq_store_api::StoreError::new(descriptor, operation));
+            assert_eq!(mapped.retry, expected_retry, "{} / {operation:?}", descriptor.code());
+        }
+    }
+
+    #[test]
+    fn store_api_error_legacy_adapter_terminates_the_typed_source_chain() {
+        #[derive(Debug)]
+        struct StoreSource;
+
+        impl std::fmt::Display for StoreSource {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("private source")
+            }
         }
 
-        let startup_unavailable = map_store_api_error(rocketmq_store_api::StoreError::new(
-            StoreErrorKind::Unavailable,
-            rocketmq_store_api::StoreOperation::Start,
-        ));
-        assert_eq!(rocketmq_error::ErrorKind::Service, startup_unavailable.kind());
+        impl std::error::Error for StoreSource {}
 
-        let read_not_found = map_store_api_error(rocketmq_store_api::StoreError::new(
-            StoreErrorKind::NotFound,
-            rocketmq_store_api::StoreOperation::Read,
-        ));
-        assert_eq!(rocketmq_error::ErrorKind::QueryNotFound, read_not_found.kind());
+        let store_error = rocketmq_store_api::StoreError::new(
+            &rocketmq_error::STORAGE_WRITE_FAILED,
+            rocketmq_store_api::StoreOperation::Append,
+        )
+        .with_source(StoreSource);
+        assert!(store_error
+            .source()
+            .and_then(|source| source.downcast_ref::<StoreSource>())
+            .is_some());
+
+        let response = map_store_api_error(store_error).apply_to(RemotingCommand::create_success_response_command());
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Storage write failed")
+        );
+        assert!(!response
+            .remark()
+            .expect("fixed public remark")
+            .contains("private source"));
     }
 
     #[tokio::test]
@@ -2596,7 +2714,7 @@ mod tests {
         let store = CapabilityStore {
             health: StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(StoreHealthError::new(rocketmq_store::StoreErrorKind::Storage)),
+                last_error: Some(StoreHealthError::new(&rocketmq_error::STORAGE_WRITE_FAILED)),
                 ..StoreHealthSnapshot::default()
             },
             receipt: None,
@@ -2606,7 +2724,7 @@ mod tests {
             store_health_reject_remark_from(&BrokerConfig::default(), &store).expect("non-writable store rejects");
 
         assert!(remark.contains("reason=store_not_writeable"));
-        assert!(remark.contains("lastFlushErrorKind=storage"));
+        assert!(remark.contains("lastFlushErrorCode=storage.write.failed"));
     }
 
     #[test]
@@ -2852,10 +2970,15 @@ mod tests {
 
     #[test]
     fn store_health_reject_remark_reports_typed_flush_failure() {
-        for &kind in rocketmq_store::StoreErrorKind::ALL {
+        for descriptor in [
+            &rocketmq_error::STORAGE_READ_FAILED,
+            &rocketmq_error::STORAGE_WRITE_FAILED,
+            &rocketmq_error::STORAGE_IO_FAILED,
+            &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        ] {
             let snapshot = StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(StoreHealthError::new(kind)),
+                last_error: Some(StoreHealthError::new(descriptor)),
                 ..StoreHealthSnapshot::default()
             };
 
@@ -2863,8 +2986,9 @@ mod tests {
                 store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("flush failure should reject");
             assert!(remark.contains("reason=store_not_writeable"));
             assert!(
-                remark.contains(&format!("lastFlushErrorKind={}", kind.as_str())),
-                "canonical kind {kind:?}"
+                remark.contains(&format!("lastFlushErrorCode={}", descriptor.code())),
+                "canonical descriptor {}",
+                descriptor.code()
             );
             assert!(!remark.contains("backend detail"));
         }

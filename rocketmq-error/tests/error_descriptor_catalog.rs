@@ -36,7 +36,18 @@ use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::PROTOCOL_HEADER_INVALID;
 use rocketmq_error::PROTOCOL_VERSION_UNSUPPORTED;
 use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
-use rocketmq_error::STORAGE_COMMIT_LOG_CORRUPT_RECORD;
+use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
+use rocketmq_error::STORAGE_CAPACITY_EXHAUSTED;
+use rocketmq_error::STORAGE_INTERNAL_FAILURE;
+use rocketmq_error::STORAGE_IO_FAILED;
+use rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED;
+use rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND;
+use rocketmq_error::STORAGE_OPERATION_TIMED_OUT;
+use rocketmq_error::STORAGE_OPERATION_UNSUPPORTED;
+use rocketmq_error::STORAGE_READ_FAILED;
+use rocketmq_error::STORAGE_REQUEST_INVALID;
+use rocketmq_error::STORAGE_STATE_CORRUPTED;
+use rocketmq_error::STORAGE_WRITE_FAILED;
 use rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED;
 use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
 
@@ -148,10 +159,114 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
         cli: CliExitCode::TEMPORARY_FAILURE,
     },
     ExpectedDescriptor {
-        descriptor: STORAGE_COMMIT_LOG_CORRUPT_RECORD,
-        code: "storage.commit_log.corrupt_record",
+        descriptor: STORAGE_LIFECYCLE_NOT_STARTED,
+        code: "storage.lifecycle.not_started",
+        condition: CanonicalCondition::FailedPrecondition,
+        public_message: "Storage service is not started",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::FailedPrecondition,
+        http: HttpStatusCode::SERVICE_UNAVAILABLE,
+        cli: CliExitCode::UNAVAILABLE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_BACKEND_UNAVAILABLE,
+        code: "storage.backend.unavailable",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Storage backend is unavailable",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Backoff,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Unavailable,
+        http: HttpStatusCode::SERVICE_UNAVAILABLE,
+        cli: CliExitCode::UNAVAILABLE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_REQUEST_INVALID,
+        code: "storage.request.invalid",
+        condition: CanonicalCondition::InvalidArgument,
+        public_message: "Storage request is invalid",
+        severity: ErrorSeverity::Info,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::InvalidParameter,
+        grpc_payload: GrpcPayloadCode::BadRequest,
+        grpc_status: GrpcStatusCode::InvalidArgument,
+        http: HttpStatusCode::BAD_REQUEST,
+        cli: CliExitCode::USAGE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_MAPPED_FILE_NOT_FOUND,
+        code: "storage.mapped_file.not_found",
+        condition: CanonicalCondition::NotFound,
+        public_message: "Mapped file was not found",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::QueryNotFound,
+        grpc_payload: GrpcPayloadCode::NotFound,
+        grpc_status: GrpcStatusCode::NotFound,
+        http: HttpStatusCode::NOT_FOUND,
+        cli: CliExitCode::NOT_FOUND,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_CAPACITY_EXHAUSTED,
+        code: "storage.capacity.exhausted",
+        condition: CanonicalCondition::ResourceExhausted,
+        public_message: "Storage capacity is exhausted",
+        severity: ErrorSeverity::Critical,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::ResourceExhausted,
+        http: HttpStatusCode::INSUFFICIENT_STORAGE,
+        cli: CliExitCode::DATA,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_READ_FAILED,
+        code: "storage.read.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Storage read failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_WRITE_FAILED,
+        code: "storage.write.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Storage write failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_IO_FAILED,
+        code: "storage.io.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Storage I/O operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_STATE_CORRUPTED,
+        code: "storage.state.corrupted",
         condition: CanonicalCondition::DataLoss,
-        public_message: "Commit log record is corrupted",
+        public_message: "Storage state is corrupted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
         remoting: RemotingResponseCode::SystemError,
@@ -159,6 +274,45 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
         grpc_status: GrpcStatusCode::DataLoss,
         http: HttpStatusCode::INTERNAL_SERVER_ERROR,
         cli: CliExitCode::DATA,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_OPERATION_TIMED_OUT,
+        code: "storage.operation.timed_out",
+        condition: CanonicalCondition::DeadlineExceeded,
+        public_message: "Storage operation timed out",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        remoting: RemotingResponseCode::SystemBusy,
+        grpc_payload: GrpcPayloadCode::RequestTimeout,
+        grpc_status: GrpcStatusCode::DeadlineExceeded,
+        http: HttpStatusCode::GATEWAY_TIMEOUT,
+        cli: CliExitCode::TEMPORARY_FAILURE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_OPERATION_UNSUPPORTED,
+        code: "storage.operation.unsupported",
+        condition: CanonicalCondition::Unimplemented,
+        public_message: "Storage operation is unsupported",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::RequestCodeNotSupported,
+        grpc_payload: GrpcPayloadCode::Unsupported,
+        grpc_status: GrpcStatusCode::Unimplemented,
+        http: HttpStatusCode::BAD_REQUEST,
+        cli: CliExitCode::USAGE,
+    },
+    ExpectedDescriptor {
+        descriptor: STORAGE_INTERNAL_FAILURE,
+        code: "storage.internal.failure",
+        condition: CanonicalCondition::Internal,
+        public_message: "Internal storage failure",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
     },
     ExpectedDescriptor {
         descriptor: PROTOCOL_VERSION_UNSUPPORTED,
@@ -190,7 +344,7 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
 
 #[test]
 fn representative_descriptor_table_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTORS.len(), 10);
+    assert_eq!(EXPECTED_DESCRIPTORS.len(), 21);
     assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTORS.len());
 
     for (actual, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTORS) {
@@ -268,7 +422,15 @@ fn representative_descriptor_field_schemas_are_exact_and_ordered() {
             TRANSPORT_CONNECTION_TIMEOUT,
             vec![fields::TIMEOUT_MS.schema(), fields::REMOTE_ADDR.schema()],
         ),
-        (STORAGE_COMMIT_LOG_CORRUPT_RECORD, vec![fields::DECLARED_SIZE.schema()]),
+        (
+            STORAGE_STATE_CORRUPTED,
+            vec![
+                fields::STORE_OPERATION.schema(),
+                fields::STORE_COMPONENT.schema(),
+                fields::STORE_DETAIL_PRESENT.schema(),
+                fields::SOURCE_PRESENT.schema(),
+            ],
+        ),
         (PROTOCOL_VERSION_UNSUPPORTED, vec![fields::ORDINAL.schema()]),
         (
             CORE_INTERNAL_FAILURE,
@@ -294,14 +456,39 @@ fn representative_descriptor_field_schemas_are_exact_and_ordered() {
         CONTROLLER_LEADERSHIP_NOT_LEADER.fields()[0].value_kind(),
         FieldValueKind::U64
     );
-    assert_eq!(
-        STORAGE_COMMIT_LOG_CORRUPT_RECORD.fields()[0].value_kind(),
-        FieldValueKind::I64
-    );
+    assert_eq!(STORAGE_STATE_CORRUPTED.fields()[0].value_kind(), FieldValueKind::Text);
     assert_eq!(
         AUTH_CREDENTIALS_INVALID.fields()[0].value_kind(),
         FieldValueKind::Presence
     );
+}
+
+#[test]
+fn every_storage_descriptor_has_the_exact_allowed_fields() {
+    let storage_descriptors = [
+        STORAGE_LIFECYCLE_NOT_STARTED,
+        STORAGE_BACKEND_UNAVAILABLE,
+        STORAGE_REQUEST_INVALID,
+        STORAGE_MAPPED_FILE_NOT_FOUND,
+        STORAGE_CAPACITY_EXHAUSTED,
+        STORAGE_READ_FAILED,
+        STORAGE_WRITE_FAILED,
+        STORAGE_IO_FAILED,
+        STORAGE_STATE_CORRUPTED,
+        STORAGE_OPERATION_TIMED_OUT,
+        STORAGE_OPERATION_UNSUPPORTED,
+        STORAGE_INTERNAL_FAILURE,
+    ];
+    let expected = [
+        fields::STORE_OPERATION.schema(),
+        fields::STORE_COMPONENT.schema(),
+        fields::STORE_DETAIL_PRESENT.schema(),
+        fields::SOURCE_PRESENT.schema(),
+    ];
+
+    for descriptor in storage_descriptors {
+        assert_eq!(descriptor.fields(), expected, "{}", descriptor.code());
+    }
 }
 
 #[test]

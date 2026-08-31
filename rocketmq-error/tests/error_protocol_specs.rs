@@ -5,7 +5,7 @@ use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RemotingResponseCode;
 use rocketmq_error::ALL_ERROR_SPECS;
-use rocketmq_error::STORAGE_COMMIT_LOG_CORRUPT_RECORD;
+use rocketmq_error::STORAGE_STATE_CORRUPTED;
 
 #[test]
 fn selected_error_kinds_have_protocol_primitives() {
@@ -67,7 +67,7 @@ fn protocol_primitive_numeric_values_match_external_boundary_numbers() {
 
 #[test]
 fn storage_corruption_descriptor_uses_data_loss_status() {
-    let projection = STORAGE_COMMIT_LOG_CORRUPT_RECORD.projection();
+    let projection = STORAGE_STATE_CORRUPTED.projection();
 
     assert_eq!(projection.remoting().code, RemotingResponseCode::SystemError);
     assert_eq!(projection.grpc().payload, GrpcPayloadCode::InternalError);

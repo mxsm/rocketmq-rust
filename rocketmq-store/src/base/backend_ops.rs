@@ -71,7 +71,6 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreErrorKind;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
@@ -198,11 +197,10 @@ impl Default for StoreHealthSnapshot {
 }
 
 /// Typed, cloneable projection of the most recent canonical flush failure.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoreHealthError {
-    pub kind: StoreErrorKind,
+    pub descriptor: &'static rocketmq_error::ErrorDescriptor,
     pub component: StoreComponent,
-    pub detail: String,
 }
 
 #[derive(Clone)]
@@ -232,10 +230,10 @@ impl StoreHealthRecorder {
     }
 
     pub(crate) fn last_flush_error(&self) -> Option<StoreHealthError> {
-        self.last_flush_error
+        *self
+            .last_flush_error
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
     }
 }
 
@@ -264,9 +262,8 @@ pub struct MessageStoreShutdownReport {
 impl From<&StoreError> for StoreHealthError {
     fn from(error: &StoreError) -> Self {
         Self {
-            kind: error.kind(),
+            descriptor: error.descriptor(),
             component: error.component(),
-            detail: error.to_string(),
         }
     }
 }

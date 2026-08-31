@@ -50,7 +50,6 @@ use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::StorePorts;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::WriteLeaseToken;
@@ -324,11 +323,11 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     {
         let append = self
             .shared_append()
-            .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
         let outcome = append
             .put_message(message)
             .await
-            .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
         Ok(store_append_receipt(
             outcome.result,
             outcome.appended_watermark,
@@ -342,11 +341,11 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     {
         let append = self
             .shared_append()
-            .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
         let outcome = append
             .put_messages(batch)
             .await
-            .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
         Ok(store_append_receipt(
             outcome.result,
             outcome.appended_watermark,
@@ -563,9 +562,9 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     where
         MS: BrokerAdminStore,
     {
-        let store = self
-            .store()
-            .map_err(|_| BackendStoreError::new(StoreErrorKind::NotStarted, StoreOperation::Admin))?;
+        let store = self.store().map_err(|_| {
+            BackendStoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin)
+        })?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 

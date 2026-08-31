@@ -32,7 +32,6 @@ use crate::runtime::StoreRuntimeScope;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 
 const DEFAULT_BATCH_SIZE: usize = 64;
@@ -151,13 +150,13 @@ impl MappedFileRetirementService<ManagedLifecycleRuntime> {
             })
             .await
             .map_err(|source| {
-                StoreError::new(StoreErrorKind::Storage, StoreOperation::Admin)
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
                     .in_component(StoreComponent::MappedFile)
                     .with_detail("failed to execute managed Store-destroy retirement submission")
                     .with_source(source)
             })?
             .map_err(|source| {
-                StoreError::new(StoreErrorKind::Storage, StoreOperation::Admin)
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
                     .in_component(StoreComponent::MappedFile)
                     .with_detail("managed Store-destroy retirement submission failed closed")
                     .with_source(source)
@@ -241,10 +240,12 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
         ) {
             self.accepting.store(false, Ordering::Release);
             task_group.cancel();
-            return Err(StoreError::new(StoreErrorKind::Unavailable, StoreOperation::Start)
-                .in_component(StoreComponent::MappedFile)
-                .with_detail("failed to schedule the managed mapped-file retirement service")
-                .with_source(source));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_detail("failed to schedule the managed mapped-file retirement service")
+                    .with_source(source),
+            );
         }
 
         self.task_group = Some(task_group);
@@ -262,7 +263,7 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
             let report = task_group.shutdown(self.config.task_shutdown_timeout).await;
             if let Err(error) = crate::runtime::shutdown_report_result("mapped-file retirement service", report) {
                 first_error = Some(
-                    StoreError::new(StoreErrorKind::Timeout, StoreOperation::Shutdown)
+                    StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Shutdown)
                         .in_component(StoreComponent::MappedFile)
                         .with_detail("managed mapped-file retirement task group did not drain")
                         .with_source(error),
@@ -300,7 +301,7 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(
-                            StoreError::new(StoreErrorKind::Timeout, operation)
+                            StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, operation)
                                 .in_component(StoreComponent::MappedFile)
                                 .with_detail("managed mapped-file retirement drain failed")
                                 .with_source(error),

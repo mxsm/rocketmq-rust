@@ -178,7 +178,6 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
@@ -757,7 +756,7 @@ impl LocalFileMessageStore {
         )
         .await
         .map_err(|_| {
-            StoreError::new(StoreErrorKind::Timeout, StoreOperation::Flush)
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Flush)
                 .in_component(StoreComponent::CommitLog)
                 .with_detail("release-checkpoint write barrier deadline expired")
         })?;
@@ -768,42 +767,51 @@ impl LocalFileMessageStore {
             .wait_until_release_checkpoint_drained(deadline)
             .await
         {
-            return Err(StoreError::new(StoreErrorKind::Timeout, StoreOperation::Flush)
-                .with_detail("release-checkpoint derived-state barrier deadline expired"));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Flush)
+                    .with_detail("release-checkpoint derived-state barrier deadline expired"),
+            );
         }
 
         let appended_offset = self.commit_log.get_max_offset();
         let commit_log_flush = self.commit_log.release_checkpoint_flush_handle();
         let consume_queue_store = self.consume_queue_store.clone();
-        let store_checkpoint = self
-            .store_checkpoint
-            .clone()
-            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Flush, "Store checkpoint is unavailable"))?;
+        let store_checkpoint = self.store_checkpoint.clone().ok_or_else(|| {
+            StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Flush)
+                .with_detail("Store checkpoint is unavailable")
+        })?;
         let index_service = self.index_service.clone();
         let (durable_offset, index_offset) = self
             .runtime_scope
             .spawn_io_until("local-store.release-checkpoint-flush", deadline, move || {
                 let durable_offset = commit_log_flush
                     .try_flush(0)
-                    .map_err(|error| StoreError::mapped_file(StoreOperation::Flush, error))?
+                    .map_err(|error| {
+                        StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                            .in_component(StoreComponent::MappedFile)
+                            .with_source(error)
+                    })?
                     .durable;
                 FlushConsumeQueueService::flush_once_blocking(&consume_queue_store, &store_checkpoint, 0);
-                let index_offset = index_service
-                    .flush_release_checkpoint()
-                    .map_err(|error| StoreError::mapped_file(StoreOperation::Flush, error))?;
+                let index_offset = index_service.flush_release_checkpoint().map_err(|error| {
+                    StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                        .in_component(StoreComponent::MappedFile)
+                        .with_source(error)
+                })?;
                 Ok::<_, StoreError>((durable_offset, index_offset))
             })
             .await
             .map_err(|error| {
-                StoreError::new(StoreErrorKind::Timeout, StoreOperation::Flush)
+                StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Flush)
                     .with_detail("release-checkpoint blocking flush failed")
                     .with_source(error)
             })??;
         if durable_offset != appended_offset {
-            return Err(StoreError::storage(
-                StoreOperation::Flush,
-                format!("release-checkpoint flush stopped at {durable_offset}, expected {appended_offset}"),
-            ));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Flush).with_detail(format!(
+                    "release-checkpoint flush stopped at {durable_offset}, expected {appended_offset}"
+                )),
+            );
         }
 
         let consume_queue_offset = self
@@ -817,7 +825,7 @@ impl LocalFileMessageStore {
             index_offset,
         };
         offsets.validate().map_err(|error| {
-            StoreError::new(StoreErrorKind::Corruption, StoreOperation::Flush)
+            StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Flush)
                 .with_detail("release-checkpoint offsets violate Store ordering")
                 .with_source(error)
         })?;
@@ -888,7 +896,9 @@ impl BackendOps for LocalFileMessageStore {
                     unique_key: request.unique_key.clone(),
                 })
                 .map_err(|error| {
-                    StoreError::storage(StoreOperation::Admin, "Extended Timer Recall failed").with_source(error)
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
+                        .with_detail("Extended Timer Recall failed")
+                        .with_source(error)
                 })?;
             Ok(match result {
                 crate::timer::timeline::RecallResult::Cancelled { .. } => TimerRecallStatus::Cancelled,

@@ -47,7 +47,6 @@ use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerStoreMode;
 use tracing::debug;
@@ -359,7 +358,7 @@ impl SendMessageStoreCapability {
 }
 
 fn append_store_unavailable() -> StoreError {
-    StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append)
+    StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append)
 }
 
 impl MessageAppender<MessageExtBrokerInner> for SendMessageStoreCapability {

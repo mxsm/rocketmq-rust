@@ -14,7 +14,8 @@
 
 use std::path::PathBuf;
 
-use rocketmq_error::DomainError;
+use rocketmq_error::STORAGE_IO_FAILED;
+use rocketmq_error::STORAGE_WRITE_FAILED;
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
 use rocketmq_store_api::AppendReceipt;
@@ -29,7 +30,6 @@ use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerSnapshotFile;
@@ -41,6 +41,7 @@ use rocketmq_store_api::TIMER_SNAPSHOT_SCHEMA_VERSION;
 #[test]
 fn storage_api_is_consumed_only_through_root_exports() {
     let source = include_str!("../src/lib.rs");
+    let error_source = include_str!("../src/error.rs");
     for module in ["capability", "contract", "error", "progress"] {
         assert!(
             !source.contains(&format!("pub mod {module};")),
@@ -48,9 +49,11 @@ fn storage_api_is_consumed_only_through_root_exports() {
         );
     }
 
-    let error =
-        StoreError::new(StoreErrorKind::Storage, StoreOperation::Append).in_component(StoreComponent::CommitLog);
-    assert_eq!("STORE_STORAGE_FAILED", DomainError::code(&error).as_str());
+    let error = StoreError::new(&STORAGE_WRITE_FAILED, StoreOperation::Append).in_component(StoreComponent::CommitLog);
+    assert_eq!("storage.write.failed", error.code().as_str());
+    assert!(!source.contains(concat!("StoreError", "Kind")));
+    assert!(!error_source.contains(concat!("StoreError", "Kind")));
+    assert!(!error_source.contains("impl DomainError for StoreError"));
 }
 
 #[test]
@@ -222,13 +225,10 @@ fn filesystem_failures_retain_io_sources_behind_store_error() {
         std::env::temp_dir().join(format!("rocketmq-store-api-missing-checkpoint-{}", std::process::id()));
     let checkpoint_error =
         hash_checkpoint_directory(&missing_checkpoint, 1).expect_err("a missing checkpoint directory must fail");
-    assert_eq!(StoreErrorKind::Io, checkpoint_error.kind());
+    assert_eq!(&STORAGE_IO_FAILED, checkpoint_error.descriptor());
     assert!(source_chain_contains_io(&checkpoint_error));
-    assert!(!checkpoint_error
-        .boundary_view()
-        .context()
-        .to_string()
-        .contains("missing-checkpoint"));
+    assert!(!checkpoint_error.to_string().contains("missing-checkpoint"));
+    assert!(!format!("{checkpoint_error:?}").contains("missing-checkpoint"));
 
     let mut manifest = TimerSnapshotManifest {
         schema_version: TIMER_SNAPSHOT_SCHEMA_VERSION,
@@ -258,13 +258,10 @@ fn filesystem_failures_retain_io_sources_behind_store_error() {
     let timer_error = manifest
         .validate_artifact_files(std::env::temp_dir())
         .expect_err("a missing timer artifact must fail");
-    assert_eq!(StoreErrorKind::Io, timer_error.kind());
+    assert_eq!(&STORAGE_IO_FAILED, timer_error.descriptor());
     assert!(source_chain_contains_io(&timer_error));
-    assert!(!timer_error
-        .boundary_view()
-        .context()
-        .to_string()
-        .contains("missing-timer"));
+    assert!(!timer_error.to_string().contains("missing-timer"));
+    assert!(!format!("{timer_error:?}").contains("missing-timer"));
 }
 
 #[test]

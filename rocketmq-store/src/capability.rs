@@ -48,7 +48,6 @@ use rocketmq_store_api::SelectResult;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
 use rocketmq_store_api::TimerRecallRequest;
@@ -806,38 +805,40 @@ pub const fn get_status_to_api(status: GetMessageStatus) -> GetStatus {
 /// Exact backend health error retained by the Broker admission projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoreHealthError {
-    kind: StoreErrorKind,
+    descriptor: &'static rocketmq_error::ErrorDescriptor,
     component: StoreComponent,
 }
 
 impl StoreHealthError {
-    /// Creates an exact projection from the backend kind.
-    pub const fn new(kind: StoreErrorKind) -> Self {
+    /// Creates a health projection from a canonical descriptor.
+    pub const fn new(descriptor: &'static rocketmq_error::ErrorDescriptor) -> Self {
         Self {
-            kind,
+            descriptor,
             component: StoreComponent::Store,
         }
     }
 
-    /// Creates a health projection with an exact component token.
-    pub const fn in_component(kind: StoreErrorKind, component: StoreComponent) -> Self {
-        Self { kind, component }
+    /// Creates a health projection with diagnostic component context.
+    pub const fn in_component(descriptor: &'static rocketmq_error::ErrorDescriptor, component: StoreComponent) -> Self {
+        Self { descriptor, component }
     }
 
     /// Creates an exact projection from one canonical store error.
     pub const fn from_error(error: &crate::base::backend_ops::StoreHealthError) -> Self {
         Self {
-            kind: error.kind,
+            descriptor: error.descriptor,
             component: error.component,
         }
     }
 
-    /// Returns the original low-cardinality backend token.
-    pub const fn backend_token(self) -> &'static str {
-        match self.component {
-            StoreComponent::Store | StoreComponent::Configuration => self.kind.as_str(),
-            component => component.as_str(),
-        }
+    /// Returns the canonical dotted health code.
+    pub const fn code(self) -> &'static str {
+        self.descriptor.code().as_str()
+    }
+
+    /// Returns diagnostic-only component context.
+    pub const fn component(self) -> StoreComponent {
+        self.component
     }
 }
 
@@ -887,7 +888,7 @@ impl StoreHealthSnapshot {
     pub fn canonical(&self) -> ApiStoreHealthSnapshot {
         ApiStoreHealthSnapshot {
             writable: self.writable,
-            last_error: self.last_error.map(|error| error.kind),
+            last_error: self.last_error.map(|error| error.descriptor),
             page_cache_busy: self.page_cache_busy,
             transient_pool_deficient: self.transient_pool_deficient,
             flush_backlog: ApiFlushBacklog {

@@ -115,6 +115,7 @@ use crate::message_store::local_file_message_store::CommitLogDispatchHandle;
 use crate::message_store::runtime_state::StoreRuntimeState;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 use crate::transfer::error::TransferResult;
@@ -125,6 +126,7 @@ use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObserva
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
+use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicyError;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
@@ -166,6 +168,13 @@ use self::handles::resolve_commit_log_confirm_offset;
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockRuntimeInfo;
+
+fn micro_batch_policy_store_error(error: MicroBatchPolicyError) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Start)
+        .in_component(StoreComponent::Configuration)
+        .with_detail("invalid CommitLog micro-batch policy")
+        .with_source(error)
+}
 
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
@@ -447,10 +456,11 @@ impl CommitLog {
         let readonly_paths = message_store_config.commit_log_readonly_paths();
         let mapped_file_queue = if message_store_config.enable_mapped_file_lifecycle_wave_b {
             if writable_paths.len() != 1 || !readonly_paths.is_empty() {
-                return Err(StoreError::storage(
-                    StoreOperation::Start,
-                    "managed mapped-file lifecycle does not support multipath CommitLog roots",
-                ));
+                return Err(
+                    StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Start)
+                        .in_component(StoreComponent::Configuration)
+                        .with_detail("managed mapped-file lifecycle does not support multipath CommitLog roots"),
+                );
             }
             MappedFileQueue::new(
                 writable_paths[0].to_string_lossy().into_owned(),
@@ -460,7 +470,10 @@ impl CommitLog {
         } else {
             let commit_log_paths = CommitLogPathSet::try_new(writable_paths, readonly_paths, mapped_file_size as u64)
                 .map_err(|error| {
-                StoreError::storage(StoreOperation::Start, "invalid CommitLog path set").with_source(error)
+                StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Start)
+                    .in_component(StoreComponent::Configuration)
+                    .with_detail("invalid CommitLog path set")
+                    .with_source(error)
             })?;
             MappedFileQueue::new_commit_log(
                 Arc::new(commit_log_paths),
@@ -500,12 +513,7 @@ impl CommitLog {
         } else {
             MicroBatchPolicy::disabled(message_store_config.commit_log_append_queue_bytes)
         }
-        .map_err(|error| {
-            StoreError::storage(
-                StoreOperation::Start,
-                format!("invalid CommitLog micro-batch policy: {error}"),
-            )
-        })?;
+        .map_err(micro_batch_policy_store_error)?;
         let append_processor = CommitLogAppendProcessor::new(CommitLogAppendDependencies {
             append: mapped_file_queue.append_handle(),
             message_store_config: Arc::clone(&message_store_config),
@@ -527,10 +535,10 @@ impl CommitLog {
             append_processor,
         )
         .map_err(|error| {
-            StoreError::storage(
-                StoreOperation::Start,
-                format!("failed to initialize CommitLog append sequencer: {error}"),
-            )
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
+                .in_component(StoreComponent::CommitLog)
+                .with_detail("failed to initialize CommitLog append sequencer")
+                .with_source(error)
         })?;
         Ok(Self {
             root: CommitLogRoot::new(CommitLogAdapter {
@@ -1001,7 +1009,12 @@ impl CommitLog {
                 );
                 Err(flush_error)
             }
-            (Err(unlock_error), Ok(_)) => Err(StoreError::mapped_file(StoreOperation::Shutdown, unlock_error)),
+            (Err(unlock_error), Ok(_)) => Err(StoreError::new(
+                &rocketmq_error::STORAGE_IO_FAILED,
+                StoreOperation::Shutdown,
+            )
+            .in_component(StoreComponent::MappedFile)
+            .with_source(unlock_error)),
         }
     }
 
@@ -2346,9 +2359,11 @@ impl CommitLog {
 
     /// Flushes the commit log and reports appended and durable watermarks.
     pub fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
-        self.mapped_file_queue
-            .try_flush(0)
-            .map_err(|source| StoreError::mapped_file(StoreOperation::Flush, source))
+        self.mapped_file_queue.try_flush(0).map_err(|source| {
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(source)
+        })
     }
 
     pub fn get_min_offset(&self) -> i64 {
@@ -2902,6 +2917,19 @@ mod tests {
     use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store_api::MasterEpoch;
     use rocketmq_store_api::WriteAuthority;
+
+    #[test]
+    fn micro_batch_policy_promotion_preserves_typed_source() {
+        let error = micro_batch_policy_store_error(MicroBatchPolicyError::ZeroMaxItems);
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.component(), StoreComponent::Configuration);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<MicroBatchPolicyError>())
+            .is_some());
+        assert!(!error.to_string().contains("max-items"));
+    }
 
     #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {

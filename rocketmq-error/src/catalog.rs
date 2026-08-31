@@ -217,14 +217,203 @@ define_error_catalog! {
             cli: CliExitCode::TEMPORARY_FAILURE,
         },
     }
-    /// Corrupt record encountered in the commit log.
-    STORAGE_COMMIT_LOG_CORRUPT_RECORD {
-        code: "storage.commit_log.corrupt_record",
-        condition: CanonicalCondition::DataLoss,
-        public_message: "Commit log record is corrupted",
+    /// Storage lifecycle operation attempted before startup completed.
+    STORAGE_LIFECYCLE_NOT_STARTED {
+        code: "storage.lifecycle.not_started",
+        condition: CanonicalCondition::FailedPrecondition,
+        public_message: "Storage service is not started",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Never,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::FailedPrecondition,
+            },
+            http: HttpStatusCode::SERVICE_UNAVAILABLE,
+            cli: CliExitCode::UNAVAILABLE,
+        },
+    }
+    /// Configured storage backend is unavailable.
+    STORAGE_BACKEND_UNAVAILABLE {
+        code: "storage.backend.unavailable",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Storage backend is unavailable",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Backoff,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Unavailable,
+            },
+            http: HttpStatusCode::SERVICE_UNAVAILABLE,
+            cli: CliExitCode::UNAVAILABLE,
+        },
+    }
+    /// Invalid request at the storage capability boundary.
+    STORAGE_REQUEST_INVALID {
+        code: "storage.request.invalid",
+        condition: CanonicalCondition::InvalidArgument,
+        public_message: "Storage request is invalid",
+        severity: ErrorSeverity::Info,
+        recovery_hint: RecoveryHint::Never,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::InvalidParameter,
+            grpc: {
+                payload: GrpcPayloadCode::BadRequest,
+                status: GrpcStatusCode::InvalidArgument,
+            },
+            http: HttpStatusCode::BAD_REQUEST,
+            cli: CliExitCode::USAGE,
+        },
+    }
+    /// Requested mapped file does not exist.
+    STORAGE_MAPPED_FILE_NOT_FOUND {
+        code: "storage.mapped_file.not_found",
+        condition: CanonicalCondition::NotFound,
+        public_message: "Mapped file was not found",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Never,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::QueryNotFound,
+            grpc: {
+                payload: GrpcPayloadCode::NotFound,
+                status: GrpcStatusCode::NotFound,
+            },
+            http: HttpStatusCode::NOT_FOUND,
+            cli: CliExitCode::NOT_FOUND,
+        },
+    }
+    /// Storage has no remaining capacity for the operation.
+    STORAGE_CAPACITY_EXHAUSTED {
+        code: "storage.capacity.exhausted",
+        condition: CanonicalCondition::ResourceExhausted,
+        public_message: "Storage capacity is exhausted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
-        fields: [fields::DECLARED_SIZE],
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::ResourceExhausted,
+            },
+            http: HttpStatusCode::INSUFFICIENT_STORAGE,
+            cli: CliExitCode::DATA,
+        },
+    }
+    /// Storage read operation failed.
+    STORAGE_READ_FAILED {
+        code: "storage.read.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Storage read failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// Storage write operation failed.
+    STORAGE_WRITE_FAILED {
+        code: "storage.write.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Storage write failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// Storage I/O operation failed.
+    STORAGE_IO_FAILED {
+        code: "storage.io.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Storage I/O operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// Storage state is corrupted.
+    STORAGE_STATE_CORRUPTED {
+        code: "storage.state.corrupted",
+        condition: CanonicalCondition::DataLoss,
+        public_message: "Storage state is corrupted",
+        severity: ErrorSeverity::Critical,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
         projection: {
             remoting: RemotingResponseCode::SystemError,
             grpc: {
@@ -233,6 +422,75 @@ define_error_catalog! {
             },
             http: HttpStatusCode::INTERNAL_SERVER_ERROR,
             cli: CliExitCode::DATA,
+        },
+    }
+    /// Storage operation exceeded its deadline.
+    STORAGE_OPERATION_TIMED_OUT {
+        code: "storage.operation.timed_out",
+        condition: CanonicalCondition::DeadlineExceeded,
+        public_message: "Storage operation timed out",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemBusy,
+            grpc: {
+                payload: GrpcPayloadCode::RequestTimeout,
+                status: GrpcStatusCode::DeadlineExceeded,
+            },
+            http: HttpStatusCode::GATEWAY_TIMEOUT,
+            cli: CliExitCode::TEMPORARY_FAILURE,
+        },
+    }
+    /// Storage operation is not implemented by the backend.
+    STORAGE_OPERATION_UNSUPPORTED {
+        code: "storage.operation.unsupported",
+        condition: CanonicalCondition::Unimplemented,
+        public_message: "Storage operation is unsupported",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Never,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::RequestCodeNotSupported,
+            grpc: {
+                payload: GrpcPayloadCode::Unsupported,
+                status: GrpcStatusCode::Unimplemented,
+            },
+            http: HttpStatusCode::BAD_REQUEST,
+            cli: CliExitCode::USAGE,
+        },
+    }
+    /// Internal storage failure without a more specific descriptor.
+    STORAGE_INTERNAL_FAILURE {
+        code: "storage.internal.failure",
+        condition: CanonicalCondition::Internal,
+        public_message: "Internal storage failure",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [
+            fields::STORE_OPERATION,
+            fields::STORE_COMPONENT,
+            fields::STORE_DETAIL_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
         },
     }
     /// Protocol version that this implementation does not support.
