@@ -555,9 +555,10 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return subscription_group_config_versioned_from_response(&response);
         }
-        Err(mq_client_err!(
+        Err(client_broker_err!(
             response.code(),
-            response.remark().map_or_else(String::new, |remark| remark.to_string())
+            response.remark().map_or_else(String::new, |remark| remark.to_string()),
+            broker_addr
         ))
     }
 }

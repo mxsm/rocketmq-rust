@@ -24,6 +24,10 @@
 pub mod core;
 
 #[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/consumer_observation.rs"]
+mod consumer_observation;
+
+#[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/exact_broker.rs"]
 mod exact_broker;
 

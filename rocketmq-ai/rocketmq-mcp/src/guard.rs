@@ -507,6 +507,8 @@ fn requires_explicit_cluster(tool_name: &str) -> bool {
             | "rocketmq_get_consumer_group_config_state"
             | "rocketmq_get_topic_stats"
             | "rocketmq_get_topic_config"
+            | "rocketmq_get_consumer_group_details"
+            | "rocketmq_get_consumer_progress"
     )
 }
 
@@ -556,6 +558,8 @@ mod tests {
             "rocketmq_get_proxy_drain_state",
             "rocketmq_get_topic_stats",
             "rocketmq_get_topic_config",
+            "rocketmq_get_consumer_group_details",
+            "rocketmq_get_consumer_progress",
         ] {
             let arguments = serde_json::json!({ "cluster": "   " }).as_object().unwrap().clone();
             let error = guard

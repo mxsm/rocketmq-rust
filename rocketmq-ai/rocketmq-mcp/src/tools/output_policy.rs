@@ -381,6 +381,13 @@ mod tests {
                     "retryable": false,
                     "logical_target": "broker-c",
                     "attributes": { "secret": "value" }
+                },
+                {
+                    "source": "consumer_connection",
+                    "code": "source_unavailable",
+                    "retryable": true,
+                    "logical_target": "broker-d",
+                    "client_id": "must not escape"
                 }
             ],
             "data": {}
@@ -388,10 +395,11 @@ mod tests {
         .unwrap();
 
         let failures = output["source_failures"].as_array().unwrap();
-        assert_eq!(failures.len(), 3);
-        assert_eq!(failures[0]["source"], "consumer_group_config");
-        assert_eq!(failures[1]["source"], "topic_config");
-        assert_eq!(failures[2]["source"], "topic_stats");
+        assert_eq!(failures.len(), 4);
+        assert_eq!(failures[0]["source"], "consumer_connection");
+        assert_eq!(failures[1]["source"], "consumer_group_config");
+        assert_eq!(failures[2]["source"], "topic_config");
+        assert_eq!(failures[3]["source"], "topic_stats");
         let serialized = output.to_string();
         assert!(!serialized.contains("backend_text"));
         assert!(!serialized.contains("address"));

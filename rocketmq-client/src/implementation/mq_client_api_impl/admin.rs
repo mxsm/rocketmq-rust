@@ -1494,9 +1494,10 @@ impl MQClientAPIImpl {
                 return rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats::decode(body.as_ref());
             }
         }
-        Err(mq_client_err!(
+        Err(client_broker_err!(
             response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string())
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
         ))
     }
 
