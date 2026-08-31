@@ -17,11 +17,11 @@
 use std::error::Error as StdError;
 use std::fmt;
 
+use rocketmq_error::fields;
 use rocketmq_error::DomainError;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorKind;
-use rocketmq_error::Sensitive;
 
 type BoxError = Box<dyn StdError + Send + Sync>;
 
@@ -375,10 +375,10 @@ impl DomainError for StoreError {
 
     fn context(&self) -> ErrorContext {
         let mut context = ErrorContext::new()
-            .with_field("store_operation", self.operation.as_str())
-            .with_field("store_component", self.component.as_str());
-        if let Some(detail) = &self.detail {
-            context.push_sensitive("store_detail", Sensitive::new(detail.clone()));
+            .with_text(fields::STORE_OPERATION, self.operation.as_str())
+            .with_text(fields::STORE_COMPONENT, self.component.as_str());
+        if self.detail.is_some() {
+            context = context.with_secret_presence(fields::STORE_DETAIL_PRESENT);
         }
         context
     }
@@ -413,16 +413,11 @@ mod tests {
             .with_source(io::Error::other("disk failure"));
 
         assert_eq!(Some("disk failure"), error.source().map(ToString::to_string).as_deref());
-        assert_eq!(
-            "<redacted>",
-            error
-                .boundary_view()
-                .context()
-                .fields()
-                .iter()
-                .find(|field| field.key == "store_detail")
-                .expect("detail field")
-                .value
-        );
+        assert!(error
+            .boundary_view()
+            .context()
+            .to_string()
+            .contains("store_detail=<redacted>"));
+        assert!(error.boundary_view().context().public_fields().next().is_none());
     }
 }

@@ -83,15 +83,7 @@ fn invariant_failure_is_not_a_string_catch_all() {
 
     assert_eq!(ErrorKind::Internal, error.kind());
     assert!(error.source().is_none());
-    assert_eq!(
-        "request owner must outlive its worker",
-        error
-            .boundary_view()
-            .context()
-            .fields()
-            .iter()
-            .find(|field| field.key == "invariant")
-            .expect("invariant context")
-            .value
-    );
+    let context = error.boundary_view().context().to_string();
+    assert_eq!(context, "invariant=<redacted>");
+    assert!(!context.contains("request owner must outlive its worker"));
 }

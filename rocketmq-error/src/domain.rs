@@ -17,6 +17,7 @@
 use std::error::Error as StdError;
 
 use crate::descriptor::ErrorCode;
+use crate::fields;
 use crate::AuthError;
 use crate::BoundaryErrorView;
 use crate::ControllerError;
@@ -34,7 +35,6 @@ use crate::RedactionPolicy;
 use crate::RetryClass;
 use crate::RocketMQError;
 use crate::RpcClientError;
-use crate::Sensitive;
 use crate::SerializationError;
 use crate::ToolsError;
 use crate::UnifiedServiceError;
@@ -50,7 +50,7 @@ pub trait DomainError: StdError + Send + Sync + 'static {
 
     /// Returns redaction-aware context safe for boundary adapters.
     fn context(&self) -> ErrorContext {
-        ErrorContext::new().with_sensitive("domain_error", Sensitive::new(self.to_string()))
+        ErrorContext::new().with_secret_presence(fields::DOMAIN_ERROR_PRESENT)
     }
 
     /// Returns the immutable policy record for this error.
@@ -176,7 +176,7 @@ impl DomainError for FilterError {
     fn context(&self) -> ErrorContext {
         match self {
             FilterError::Compile(error) => error.context(),
-            _ => ErrorContext::new().with_sensitive("domain_error", Sensitive::new(self.to_string())),
+            _ => ErrorContext::new().with_secret_presence(fields::DOMAIN_ERROR_PRESENT),
         }
     }
 }

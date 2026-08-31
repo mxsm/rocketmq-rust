@@ -15,11 +15,14 @@
 use std::collections::HashSet;
 
 use rocketmq_error::descriptor_by_code;
+use rocketmq_error::fields;
 use rocketmq_error::CanonicalCondition;
 use rocketmq_error::CliExitCode;
+use rocketmq_error::ContextVisibility;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::ErrorSeverity;
+use rocketmq_error::FieldValueKind;
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
@@ -247,13 +250,68 @@ fn public_messages_and_protocol_values_are_boundary_safe() {
 }
 
 #[test]
+fn representative_descriptor_field_schemas_are_exact_and_ordered() {
+    let expected = [
+        (
+            PROTOCOL_HEADER_INVALID,
+            vec![
+                fields::OPERATION_DIAGNOSTIC.schema(),
+                fields::INVALID_VALUE_PRESENT.schema(),
+            ],
+        ),
+        (ROUTE_TOPIC_NOT_FOUND, vec![fields::TOPIC.schema()]),
+        (AUTH_CREDENTIALS_INVALID, vec![fields::CREDENTIALS_PRESENT.schema()]),
+        (AUTH_PERMISSION_DENIED, vec![fields::OPERATION.schema()]),
+        (TRANSPORT_ADMISSION_QUEUE_SATURATED, vec![fields::REMOTE_ADDR.schema()]),
+        (CONTROLLER_LEADERSHIP_NOT_LEADER, vec![fields::LEADER_ID.schema()]),
+        (
+            TRANSPORT_CONNECTION_TIMEOUT,
+            vec![fields::TIMEOUT_MS.schema(), fields::REMOTE_ADDR.schema()],
+        ),
+        (STORAGE_COMMIT_LOG_CORRUPT_RECORD, vec![fields::DECLARED_SIZE.schema()]),
+        (PROTOCOL_VERSION_UNSUPPORTED, vec![fields::ORDINAL.schema()]),
+        (
+            CORE_INTERNAL_FAILURE,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+    ];
+
+    for (descriptor, fields) in expected {
+        assert_eq!(descriptor.fields(), fields, "{}", descriptor.code());
+        let mut names = HashSet::new();
+        for schema in descriptor.fields() {
+            assert!(names.insert(schema.name()), "duplicate {}", schema.name());
+            assert!(schema.text_byte_limit().is_none_or(|limit| limit <= 256));
+        }
+    }
+
+    assert_eq!(
+        PROTOCOL_HEADER_INVALID.fields()[0].visibility(),
+        ContextVisibility::Diagnostic
+    );
+    assert_eq!(ROUTE_TOPIC_NOT_FOUND.fields()[0].value_kind(), FieldValueKind::Text);
+    assert_eq!(
+        CONTROLLER_LEADERSHIP_NOT_LEADER.fields()[0].value_kind(),
+        FieldValueKind::U64
+    );
+    assert_eq!(
+        STORAGE_COMMIT_LOG_CORRUPT_RECORD.fields()[0].value_kind(),
+        FieldValueKind::I64
+    );
+    assert_eq!(
+        AUTH_CREDENTIALS_INVALID.fields()[0].value_kind(),
+        FieldValueKind::Presence
+    );
+}
+
+#[test]
 fn descriptor_construction_and_catalog_macro_remain_private() {
     let descriptor_source = include_str!("../src/descriptor.rs");
     let projection_source = include_str!("../src/projection.rs");
     let catalog_source = include_str!("../src/catalog.rs");
     let crate_root = include_str!("../src/lib.rs");
 
-    assert!(descriptor_source.contains("pub(crate) const fn new("));
+    assert!(descriptor_source.contains("pub(crate) const fn try_new("));
     assert!(projection_source.contains("pub(crate) const fn new("));
     assert!(!descriptor_source.contains("pub code: ErrorCode"));
     assert!(!projection_source.contains("pub remoting: RemotingSpec"));

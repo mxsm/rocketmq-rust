@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use crate::fields;
 use crate::ErrorContext;
 
 /// The category of a SQL filter compilation failure.
@@ -121,14 +122,14 @@ impl FilterCompileError {
     /// Returns structured, redaction-safe context for this compile failure.
     pub fn context(&self) -> ErrorContext {
         let context = ErrorContext::new()
-            .with_field("filter_compile_kind", format!("{:?}", self.kind))
-            .with_field("filter_compile_stage", format!("{:?}", self.stage));
+            .with_text(fields::FILTER_COMPILE_KIND, format!("{:?}", self.kind))
+            .with_text(fields::FILTER_COMPILE_STAGE, format!("{:?}", self.stage));
         let context = match self.position {
-            Some(position) => context.with_field("filter_compile_position", position.to_string()),
+            Some(position) => context.with_u64(fields::FILTER_COMPILE_POSITION, position as u64),
             None => context,
         };
         match self.source {
-            Some(source) => context.with_field("filter_compile_source", format!("{:?}", source)),
+            Some(source) => context.with_text(fields::FILTER_COMPILE_SOURCE, format!("{:?}", source)),
             None => context,
         }
     }

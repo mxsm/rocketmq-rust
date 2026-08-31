@@ -14,6 +14,8 @@
 
 use crate::descriptor::ErrorCode;
 use crate::descriptor::ErrorDescriptor;
+use crate::field::fields;
+use crate::field::FieldSchema;
 use crate::projection::ProjectionSpec;
 use crate::CanonicalCondition;
 use crate::CliExitCode;
@@ -38,6 +40,7 @@ macro_rules! define_error_catalog {
                 public_message: $public_message:literal,
                 severity: $severity:path,
                 recovery_hint: $recovery_hint:path,
+                fields: [$($field:path),* $(,)?],
                 projection: {
                     remoting: $remoting:path,
                     grpc: {
@@ -57,8 +60,9 @@ macro_rules! define_error_catalog {
                     Some(code) => code,
                     None => panic!("invalid canonical error code"),
                 };
+                const FIELDS: &[FieldSchema] = &[$($field.schema()),*];
 
-                ErrorDescriptor::new(
+                match ErrorDescriptor::try_new(
                     CODE,
                     $condition,
                     $public_message,
@@ -70,7 +74,11 @@ macro_rules! define_error_catalog {
                         HttpSpec::new($http),
                         CliSpec::new($cli),
                     ),
-                )
+                    FIELDS,
+                ) {
+                    Some(descriptor) => descriptor,
+                    None => panic!("invalid descriptor field list"),
+                }
             };
         )+
 
@@ -90,6 +98,7 @@ define_error_catalog! {
         public_message: "Request header is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::INVALID_VALUE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::InvalidParameter,
             grpc: {
@@ -107,6 +116,7 @@ define_error_catalog! {
         public_message: "Topic route was not found",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::RefreshRoute,
+        fields: [fields::TOPIC],
         projection: {
             remoting: RemotingResponseCode::TopicNotExist,
             grpc: {
@@ -124,6 +134,7 @@ define_error_catalog! {
         public_message: "Authentication credentials are invalid",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::RefreshCredentials,
+        fields: [fields::CREDENTIALS_PRESENT],
         projection: {
             remoting: RemotingResponseCode::NoPermission,
             grpc: {
@@ -141,6 +152,7 @@ define_error_catalog! {
         public_message: "Permission was denied",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        fields: [fields::OPERATION],
         projection: {
             remoting: RemotingResponseCode::NoPermission,
             grpc: {
@@ -158,6 +170,7 @@ define_error_catalog! {
         public_message: "Transport admission queue is saturated",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        fields: [fields::REMOTE_ADDR],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {
@@ -175,6 +188,7 @@ define_error_catalog! {
         public_message: "Controller is not the leader",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::RefreshLeader,
+        fields: [fields::LEADER_ID],
         projection: {
             remoting: RemotingResponseCode::ControllerNotLeader,
             grpc: {
@@ -192,6 +206,7 @@ define_error_catalog! {
         public_message: "Transport connection timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        fields: [fields::TIMEOUT_MS, fields::REMOTE_ADDR],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {
@@ -209,6 +224,7 @@ define_error_catalog! {
         public_message: "Commit log record is corrupted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::DECLARED_SIZE],
         projection: {
             remoting: RemotingResponseCode::SystemError,
             grpc: {
@@ -226,6 +242,7 @@ define_error_catalog! {
         public_message: "Protocol version is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        fields: [fields::ORDINAL],
         projection: {
             remoting: RemotingResponseCode::RequestCodeNotSupported,
             grpc: {
@@ -243,6 +260,7 @@ define_error_catalog! {
         public_message: "Internal error",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
             grpc: {

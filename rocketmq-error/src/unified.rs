@@ -33,7 +33,9 @@ pub use crate::observability_error::ObservabilityError;
 
 use crate::boundary::BoundaryErrorView;
 use crate::context::ErrorContext;
-use crate::context::Sensitive;
+use crate::field::FieldKey;
+use crate::field::SecretPresenceField;
+use crate::fields;
 use crate::kind::ErrorKind;
 use crate::shared::SharedRocketMQError;
 use crate::spec::ErrorSpec;
@@ -752,151 +754,149 @@ impl RocketMQError {
     /// Return redaction-aware structured context for this error.
     ///
     /// The returned context is a snapshot derived from the current enum variant.
-    /// Sensitive details are represented through [`Sensitive`] so external
-    /// adapters can safely render the context without leaking raw values.
+    /// Secret-bearing details are represented only by value-free presence
+    /// markers so adapters cannot observe the original input.
     pub fn context(&self) -> ErrorContext {
         match self {
             Self::Shared(error) => error.as_error().context(),
-            Self::Network(error) => {
-                ErrorContext::new().with_sensitive("addr", Sensitive::new(error.addr().to_string()))
-            }
-            Self::Serialization(error) => redacted_context("serialization_error", error.to_string()),
-            Self::Protocol(error) => ErrorContext::new().with_field("protocol_error", error.to_string()),
-            Self::Rpc(error) => redacted_context("rpc_error", error.to_string()),
-            Self::Authentication(error) => redacted_context("auth_error", error.to_string()),
-            Self::Controller(error) => redacted_context("controller_error", error.to_string()),
-            Self::InvalidProperty(property) => ErrorContext::new().with_field("property", property.as_str()),
-            Self::BrokerNotFound { name } => ErrorContext::new().with_field("broker", name.as_str()),
-            Self::BrokerRegistrationFailed { name, reason } => ErrorContext::new()
-                .with_field("broker", name.as_str())
-                .with_field("reason", reason.as_str()),
+            Self::Network(error) => ErrorContext::new().with_text(fields::ADDR, error.addr()),
+            Self::Serialization(_) => secret_presence_context(fields::SERIALIZATION_ERROR_PRESENT),
+            Self::Protocol(_) => secret_presence_context(fields::PROTOCOL_ERROR_PRESENT),
+            Self::Rpc(_) => secret_presence_context(fields::RPC_ERROR_PRESENT),
+            Self::Authentication(_) => secret_presence_context(fields::AUTH_ERROR_PRESENT),
+            Self::Controller(_) => secret_presence_context(fields::CONTROLLER_ERROR_PRESENT),
+            Self::InvalidProperty(property) => ErrorContext::new().with_text(fields::PROPERTY, property),
+            Self::BrokerNotFound { name } => ErrorContext::new().with_text(fields::BROKER, name),
+            Self::BrokerRegistrationFailed { name, .. } => ErrorContext::new()
+                .with_text(fields::BROKER, name)
+                .with_secret_presence(fields::REASON_PRESENT),
             Self::BrokerOperationFailed {
                 operation,
                 code,
-                message,
+                message: _,
                 broker_addr,
             } => {
                 let mut context = ErrorContext::new()
-                    .with_field("operation", *operation)
-                    .with_field("broker_code", code.to_string())
-                    .with_field("message", message.as_str());
+                    .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                    .with_i64(fields::BROKER_CODE, i64::from(*code))
+                    .with_secret_presence(fields::MESSAGE_PRESENT);
                 if let Some(addr) = broker_addr {
-                    context = context.with_sensitive("broker_addr", Sensitive::new(addr.clone()));
+                    context = context.with_text(fields::BROKER_ADDR, addr);
                 }
                 context
             }
-            Self::TopicNotExist { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
+            Self::TopicNotExist { topic } => ErrorContext::new().with_text(fields::TOPIC, topic),
             Self::QueueNotExist { topic, queue_id } => ErrorContext::new()
-                .with_field("topic", topic.as_str())
-                .with_field("queue_id", queue_id.to_string()),
-            Self::SubscriptionGroupNotExist { group } => ErrorContext::new().with_field("group", group.as_str()),
+                .with_text(fields::TOPIC, topic)
+                .with_i64(fields::QUEUE_ID, i64::from(*queue_id)),
+            Self::SubscriptionGroupNotExist { group } => ErrorContext::new().with_text(fields::GROUP, group),
             Self::QueueIdOutOfRange { topic, queue_id, max } => ErrorContext::new()
-                .with_field("topic", topic.as_str())
-                .with_field("queue_id", queue_id.to_string())
-                .with_field("max_queue_id", max.to_string()),
+                .with_text(fields::TOPIC, topic)
+                .with_i64(fields::QUEUE_ID, i64::from(*queue_id))
+                .with_i64(fields::MAX_QUEUE_ID, i64::from(*max)),
             Self::MessageTooLarge { actual, limit } => ErrorContext::new()
-                .with_field("actual_bytes", actual.to_string())
-                .with_field("limit_bytes", limit.to_string()),
-            Self::MessageValidationFailed { reason } => ErrorContext::new().with_field("reason", reason.as_str()),
+                .with_u64(fields::ACTUAL_BYTES, *actual as u64)
+                .with_u64(fields::LIMIT_BYTES, *limit as u64),
+            Self::MessageValidationFailed { .. } => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
             Self::RetryLimitExceeded { group, current, max } => ErrorContext::new()
-                .with_field("group", group.as_str())
-                .with_field("current", current.to_string())
-                .with_field("max", max.to_string()),
+                .with_text(fields::GROUP, group)
+                .with_i64(fields::CURRENT, i64::from(*current))
+                .with_i64(fields::MAX, i64::from(*max)),
             Self::TransactionRejected => ErrorContext::new(),
-            Self::BrokerPermissionDenied { operation } => {
-                ErrorContext::new().with_field("operation", operation.as_str())
-            }
+            Self::BrokerPermissionDenied { operation } => ErrorContext::new().with_text(fields::OPERATION, operation),
             Self::NotMasterBroker { master_address } => {
-                ErrorContext::new().with_sensitive("master_address", Sensitive::new(master_address.clone()))
+                ErrorContext::new().with_text(fields::MASTER_ADDRESS, master_address)
             }
-            Self::MessageLookupFailed { offset } => ErrorContext::new().with_field("offset", offset.to_string()),
-            Self::QueryNotFound { resource } => ErrorContext::new().with_field("resource", resource.as_str()),
-            Self::TopicSendingForbidden { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
-            Self::BrokerAsyncTaskFailed { task, context, .. } => ErrorContext::new()
-                .with_field("task", *task)
-                .with_sensitive("context", Sensitive::new(context.clone())),
-            Self::RequestBodyInvalid { operation, reason } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_field("reason", reason.as_str()),
-            Self::RequestBodySource { operation, source } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_sensitive("source", Sensitive::new(source.to_string())),
-            Self::RequestHeaderError(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
-            Self::RequestHeaderSource { operation, source } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_sensitive("source", Sensitive::new(source.to_string())),
-            Self::AuthenticationSource { operation, source } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_sensitive("source", Sensitive::new(source.to_string())),
-            Self::ResponseProcessFailed { operation, reason } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_field("reason", reason.as_str()),
-            Self::RouteNotFound { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
-            Self::RouteInconsistent { topic, reason } => ErrorContext::new()
-                .with_field("topic", topic.as_str())
-                .with_field("reason", reason.as_str()),
-            Self::RouteRegistrationConflict { broker_name, reason } => ErrorContext::new()
-                .with_field("broker", broker_name.as_str())
-                .with_field("reason", reason.as_str()),
+            Self::MessageLookupFailed { offset } => ErrorContext::new().with_i64(fields::OFFSET, *offset),
+            Self::QueryNotFound { resource } => ErrorContext::new().with_text(fields::RESOURCE, resource),
+            Self::TopicSendingForbidden { topic } => ErrorContext::new().with_text(fields::TOPIC, topic),
+            Self::BrokerAsyncTaskFailed { task, .. } => ErrorContext::new()
+                .with_text(fields::TASK, *task)
+                .with_secret_presence(fields::CONTEXT_PRESENT),
+            Self::RequestBodyInvalid { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::RequestBodySource { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_secret_presence(fields::SOURCE_DETAIL_PRESENT),
+            Self::RequestHeaderError(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+            Self::RequestHeaderSource { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_secret_presence(fields::SOURCE_DETAIL_PRESENT),
+            Self::AuthenticationSource { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_secret_presence(fields::SOURCE_DETAIL_PRESENT),
+            Self::ResponseProcessFailed { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::RouteNotFound { topic } => ErrorContext::new().with_text(fields::TOPIC, topic),
+            Self::RouteInconsistent { topic, .. } => ErrorContext::new()
+                .with_text(fields::TOPIC, topic)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::RouteRegistrationConflict { broker_name, .. } => ErrorContext::new()
+                .with_text(fields::BROKER, broker_name)
+                .with_secret_presence(fields::REASON_PRESENT),
             Self::RouteVersionConflict { expected, actual } => ErrorContext::new()
-                .with_field("expected", expected.to_string())
-                .with_field("actual", actual.to_string()),
-            Self::ClusterNotFound { cluster } => ErrorContext::new().with_field("cluster", cluster.as_str()),
+                .with_u64(fields::EXPECTED_U64, *expected)
+                .with_u64(fields::ACTUAL_U64, *actual),
+            Self::ClusterNotFound { cluster } => ErrorContext::new().with_text(fields::CLUSTER, cluster),
             Self::ClientNotStarted
             | Self::ClientAlreadyStarted
             | Self::ClientShuttingDown
             | Self::ProducerNotAvailable
             | Self::ConsumerNotAvailable => ErrorContext::new(),
             Self::ClientInvalidState { expected, actual } => ErrorContext::new()
-                .with_field("expected", *expected)
-                .with_field("actual", actual.as_str()),
+                .with_text(fields::EXPECTED_STATE, *expected)
+                .with_text(fields::ACTUAL_STATE, actual),
             Self::Tools(error) => error.context(),
             Self::Filter(FilterError::Compile(error)) => error.context(),
-            Self::Filter(error) => ErrorContext::new().with_field("filter_error", error.to_string()),
+            Self::Filter(_) => ErrorContext::new().with_secret_presence(fields::FILTER_ERROR_PRESENT),
             Self::Observability(error) => error.context(),
-            Self::StorageReadFailed { path, reason } | Self::StorageWriteFailed { path, reason } => ErrorContext::new()
-                .with_sensitive("path", Sensitive::new(path.clone()))
-                .with_sensitive("reason", Sensitive::new(reason.clone())),
-            Self::StorageCorrupted { path } | Self::StorageOutOfSpace { path } | Self::StorageLockFailed { path } => {
-                ErrorContext::new().with_sensitive("path", Sensitive::new(path.clone()))
+            Self::StorageReadFailed { .. } | Self::StorageWriteFailed { .. } => ErrorContext::new()
+                .with_secret_presence(fields::PATH_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::StorageCorrupted { .. } | Self::StorageOutOfSpace { .. } | Self::StorageLockFailed { .. } => {
+                ErrorContext::new().with_secret_presence(fields::PATH_PRESENT)
             }
-            Self::ConfigParseFailed { key, reason } => ErrorContext::new()
-                .with_field("key", *key)
-                .with_sensitive("reason", Sensitive::new(reason.clone())),
-            Self::ConfigMissing { key } => ErrorContext::new().with_field("key", *key),
-            Self::ConfigInvalidValue { key, value, reason } => ErrorContext::new()
-                .with_field("key", *key)
-                .with_sensitive("value", Sensitive::new(value.clone()))
-                .with_sensitive("reason", Sensitive::new(reason.clone())),
-            Self::AuthConfigInvalid { key, reason } => ErrorContext::new()
-                .with_field("key", *key)
-                .with_sensitive("reason", Sensitive::new(reason.clone())),
-            Self::AuthHotReloadFailed { path, reason } => ErrorContext::new()
-                .with_sensitive("path", Sensitive::new(path.clone()))
-                .with_sensitive("reason", Sensitive::new(reason.clone())),
-            Self::ControllerNotLeader { leader_id } => ErrorContext::new().with_field(
-                "leader_id",
-                leader_id.map_or_else(|| "unknown".to_string(), |id| id.to_string()),
-            ),
-            Self::ControllerRaftError { reason } | Self::ControllerSnapshotFailed { reason } => {
-                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
+            Self::ConfigParseFailed { key, .. } => ErrorContext::new()
+                .with_text(fields::KEY, *key)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::ConfigMissing { key } => ErrorContext::new().with_text(fields::KEY, *key),
+            Self::ConfigInvalidValue { key, .. } => ErrorContext::new()
+                .with_text(fields::KEY, *key)
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::AuthConfigInvalid { key, .. } => ErrorContext::new()
+                .with_text(fields::KEY, *key)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::AuthHotReloadFailed { .. } => ErrorContext::new()
+                .with_secret_presence(fields::PATH_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::ControllerNotLeader { leader_id } => match leader_id {
+                Some(leader_id) => ErrorContext::new().with_u64(fields::LEADER_ID, *leader_id),
+                None => ErrorContext::new(),
+            },
+            Self::ControllerRaftError { .. } | Self::ControllerSnapshotFailed { .. } => {
+                ErrorContext::new().with_secret_presence(fields::REASON_PRESENT)
             }
             Self::ControllerConsensusTimeout { operation, timeout_ms } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_field("timeout_ms", timeout_ms.to_string()),
-            Self::IO(error) => redacted_context("io_error", error.to_string()),
-            Self::IllegalArgument(message) => ErrorContext::new().with_field("message", message.as_str()),
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_u64(fields::TIMEOUT_MS, *timeout_ms),
+            Self::IO(_) => secret_presence_context(fields::IO_ERROR_PRESENT),
+            Self::IllegalArgument(_) => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
             Self::Timeout { operation, timeout_ms } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_field("timeout_ms", timeout_ms.to_string()),
-            Self::Internal { operation, source } => ErrorContext::new()
-                .with_field("operation", *operation)
-                .with_sensitive("internal_error", Sensitive::new(source.to_string())),
-            Self::InvariantViolation { invariant } => ErrorContext::new().with_field("invariant", *invariant),
-            Self::Service(error) => redacted_context("service_error", error.to_string()),
-            Self::InvalidVersionOrdinal(ordinal) => ErrorContext::new().with_field("ordinal", ordinal.to_string()),
-            Self::NotInitialized(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
-            Self::MissingRequiredMessageProperty { property } => ErrorContext::new().with_field("property", *property),
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_u64(fields::TIMEOUT_MS, *timeout_ms),
+            Self::Internal { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+                .with_secret_presence(fields::INTERNAL_ERROR_PRESENT),
+            Self::InvariantViolation { invariant } => ErrorContext::new().with_text(fields::INVARIANT, *invariant),
+            Self::Service(_) => secret_presence_context(fields::SERVICE_ERROR_PRESENT),
+            Self::InvalidVersionOrdinal(ordinal) => ErrorContext::new().with_u64(fields::ORDINAL, u64::from(*ordinal)),
+            Self::NotInitialized(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+            Self::MissingRequiredMessageProperty { property } => {
+                ErrorContext::new().with_text(fields::PROPERTY, *property)
+            }
         }
     }
 
@@ -1308,8 +1308,8 @@ impl From<FilterCompileError> for RocketMQError {
     }
 }
 
-fn redacted_context(key: &'static str, value: impl Into<String>) -> ErrorContext {
-    ErrorContext::new().with_sensitive(key, Sensitive::new(value.into()))
+fn secret_presence_context(key: FieldKey<SecretPresenceField>) -> ErrorContext {
+    ErrorContext::new().with_secret_presence(key)
 }
 
 // ============================================================================

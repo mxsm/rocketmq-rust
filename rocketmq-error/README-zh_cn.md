@@ -214,17 +214,17 @@ assert_eq!(view.context().to_string(), "path=<redacted>, reason=<redacted>");
 
 `Display` 和 `Debug` 是诊断接口。它们适用于可信进程边界内部，但外部适配器应优先使用 `public_message()`、`context()` 或 `boundary_view()`。
 
-敏感值应通过 `Sensitive<T>` 传递，或使用 `ErrorContext::with_sensitive` 添加。敏感字段会渲染为 `<redacted>`。
+目录拥有的类型化键固定了每个字段的值类型、可见性和长度限制。敏感输入不会传入 `ErrorContext`；调用方只通过不接收值的密钥存在标记记录其存在。
 
 ```rust
+use rocketmq_error::fields;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::Sensitive;
 
 let context = ErrorContext::new()
-    .with_field("topic", "TopicA")
-    .with_sensitive("token", Sensitive::new("plain-token"));
+    .with_text(fields::TOPIC, "TopicA")
+    .with_secret_presence(fields::CREDENTIALS_PRESENT);
 
-assert_eq!(context.to_string(), "topic=TopicA, token=<redacted>");
+assert_eq!(context.to_string(), "topic=TopicA, credentials_present=<redacted>");
 ```
 
 ## 恢复与可观测性

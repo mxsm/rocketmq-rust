@@ -1,7 +1,8 @@
+use rocketmq_error::fields;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorKind;
+use rocketmq_error::FieldValueRef;
 use rocketmq_error::ObservabilityError;
-use rocketmq_error::RedactionKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::Sensitive;
 
@@ -20,19 +21,20 @@ fn sensitive_display_and_debug_are_redacted() {
 #[test]
 fn error_context_redacts_sensitive_fields() {
     let context = ErrorContext::new()
-        .with_field("topic", "TopicA")
-        .with_sensitive("secret_key", Sensitive::new("sk-123"))
-        .with_sensitive("token", Sensitive::new("token-456"));
+        .with_text(fields::TOPIC, "TopicA")
+        .with_secret_presence(fields::CREDENTIALS_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT);
 
     assert_eq!(context.len(), 3);
-    assert_eq!(context.fields()[0].redaction, RedactionKind::Public);
-    assert_eq!(context.fields()[1].redaction, RedactionKind::Sensitive);
-    assert_eq!(context.fields()[1].value, "<redacted>");
+    let public = context.public_fields().collect::<Vec<_>>();
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0].name(), "topic");
+    assert_eq!(public[0].value(), FieldValueRef::Text("TopicA"));
 
     let display = context.to_string();
     assert!(display.contains("topic=TopicA"));
-    assert!(display.contains("secret_key=<redacted>"));
-    assert!(display.contains("token=<redacted>"));
+    assert!(display.contains("credentials_present=<redacted>"));
+    assert!(display.contains("source_present=<redacted>"));
     assert!(!display.contains("sk-123"));
     assert!(!display.contains("token-456"));
 
@@ -52,14 +54,8 @@ fn rocketmq_error_exposes_public_message_and_redacted_context() {
     let context = internal.context();
 
     assert_eq!(internal.public_message(), "Internal error");
-    assert_eq!(context.fields()[0].key, "operation");
-    assert_eq!(context.fields()[0].redaction, RedactionKind::Public);
-    assert_eq!(context.fields()[1].key, "internal_error");
-    assert_eq!(context.fields()[1].redaction, RedactionKind::Sensitive);
-    assert_eq!(
-        context.to_string(),
-        "operation=run internal operation, internal_error=<redacted>"
-    );
+    assert!(context.public_fields().next().is_none());
+    assert_eq!(context.to_string(), "operation=<redacted>, internal_error=<redacted>");
     assert!(!context.to_string().contains("plain-text"));
 }
 
@@ -72,7 +68,7 @@ fn boundary_view_exposes_public_message_and_redacted_context() {
     assert_eq!(view.message(), "Internal error");
     assert_eq!(
         view.context().to_string(),
-        "operation=run internal operation, internal_error=<redacted>"
+        "operation=<redacted>, internal_error=<redacted>"
     );
     assert!(!view.context().to_string().contains("plain-text"));
     assert!(!view.is_retryable());
@@ -86,8 +82,7 @@ fn observability_error_context_redacts_sensitive_details() {
 
     assert_eq!(init.kind(), ErrorKind::ObservabilityMetricsInitFailed);
     let context = init.context();
-    assert_eq!(context.fields()[0].key, "reason");
-    assert_eq!(context.fields()[0].redaction, RedactionKind::Sensitive);
+    assert!(context.public_fields().next().is_none());
     assert_eq!(context.to_string(), "reason=<redacted>");
     assert!(!context.to_string().contains("secret"));
 
@@ -99,10 +94,7 @@ fn observability_error_context_redacts_sensitive_details() {
 
     assert_eq!(filter.kind(), ErrorKind::ObservabilityLogFilterInvalid);
     assert_eq!(context.len(), 2);
-    assert_eq!(context.fields()[0].key, "filter");
-    assert_eq!(context.fields()[0].redaction, RedactionKind::Sensitive);
-    assert_eq!(context.fields()[1].key, "error");
-    assert_eq!(context.fields()[1].redaction, RedactionKind::Sensitive);
+    assert!(context.public_fields().next().is_none());
     assert!(!context.to_string().contains("rocketmq_store=trace"));
     assert!(!context.to_string().contains("invalid directive"));
 }

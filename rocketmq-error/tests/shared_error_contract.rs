@@ -86,7 +86,7 @@ fn shared_error_clones_preserve_typed_metadata_and_source_chains() {
     };
     assert_eq!(
         config_invalid_value.context().to_string(),
-        "key=connect.timeout, value=<redacted>, reason=<redacted>"
+        "key=<redacted>, value=<redacted>, reason=<redacted>"
     );
     assert_shared_contract(config_invalid_value);
     assert_shared_contract(RocketMQError::ClientNotStarted);
