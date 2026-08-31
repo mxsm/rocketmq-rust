@@ -71,42 +71,18 @@ impl<'de> Deserialize<'de> for GroupRetryPolicyType {
 
 #[cfg(test)]
 mod group_retry_policy_type_tests {
-    use serde_json;
-
     use super::*;
 
     #[test]
-    fn serialization_of_exponential_policy() {
-        let policy = GroupRetryPolicyType::Exponential;
-        let serialized = serde_json::to_string(&policy).unwrap();
-        assert_eq!(serialized, "\"EXPONENTIAL\"");
-    }
+    fn serde_uses_java_policy_names_and_rejects_unknown_values() {
+        for (policy, json) in [
+            (GroupRetryPolicyType::Exponential, "\"EXPONENTIAL\""),
+            (GroupRetryPolicyType::Customized, "\"CUSTOMIZED\""),
+        ] {
+            assert_eq!(serde_json::to_string(&policy).unwrap(), json);
+            assert_eq!(serde_json::from_str::<GroupRetryPolicyType>(json).unwrap(), policy);
+        }
 
-    #[test]
-    fn serialization_of_customized_policy() {
-        let policy = GroupRetryPolicyType::Customized;
-        let serialized = serde_json::to_string(&policy).unwrap();
-        assert_eq!(serialized, "\"CUSTOMIZED\"");
-    }
-
-    #[test]
-    fn deserialization_of_exponential_policy() {
-        let serialized = "\"EXPONENTIAL\"";
-        let policy: GroupRetryPolicyType = serde_json::from_str(serialized).unwrap();
-        assert_eq!(policy, GroupRetryPolicyType::Exponential);
-    }
-
-    #[test]
-    fn deserialization_of_customized_policy() {
-        let serialized = "\"CUSTOMIZED\"";
-        let policy: GroupRetryPolicyType = serde_json::from_str(serialized).unwrap();
-        assert_eq!(policy, GroupRetryPolicyType::Customized);
-    }
-
-    #[test]
-    fn deserialization_fails_for_invalid_value() {
-        let serialized = "\"UNKNOWN\"";
-        let result: Result<GroupRetryPolicyType, _> = serde_json::from_str(serialized);
-        assert!(result.is_err());
+        assert!(serde_json::from_str::<GroupRetryPolicyType>("\"UNKNOWN\"").is_err());
     }
 }

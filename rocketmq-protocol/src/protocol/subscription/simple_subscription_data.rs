@@ -56,20 +56,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn simple_subscription_data_default() {
-        let data = SimpleSubscriptionData::default();
-        assert_eq!(data.topic(), "");
-        assert_eq!(data.expression_type(), "");
-        assert_eq!(data.expression(), "");
-        assert_eq!(data.version(), 0);
-    }
-
-    #[test]
-    fn simple_subscription_data_new_and_getters() {
+    fn serde_preserves_subscription_data() {
         let data = SimpleSubscriptionData::new("topic".to_string(), "TAG".to_string(), "*".to_string(), 123);
-        assert_eq!(data.topic(), "topic");
-        assert_eq!(data.expression_type(), "TAG");
-        assert_eq!(data.expression(), "*");
-        assert_eq!(data.version(), 123);
+        assert_eq!(
+            (data.topic(), data.expression_type(), data.expression(), data.version()),
+            ("topic", "TAG", "*", 123)
+        );
+
+        let json = serde_json::to_string(&data).unwrap();
+        assert_eq!(
+            json,
+            r#"{"topic":"topic","expressionType":"TAG","expression":"*","version":123}"#
+        );
+        assert_eq!(serde_json::from_str::<SimpleSubscriptionData>(&json).unwrap(), data);
     }
 }

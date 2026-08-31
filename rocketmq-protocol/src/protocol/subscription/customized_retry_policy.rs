@@ -69,39 +69,31 @@ mod customized_retry_policy_tests {
     #[test]
     fn default_creates_expected_sequence() {
         let policy = CustomizedRetryPolicy::default();
-        let expected_sequence = vec![
+        let expected_sequence = [
             1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000,
             540_000, 600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
         ];
-        assert_eq!(policy.next, expected_sequence);
+        assert_eq!(policy.next(), expected_sequence);
     }
 
     #[test]
-    fn next_delay_duration_returns_correct_delay_for_valid_reconsume_times() {
+    fn next_delay_duration_handles_offsets_and_boundaries() {
         let policy = CustomizedRetryPolicy::default();
-        let test_cases = vec![(0, 10000), (1, 30000), (16, 7_200_000), (17, 7_200_000)];
+        let test_cases = [
+            (-1, 10_000),
+            (0, 10_000),
+            (1, 30_000),
+            (14, 3_600_000),
+            (15, 7_200_000),
+            (16, 7_200_000),
+        ];
 
         for (reconsume_times, expected_delay) in test_cases {
-            let delay = policy.next_delay_duration(reconsume_times);
-            assert_eq!(delay, expected_delay, "Failed for reconsume_times: {}", reconsume_times);
+            assert_eq!(
+                policy.next_delay_duration(reconsume_times),
+                expected_delay,
+                "unexpected delay for reconsume_times={reconsume_times}"
+            );
         }
-    }
-
-    #[test]
-    fn next_delay_duration_handles_negative_reconsume_times() {
-        let policy = CustomizedRetryPolicy::default();
-        let delay = policy.next_delay_duration(-1);
-        assert_eq!(
-            delay, 10000,
-            "Should handle negative reconsume times by treating them as 0"
-        );
-    }
-
-    #[test]
-    fn next_delay_duration_scales_with_reconsume_times() {
-        let policy = CustomizedRetryPolicy::default();
-        let first_delay = policy.next_delay_duration(0);
-        let second_delay = policy.next_delay_duration(1);
-        assert!(second_delay > first_delay, "Delay should increase with reconsume times");
     }
 }

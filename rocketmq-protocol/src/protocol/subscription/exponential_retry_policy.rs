@@ -86,49 +86,40 @@ mod exponential_retry_policy_tests {
     use super::*;
 
     #[test]
-    fn default_policy_has_expected_values() {
-        let policy = ExponentialRetryPolicy::default();
-        assert_eq!(policy.initial(), Duration::from_secs(5).as_millis() as u64);
-        assert_eq!(policy.max(), Duration::from_hours(2).as_millis() as u64);
-        assert_eq!(policy.multiplier(), 2);
+    fn configuration_methods_and_serde_preserve_values() {
+        let default = ExponentialRetryPolicy::default();
+        assert_eq!(
+            (default.initial(), default.max(), default.multiplier()),
+            (
+                Duration::from_secs(5).as_millis() as u64,
+                Duration::from_hours(2).as_millis() as u64,
+                2,
+            )
+        );
+
+        let mut policy = ExponentialRetryPolicy::new(1_000, 3_600_000, 3);
+        policy.set_initial(2_000);
+        policy.set_max(7_200_000);
+        policy.set_multiplier(4);
+
+        let json = serde_json::to_string(&policy).unwrap();
+        assert_eq!(json, r#"{"initial":2000,"max":7200000,"multiplier":4}"#);
+
+        let decoded: ExponentialRetryPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            (decoded.initial(), decoded.max(), decoded.multiplier()),
+            (2_000, 7_200_000, 4)
+        );
     }
 
     #[test]
-    fn custom_policy_values_are_set_correctly() {
-        let policy = ExponentialRetryPolicy::new(1000, 3600000, 3);
-        assert_eq!(policy.initial(), 1000);
-        assert_eq!(policy.max(), 3600000);
-        assert_eq!(policy.multiplier(), 3);
-    }
+    fn next_delay_duration_handles_boundaries() {
+        let policy = ExponentialRetryPolicy::new(1_000, 5_000, 2);
+        for (reconsume_times, expected_delay) in [(-1, 1_000), (0, 1_000), (1, 2_000), (2, 4_000), (3, 5_000)] {
+            assert_eq!(policy.next_delay_duration(reconsume_times), expected_delay);
+        }
 
-    #[test]
-    fn next_delay_duration_does_not_exceed_max() {
-        let policy = ExponentialRetryPolicy::new(1000, 5000, 2);
-        let delay = policy.next_delay_duration(10);
-        assert_eq!(delay, 5000);
-    }
-
-    #[test]
-    fn next_delay_duration_follows_exponential_growth() {
-        let policy = ExponentialRetryPolicy::new(1000, 100000, 2);
-        let first_delay = policy.next_delay_duration(1);
-        let second_delay = policy.next_delay_duration(2);
-        assert!(second_delay > first_delay);
-        assert_eq!(first_delay, 2000);
-        assert_eq!(second_delay, 4000);
-    }
-
-    #[test]
-    fn next_delay_duration_handles_negative_reconsume_times_as_zero() {
-        let policy = ExponentialRetryPolicy::default();
-        let delay = policy.next_delay_duration(-1);
-        assert_eq!(delay, policy.initial() as i64);
-    }
-
-    #[test]
-    fn next_delay_duration_caps_reconsume_times_to_avoid_overflow() {
-        let policy = ExponentialRetryPolicy::new(1000, u64::MAX, 2);
-        let delay = policy.next_delay_duration(100); // Use a large number to test capping
-        assert!(delay > 0); // Exact value depends on implementation details
+        let uncapped_max = ExponentialRetryPolicy::new(1, u64::MAX, 2);
+        assert_eq!(uncapped_max.next_delay_duration(100), 1_i64 << 32);
     }
 }

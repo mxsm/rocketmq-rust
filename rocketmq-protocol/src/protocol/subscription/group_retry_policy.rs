@@ -90,47 +90,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn group_retry_policy_default() {
-        let policy = GroupRetryPolicy::default();
-        assert_eq!(policy.type_(), GroupRetryPolicyType::Customized);
-        assert!(policy.exponential_retry_policy().is_none());
-        assert!(policy.customized_retry_policy().is_none());
+    fn serde_preserves_retry_policy_configuration() {
+        let mut policy = GroupRetryPolicy::default();
+        let customized: CustomizedRetryPolicy = serde_json::from_str(r#"{"next":[1,2,42]}"#).unwrap();
+        policy.set_type_(GroupRetryPolicyType::Exponential);
+        policy.set_exponential_retry_policy(Some(ExponentialRetryPolicy::new(2_000, 30_000, 3)));
+        policy.set_customized_retry_policy(Some(customized));
+
+        let json = serde_json::to_value(&policy).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "EXPONENTIAL",
+                "exponentialRetryPolicy": {"initial": 2_000, "max": 30_000, "multiplier": 3},
+                "customizedRetryPolicy": {"next": [1, 2, 42]},
+            })
+        );
+
+        let decoded: GroupRetryPolicy = serde_json::from_value(json).unwrap();
+
+        assert_eq!(decoded.type_(), GroupRetryPolicyType::Exponential);
+        assert_eq!(
+            (
+                decoded.exponential_retry_policy().unwrap().initial(),
+                decoded.exponential_retry_policy().unwrap().max(),
+                decoded.exponential_retry_policy().unwrap().multiplier(),
+            ),
+            (2_000, 30_000, 3)
+        );
+        assert_eq!(decoded.customized_retry_policy().unwrap().next(), [1, 2, 42]);
     }
 
     #[test]
-    fn group_retry_policy_setters_and_getters() {
+    fn get_retry_policy_selects_configured_policy_or_default() {
         let mut policy = GroupRetryPolicy::default();
-        let exp = ExponentialRetryPolicy::default();
-        let cust = CustomizedRetryPolicy::default();
+        assert_eq!(
+            policy.get_retry_policy().next_delay_duration(0),
+            DEFAULT_RETRY_POLICY.next_delay_duration(0)
+        );
 
         policy.set_type_(GroupRetryPolicyType::Exponential);
-        policy.set_exponential_retry_policy(Some(exp.clone()));
-        policy.set_customized_retry_policy(Some(cust.clone()));
+        policy.set_exponential_retry_policy(Some(ExponentialRetryPolicy::new(2_000, 30_000, 3)));
+        assert_eq!(policy.get_retry_policy().next_delay_duration(1), 6_000);
 
-        assert_eq!(policy.type_(), GroupRetryPolicyType::Exponential);
+        policy.set_exponential_retry_policy(None);
         assert_eq!(
-            policy.exponential_retry_policy().unwrap().next_delay_duration(1),
-            exp.next_delay_duration(1)
+            policy.get_retry_policy().next_delay_duration(0),
+            DEFAULT_RETRY_POLICY.next_delay_duration(0)
         );
-        assert_eq!(
-            policy.customized_retry_policy().unwrap().next_delay_duration(1),
-            cust.next_delay_duration(1)
-        );
-    }
 
-    #[test]
-    fn group_retry_policy_get_retry_policy_fallback() {
-        let mut policy = GroupRetryPolicy::default();
-        let retry_policy = policy.get_retry_policy();
-        assert_eq!(
-            retry_policy.next_delay_duration(1),
-            DEFAULT_RETRY_POLICY.next_delay_duration(1)
-        );
-        policy.set_type_(GroupRetryPolicyType::Exponential);
-        let retry_policy = policy.get_retry_policy();
-        assert_eq!(
-            retry_policy.next_delay_duration(1),
-            DEFAULT_RETRY_POLICY.next_delay_duration(1)
-        );
+        let customized: CustomizedRetryPolicy = serde_json::from_str(r#"{"next":[1,2,42]}"#).unwrap();
+        policy.set_type_(GroupRetryPolicyType::Customized);
+        policy.set_customized_retry_policy(Some(customized));
+        assert_eq!(policy.get_retry_policy().next_delay_duration(0), 42);
     }
 }

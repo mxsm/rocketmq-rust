@@ -419,31 +419,34 @@ impl SubscriptionGroupConfig {
 #[cfg(test)]
 mod subscription_group_config_tests {
     use super::*;
-    //use crate::protocol::subscription::group_retry_policy::RetryPolicy;
+    use crate::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
 
     #[test]
-    fn creating_default_subscription_group_config() {
-        let config = SubscriptionGroupConfig::default();
-        assert_eq!(config.group_name, "");
-        assert!(config.consume_enable);
-        assert!(config.consume_from_min_enable);
-        assert!(config.consume_broadcast_enable);
-        assert!(!config.consume_message_orderly);
-        assert_eq!(config.retry_queue_nums, 1);
-        assert_eq!(config.retry_max_times, 16);
-        // assert_eq!(config.group_retry_policy, GroupRetryPolicy::default());
-        assert_eq!(config.broker_id, MASTER_ID);
-        assert_eq!(config.which_broker_when_consume_slowly, 1);
-        assert!(config.notify_consumer_ids_changed_enable);
-        assert_eq!(config.group_sys_flag, 0);
-        assert_eq!(config.consume_timeout_minute, 15);
-        assert!(config.subscription_data_set.is_none());
-        assert!(config.attributes.is_empty());
-    }
+    fn defaults_and_mutators_preserve_configuration() {
+        let mut config = SubscriptionGroupConfig::new("initial_group".into());
+        assert_eq!(config.group_name(), "initial_group");
+        assert_eq!(
+            (
+                config.consume_enable(),
+                config.consume_from_min_enable(),
+                config.consume_broadcast_enable(),
+                config.consume_message_orderly(),
+                config.retry_queue_nums(),
+                config.retry_max_times(),
+                config.broker_id(),
+                config.which_broker_when_consume_slowly(),
+                config.notify_consumer_ids_changed_enable(),
+                config.group_sys_flag(),
+                config.consume_timeout_minute(),
+            ),
+            (true, true, true, false, 1, 16, MASTER_ID, 1, true, 0, 15)
+        );
+        assert_eq!(config.group_retry_policy().type_(), GroupRetryPolicyType::Customized);
+        assert!(config.subscription_data_set().is_none());
+        assert!(config.attributes().is_empty());
 
-    #[test]
-    fn setting_and_getting_fields() {
-        let mut config = SubscriptionGroupConfig::default();
+        let mut retry_policy = GroupRetryPolicy::default();
+        retry_policy.set_type_(GroupRetryPolicyType::Exponential);
         config.set_group_name("test_group".into());
         config.set_consume_enable(false);
         config.set_consume_from_min_enable(true);
@@ -451,32 +454,39 @@ mod subscription_group_config_tests {
         config.set_consume_message_orderly(true);
         config.set_retry_queue_nums(2);
         config.set_retry_max_times(10);
-        //config.set_group_retry_policy(GroupRetryPolicy::Custom(RetryPolicy::FixedDelay(100)));
+        config.set_group_retry_policy(retry_policy);
         config.set_broker_id(2);
         config.set_which_broker_when_consume_slowly(2);
         config.set_notify_consumer_ids_changed_enable(false);
         config.set_group_sys_flag(1);
         config.set_consume_timeout_minute(30);
-        config.set_subscription_data_set(Some(HashSet::new()));
+        config.set_subscription_data_set(Some(HashSet::from([SimpleSubscriptionData::new(
+            "topic".to_string(),
+            "TAG".to_string(),
+            "*".to_string(),
+            1,
+        )])));
         config.set_attributes(HashMap::from([("key".into(), "value".into())]));
 
-        assert_eq!(config.group_name(), "test_group");
-        assert!(!config.consume_enable());
-        assert!(config.consume_from_min_enable());
-        assert!(!config.consume_broadcast_enable());
-        assert!(config.consume_message_orderly());
-        assert_eq!(config.retry_queue_nums(), 2);
-        assert_eq!(config.retry_max_times(), 10);
-        /*        assert_eq!(
-            config.group_retry_policy(),
-            &GroupRetryPolicy::Custom(RetryPolicy::FixedDelay(100))
-        );*/
-        assert_eq!(config.broker_id(), 2);
-        assert_eq!(config.which_broker_when_consume_slowly(), 2);
-        assert!(!config.notify_consumer_ids_changed_enable());
-        assert_eq!(config.group_sys_flag(), 1);
-        assert_eq!(config.consume_timeout_minute(), 30);
-        assert!(config.subscription_data_set().is_some());
+        assert_eq!(
+            (
+                config.group_name().as_str(),
+                config.consume_enable(),
+                config.consume_from_min_enable(),
+                config.consume_broadcast_enable(),
+                config.consume_message_orderly(),
+                config.retry_queue_nums(),
+                config.retry_max_times(),
+                config.broker_id(),
+                config.which_broker_when_consume_slowly(),
+                config.notify_consumer_ids_changed_enable(),
+                config.group_sys_flag(),
+                config.consume_timeout_minute(),
+            ),
+            ("test_group", false, true, false, true, 2, 10, 2, 2, false, 1, 30)
+        );
+        assert_eq!(config.group_retry_policy().type_(), GroupRetryPolicyType::Exponential);
+        assert_eq!(config.subscription_data_set().unwrap().len(), 1);
         assert_eq!(config.attributes(), &HashMap::from([("key".into(), "value".into())]));
     }
 
@@ -497,21 +507,23 @@ mod subscription_group_config_tests {
     }
 
     #[test]
-    fn lite_subscription_attributes_use_java_defaults() {
+    fn lite_subscription_attributes_use_defaults_and_parse_values() {
         let config = SubscriptionGroupConfig::default();
 
-        assert_eq!(config.lite_sub_client_quota(), 2000);
-        assert!(!config.lite_sub_exclusive());
-        assert_eq!(config.max_client_event_count(), -1);
-        assert!(!config.reset_offset_in_exclusive_mode());
-        assert!(!config.reset_offset_on_unsubscribe());
-        assert_eq!(config.priority_factor(), 100);
-        assert!(!config.lite_sub_wildcard());
-    }
+        assert_eq!(
+            (
+                config.lite_sub_client_quota(),
+                config.lite_sub_exclusive(),
+                config.max_client_event_count(),
+                config.reset_offset_in_exclusive_mode(),
+                config.reset_offset_on_unsubscribe(),
+                config.priority_factor(),
+                config.lite_sub_wildcard(),
+            ),
+            (2000, false, -1, false, false, 100, false)
+        );
 
-    #[test]
-    fn lite_subscription_attributes_parse_from_attribute_map() {
-        let mut config = SubscriptionGroupConfig::default();
+        let mut config = config;
         config.set_attributes(HashMap::from([
             (
                 CheetahString::from_static_str(LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME),
@@ -539,12 +551,40 @@ mod subscription_group_config_tests {
             ),
         ]));
 
-        assert_eq!(config.lite_sub_client_quota(), 128);
-        assert!(config.lite_sub_exclusive());
-        assert_eq!(config.max_client_event_count(), 256);
-        assert!(config.reset_offset_in_exclusive_mode());
-        assert!(config.reset_offset_on_unsubscribe());
-        assert_eq!(config.priority_factor(), 25);
+        assert_eq!(
+            (
+                config.lite_sub_client_quota(),
+                config.lite_sub_exclusive(),
+                config.max_client_event_count(),
+                config.reset_offset_in_exclusive_mode(),
+                config.reset_offset_on_unsubscribe(),
+                config.priority_factor(),
+            ),
+            (128, true, 256, true, true, 25)
+        );
+
+        config.set_attributes(HashMap::from([
+            (
+                CheetahString::from_static_str(LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("invalid"),
+            ),
+            (
+                CheetahString::from_static_str(LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("invalid"),
+            ),
+            (
+                CheetahString::from_static_str(PRIORITY_FACTOR_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("invalid"),
+            ),
+        ]));
+        assert_eq!(
+            (
+                config.lite_sub_client_quota(),
+                config.max_client_event_count(),
+                config.priority_factor(),
+            ),
+            (2000, -1, 100)
+        );
     }
 
     #[test]
