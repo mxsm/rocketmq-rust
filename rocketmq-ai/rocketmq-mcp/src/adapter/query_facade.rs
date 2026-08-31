@@ -29,8 +29,15 @@ use crate::adapter::admin_session::SessionTopicRoute;
 use crate::config::McpConfig;
 use crate::infrastructure::cache::CacheMetricsSnapshot;
 use crate::infrastructure::cache::QueryCache;
+use crate::infrastructure::snapshot::SnapshotKind;
+use crate::infrastructure::snapshot::SnapshotRequest;
+use crate::infrastructure::snapshot::SnapshotSelectionMode;
+use crate::infrastructure::snapshot::SnapshotStore;
+use crate::infrastructure::snapshot::SnapshotView;
+use crate::infrastructure::snapshot::SnapshotWeight;
 use crate::model::contract::observed_at;
 use crate::model::contract::paginate;
+use crate::model::contract::Page;
 use crate::model::contract::PageRequest;
 use crate::model::contract::QueryCompleteness;
 use crate::model::contract::QueryPayload;
@@ -38,7 +45,6 @@ use crate::model::contract::QueryResult;
 use crate::model::contract::QuerySource;
 use crate::model::contract::SourceFailure;
 use crate::model::contract::SourceFailureCode;
-use crate::model::contract::DEFAULT_PAGE_LIMIT;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::service::diagnosis_collector::ConsumerLagEvidence;
@@ -106,6 +112,44 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         args: ListConsumerGroupsArgs,
     ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError>> + Send;
 
+    fn describe_consumer_group(
+        &self,
+        cluster: String,
+        group: String,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolExecutionError>>
+           + Send {
+        async move {
+            let result = self
+                .list_consumer_groups(ListConsumerGroupsArgs {
+                    cluster: Some(cluster.clone()),
+                    filter: Some(group.clone()),
+                    page: PageRequest {
+                        limit: Some(crate::model::contract::MAX_PAGE_LIMIT),
+                        cursor: None,
+                    },
+                })
+                .await?;
+            let summary = result
+                .data
+                .page
+                .items
+                .iter()
+                .find(|summary| summary.group == group)
+                .cloned()
+                .ok_or_else(|| {
+                    ToolExecutionError::InvalidArguments(format!(
+                        "consumer group not found in cluster {cluster}: {group}"
+                    ))
+                })?;
+            Ok(QueryResult::from_payload(
+                QueryPayload::new(summary, result.partial, result.warnings, result.source_failures),
+                result.observed_at,
+                result.freshness_ms,
+                result.cache_status,
+            ))
+        }
+    }
+
     fn query_consumer_lag(
         &self,
         args: QueryConsumerLagArgs,
@@ -128,6 +172,7 @@ pub(crate) struct QueryFacade<F> {
     factory: F,
     control: WorkflowControl,
     cache: QueryCache,
+    snapshots: SnapshotStore,
     visibility_class: String,
 }
 
@@ -157,6 +202,7 @@ where
     pub(crate) fn with_factory_and_control(config: McpConfig, factory: F, control: WorkflowControl) -> Self {
         Self {
             cache: QueryCache::new(config.cache.enabled, config.cache.max_entries),
+            snapshots: SnapshotStore::new(config.cache.cursor_snapshot_max_entries),
             config,
             factory,
             control,
@@ -175,11 +221,11 @@ where
     }
 
     pub(crate) fn cache_metrics(&self) -> CacheMetricsSnapshot {
-        self.cache.metrics()
+        self.cache.metrics().merge(self.snapshots.metrics())
     }
 
     pub(crate) async fn invalidate_cache(&self) -> usize {
-        self.cache.clear().await
+        self.cache.clear().await.saturating_add(self.snapshots.clear().await)
     }
 
     pub(crate) async fn cluster_overview(
@@ -196,19 +242,23 @@ where
                 &self.control.cancellation,
                 || ToolExecutionError::Cancelled,
                 || async {
-                    self.run_workflow(cluster, |session, cluster| {
+                    let page = PageRequest::default();
+                    let topic_snapshot = self.topic_inventory_snapshot(cluster.clone(), None, &page).await?;
+                    let consumer_snapshot = self
+                        .consumer_group_inventory_snapshot(cluster.clone(), None, false, &page)
+                        .await?;
+                    self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let brokers = session.broker_rows().await?;
                             let mut completeness = brokers.completeness();
-                            let topics = sorted_unique_topic_names(session.topic_inventory().await?);
-                            let consumer_groups = session.consumer_groups().await?;
-                            completeness.merge(consumer_groups.completeness());
+                            completeness.merge(topic_snapshot.payload.completeness());
+                            completeness.merge(consumer_snapshot.payload.completeness());
                             Ok(completeness.wrap(ClusterOverviewOutput {
                                 cluster: cluster.name.clone(),
                                 namesrv_addr: cluster.namesrv_addr.clone(),
                                 brokers: brokers.data,
-                                topic_count: topics.len(),
-                                consumer_group_count: consumer_groups.data.len(),
+                                topic_count: topic_snapshot.payload.data.len(),
+                                consumer_group_count: consumer_snapshot.payload.data.len(),
                                 generated_at: observed_at(),
                             }))
                         })
@@ -224,46 +274,30 @@ where
         args: ListTopicsArgs,
     ) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
         let cluster = self.resolve_cluster(args.cluster.as_deref())?;
-        let key = self.cache_key(
-            "list_topics",
-            &cluster.name,
-            &list_key(args.filter.as_deref(), &args.page),
-        );
-        let ttl = Duration::from_millis(self.config.cache.topic_list_ttl_ms);
-        self.cache
-            .get_or_try_init_cancellable(
-                key,
-                ttl,
-                &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
-                || async {
-                    self.run_workflow(cluster, move |session, cluster| {
-                        Box::pin(async move {
-                            let mut topics = sorted_unique_topic_names(session.topic_inventory().await?)
-                                .into_iter()
-                                .map(|topic| crate::tools::topic_tools::TopicListEntry {
-                                    topic,
-                                    cluster: Some(cluster.rocketmq_cluster_name.clone()),
-                                    consumer_group: None,
-                                })
-                                .collect::<Vec<_>>();
-                            if let Some(filter) = normalized_filter(args.filter.as_deref()) {
-                                topics.retain(|entry| entry.topic.to_ascii_lowercase().contains(&filter));
-                            }
-                            let page = paginate(topics, &args.page)
-                                .map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))?;
-                            Ok(QueryPayload::complete(ListTopicsOutput {
-                                cluster: cluster.name.clone(),
-                                namesrv_addr: cluster.namesrv_addr.clone(),
-                                page,
-                                generated_at: observed_at(),
-                            }))
-                        })
-                    })
-                    .await
-                },
-            )
-            .await
+        let snapshot = self
+            .topic_inventory_snapshot(cluster.clone(), args.filter.as_deref(), &args.page)
+            .await?;
+        let entries = snapshot
+            .payload
+            .data
+            .iter()
+            .cloned()
+            .map(|topic| crate::tools::topic_tools::TopicListEntry {
+                topic,
+                cluster: Some(cluster.rocketmq_cluster_name.clone()),
+                consumer_group: None,
+            })
+            .collect::<Vec<_>>();
+        let page = self.snapshots.page(&snapshot, &entries)?;
+        Ok(query_result_from_snapshot(
+            &snapshot,
+            snapshot.payload.completeness().wrap(ListTopicsOutput {
+                cluster: cluster.name,
+                namesrv_addr: cluster.namesrv_addr,
+                page,
+                generated_at: observed_at(),
+            }),
+        ))
     }
 
     pub(crate) async fn describe_topic(
@@ -272,30 +306,14 @@ where
     ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
-        let key = self.cache_key(
-            "describe_topic",
-            &cluster.name,
-            &format!("topic={}|{}", args.topic, page_key(&args.page)),
-        );
-        let ttl = Duration::from_millis(self.config.cache.topic_list_ttl_ms);
-        self.cache
-            .get_or_try_init_cancellable(
-                key,
-                ttl,
-                &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
-                || async {
-                    self.run_workflow(cluster, move |session, cluster| {
-                        Box::pin(async move {
-                            let route = session.topic_route(&args.topic).await?;
-                            let route = topic_route_output(cluster, &args.topic, route, &args.page)?;
-                            Ok(QueryPayload::complete(describe_topic_output(&route)))
-                        })
-                    })
-                    .await
-                },
-            )
-            .await
+        let snapshot = self
+            .topic_route_snapshot(cluster.clone(), args.topic.clone(), &args.page)
+            .await?;
+        let route = topic_route_output_from_snapshot(&self.snapshots, &snapshot, &cluster, &args.topic)?;
+        Ok(query_result_from_snapshot(
+            &snapshot,
+            snapshot.payload.completeness().wrap(describe_topic_output(&route)),
+        ))
     }
 
     pub(crate) async fn query_topic_route(
@@ -304,29 +322,14 @@ where
     ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
-        let key = self.cache_key(
-            "topic_route",
-            &cluster.name,
-            &format!("topic={}|{}", args.topic, page_key(&args.page)),
-        );
-        let ttl = Duration::from_millis(self.config.cache.topic_list_ttl_ms);
-        self.cache
-            .get_or_try_init_cancellable(
-                key,
-                ttl,
-                &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
-                || async {
-                    self.run_workflow(cluster, move |session, cluster| {
-                        Box::pin(async move {
-                            let route = session.topic_route(&args.topic).await?;
-                            topic_route_output(cluster, &args.topic, route, &args.page).map(QueryPayload::complete)
-                        })
-                    })
-                    .await
-                },
-            )
-            .await
+        let snapshot = self
+            .topic_route_snapshot(cluster.clone(), args.topic.clone(), &args.page)
+            .await?;
+        let output = topic_route_output_from_snapshot(&self.snapshots, &snapshot, &cluster, &args.topic)?;
+        Ok(query_result_from_snapshot(
+            &snapshot,
+            snapshot.payload.completeness().wrap(output),
+        ))
     }
 
     pub(crate) async fn list_consumer_groups(
@@ -334,34 +337,64 @@ where
         args: ListConsumerGroupsArgs,
     ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
         let cluster = self.resolve_cluster(args.cluster.as_deref())?;
+        let snapshot = self
+            .consumer_group_inventory_snapshot(cluster.clone(), args.filter.as_deref(), false, &args.page)
+            .await?;
+        let names_page = self.snapshots.page(&snapshot, &snapshot.payload.data)?;
+        let selected_names = names_page.items.clone();
+        if selected_names.is_empty() {
+            return Ok(query_result_from_snapshot(
+                &snapshot,
+                snapshot.payload.completeness().wrap(ListConsumerGroupsOutput {
+                    cluster: cluster.name,
+                    namesrv_addr: cluster.namesrv_addr,
+                    page: Page {
+                        items: Vec::new(),
+                        count: 0,
+                        total_count: names_page.total_count,
+                        has_more: names_page.has_more,
+                        next_cursor: names_page.next_cursor,
+                    },
+                    generated_at: observed_at(),
+                }),
+            ));
+        }
         let key = self.cache_key(
-            "list_consumer_groups",
+            "consumer_group_page_enrichment",
             &cluster.name,
-            &list_key(args.filter.as_deref(), &args.page),
+            &format!(
+                "snapshot={}|cursor={}",
+                snapshot.identity(),
+                args.page.cursor.as_deref().unwrap_or("first")
+            ),
         );
         let ttl = Duration::from_millis(self.config.cache.consumer_lag_ttl_ms);
-        self.cache
+        let enrichment_snapshot = snapshot.clone();
+        let enriched = self
+            .cache
             .get_or_try_init_cancellable(
                 key,
                 ttl,
                 &self.control.cancellation,
                 || ToolExecutionError::Cancelled,
-                move || async {
-                    self.run_workflow(cluster, move |session, cluster| {
+                move || async move {
+                    self.run_workflow(cluster.clone(), move |session, cluster| {
                         Box::pin(async move {
-                            let groups = session.consumer_groups().await?;
-                            let completeness = groups.completeness();
+                            let groups = session.consumer_groups_exact(&selected_names).await?;
+                            let mut completeness = enrichment_snapshot.payload.completeness();
+                            completeness.merge(groups.completeness());
                             let mut groups = groups.data;
                             groups.sort_by(|left, right| left.group.cmp(&right.group));
-                            if let Some(filter) = normalized_filter(args.filter.as_deref()) {
-                                groups.retain(|entry| entry.group.to_ascii_lowercase().contains(&filter));
-                            }
-                            let page = paginate(groups, &args.page)
-                                .map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))?;
                             Ok(completeness.wrap(ListConsumerGroupsOutput {
                                 cluster: cluster.name.clone(),
                                 namesrv_addr: cluster.namesrv_addr.clone(),
-                                page,
+                                page: Page {
+                                    count: groups.len(),
+                                    items: groups,
+                                    total_count: names_page.total_count,
+                                    has_more: names_page.has_more,
+                                    next_cursor: names_page.next_cursor,
+                                },
                                 generated_at: observed_at(),
                             }))
                         })
@@ -369,7 +402,18 @@ where
                     .await
                 },
             )
-            .await
+            .await?;
+        Ok(QueryResult::from_payload(
+            QueryPayload::new(
+                enriched.data,
+                enriched.partial,
+                enriched.warnings,
+                enriched.source_failures,
+            ),
+            snapshot.observed_at,
+            snapshot.freshness_ms,
+            enriched.cache_status,
+        ))
     }
 
     pub(crate) async fn query_consumer_lag(
@@ -379,36 +423,90 @@ where
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let snapshot = self
+            .consumer_lag_snapshot(
+                cluster.clone(),
+                args.topic.clone(),
+                args.consumer_group.clone(),
+                &args.page,
+            )
+            .await?;
+        let output =
+            consumer_lag_output_from_snapshot(&self.snapshots, &snapshot, &cluster, args.topic, args.consumer_group)?;
+        Ok(query_result_from_snapshot(
+            &snapshot,
+            snapshot.payload.completeness().wrap(output),
+        ))
+    }
+
+    pub(crate) async fn describe_consumer_group(
+        &self,
+        cluster_name: String,
+        group: String,
+    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolExecutionError> {
+        let group = normalized_identifier("consumer_group", &group)?;
+        let cluster = self.resolve_cluster(Some(&cluster_name))?;
+        let page = PageRequest {
+            limit: Some(1),
+            cursor: None,
+        };
+        let snapshot = self
+            .consumer_group_inventory_snapshot(cluster.clone(), Some(&group), true, &page)
+            .await?;
+        if snapshot.payload.data.is_empty() {
+            return Err(ToolExecutionError::InvalidArguments(format!(
+                "consumer group not found in cluster {}: {group}",
+                cluster.name
+            )));
+        }
+        let selected = snapshot.payload.data.clone();
         let key = self.cache_key(
-            "consumer_lag",
+            "consumer_group_exact_enrichment",
             &cluster.name,
-            &format!(
-                "topic={}|group={}|{}",
-                args.topic,
-                args.consumer_group,
-                page_key(&args.page)
-            ),
+            &format!("snapshot={}", snapshot.identity()),
         );
         let ttl = Duration::from_millis(self.config.cache.consumer_lag_ttl_ms);
-        self.cache
+        let inventory_completeness = snapshot.payload.completeness();
+        let enriched = self
+            .cache
             .get_or_try_init_cancellable(
                 key,
                 ttl,
                 &self.control.cancellation,
                 || ToolExecutionError::Cancelled,
-                move || async {
-                    self.run_workflow(cluster, move |session, cluster| {
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move {
-                            let lag = session.consumer_lag(&args.topic, &args.consumer_group).await?;
-                            let completeness = lag.completeness();
-                            consumer_lag_output(cluster, args.topic, args.consumer_group, &args.page, lag.data)
-                                .map(|output| completeness.wrap(output))
+                            let groups = session.consumer_groups_exact(&selected).await?;
+                            let mut completeness = inventory_completeness;
+                            completeness.merge(groups.completeness());
+                            let summary = groups
+                                .data
+                                .into_iter()
+                                .find(|summary| summary.group == group)
+                                .ok_or_else(|| {
+                                    ToolExecutionError::Backend(
+                                        "selected consumer group enrichment was unavailable".to_string(),
+                                    )
+                                })?;
+                            Ok(completeness.wrap(summary))
                         })
                     })
                     .await
                 },
             )
-            .await
+            .await?;
+        Ok(QueryResult::from_payload(
+            QueryPayload::new(
+                enriched.data,
+                enriched.partial,
+                enriched.warnings,
+                enriched.source_failures,
+            ),
+            snapshot.observed_at,
+            snapshot.freshness_ms,
+            enriched.cache_status,
+        ))
     }
 
     pub(crate) async fn describe_broker(
@@ -546,6 +644,169 @@ where
             .await
     }
 
+    async fn topic_inventory_snapshot(
+        &self,
+        cluster: ResolvedCluster,
+        filter: Option<&str>,
+        page: &PageRequest,
+    ) -> Result<SnapshotView<Vec<String>>, ToolExecutionError> {
+        let filter = normalized_filter(filter).unwrap_or_default();
+        let request = SnapshotRequest::try_new(
+            SnapshotKind::TopicInventory,
+            cluster.name.clone(),
+            filter.clone(),
+            page,
+            self.visibility_class.clone(),
+        )?;
+        self.snapshots
+            .get_or_load(
+                request,
+                page.cursor.as_deref(),
+                self.cursor_snapshot_ttl(),
+                self.snapshot_response_ttl(self.config.cache.topic_list_ttl_ms),
+                |topics: &Vec<String>| SnapshotWeight::inventory(topics.len()),
+                &self.control.cancellation,
+                || {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move {
+                            let mut topics = sorted_unique_topic_names(session.topic_inventory().await?);
+                            if !filter.is_empty() {
+                                topics.retain(|topic| topic.to_ascii_lowercase().contains(&filter));
+                            }
+                            Ok(QueryPayload::complete(topics))
+                        })
+                    })
+                },
+            )
+            .await
+    }
+
+    async fn consumer_group_inventory_snapshot(
+        &self,
+        cluster: ResolvedCluster,
+        filter: Option<&str>,
+        exact: bool,
+        page: &PageRequest,
+    ) -> Result<SnapshotView<Vec<String>>, ToolExecutionError> {
+        let filter = if exact {
+            filter.map(str::trim).unwrap_or_default().to_string()
+        } else {
+            normalized_filter(filter).unwrap_or_default()
+        };
+        let selection_mode = if exact {
+            SnapshotSelectionMode::ExactIdentifier
+        } else {
+            SnapshotSelectionMode::LiteralFilter
+        };
+        let request = SnapshotRequest::try_new_with_selection(
+            SnapshotKind::ConsumerGroupInventory,
+            cluster.name.clone(),
+            filter.clone(),
+            selection_mode,
+            page,
+            self.visibility_class.clone(),
+        )?;
+        self.snapshots
+            .get_or_load(
+                request,
+                page.cursor.as_deref(),
+                self.cursor_snapshot_ttl(),
+                self.snapshot_response_ttl(self.config.cache.consumer_lag_ttl_ms),
+                |groups: &Vec<String>| SnapshotWeight::inventory(groups.len()),
+                &self.control.cancellation,
+                || {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move {
+                            let groups = session.consumer_group_inventory().await?;
+                            Ok(groups.map(|mut groups| {
+                                groups.sort();
+                                groups.dedup();
+                                if !filter.is_empty() {
+                                    if exact {
+                                        groups.retain(|group| group == &filter);
+                                    } else {
+                                        groups.retain(|group| group.to_ascii_lowercase().contains(&filter));
+                                    }
+                                }
+                                groups
+                            }))
+                        })
+                    })
+                },
+            )
+            .await
+    }
+
+    async fn topic_route_snapshot(
+        &self,
+        cluster: ResolvedCluster,
+        topic: String,
+        page: &PageRequest,
+    ) -> Result<SnapshotView<SessionTopicRoute>, ToolExecutionError> {
+        let request = SnapshotRequest::try_new(
+            SnapshotKind::TopicRoute,
+            cluster.name.clone(),
+            format!("topic={topic}"),
+            page,
+            self.visibility_class.clone(),
+        )?;
+        self.snapshots
+            .get_or_load(
+                request,
+                page.cursor.as_deref(),
+                self.cursor_snapshot_ttl(),
+                self.snapshot_response_ttl(self.config.cache.topic_list_ttl_ms),
+                |route: &SessionTopicRoute| SnapshotWeight::detail(route.queues.len()),
+                &self.control.cancellation,
+                || {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.topic_route(&topic).await.map(QueryPayload::complete) })
+                    })
+                },
+            )
+            .await
+    }
+
+    async fn consumer_lag_snapshot(
+        &self,
+        cluster: ResolvedCluster,
+        topic: String,
+        consumer_group: String,
+        page: &PageRequest,
+    ) -> Result<SnapshotView<SessionConsumerLag>, ToolExecutionError> {
+        let request = SnapshotRequest::try_new(
+            SnapshotKind::ConsumerLag,
+            cluster.name.clone(),
+            format!("topic={topic}|group={consumer_group}"),
+            page,
+            self.visibility_class.clone(),
+        )?;
+        self.snapshots
+            .get_or_load(
+                request,
+                page.cursor.as_deref(),
+                self.cursor_snapshot_ttl(),
+                self.snapshot_response_ttl(self.config.cache.consumer_lag_ttl_ms),
+                |lag: &SessionConsumerLag| SnapshotWeight::detail(lag.queues.len()),
+                &self.control.cancellation,
+                || {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.consumer_lag(&topic, &consumer_group).await })
+                    })
+                },
+            )
+            .await
+    }
+
+    fn cursor_snapshot_ttl(&self) -> Duration {
+        Duration::from_millis(self.config.cache.cursor_snapshot_ttl_ms)
+    }
+
+    fn snapshot_response_ttl(&self, ttl_ms: u64) -> Option<Duration> {
+        (self.config.cache.enabled && self.config.cache.max_entries > 0 && ttl_ms > 0)
+            .then(|| Duration::from_millis(ttl_ms))
+    }
+
     async fn run_workflow<T, O>(&self, cluster: ResolvedCluster, operation: O) -> Result<T, ToolExecutionError>
     where
         T: Send,
@@ -669,6 +930,14 @@ where
         QueryFacade::list_consumer_groups(self, args).await
     }
 
+    async fn describe_consumer_group(
+        &self,
+        cluster: String,
+        group: String,
+    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolExecutionError> {
+        QueryFacade::describe_consumer_group(self, cluster, group).await
+    }
+
     async fn query_consumer_lag(
         &self,
         args: QueryConsumerLagArgs,
@@ -689,6 +958,61 @@ where
     ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
         QueryFacade::diagnose_consumer_lag(self, args).await
     }
+}
+
+fn query_result_from_snapshot<S, T>(snapshot: &SnapshotView<S>, payload: QueryPayload<T>) -> QueryResult<T> {
+    QueryResult::from_payload(
+        payload,
+        snapshot.observed_at.clone(),
+        snapshot.freshness_ms,
+        snapshot.cache_status,
+    )
+}
+
+fn consumer_lag_output_from_snapshot(
+    store: &SnapshotStore,
+    snapshot: &SnapshotView<SessionConsumerLag>,
+    cluster: &ResolvedCluster,
+    topic: String,
+    consumer_group: String,
+) -> Result<QueryConsumerLagOutput, ToolExecutionError> {
+    let lag = &snapshot.payload.data;
+    let max_queue_lag = lag.queues.iter().map(|queue| queue.lag).max().unwrap_or_default();
+    let page = store.page(snapshot, &lag.queues)?;
+    Ok(QueryConsumerLagOutput {
+        cluster: cluster.name.clone(),
+        namesrv_addr: cluster.namesrv_addr.clone(),
+        topic,
+        consumer_group,
+        total_lag: lag.total_lag,
+        max_queue_lag,
+        consume_tps: lag.consume_tps,
+        inflight_total: lag.inflight_total,
+        page,
+        generated_at: observed_at(),
+    })
+}
+
+fn topic_route_output_from_snapshot(
+    store: &SnapshotStore,
+    snapshot: &SnapshotView<SessionTopicRoute>,
+    cluster: &ResolvedCluster,
+    topic: &str,
+) -> Result<QueryTopicRouteOutput, ToolExecutionError> {
+    let route = &snapshot.payload.data;
+    let read_queue_count = route.queues.iter().map(|queue| queue.read_queue_nums).sum();
+    let write_queue_count = route.queues.iter().map(|queue| queue.write_queue_nums).sum();
+    let page = store.page(snapshot, &route.queues)?;
+    Ok(QueryTopicRouteOutput {
+        cluster: cluster.name.clone(),
+        namesrv_addr: cluster.namesrv_addr.clone(),
+        topic: topic.to_string(),
+        brokers: route.brokers.clone(),
+        read_queue_count,
+        write_queue_count,
+        page,
+        generated_at: observed_at(),
+    })
 }
 
 fn consumer_lag_output(
@@ -841,38 +1165,30 @@ fn sorted_unique_topic_names(mut topics: Vec<String>) -> Vec<String> {
 }
 
 fn normalized_identifier(field: &str, value: &str) -> Result<String, ToolExecutionError> {
+    const MAX_IDENTIFIER_BYTES: usize = 255;
     let value = value.trim();
     if value.is_empty() {
         return Err(ToolExecutionError::InvalidArguments(format!(
             "{field} must not be empty"
         )));
     }
+    if value.len() > MAX_IDENTIFIER_BYTES {
+        return Err(ToolExecutionError::InvalidArguments(format!(
+            "{field} must not exceed {MAX_IDENTIFIER_BYTES} bytes"
+        )));
+    }
     Ok(value.to_string())
-}
-
-fn list_key(filter: Option<&str>, page: &PageRequest) -> String {
-    format!(
-        "filter={}|{}",
-        normalized_filter(filter).unwrap_or_default(),
-        page_key(page)
-    )
-}
-
-fn page_key(page: &PageRequest) -> String {
-    format!(
-        "limit={}|cursor={}",
-        page.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
-        page.cursor.as_deref().unwrap_or_default()
-    )
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use tokio::sync::Barrier;
     use tokio_util::sync::CancellationToken;
 
     use crate::config::McpConfig;
@@ -895,9 +1211,56 @@ mod tests {
         broker_queries: AtomicUsize,
         topic_inventory_queries: AtomicUsize,
         consumer_group_queries: AtomicUsize,
+        consumer_group_inventory_queries: AtomicUsize,
+        consumer_group_enrichment_queries: AtomicUsize,
+        consumer_group_enriched_targets: AtomicUsize,
         route_queries: AtomicUsize,
         consumer_lag_queries: AtomicUsize,
         runtime_probes: AtomicUsize,
+    }
+
+    #[derive(Debug)]
+    struct TopicInventoryGate {
+        armed: AtomicBool,
+        entered: AtomicUsize,
+        release: Barrier,
+    }
+
+    impl TopicInventoryGate {
+        fn new(expected_loaders: usize) -> Self {
+            Self {
+                armed: AtomicBool::new(false),
+                entered: AtomicUsize::new(0),
+                release: Barrier::new(expected_loaders + 1),
+            }
+        }
+
+        fn arm(&self) {
+            self.entered.store(0, Ordering::SeqCst);
+            self.armed.store(true, Ordering::SeqCst);
+        }
+
+        async fn wait_if_armed(&self) {
+            if self.armed.load(Ordering::SeqCst) {
+                self.entered.fetch_add(1, Ordering::SeqCst);
+                self.release.wait().await;
+            }
+        }
+
+        async fn release(&self) {
+            self.armed.store(false, Ordering::SeqCst);
+            self.release.wait().await;
+        }
+    }
+
+    async fn wait_for_atomic_count(counter: &AtomicUsize, expected: usize) {
+        for _ in 0..10_000 {
+            if counter.load(Ordering::SeqCst) == expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), expected);
     }
 
     #[derive(Clone, Default)]
@@ -909,8 +1272,16 @@ mod tests {
         partial_sources: bool,
         hang_broker_query: bool,
         hang_topic_inventory: bool,
-        delay_topic_inventory: bool,
+        topic_inventory_gate: Option<Arc<TopicInventoryGate>>,
         fail_topic_inventory: bool,
+        many_groups: bool,
+        case_colliding_groups: bool,
+        empty_groups: bool,
+        mutating_group_inventory: bool,
+        many_route_rows: bool,
+        many_lag_rows: bool,
+        fail_group_enrichment: bool,
+        yield_snapshot_queries: bool,
     }
 
     impl AdminSessionFactory for FakeSessionFactory {
@@ -927,8 +1298,16 @@ mod tests {
                 partial_sources: self.partial_sources,
                 hang_broker_query: self.hang_broker_query,
                 hang_topic_inventory: self.hang_topic_inventory,
-                delay_topic_inventory: self.delay_topic_inventory,
+                topic_inventory_gate: self.topic_inventory_gate.clone(),
                 fail_topic_inventory: self.fail_topic_inventory,
+                many_groups: self.many_groups,
+                case_colliding_groups: self.case_colliding_groups,
+                empty_groups: self.empty_groups,
+                mutating_group_inventory: self.mutating_group_inventory,
+                many_route_rows: self.many_route_rows,
+                many_lag_rows: self.many_lag_rows,
+                fail_group_enrichment: self.fail_group_enrichment,
+                yield_snapshot_queries: self.yield_snapshot_queries,
             })
         }
     }
@@ -942,8 +1321,16 @@ mod tests {
         partial_sources: bool,
         hang_broker_query: bool,
         hang_topic_inventory: bool,
-        delay_topic_inventory: bool,
+        topic_inventory_gate: Option<Arc<TopicInventoryGate>>,
         fail_topic_inventory: bool,
+        many_groups: bool,
+        case_colliding_groups: bool,
+        empty_groups: bool,
+        mutating_group_inventory: bool,
+        many_route_rows: bool,
+        many_lag_rows: bool,
+        fail_group_enrichment: bool,
+        yield_snapshot_queries: bool,
     }
 
     impl AdminSession for FakeSession {
@@ -992,8 +1379,8 @@ mod tests {
             if self.hang_topic_inventory {
                 std::future::pending::<()>().await;
             }
-            if self.delay_topic_inventory {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+            if let Some(gate) = &self.topic_inventory_gate {
+                gate.wait_if_armed().await;
             }
             if self.fail_topic_inventory {
                 return Err(ToolExecutionError::backend("topic query failed"));
@@ -1003,9 +1390,17 @@ mod tests {
 
         async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
             self.counters.route_queries.fetch_add(1, Ordering::SeqCst);
+            if self.yield_snapshot_queries {
+                tokio::task::yield_now().await;
+            }
+            let queues = if self.many_route_rows {
+                (0..5).map(|index| route_queue(&format!("broker-{index}"))).collect()
+            } else {
+                vec![route_queue("broker-a")]
+            };
             Ok(SessionTopicRoute {
                 brokers: vec![route_broker(&self.cluster.name, "broker-a")],
-                queues: vec![route_queue("broker-a")],
+                queues,
             })
         }
 
@@ -1019,14 +1414,78 @@ mod tests {
             })
         }
 
+        async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolExecutionError> {
+            let query_index = self
+                .counters
+                .consumer_group_inventory_queries
+                .fetch_add(1, Ordering::SeqCst);
+            if self.yield_snapshot_queries {
+                tokio::task::yield_now().await;
+            }
+            let groups = if self.empty_groups {
+                Vec::new()
+            } else if self.case_colliding_groups {
+                vec!["OrderGroup".to_string(), "ordergroup".to_string()]
+            } else if self.mutating_group_inventory && query_index > 0 {
+                vec![
+                    "group-inserted".to_string(),
+                    "group-4".to_string(),
+                    "group-0".to_string(),
+                ]
+            } else if self.many_groups || self.mutating_group_inventory {
+                (0..5).map(|index| format!("group-{index}")).collect()
+            } else {
+                vec!["order-service".to_string()]
+            };
+            Ok(QueryPayload::complete(groups))
+        }
+
+        async fn consumer_groups_exact(
+            &mut self,
+            groups: &[String],
+        ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+            self.counters
+                .consumer_group_enrichment_queries
+                .fetch_add(1, Ordering::SeqCst);
+            self.counters
+                .consumer_group_enriched_targets
+                .fetch_add(groups.len(), Ordering::SeqCst);
+            if self.yield_snapshot_queries {
+                tokio::task::yield_now().await;
+            }
+            if self.fail_group_enrichment {
+                return Err(ToolExecutionError::backend("all group enrichment sources failed"));
+            }
+            let groups = groups.iter().map(|group| consumer_group(group)).collect::<Vec<_>>();
+            Ok(if self.partial_sources {
+                partial_payload(groups, QuerySource::ConsumerConnection, "broker-b")
+            } else {
+                QueryPayload::complete(groups)
+            })
+        }
+
         async fn consumer_lag(
             &mut self,
             _topic: &str,
             _consumer_group: &str,
         ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
             self.counters.consumer_lag_queries.fetch_add(1, Ordering::SeqCst);
+            if self.yield_snapshot_queries {
+                tokio::task::yield_now().await;
+            }
+            let queues = if self.many_lag_rows {
+                (0..5)
+                    .map(|index| {
+                        let mut row = queue_lag("broker-a");
+                        row.queue_id = index;
+                        row
+                    })
+                    .collect()
+            } else {
+                vec![queue_lag("broker-a")]
+            };
             let lag = SessionConsumerLag {
-                queues: vec![queue_lag("broker-a")],
+                queues,
                 total_lag: 10_000,
                 consume_tps: 0.5,
                 inflight_total: 5,
@@ -1149,11 +1608,13 @@ mod tests {
 
         assert_eq!(result.topic_count, 2);
         assert_eq!(result.consumer_group_count, 1);
-        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 3);
         assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.consumer_group_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.consumer_group_queries.load(Ordering::SeqCst), 0);
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 0);
     }
 
@@ -1174,7 +1635,7 @@ mod tests {
             .await
             .unwrap();
         assert!(overview.partial);
-        assert_eq!(overview.source_failures.len(), 2);
+        assert_eq!(overview.source_failures.len(), 1);
 
         let groups = facade
             .list_consumer_groups(ListConsumerGroupsArgs {
@@ -1380,7 +1841,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_facade_timeout_shuts_down_the_started_session_once() {
+    async fn query_facade_timeout_shuts_down_every_started_session_once() {
         let factory = FakeSessionFactory {
             hang_broker_query: true,
             ..Default::default()
@@ -1397,12 +1858,13 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, ToolExecutionError::TimedOut { .. }));
-        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        let starts = counters.starts.load(Ordering::SeqCst);
+        assert!(starts > 0);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), starts);
     }
 
     #[tokio::test]
-    async fn query_facade_cancellation_shuts_down_the_started_session_once() {
+    async fn query_facade_cancellation_shuts_down_every_started_session_once() {
         let factory = FakeSessionFactory {
             hang_broker_query: true,
             ..Default::default()
@@ -1424,8 +1886,9 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, ToolExecutionError::Cancelled));
-        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        let starts = counters.starts.load(Ordering::SeqCst);
+        assert!(starts > 0);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), starts);
     }
 
     #[tokio::test]
@@ -1533,16 +1996,21 @@ mod tests {
 
     #[tokio::test]
     async fn query_facade_singleflight_coalesces_concurrent_identical_misses() {
+        let gate = Arc::new(TopicInventoryGate::new(1));
+        gate.arm();
         let factory = FakeSessionFactory {
-            delay_topic_inventory: true,
+            topic_inventory_gate: Some(gate.clone()),
             ..Default::default()
         };
         let counters = factory.counters.clone();
         let facade = QueryFacade::with_factory(example_config(), factory);
+        let start = Arc::new(Barrier::new(9));
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..8 {
             let facade = facade.clone();
+            let start = start.clone();
             tasks.spawn(async move {
+                start.wait().await;
                 facade
                     .list_topics(ListTopicsArgs {
                         cluster: Some("local-dev".to_string()),
@@ -1554,6 +2022,18 @@ mod tests {
                     .cache_status
             });
         }
+
+        start.wait().await;
+        wait_for_atomic_count(&gate.entered, 1).await;
+        for _ in 0..10_000 {
+            if facade.cache_metrics().coalesced_waiters == 7 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(gate.entered.load(Ordering::SeqCst), 1);
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 7);
+        gate.release().await;
 
         let mut statuses = Vec::new();
         while let Some(status) = tasks.join_next().await {
@@ -1654,6 +2134,825 @@ mod tests {
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
     }
 
+    #[tokio::test]
+    async fn consumer_group_walk_is_stable_when_upstream_reorders_removes_and_inserts() {
+        let factory = FakeSessionFactory {
+            mutating_group_inventory: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let mut cursor = None;
+        let mut second_cursor = None;
+        let mut observed = Vec::new();
+        loop {
+            let result = facade
+                .list_consumer_groups(ListConsumerGroupsArgs {
+                    cluster: Some("local-dev".to_string()),
+                    filter: None,
+                    page: PageRequest {
+                        limit: Some(2),
+                        cursor: cursor.clone(),
+                    },
+                })
+                .await
+                .unwrap();
+            observed.extend(result.page.items.iter().map(|group| group.group.clone()));
+            if second_cursor.is_none() {
+                second_cursor = result.page.next_cursor.clone();
+            }
+            cursor = result.page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(observed, ["group-0", "group-1", "group-2", "group-3", "group-4"]);
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.consumer_group_enriched_targets.load(Ordering::SeqCst), 5);
+        let sessions_before_replay = counters.starts.load(Ordering::SeqCst);
+        let replay = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: second_cursor,
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(replay.cache_status, CacheStatus::Hit);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), sessions_before_replay);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), sessions_before_replay);
+    }
+
+    #[tokio::test]
+    async fn empty_consumer_group_inventory_needs_no_enrichment_session() {
+        let factory = FakeSessionFactory {
+            empty_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let result = facade
+            .list_consumer_groups(ListConsumerGroupsArgs::default())
+            .await
+            .unwrap();
+
+        assert!(result.page.items.is_empty());
+        assert_eq!(result.page.total_count, 0);
+        assert!(!result.page.has_more);
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn total_selected_page_enrichment_failure_is_not_cached_and_shuts_down() {
+        let factory = FakeSessionFactory {
+            fail_group_enrichment: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let error = facade
+            .list_consumer_groups(ListConsumerGroupsArgs::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ToolExecutionError::Backend(_)));
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn route_snapshot_is_shared_by_tool_description_and_query_resource_pages() {
+        let factory = FakeSessionFactory {
+            many_route_rows: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let first = facade
+            .query_topic_route(QueryTopicRouteArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        let cursor = first.page.next_cursor.clone().unwrap();
+        let described = facade
+            .describe_topic(DescribeTopicArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: Some(cursor.clone()),
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(described.page.items.len(), 2);
+        let uri = format!("rocketmq://clusters/local-dev/topics/orders/route?limit=2&cursor={cursor}");
+        resources::reader::read_resource(&facade, &uri).await.unwrap();
+
+        assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn consumer_lag_resource_page_reuses_tool_detail_snapshot_without_a_session() {
+        let factory = FakeSessionFactory {
+            many_lag_rows: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let first = facade
+            .query_consumer_lag(QueryConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        let cursor = first.page.next_cursor.clone().unwrap();
+        let uri = format!(
+            "rocketmq://clusters/local-dev/consumer-groups/order-service/lag?topic=orders&limit=2&cursor={cursor}"
+        );
+        resources::reader::read_resource(&facade, &uri).await.unwrap();
+
+        assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn exact_consumer_group_resource_enriches_only_the_requested_group() {
+        let factory = FakeSessionFactory {
+            many_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let result = resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups/group-4")
+            .await
+            .unwrap();
+        let payload = match &result.contents[0] {
+            rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
+                serde_json::from_str::<serde_json::Value>(text).unwrap()
+            }
+            _ => panic!("resource should contain JSON text"),
+        };
+        assert_eq!(payload["consumer_group"]["group"], "group-4");
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enriched_targets.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn literal_filter_then_exact_resource_use_distinct_structured_snapshot_selections() {
+        let factory = FakeSessionFactory {
+            many_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let listed = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("exact=group-4".to_string()),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        assert!(listed.page.items.is_empty());
+        let same_text_filter = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("group-4".to_string()),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(same_text_filter.page.items[0].group, "group-4");
+
+        let resource =
+            resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups/group-4")
+                .await
+                .unwrap();
+        let payload = match &resource.contents[0] {
+            rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
+                serde_json::from_str::<serde_json::Value>(text).unwrap()
+            }
+            _ => panic!("resource should contain JSON text"),
+        };
+        assert_eq!(payload["consumer_group"]["group"], "group-4");
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exact_resource_then_literal_filter_use_distinct_structured_snapshot_selections() {
+        let factory = FakeSessionFactory {
+            many_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups/group-4")
+            .await
+            .unwrap();
+        let same_text_filter = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("group-4".to_string()),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(same_text_filter.page.items[0].group, "group-4");
+        let listed = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("exact=group-4".to_string()),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        assert!(listed.page.items.is_empty());
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn case_colliding_group_list_then_exact_resources_preserve_identity() {
+        let factory = FakeSessionFactory {
+            case_colliding_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let listed = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("ordergroup".to_string()),
+                page: PageRequest {
+                    limit: Some(10),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            listed
+                .page
+                .items
+                .iter()
+                .map(|item| item.group.as_str())
+                .collect::<Vec<_>>(),
+            ["OrderGroup", "ordergroup"]
+        );
+        for group in ["OrderGroup", "ordergroup"] {
+            let resource = resources::reader::read_resource(
+                &facade,
+                &format!("rocketmq://clusters/local-dev/consumer-groups/{group}"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(resource_json(resource)["consumer_group"]["group"], group);
+        }
+        let error =
+            resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups/ORDERGROUP")
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("not found"));
+        assert!(!error.to_string().contains("unavailable"));
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 4);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.consumer_group_enriched_targets.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn case_colliding_exact_resources_then_list_preserve_identity() {
+        let factory = FakeSessionFactory {
+            case_colliding_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        for group in ["OrderGroup", "ordergroup"] {
+            let resource = resources::reader::read_resource(
+                &facade,
+                &format!("rocketmq://clusters/local-dev/consumer-groups/{group}"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(resource_json(resource)["consumer_group"]["group"], group);
+        }
+        let error =
+            resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups/ORDERGROUP")
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("not found"));
+        assert!(!error.to_string().contains("unavailable"));
+        let listed = facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("ordergroup".to_string()),
+                page: PageRequest {
+                    limit: Some(10),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            listed
+                .page
+                .items
+                .iter()
+                .map(|item| item.group.as_str())
+                .collect::<Vec<_>>(),
+            ["OrderGroup", "ordergroup"]
+        );
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 4);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.consumer_group_enriched_targets.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn cursor_mismatch_fails_without_rebuilding_or_starting_a_session() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let first = facade
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        let starts = counters.starts.load(Ordering::SeqCst);
+        let error = facade
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("orders".to_string()),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: first.page.next_cursor.clone(),
+                },
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("context"));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
+    }
+
+    #[tokio::test]
+    async fn topic_snapshot_bypass_reloads_first_pages_without_losing_cursor_replay() {
+        let mut config = example_config();
+        config.cache.enabled = false;
+        let gate = Arc::new(TopicInventoryGate::new(2));
+        let factory = FakeSessionFactory {
+            topic_inventory_gate: Some(gate.clone()),
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(config, factory);
+        let args = || ListTopicsArgs {
+            cluster: Some("local-dev".to_string()),
+            filter: None,
+            page: PageRequest {
+                limit: Some(1),
+                cursor: None,
+            },
+        };
+
+        assert_eq!(
+            facade.list_topics(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        assert_eq!(
+            facade.list_topics(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        gate.arm();
+        let start = Arc::new(Barrier::new(3));
+        let left_start = start.clone();
+        let left_facade = facade.clone();
+        let left = tokio::spawn(async move {
+            left_start.wait().await;
+            left_facade.list_topics(args()).await
+        });
+        let right_start = start.clone();
+        let right_facade = facade.clone();
+        let right = tokio::spawn(async move {
+            right_start.wait().await;
+            right_facade.list_topics(args()).await
+        });
+        start.wait().await;
+        wait_for_atomic_count(&gate.entered, 2).await;
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 0);
+        gate.release().await;
+        let left = left.await.unwrap();
+        let right = right.await.unwrap();
+        assert_eq!(left.unwrap().cache_status, CacheStatus::Bypass);
+        assert_eq!(right.unwrap().cache_status, CacheStatus::Bypass);
+        let first = facade.list_topics(args()).await.unwrap();
+        let continuation = ListTopicsArgs {
+            page: PageRequest {
+                limit: Some(1),
+                cursor: first.page.next_cursor.clone(),
+            },
+            ..args()
+        };
+        assert_eq!(
+            facade.list_topics(continuation.clone()).await.unwrap().cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(
+            facade.list_topics(continuation).await.unwrap().cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 5);
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 0);
+    }
+
+    #[tokio::test]
+    async fn route_snapshot_zero_ttl_reloads_first_pages_without_losing_cursor_replay() {
+        let mut config = example_config();
+        config.cache.topic_list_ttl_ms = 0;
+        let factory = FakeSessionFactory {
+            many_route_rows: true,
+            yield_snapshot_queries: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(config, factory);
+        let args = || QueryTopicRouteArgs {
+            cluster: "local-dev".to_string(),
+            topic: "orders".to_string(),
+            page: PageRequest {
+                limit: Some(2),
+                cursor: None,
+            },
+        };
+
+        assert_eq!(
+            facade.query_topic_route(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        assert_eq!(
+            facade.query_topic_route(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        let (left, right) = tokio::join!(facade.query_topic_route(args()), facade.query_topic_route(args()));
+        assert_eq!(left.unwrap().cache_status, CacheStatus::Bypass);
+        assert_eq!(right.unwrap().cache_status, CacheStatus::Bypass);
+        let first = facade.query_topic_route(args()).await.unwrap();
+        let continuation = QueryTopicRouteArgs {
+            page: PageRequest {
+                limit: Some(2),
+                cursor: first.page.next_cursor.clone(),
+            },
+            ..args()
+        };
+        assert_eq!(
+            facade
+                .query_topic_route(continuation.clone())
+                .await
+                .unwrap()
+                .cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(
+            facade.query_topic_route(continuation).await.unwrap().cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(counters.route_queries.load(Ordering::SeqCst), 5);
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 0);
+    }
+
+    #[tokio::test]
+    async fn lag_snapshot_zero_ttl_reloads_first_pages_without_losing_cursor_replay() {
+        let mut config = example_config();
+        config.cache.consumer_lag_ttl_ms = 0;
+        let factory = FakeSessionFactory {
+            many_lag_rows: true,
+            yield_snapshot_queries: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(config, factory);
+        let args = || QueryConsumerLagArgs {
+            cluster: "local-dev".to_string(),
+            topic: "orders".to_string(),
+            consumer_group: "order-service".to_string(),
+            page: PageRequest {
+                limit: Some(2),
+                cursor: None,
+            },
+        };
+
+        assert_eq!(
+            facade.query_consumer_lag(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        assert_eq!(
+            facade.query_consumer_lag(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        let (left, right) = tokio::join!(facade.query_consumer_lag(args()), facade.query_consumer_lag(args()));
+        assert_eq!(left.unwrap().cache_status, CacheStatus::Bypass);
+        assert_eq!(right.unwrap().cache_status, CacheStatus::Bypass);
+        let first = facade.query_consumer_lag(args()).await.unwrap();
+        let continuation = QueryConsumerLagArgs {
+            page: PageRequest {
+                limit: Some(2),
+                cursor: first.page.next_cursor.clone(),
+            },
+            ..args()
+        };
+        assert_eq!(
+            facade
+                .query_consumer_lag(continuation.clone())
+                .await
+                .unwrap()
+                .cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(
+            facade.query_consumer_lag(continuation).await.unwrap().cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 5);
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 0);
+    }
+
+    #[tokio::test]
+    async fn group_snapshot_bypass_reloads_first_pages_but_reuses_cursor_inventory() {
+        let mut config = example_config();
+        config.cache.enabled = false;
+        let factory = FakeSessionFactory {
+            many_groups: true,
+            yield_snapshot_queries: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(config, factory);
+        let args = || ListConsumerGroupsArgs {
+            cluster: Some("local-dev".to_string()),
+            filter: None,
+            page: PageRequest {
+                limit: Some(2),
+                cursor: None,
+            },
+        };
+
+        assert_eq!(
+            facade.list_consumer_groups(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        assert_eq!(
+            facade.list_consumer_groups(args()).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        let (left, right) = tokio::join!(facade.list_consumer_groups(args()), facade.list_consumer_groups(args()));
+        assert_eq!(left.unwrap().cache_status, CacheStatus::Bypass);
+        assert_eq!(right.unwrap().cache_status, CacheStatus::Bypass);
+        let first = facade.list_consumer_groups(args()).await.unwrap();
+        let continuation = ListConsumerGroupsArgs {
+            page: PageRequest {
+                limit: Some(2),
+                cursor: first.page.next_cursor.clone(),
+            },
+            ..args()
+        };
+        assert_eq!(
+            facade
+                .list_consumer_groups(continuation.clone())
+                .await
+                .unwrap()
+                .cache_status,
+            CacheStatus::Bypass
+        );
+        assert_eq!(
+            facade.list_consumer_groups(continuation).await.unwrap().cache_status,
+            CacheStatus::Bypass
+        );
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 5);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 7);
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 0);
+    }
+
+    #[tokio::test]
+    async fn topic_route_and_lag_full_page_walks_use_one_base_rpc_each() {
+        let factory = FakeSessionFactory {
+            many_route_rows: true,
+            many_lag_rows: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let mut cursor = None;
+        let mut topics = Vec::new();
+        loop {
+            let result = facade
+                .list_topics(ListTopicsArgs {
+                    cluster: Some("local-dev".to_string()),
+                    filter: None,
+                    page: PageRequest { limit: Some(1), cursor },
+                })
+                .await
+                .unwrap();
+            topics.extend(result.page.items.iter().map(|topic| topic.topic.clone()));
+            cursor = result.page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        let mut cursor = None;
+        let mut route_rows = 0;
+        loop {
+            let result = facade
+                .query_topic_route(QueryTopicRouteArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: "orders".to_string(),
+                    page: PageRequest { limit: Some(2), cursor },
+                })
+                .await
+                .unwrap();
+            route_rows += result.page.items.len();
+            cursor = result.page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        let mut cursor = None;
+        let mut lag_rows = 0;
+        loop {
+            let result = facade
+                .query_consumer_lag(QueryConsumerLagArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: "orders".to_string(),
+                    consumer_group: "order-service".to_string(),
+                    page: PageRequest { limit: Some(2), cursor },
+                })
+                .await
+                .unwrap();
+            lag_rows += result.page.items.len();
+            cursor = result.page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        assert_eq!(topics, ["orders", "payments"]);
+        assert_eq!(route_rows, 5);
+        assert_eq!(lag_rows, 5);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn consumer_group_pages_share_inventory_and_enrichment_in_both_surface_orders() {
+        let factory = FakeSessionFactory {
+            many_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups?limit=2")
+            .await
+            .unwrap();
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);
+
+        let factory = FakeSessionFactory {
+            many_groups: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/consumer-groups?limit=2")
+            .await
+            .unwrap();
+        facade
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn detail_snapshot_preserves_observation_and_full_evidence_across_surfaces() {
+        let factory = FakeSessionFactory {
+            many_lag_rows: true,
+            partial_sources: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let first = facade
+            .query_consumer_lag(QueryConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        let cursor = first.page.next_cursor.clone().unwrap();
+        let uri = format!(
+            "rocketmq://clusters/local-dev/consumer-groups/order-service/lag?topic=orders&limit=2&cursor={cursor}"
+        );
+        let resource = resource_json(resources::reader::read_resource(&facade, &uri).await.unwrap());
+        assert_eq!(resource["observed_at"], first.observed_at);
+        assert_eq!(resource["partial"], first.partial);
+        assert_eq!(resource["warnings"], serde_json::json!(first.warnings));
+        assert_eq!(resource["source_failures"], serde_json::json!(first.source_failures));
+
+        let replay = facade
+            .query_consumer_lag(QueryConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+                page: PageRequest {
+                    limit: Some(2),
+                    cursor: Some(cursor),
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(replay.observed_at, first.observed_at);
+        assert_eq!(replay.partial, first.partial);
+        assert_eq!(replay.warnings, first.warnings);
+        assert_eq!(replay.source_failures, first.source_failures);
+        assert_eq!(replay.cache_status, CacheStatus::Hit);
+        assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 1);
+    }
+
     fn example_config() -> McpConfig {
         McpConfig::load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1661,6 +2960,13 @@ mod tests {
                 .join("mcp.example.toml"),
         )
         .unwrap()
+    }
+
+    fn resource_json(result: rmcp::model::ReadResourceResult) -> serde_json::Value {
+        match &result.contents[0] {
+            rmcp::model::ResourceContents::TextResourceContents { text, .. } => serde_json::from_str(text).unwrap(),
+            _ => panic!("resource should contain JSON text"),
+        }
     }
 
     fn example_config_with_physical_cluster() -> McpConfig {

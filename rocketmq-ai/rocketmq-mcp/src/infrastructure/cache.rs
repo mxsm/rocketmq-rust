@@ -43,6 +43,19 @@ pub(crate) struct CacheMetricsSnapshot {
     pub coalesced_waiters: u64,
 }
 
+impl CacheMetricsSnapshot {
+    pub(crate) fn merge(self, other: Self) -> Self {
+        Self {
+            hits: self.hits.saturating_add(other.hits),
+            misses: self.misses.saturating_add(other.misses),
+            bypasses: self.bypasses.saturating_add(other.bypasses),
+            evictions: self.evictions.saturating_add(other.evictions),
+            invalidations: self.invalidations.saturating_add(other.invalidations),
+            coalesced_waiters: self.coalesced_waiters.saturating_add(other.coalesced_waiters),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct CacheMetrics {
     hits: AtomicU64,

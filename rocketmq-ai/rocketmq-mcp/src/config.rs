@@ -267,6 +267,16 @@ impl McpConfig {
                 "cache.max_entries must be greater than zero when cache is enabled".to_string(),
             ));
         }
+        if self.cache.cursor_snapshot_ttl_ms == 0 || self.cache.cursor_snapshot_ttl_ms > 5 * 60 * 1_000 {
+            return Err(McpError::InvalidConfig(
+                "cache.cursor_snapshot_ttl_ms must be between 1 and 300000".to_string(),
+            ));
+        }
+        if !(1..=10_000).contains(&self.cache.cursor_snapshot_max_entries) {
+            return Err(McpError::InvalidConfig(
+                "cache.cursor_snapshot_max_entries must be between 1 and 10000".to_string(),
+            ));
+        }
         validate_non_empty(
             "diagnosis.consumer_lag_policy_profile",
             &self.diagnosis.consumer_lag_policy_profile,
@@ -842,10 +852,22 @@ const fn default_audit_queue_max_bytes() -> usize {
 pub struct CacheConfig {
     pub enabled: bool,
     pub max_entries: usize,
+    #[serde(default = "default_cursor_snapshot_max_entries")]
+    pub cursor_snapshot_max_entries: usize,
+    #[serde(default = "default_cursor_snapshot_ttl_ms")]
+    pub cursor_snapshot_ttl_ms: u64,
     pub cluster_overview_ttl_ms: u64,
     pub topic_list_ttl_ms: u64,
     pub broker_metrics_ttl_ms: u64,
     pub consumer_lag_ttl_ms: u64,
+}
+
+const fn default_cursor_snapshot_max_entries() -> usize {
+    256
+}
+
+const fn default_cursor_snapshot_ttl_ms() -> u64 {
+    60_000
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -1315,6 +1337,43 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         let error = config.validate().unwrap_err();
 
         assert!(error.to_string().contains("cache.max_entries"));
+    }
+
+    #[test]
+    fn cursor_snapshot_policy_defaults_and_requires_positive_bounds() {
+        let source = std::fs::read_to_string(example_config_path()).unwrap();
+        let source = source
+            .lines()
+            .filter(|line| {
+                !line.starts_with("cursor_snapshot_max_entries") && !line.starts_with("cursor_snapshot_ttl_ms")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = config::Config::builder()
+            .add_source(config::File::from_str(&source, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize::<McpConfig>()
+            .unwrap();
+        assert_eq!(parsed.cache.cursor_snapshot_max_entries, 256);
+        assert_eq!(parsed.cache.cursor_snapshot_ttl_ms, 60_000);
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.cache.enabled = false;
+        config.cache.cursor_snapshot_ttl_ms = 0;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cursor_snapshot_ttl_ms"));
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.cache.cursor_snapshot_max_entries = 0;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cursor_snapshot_max_entries"));
     }
 
     #[test]

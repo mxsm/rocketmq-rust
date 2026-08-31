@@ -100,6 +100,36 @@ pub fn list_resource_templates(
             "RocketMQ broker",
             "Read-only details for one RocketMQ broker.",
         ),
+        resource_template(
+            "rocketmq://clusters/{cluster}/topics{?filter,limit,cursor}",
+            "rocketmq_topics_page",
+            "RocketMQ topic page",
+            "Read a filtered page from one stable topic inventory snapshot.",
+        ),
+        resource_template(
+            "rocketmq://clusters/{cluster}/topics/{topic}{?limit,cursor}",
+            "rocketmq_topic_page",
+            "RocketMQ topic detail page",
+            "Read a bounded page from one stable topic detail snapshot.",
+        ),
+        resource_template(
+            "rocketmq://clusters/{cluster}/topics/{topic}/route{?limit,cursor}",
+            "rocketmq_topic_route_page",
+            "RocketMQ topic route page",
+            "Read a bounded page from one stable topic route snapshot.",
+        ),
+        resource_template(
+            "rocketmq://clusters/{cluster}/consumer-groups{?filter,limit,cursor}",
+            "rocketmq_consumer_groups_page",
+            "RocketMQ consumer group page",
+            "Read and enrich one filtered page from a stable consumer-group inventory snapshot.",
+        ),
+        resource_template(
+            "rocketmq://clusters/{cluster}/consumer-groups/{group}/lag{?topic,limit,cursor}",
+            "rocketmq_consumer_lag_page",
+            "RocketMQ consumer lag page",
+            "Read a bounded page from one stable consumer-lag snapshot.",
+        ),
     ];
     let page = discovery_page(templates, request)?;
     let mut result = ListResourceTemplatesResult::with_all_items(page.items);
@@ -181,6 +211,11 @@ mod tests {
                 "rocketmq://clusters/{cluster}/consumer-groups/{group}",
                 "rocketmq://clusters/{cluster}/consumer-groups/{group}/lag{?topic}",
                 "rocketmq://clusters/{cluster}/brokers/{broker}",
+                "rocketmq://clusters/{cluster}/topics{?filter,limit,cursor}",
+                "rocketmq://clusters/{cluster}/topics/{topic}{?limit,cursor}",
+                "rocketmq://clusters/{cluster}/topics/{topic}/route{?limit,cursor}",
+                "rocketmq://clusters/{cluster}/consumer-groups{?filter,limit,cursor}",
+                "rocketmq://clusters/{cluster}/consumer-groups/{group}/lag{?topic,limit,cursor}",
             ]
         );
     }

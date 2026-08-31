@@ -1366,6 +1366,26 @@ impl ConsumerQueryAdmin for ReadAdminSession {
         })
     }
 
+    fn list_consumer_group_inventory_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a consumer::ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<consumer::ConsumerGroupInventoryResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            consumer_group_inventory(&mut self.inner).await
+        })
+    }
+
+    fn enrich_consumer_groups_exact_with_evidence<'a>(
+        &'a mut self,
+        request: &'a consumer::ExactConsumerGroupEnrichmentRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<consumer::ListConsumerGroupsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            enrich_consumer_groups_exact(&mut self.inner, request).await
+        })
+    }
+
     fn query_consumer_lag<'a>(
         &'a mut self,
         request: &'a consumer::QueryConsumerLagRequest,
@@ -1751,6 +1771,124 @@ fn default_consumer_group_summary(group: &str) -> consumer::ConsumerGroupSummary
     }
 }
 
+#[derive(Clone)]
+struct ExactGroupObservation {
+    summary: consumer::ConsumerGroupSummary,
+    successful_sources: usize,
+    failures: Vec<AdminSourceFailure>,
+}
+
+trait ConsumerGroupSnapshotSource {
+    fn fetch_retry_topics(&mut self) -> AdminFuture<'_, Vec<CheetahString>>;
+
+    fn observe_exact_group<'a>(&'a mut self, group: &'a str) -> AdminFuture<'a, ExactGroupObservation>;
+}
+
+impl ConsumerGroupSnapshotSource for DefaultMQAdminExt {
+    fn fetch_retry_topics(&mut self) -> AdminFuture<'_, Vec<CheetahString>> {
+        Box::pin(async move {
+            self.fetch_all_topic_list()
+                .await
+                .map(|topics| topics.topic_list)
+                .map_err(|error| backend_error("fetch_all_topic_list", error))
+        })
+    }
+
+    fn observe_exact_group<'a>(&'a mut self, group: &'a str) -> AdminFuture<'a, ExactGroupObservation> {
+        Box::pin(async move {
+            let mut summary = default_consumer_group_summary(group);
+            let mut successful_sources = 0usize;
+            let mut failures = Vec::new();
+            match self
+                .examine_consume_stats_with_evidence(CheetahString::from(group), None, None, None)
+                .await
+            {
+                Ok(stats) => {
+                    successful_sources += stats.successful_brokers;
+                    summary.consume_tps = stats.stats.get_consume_tps();
+                    summary.diff_total = stats.stats.compute_total_diff();
+                    failures.extend(stats.failures.into_iter().map(|failure| {
+                        source_failure_from_client(
+                            AdminQuerySource::ConsumerStatistics,
+                            failure.broker_name(),
+                            failure.code(),
+                            failure.retryable(),
+                        )
+                    }));
+                }
+                Err(error) => failures.push(source_failure_from_error(
+                    AdminQuerySource::ConsumerStatistics,
+                    group,
+                    &error,
+                )),
+            }
+            let connection_evidence = collect_group_connection_summary(self, group).await?;
+            successful_sources += connection_evidence.successful_sources;
+            if connection_evidence.successful_sources == 0
+                && connection_evidence.failures.is_empty()
+                && connection_evidence.summary.is_some()
+            {
+                successful_sources += 1;
+            }
+            failures.extend(connection_evidence.failures);
+            if let Some(connection) = connection_evidence.summary {
+                summary.client_count = connection.client_count;
+                summary.consume_type = connection.consume_type;
+                summary.message_model = connection.message_model;
+                summary.version = connection.version;
+            }
+            Ok(ExactGroupObservation {
+                summary,
+                successful_sources,
+                failures,
+            })
+        })
+    }
+}
+
+async fn consumer_group_inventory(
+    source: &mut impl ConsumerGroupSnapshotSource,
+) -> AdminResult<AdminQueryResult<consumer::ConsumerGroupInventoryResult>> {
+    let topics = source.fetch_retry_topics().await?;
+    Ok(AdminQueryResult::complete(consumer::ConsumerGroupInventoryResult {
+        groups: retry_consumer_groups(topics),
+    }))
+}
+
+async fn enrich_consumer_groups_exact(
+    source: &mut impl ConsumerGroupSnapshotSource,
+    request: &consumer::ExactConsumerGroupEnrichmentRequest,
+) -> AdminResult<AdminQueryResult<consumer::ListConsumerGroupsResult>> {
+    if request.groups().is_empty() {
+        return Ok(AdminQueryResult::complete(consumer::ListConsumerGroupsResult::default()));
+    }
+    let mut groups = Vec::with_capacity(request.groups().len());
+    let mut failures = Vec::new();
+    let mut successful_sources = 0usize;
+    for group in request.groups() {
+        let observation = source.observe_exact_group(group).await?;
+        successful_sources += observation.successful_sources;
+        failures.extend(observation.failures);
+        groups.push(observation.summary);
+    }
+    AdminQueryResult::from_sources(
+        consumer::ListConsumerGroupsResult { groups },
+        successful_sources,
+        failures,
+    )
+}
+
+fn retry_consumer_groups(topics: impl IntoIterator<Item = CheetahString>) -> Vec<String> {
+    let mut groups = topics
+        .into_iter()
+        .filter(|topic| topic.starts_with(RETRY_GROUP_TOPIC_PREFIX))
+        .map(|topic| KeyBuilder::parse_group(topic.as_str()))
+        .collect::<Vec<_>>();
+    groups.sort();
+    groups.dedup();
+    groups
+}
+
 struct ConsumerConnectionSummary {
     client_count: i32,
     consume_type: String,
@@ -2025,6 +2163,121 @@ mod tests {
     use rocketmq_protocol::protocol::LanguageCode;
 
     use super::*;
+
+    mod consumer_snapshot_tests {
+        use std::collections::HashSet;
+
+        use super::*;
+
+        #[derive(Default)]
+        struct FakeSource {
+            inventory_calls: usize,
+            observed_groups: Vec<String>,
+            topics: Vec<CheetahString>,
+            partial_groups: HashSet<String>,
+            failed_groups: HashSet<String>,
+        }
+
+        impl ConsumerGroupSnapshotSource for FakeSource {
+            fn fetch_retry_topics(&mut self) -> AdminFuture<'_, Vec<CheetahString>> {
+                Box::pin(async move {
+                    self.inventory_calls += 1;
+                    Ok(self.topics.clone())
+                })
+            }
+
+            fn observe_exact_group<'a>(&'a mut self, group: &'a str) -> AdminFuture<'a, ExactGroupObservation> {
+                Box::pin(async move {
+                    self.observed_groups.push(group.to_string());
+                    let failed = self.failed_groups.contains(group);
+                    let partial = self.partial_groups.contains(group);
+                    let failures = (failed || partial)
+                        .then(|| {
+                            AdminSourceFailure::new(
+                                AdminQuerySource::ConsumerStatistics,
+                                AdminQueryFailureCode::SourceUnavailable,
+                                true,
+                                "10.0.0.1:10911",
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                    Ok(ExactGroupObservation {
+                        summary: default_consumer_group_summary(group),
+                        successful_sources: usize::from(!failed),
+                        failures,
+                    })
+                })
+            }
+        }
+
+        #[tokio::test]
+        async fn inventory_is_one_rpc_and_never_enriches() {
+            let mut source = FakeSource {
+                topics: vec![
+                    "%RETRY%group-b".into(),
+                    "orders".into(),
+                    "%RETRY%group-a".into(),
+                    "%RETRY%group-b".into(),
+                ],
+                ..Default::default()
+            };
+            let result = consumer_group_inventory(&mut source).await.unwrap();
+            assert_eq!(result.data.groups, ["group-a", "group-b"]);
+            assert_eq!(source.inventory_calls, 1);
+            assert!(source.observed_groups.is_empty());
+        }
+
+        #[tokio::test]
+        async fn exact_enrichment_is_bounded_sorted_and_skips_inventory() {
+            let request =
+                consumer::ExactConsumerGroupEnrichmentRequest::try_new(["group-b", "group-a", "group-b"]).unwrap();
+            let mut source = FakeSource::default();
+            let result = enrich_consumer_groups_exact(&mut source, &request).await.unwrap();
+            assert_eq!(source.inventory_calls, 0);
+            assert_eq!(source.observed_groups, ["group-a", "group-b"]);
+            assert_eq!(
+                result
+                    .data
+                    .groups
+                    .iter()
+                    .map(|group| group.group.as_str())
+                    .collect::<Vec<_>>(),
+                ["group-a", "group-b"]
+            );
+
+            let empty = consumer::ExactConsumerGroupEnrichmentRequest::try_new(Vec::<String>::new()).unwrap();
+            enrich_consumer_groups_exact(&mut source, &empty).await.unwrap();
+            assert_eq!(source.observed_groups, ["group-a", "group-b"]);
+            assert!(consumer::ExactConsumerGroupEnrichmentRequest::try_new(["invalid.group"]).is_err());
+            assert!(consumer::ExactConsumerGroupEnrichmentRequest::try_new(
+                (0..consumer::ExactConsumerGroupEnrichmentRequest::MAX_GROUPS).map(|index| format!("group-{index}"))
+            )
+            .is_ok());
+            assert!(consumer::ExactConsumerGroupEnrichmentRequest::try_new(
+                (0..=consumer::ExactConsumerGroupEnrichmentRequest::MAX_GROUPS).map(|index| format!("group-{index}"))
+            )
+            .is_err());
+        }
+
+        #[tokio::test]
+        async fn exact_enrichment_preserves_partial_total_and_safe_evidence() {
+            let request = consumer::ExactConsumerGroupEnrichmentRequest::try_new(["group-a"]).unwrap();
+            let mut partial = FakeSource {
+                partial_groups: HashSet::from(["group-a".to_string()]),
+                ..Default::default()
+            };
+            let result = enrich_consumer_groups_exact(&mut partial, &request).await.unwrap();
+            assert!(result.partial);
+            assert_eq!(result.source_failures[0].logical_target(), "unknown");
+
+            let mut failed = FakeSource {
+                failed_groups: HashSet::from(["group-a".to_string()]),
+                ..Default::default()
+            };
+            assert!(enrich_consumer_groups_exact(&mut failed, &request).await.is_err());
+        }
+    }
 
     #[test]
     fn cluster_topic_inventory_filters_retry_and_dlq_then_sorts_and_deduplicates() {
