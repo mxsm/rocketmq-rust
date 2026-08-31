@@ -24,8 +24,10 @@ use crate::tools::broker_tools;
 use crate::tools::change_tools;
 use crate::tools::cluster_tools;
 use crate::tools::config_tools;
+use crate::tools::connection_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
+use crate::tools::message_tools;
 use crate::tools::proxy_tools;
 use crate::tools::topic_tools;
 
@@ -43,6 +45,11 @@ pub enum ToolId {
     GetBrokerLogFilterState,
     GetProxyDrainState,
     DiagnoseConsumerLag,
+    ListConsumerConnections,
+    ListProducerConnections,
+    GetMessageMetadata,
+    GetTopicConfigState,
+    GetConsumerGroupConfigState,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
     #[cfg(feature = "change-planning")]
@@ -69,6 +76,11 @@ impl ToolId {
         Self::GetBrokerLogFilterState,
         Self::GetProxyDrainState,
         Self::DiagnoseConsumerLag,
+        Self::ListConsumerConnections,
+        Self::ListProducerConnections,
+        Self::GetMessageMetadata,
+        Self::GetTopicConfigState,
+        Self::GetConsumerGroupConfigState,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
         #[cfg(feature = "change-planning")]
@@ -174,6 +186,41 @@ impl ToolId {
                 "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
                 RiskLevel::Diagnose,
             ),
+            Self::ListConsumerConnections => ToolDescriptor::read_only(
+                self,
+                "rocketmq_list_consumer_connections",
+                "RocketMQ consumer connections",
+                "List a bounded page of pseudonymous consumer connections for one exact group.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::ListProducerConnections => ToolDescriptor::read_only(
+                self,
+                "rocketmq_list_producer_connections",
+                "RocketMQ producer connections",
+                "List a bounded page of pseudonymous producer connections for one exact Topic and Producer group.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetMessageMetadata => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_message_metadata",
+                "RocketMQ message metadata",
+                "Get fixed body-free metadata for one message as process-lifetime aliases.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetTopicConfigState => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_topic_config_state",
+                "RocketMQ Topic configuration state",
+                "Get version-CAS observations for one Topic at bounded logical Brokers.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetConsumerGroupConfigState => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_consumer_group_config_state",
+                "RocketMQ consumer group configuration state",
+                "Get version-CAS observations for one Consumer Group at bounded logical Brokers.",
+                RiskLevel::ReadOnly,
+            ),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => ToolDescriptor::read_only(
                 self,
@@ -254,6 +301,24 @@ impl ToolId {
             Self::DiagnoseConsumerLag => {
                 descriptor.build::<diagnosis_tools::DiagnoseConsumerLagArgs, crate::model::diagnosis::DiagnosisReport>()
             }
+            Self::ListConsumerConnections => descriptor.build::<
+                connection_tools::ListConsumerConnectionsArgs,
+                connection_tools::ListConsumerConnectionsOutput,
+            >(),
+            Self::ListProducerConnections => descriptor.build::<
+                connection_tools::ListProducerConnectionsArgs,
+                connection_tools::ListProducerConnectionsOutput,
+            >(),
+            Self::GetMessageMetadata => {
+                descriptor.build::<message_tools::MessageMetadataArgs, message_tools::MessageMetadataOutput>()
+            }
+            Self::GetTopicConfigState => {
+                descriptor.build::<config_tools::TopicConfigStateArgs, config_tools::TopicConfigStateOutput>()
+            }
+            Self::GetConsumerGroupConfigState => descriptor.build::<
+                config_tools::ConsumerGroupConfigStateArgs,
+                config_tools::ConsumerGroupConfigStateOutput,
+            >(),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => descriptor.build::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(),
             #[cfg(feature = "change-planning")]
@@ -403,7 +468,31 @@ mod tests {
             ]
         );
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 12);
+        assert_eq!(names.len(), 17);
+        #[cfg(feature = "change-planning")]
+        assert_eq!(names.len(), 22);
+    }
+
+    #[test]
+    fn connection_message_and_config_state_contracts_are_read_only_and_closed() {
+        let expected = [
+            ToolId::ListConsumerConnections,
+            ToolId::ListProducerConnections,
+            ToolId::GetMessageMetadata,
+            ToolId::GetTopicConfigState,
+            ToolId::GetConsumerGroupConfigState,
+        ];
+        for tool_id in expected {
+            let descriptor = tool_id.descriptor();
+            assert_eq!(descriptor.risk_level, RiskLevel::ReadOnly);
+            assert!(descriptor.annotations.read_only);
+            assert!(!descriptor.annotations.destructive);
+            assert!(descriptor.annotations.idempotent);
+            assert_eq!(
+                tool_id.definition().input_schema.get("additionalProperties"),
+                Some(&serde_json::Value::Bool(false))
+            );
+        }
     }
 
     #[test]

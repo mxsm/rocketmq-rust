@@ -70,9 +70,18 @@ use crate::core::client_connection::ListProducerConnectionsResult;
 use crate::core::client_connection::ProducerConnectionObservation;
 use crate::core::client_connection::QueryConsumerConnectionsRequest;
 use crate::core::client_connection::QueryConsumerConnectionsResult;
+use crate::core::client_connection::QueryTopicProducerConnectionsRequest;
+use crate::core::client_connection::QueryTopicProducerConnectionsResult;
 use crate::core::clock::Clock;
+use crate::core::config_state::ConfigStateQueryAdmin;
+use crate::core::config_state::ConsumerGroupConfigStateRequest;
+use crate::core::config_state::ConsumerGroupConfigStateResult;
+use crate::core::config_state::TopicConfigStateRequest;
+use crate::core::config_state::TopicConfigStateResult;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerQueryAdmin;
+use crate::core::message::MessageMetadataQueryAdmin;
+use crate::core::message::MessageMetadataRequest;
 use crate::core::proxy::ProxyDrainPending;
 use crate::core::proxy::ProxyDrainState;
 use crate::core::proxy::ProxyQueryAdmin;
@@ -1121,6 +1130,62 @@ impl ClientConnectionQueryAdmin for ReadAdminSession {
                 successful_sources,
                 failures,
             )
+        })
+    }
+
+    fn query_topic_producer_connections<'a>(
+        &'a mut self,
+        request: &'a QueryTopicProducerConnectionsRequest,
+    ) -> AdminFuture<'a, QueryTopicProducerConnectionsResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::read_queries::query_topic_producer_connections(&self.inner, request)
+                .await
+                .map(|result| result.data)
+        })
+    }
+
+    fn query_topic_producer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryTopicProducerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicProducerConnectionsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::read_queries::query_topic_producer_connections(&self.inner, request).await
+        })
+    }
+}
+
+impl MessageMetadataQueryAdmin for ReadAdminSession {
+    fn query_message_metadata<'a>(
+        &'a mut self,
+        request: &'a MessageMetadataRequest,
+    ) -> AdminFuture<'a, crate::core::message::MessageMetadata> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::read_queries::query_message_metadata(&self.inner, request).await
+        })
+    }
+}
+
+impl ConfigStateQueryAdmin for ReadAdminSession {
+    fn query_topic_config_state<'a>(
+        &'a mut self,
+        request: &'a TopicConfigStateRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<TopicConfigStateResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::read_queries::query_topic_config_state(&self.inner, request).await
+        })
+    }
+
+    fn query_consumer_group_config_state<'a>(
+        &'a mut self,
+        request: &'a ConsumerGroupConfigStateRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupConfigStateResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::read_queries::query_consumer_group_config_state(&self.inner, request).await
         })
     }
 }

@@ -9,6 +9,11 @@ allow_tools = [
   "rocketmq_get_consumer_lag",
   "rocketmq_describe_broker",
   "rocketmq_get_broker_config_summary",
+  "rocketmq_list_consumer_connections",
+  "rocketmq_list_producer_connections",
+  "rocketmq_get_message_metadata",
+  "rocketmq_get_topic_config_state",
+  "rocketmq_get_consumer_group_config_state",
 ]
 deny_tools = ["*"]
 

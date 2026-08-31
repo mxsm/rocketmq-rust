@@ -203,6 +203,8 @@ pub(crate) enum SnapshotKind {
     ConsumerGroupInventory,
     TopicRoute,
     ConsumerLag,
+    ConsumerConnections,
+    ProducerConnections,
 }
 
 impl SnapshotKind {
@@ -212,6 +214,8 @@ impl SnapshotKind {
             Self::ConsumerGroupInventory => "consumer_group_inventory",
             Self::TopicRoute => "topic_route",
             Self::ConsumerLag => "consumer_lag",
+            Self::ConsumerConnections => "consumer_connections",
+            Self::ProducerConnections => "producer_connections",
         }
     }
 }

@@ -28,6 +28,8 @@ use crate::core::client_connection::ListProducerConnectionsResult;
 use crate::core::client_connection::ProducerConnectionObservation;
 use crate::core::client_connection::QueryConsumerConnectionsRequest;
 use crate::core::client_connection::QueryConsumerConnectionsResult;
+use crate::core::client_connection::QueryTopicProducerConnectionsRequest;
+use crate::core::client_connection::QueryTopicProducerConnectionsResult;
 use crate::core::query::AdminQueryFailureCode;
 use crate::core::query::AdminQueryResult;
 use crate::core::query::AdminQuerySource;
@@ -81,6 +83,24 @@ impl ClientConnectionQueryAdmin for AdminSession {
             let outcome = query_producer_connections(&self.inner, request).await?;
             AdminQueryResult::from_sources(outcome.result, outcome.successful_sources, outcome.failures)
         })
+    }
+
+    fn query_topic_producer_connections<'a>(
+        &'a mut self,
+        request: &'a QueryTopicProducerConnectionsRequest,
+    ) -> AdminFuture<'a, QueryTopicProducerConnectionsResult> {
+        Box::pin(async move {
+            crate::client_adapter::targeted_read::query_topic_producer_connections(self, request)
+                .await
+                .map(|result| result.data)
+        })
+    }
+
+    fn query_topic_producer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryTopicProducerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicProducerConnectionsResult>> {
+        crate::client_adapter::targeted_read::query_topic_producer_connections(self, request)
     }
 }
 

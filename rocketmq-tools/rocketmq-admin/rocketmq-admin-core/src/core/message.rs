@@ -19,8 +19,10 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::core::error::required;
 use crate::core::queue::QueueRef;
 use crate::core::AdminFuture;
+use crate::core::AdminResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageRecord {
@@ -66,6 +68,30 @@ pub struct MessageMetadata {
     pub sys_flag: i32,
     pub flag: i32,
     pub prepared_transaction_offset: i64,
+}
+
+/// Cluster-isolated lookup of one offset message identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageMetadataRequest {
+    pub cluster: String,
+    pub message_id: String,
+}
+
+impl MessageMetadataRequest {
+    pub fn try_new(cluster: impl Into<String>, message_id: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            message_id: required("message_id", message_id)?,
+        })
+    }
+}
+
+/// Narrow body-free message metadata capability for read-only integrations.
+pub trait MessageMetadataQueryAdmin: Send {
+    fn query_message_metadata<'a>(
+        &'a mut self,
+        request: &'a MessageMetadataRequest,
+    ) -> AdminFuture<'a, MessageMetadata>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,5 +313,19 @@ impl<T: MessageAdmin + ?Sized> MessageMutationAdmin for T {
     }
     fn resend_dlq_message<'a>(&'a mut self, request: &'a DlqMessageLookupRequest) -> AdminFuture<'a, DlqResendResult> {
         MessageAdmin::resend_dlq_message(self, request)
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_request_requires_exact_cluster_and_message_id() {
+        let request = MessageMetadataRequest::try_new(" cluster-a ", " message-id ").unwrap();
+        assert_eq!(request.cluster, "cluster-a");
+        assert_eq!(request.message_id, "message-id");
+        assert!(MessageMetadataRequest::try_new("", "message-id").is_err());
+        assert!(MessageMetadataRequest::try_new("cluster-a", " ").is_err());
     }
 }

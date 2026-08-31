@@ -34,6 +34,8 @@ pub enum QuerySource {
     ConsumerStatistics,
     ConsumerConnection,
     ProducerConnection,
+    TopicConfig,
+    ConsumerGroupConfig,
     SubscriptionGroups,
     TopicRoute,
 }
@@ -108,6 +110,8 @@ impl SourceFailure {
             AdminSource::ConsumerStatistics => QuerySource::ConsumerStatistics,
             AdminSource::ConsumerConnection => QuerySource::ConsumerConnection,
             AdminSource::ProducerConnection => QuerySource::ProducerConnection,
+            AdminSource::TopicConfig => QuerySource::TopicConfig,
+            AdminSource::ConsumerGroupConfig => QuerySource::ConsumerGroupConfig,
             AdminSource::SubscriptionGroups => QuerySource::SubscriptionGroups,
         };
         let code = match failure.code() {
@@ -432,6 +436,46 @@ fn safe_logical_target(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_query_sources_have_closed_snake_case_wire_and_schema_contracts() {
+        assert_eq!(serde_json::to_value(QuerySource::TopicConfig).unwrap(), "topic_config");
+        assert_eq!(
+            serde_json::to_value(QuerySource::ConsumerGroupConfig).unwrap(),
+            "consumer_group_config"
+        );
+        assert_eq!(
+            serde_json::from_value::<QuerySource>(serde_json::json!("topic_config")).unwrap(),
+            QuerySource::TopicConfig
+        );
+        assert_eq!(
+            serde_json::from_value::<QuerySource>(serde_json::json!("consumer_group_config")).unwrap(),
+            QuerySource::ConsumerGroupConfig
+        );
+        assert!(serde_json::from_value::<QuerySource>(serde_json::json!("future_config_source")).is_err());
+
+        let schema = serde_json::to_value(schemars::schema_for!(QuerySource)).unwrap();
+        let values = schema["enum"].as_array().unwrap();
+        assert!(values.contains(&serde_json::json!("topic_config")));
+        assert!(values.contains(&serde_json::json!("consumer_group_config")));
+        assert!(!values.contains(&serde_json::json!("future_config_source")));
+    }
+
+    #[test]
+    fn admin_config_sources_preserve_their_exact_public_evidence_kind() {
+        use rocketmq_admin_core::core::query::AdminQueryFailureCode;
+        use rocketmq_admin_core::core::query::AdminQuerySource;
+        use rocketmq_admin_core::core::query::AdminSourceFailure;
+
+        for (admin_source, expected) in [
+            (AdminQuerySource::TopicConfig, QuerySource::TopicConfig),
+            (AdminQuerySource::ConsumerGroupConfig, QuerySource::ConsumerGroupConfig),
+        ] {
+            let failure =
+                AdminSourceFailure::new(admin_source, AdminQueryFailureCode::SourceUnavailable, true, "broker-a");
+            assert_eq!(SourceFailure::from_admin(&failure).source, expected);
+        }
+    }
 
     #[test]
     fn pagination_is_bounded_and_cursor_resumes() {

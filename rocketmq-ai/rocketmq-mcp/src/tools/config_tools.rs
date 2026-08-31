@@ -43,6 +43,62 @@ pub struct BrokerConfigSummaryOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct TopicConfigStateArgs {
+    pub cluster: String,
+    pub topic: String,
+    pub broker_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct TopicConfigStateRow {
+    pub broker_name: String,
+    pub version: u64,
+    pub read_queue_nums: u32,
+    pub write_queue_nums: u32,
+    pub order: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct TopicConfigStateOutput {
+    pub cluster: String,
+    pub topic: String,
+    pub brokers: Vec<TopicConfigStateRow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConsumerGroupConfigStateArgs {
+    pub cluster: String,
+    pub group: String,
+    pub broker_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ConsumerGroupConfigStateRow {
+    pub broker_name: String,
+    pub version: u64,
+    pub retry_max_times: u32,
+    pub retry_queue_nums: u32,
+    pub consume_timeout_minutes: u32,
+    pub consume_enable: bool,
+    pub consume_from_min_enable: bool,
+    pub consume_broadcast_enable: bool,
+    pub consume_message_orderly: bool,
+    pub broker_id: u64,
+    pub which_broker_when_consume_slowly: u64,
+    pub notify_consumer_ids_changed_enable: bool,
+    pub group_sys_flag: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ConsumerGroupConfigStateOutput {
+    pub cluster: String,
+    pub group: String,
+    pub brokers: Vec<ConsumerGroupConfigStateRow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BrokerLogFilterStateArgs {
     pub cluster: String,
     pub broker_name: String,

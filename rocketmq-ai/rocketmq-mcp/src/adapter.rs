@@ -16,4 +16,5 @@
 
 pub(crate) mod admin_session;
 mod admin_session_projection;
+pub(crate) mod identifier_alias;
 pub(crate) mod query_facade;

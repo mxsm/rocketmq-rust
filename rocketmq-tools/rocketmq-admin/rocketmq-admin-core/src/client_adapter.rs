@@ -37,6 +37,8 @@ pub mod services;
 #[cfg(feature = "client-adapter")]
 mod static_topic;
 #[cfg(feature = "client-adapter")]
+mod targeted_read;
+#[cfg(feature = "client-adapter")]
 mod topic;
 
 #[cfg(feature = "client-adapter")]
