@@ -363,6 +363,7 @@ mod tests {
     use crate::config::AuditConfig;
     use crate::config::ClusterConfig;
     use crate::config::SecurityConfig;
+    use crate::guard::context::VisibilityClass;
     use crate::guard::jwks::JwksError;
     use crate::guard::jwks::JwksSource;
 
@@ -390,7 +391,32 @@ mod tests {
         assert_eq!(context.principal.id, "sre@example.test");
         assert_eq!(context.client.as_deref(), Some("mcp-test-client"));
         assert!(context.principal.roles.contains("diagnose"));
+        assert_eq!(context.visibility_class(), VisibilityClass::Sensitive);
         assert_eq!(context.principal.allowed_clusters.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn http_auth_visibility_uses_verified_scopes_for_oauth_and_development_mode() {
+        let oauth = oauth_state(["rocketmq:read"]).await;
+        let read_only = oauth
+            .authenticate(&bearer_headers(&signed_token("rocketmq:read", "test-key")))
+            .await
+            .unwrap();
+        assert_eq!(read_only.visibility_class(), VisibilityClass::Standard);
+
+        let development: HttpAuthState<StaticSource> = HttpAuthState {
+            authenticator: HttpAuthenticator::DevelopmentToken {
+                token: Arc::from("local-test-token"),
+                tenant: None,
+            },
+            guard: test_guard(),
+            resource_metadata: None,
+        };
+        let context = development
+            .authenticate(&bearer_headers("local-test-token"))
+            .await
+            .unwrap();
+        assert_eq!(context.visibility_class(), VisibilityClass::Sensitive);
     }
 
     #[tokio::test]

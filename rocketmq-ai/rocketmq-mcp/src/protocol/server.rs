@@ -39,6 +39,8 @@ use serde_json::json;
 use std::time::Instant;
 use tracing::Instrument;
 
+use crate::adapter::admin_session::AdminCoreSessionFactory;
+use crate::adapter::query_facade::QueryFacade;
 use crate::app::McpApp;
 use crate::guard::context::RequestContext as AccessContext;
 use crate::guard::GuardError;
@@ -251,7 +253,7 @@ impl ServerHandler for RocketmqMcpServer {
                     resources::system::read_result(&request.uri, "observability", self.app.observability_status_view())
                 }
                 _ => {
-                    let query = self.app.query().as_ref().clone().with_cancellation(context.ct);
+                    let query = self.request_query(&access, context.ct);
                     resources::reader::read_resource(&query, &request.uri).await
                 }
             };
@@ -312,8 +314,8 @@ impl ServerHandler for RocketmqMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let query = self.app.query().as_ref().clone().with_cancellation(context.ct.clone());
         let access = self.access_context(&context)?;
+        let query = self.request_query(&access, context.ct.clone());
         let result = ToolExecutor::new(query, self.app.guard().clone())
             .with_metrics(self.app.metrics().clone())
             .with_request_context(access)
@@ -329,6 +331,19 @@ impl ServerHandler for RocketmqMcpServer {
 }
 
 impl RocketmqMcpServer {
+    fn request_query(
+        &self,
+        access: &AccessContext,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> QueryFacade<AdminCoreSessionFactory> {
+        self.app
+            .query()
+            .as_ref()
+            .clone()
+            .with_visibility_class(access.visibility_class())
+            .with_cancellation(cancellation)
+    }
+
     fn access_context(&self, context: &RequestContext<RoleServer>) -> Result<AccessContext, ErrorData> {
         #[cfg(feature = "streamable-http")]
         if let Some(parts) = context.extensions.get::<axum::http::request::Parts>() {
@@ -419,15 +434,34 @@ fn record_resource_operation(operation: &'static str, outcome: McpOperationOutco
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use std::sync::atomic::Ordering;
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use std::sync::Arc;
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use rmcp::model::NumberOrString;
     use rmcp::ServerHandler;
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use rmcp::ServiceExt;
     use serde_json::json;
 
     use super::*;
     use crate::app::McpApp;
     use crate::config::McpConfig;
+    use crate::guard::context::Principal;
+    use crate::guard::context::VisibilityClass;
     use crate::prompts;
     use crate::resources;
     use crate::tools;
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use crate::adapter::admin_session::ProtocolTestCounters;
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use crate::adapter::admin_session::ProtocolTestGate;
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    use crate::adapter::admin_session::ProtocolTestSessionFactory;
 
     #[test]
     fn server_info_declares_mvp_capabilities() {
@@ -464,6 +498,453 @@ mod tests {
         assert_eq!(data["retryable"], false);
         assert_eq!(data["correlation_id"], "request-7");
         assert!(!error.message.contains("secret tenant details"));
+    }
+
+    #[test]
+    fn request_query_unit_binds_closed_visibility_without_retaining_identity() {
+        let owner =
+            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default("mcp-visibility-test"))
+                .unwrap();
+        let app = McpApp::new(
+            McpConfig::load(example_config_path()).unwrap(),
+            owner.root_context().component("mcp-app"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .unwrap();
+        let server = RocketmqMcpServer::new(app);
+        let access = |scope: &str| AccessContext {
+            principal: Principal {
+                id: "private-principal-sentinel".to_string(),
+                tenant: Some("private-tenant-sentinel".to_string()),
+                roles: ["private-role-sentinel".to_string()].into_iter().collect(),
+                scopes: [scope.to_string()].into_iter().collect(),
+                allowed_clusters: Some(BTreeSet::from(["local-dev".to_string()])),
+            },
+            client: Some("private-client-sentinel".to_string()),
+        };
+
+        let standard = server.request_query(&access("rocketmq:read"), tokio_util::sync::CancellationToken::new());
+        let sensitive = server.request_query(&access("rocketmq:diagnose"), tokio_util::sync::CancellationToken::new());
+
+        assert_eq!(standard.visibility_class(), VisibilityClass::Standard);
+        assert_eq!(sensitive.visibility_class(), VisibilityClass::Sensitive);
+        for debug in [format!("{standard:?}"), format!("{sensitive:?}")] {
+            assert!(!debug.contains("private-principal-sentinel"));
+            assert!(!debug.contains("private-tenant-sentinel"));
+            assert!(!debug.contains("private-role-sentinel"));
+            assert!(!debug.contains("private-client-sentinel"));
+        }
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handlers_bind_http_and_stdio_visibility_and_isolate_query_state() {
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        let standard = oauth_context(&peer, 1, "oauth-read", ["read_only"], ["rocketmq:read"]);
+        let standard_tool = complete_tool_response(
+            running
+                .service()
+                .call_tool(list_topics_request(Some(1), None), standard)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(standard_tool.is_error, Some(false));
+        let cursor = standard_tool.structured_content.as_ref().unwrap()["data"]["next_cursor"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+
+        let standard_resource = oauth_context(&peer, 2, "other-oauth-read", ["read_only"], ["rocketmq:read"]);
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics?limit=1"),
+                standard_resource,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            counters.topic_inventory_queries.load(Ordering::SeqCst),
+            1,
+            "same-class Tool and Resource must share the retained snapshot"
+        );
+
+        let sensitive = oauth_context(
+            &peer,
+            3,
+            "oauth-diagnose",
+            ["diagnose"],
+            ["rocketmq:read", "rocketmq:diagnose"],
+        );
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics?limit=1"),
+                sensitive,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            counters.topic_inventory_queries.load(Ordering::SeqCst),
+            2,
+            "standard and sensitive snapshots must not share"
+        );
+
+        let before_cursor_replay = counters.starts.load(Ordering::SeqCst);
+        let replay = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    list_topics_request(Some(1), Some(cursor)),
+                    oauth_context(
+                        &peer,
+                        4,
+                        "oauth-diagnose",
+                        ["diagnose"],
+                        ["rocketmq:read", "rocketmq:diagnose"],
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(replay.is_error, Some(true));
+        assert_eq!(
+            counters.starts.load(Ordering::SeqCst),
+            before_cursor_replay,
+            "cross-class cursor rejection must not start an admin session"
+        );
+
+        let stdio_diagnose = local_context(&peer, 5);
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics?limit=1"),
+                stdio_diagnose,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            counters.topic_inventory_queries.load(Ordering::SeqCst),
+            2,
+            "local diagnose must share the sensitive class"
+        );
+
+        let overview = || {
+            CallToolRequestParams::new("rocketmq_get_cluster_overview")
+                .with_arguments(json!({"cluster": "local-dev"}).as_object().unwrap().clone())
+        };
+        running
+            .service()
+            .call_tool(
+                overview(),
+                oauth_context(&peer, 6, "oauth-read", ["read_only"], ["rocketmq:read"]),
+            )
+            .await
+            .unwrap();
+        running
+            .service()
+            .call_tool(
+                overview(),
+                oauth_context(
+                    &peer,
+                    7,
+                    "oauth-diagnose",
+                    ["diagnose"],
+                    ["rocketmq:read", "rocketmq:diagnose"],
+                ),
+            )
+            .await
+            .unwrap();
+        running
+            .service()
+            .call_tool(
+                overview(),
+                oauth_context(&peer, 8, "another-read", ["read_only"], ["rocketmq:read"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            counters.broker_queries.load(Ordering::SeqCst),
+            2,
+            "ordinary cache entries must share within, but not across, visibility classes"
+        );
+
+        drop(running);
+        drop(client);
+
+        let (_owner, read_only_server, read_only_counters) = test_server("read_only", None);
+        let (read_only_running, read_only_client) = connected_test_server(read_only_server).await;
+        let read_only_peer = read_only_running.peer().clone();
+
+        read_only_running
+            .service()
+            .call_tool(
+                list_topics_request(None, None),
+                oauth_context(&read_only_peer, 9, "oauth-read", ["read_only"], ["rocketmq:read"]),
+            )
+            .await
+            .unwrap();
+        read_only_running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics"),
+                local_context(&read_only_peer, 10),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            read_only_counters.topic_inventory_queries.load(Ordering::SeqCst),
+            1,
+            "local read-only must use the standard HTTP read class"
+        );
+
+        drop(read_only_running);
+        drop(read_only_client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handlers_map_local_operator_and_reject_unauthorized_before_sessions() {
+        let (_owner, server, counters) = test_server("operator", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        running
+            .service()
+            .call_tool(
+                list_topics_request(None, None),
+                oauth_context(&peer, 1, "oauth-read", ["read_only"], ["rocketmq:read"]),
+            )
+            .await
+            .unwrap();
+        running
+            .service()
+            .call_tool(list_topics_request(None, None), local_context(&peer, 2))
+            .await
+            .unwrap();
+        assert_eq!(
+            counters.topic_inventory_queries.load(Ordering::SeqCst),
+            2,
+            "local operator must use sensitive rather than the HTTP read class"
+        );
+
+        drop(running);
+        drop(client);
+
+        let (_owner, denied_server, denied_counters) = test_server("read_only", None);
+        let (denied_running, denied_client) = connected_test_server(denied_server).await;
+        let denied_peer = denied_running.peer().clone();
+        let diagnose = CallToolRequestParams::new("rocketmq_diagnose_consumer_lag").with_arguments(
+            json!({"cluster": "local-dev", "topic": "orders", "consumer_group": "orders-service"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let denied = complete_tool_response(
+            denied_running
+                .service()
+                .call_tool(diagnose, local_context(&denied_peer, 3))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(denied.is_error, Some(true));
+        let unknown = denied_running
+            .service()
+            .call_tool(
+                CallToolRequestParams::new("rocketmq_unknown_query"),
+                local_context(&denied_peer, 4),
+            )
+            .await;
+        assert!(unknown.is_err());
+        let no_scope = oauth_context(&denied_peer, 5, "oauth-no-scope", ["diagnose"], []);
+        let denied_tool = complete_tool_response(
+            denied_running
+                .service()
+                .call_tool(list_topics_request(None, None), no_scope)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(denied_tool.is_error, Some(true));
+        let unknown_scope = complete_tool_response(
+            denied_running
+                .service()
+                .call_tool(
+                    list_topics_request(None, None),
+                    oauth_context(
+                        &denied_peer,
+                        6,
+                        "oauth-unknown-scope",
+                        ["diagnose"],
+                        ["rocketmq:unknown"],
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(unknown_scope.is_error, Some(true));
+        let denied_resource = denied_running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics"),
+                oauth_context(&denied_peer, 7, "oauth-no-scope", ["diagnose"], []),
+            )
+            .await;
+        assert!(denied_resource.is_err());
+        assert_eq!(
+            denied_counters.starts.load(Ordering::SeqCst),
+            0,
+            "denied and unknown requests must not reach Admin/session work"
+        );
+        assert_eq!(denied_counters.broker_queries.load(Ordering::SeqCst), 0);
+        assert_eq!(denied_counters.topic_inventory_queries.load(Ordering::SeqCst), 0);
+        assert_eq!(denied_counters.shutdowns.load(Ordering::SeqCst), 0);
+
+        drop(denied_running);
+        drop(denied_client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handler_singleflight_coalesces_within_but_not_across_classes() {
+        let gate = Arc::new(ProtocolTestGate::new(2));
+        let (_owner, server, counters) = test_server("diagnose", Some(gate.clone()));
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let start = Arc::new(tokio::sync::Barrier::new(5));
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for (id, principal, role, scopes) in [
+            (1, "read-a", "read_only", vec!["rocketmq:read"]),
+            (2, "read-b", "read_only", vec!["rocketmq:read"]),
+            (3, "diagnose-a", "diagnose", vec!["rocketmq:read", "rocketmq:diagnose"]),
+            (4, "diagnose-b", "diagnose", vec!["rocketmq:read", "rocketmq:diagnose"]),
+        ] {
+            let server = running.service().clone();
+            let peer = peer.clone();
+            let start = start.clone();
+            tasks.spawn(async move {
+                start.wait().await;
+                server
+                    .call_tool(
+                        list_topics_request(None, None),
+                        oauth_context(&peer, id, principal, [role], scopes),
+                    )
+                    .await
+                    .unwrap()
+            });
+        }
+
+        start.wait().await;
+        gate.wait_until_entered(2).await;
+        gate.release().await;
+        while let Some(result) = tasks.join_next().await {
+            assert_eq!(complete_tool_response(result.unwrap()).is_error, Some(false));
+        }
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
+
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn test_server(
+        profile: &str,
+        gate: Option<Arc<ProtocolTestGate>>,
+    ) -> (
+        rocketmq_runtime::RuntimeOwner,
+        RocketmqMcpServer,
+        Arc<ProtocolTestCounters>,
+    ) {
+        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            "mcp-real-handler-test",
+        ))
+        .unwrap();
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.security.profile = profile.to_string();
+        let factory = ProtocolTestSessionFactory::new(gate);
+        let counters = factory.counters.clone();
+        let app = McpApp::new(
+            config,
+            owner.root_context().component("mcp-app"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .unwrap()
+        .with_test_session_factory(factory);
+        (owner, RocketmqMcpServer::new(app), counters)
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    async fn connected_test_server(
+        server: RocketmqMcpServer,
+    ) -> (
+        rmcp::service::RunningService<RoleServer, RocketmqMcpServer>,
+        tokio::io::DuplexStream,
+    ) {
+        use tokio::io::AsyncWriteExt;
+
+        const INITIALIZE: &[u8] = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"handler-test\",\"version\":\"1.0.0\"}}}\n";
+        let (server_transport, mut client_transport) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move { server.serve(server_transport).await });
+        client_transport.write_all(INITIALIZE).await.unwrap();
+        let server = server_task.await.unwrap().unwrap();
+        (server, client_transport)
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn oauth_context(
+        peer: &rmcp::service::Peer<RoleServer>,
+        id: i64,
+        principal: &str,
+        roles: impl IntoIterator<Item = &'static str>,
+        scopes: impl IntoIterator<Item = &'static str>,
+    ) -> RequestContext<RoleServer> {
+        let request = axum::http::Request::builder().uri("/mcp").body(()).unwrap();
+        let (mut parts, _) = request.into_parts();
+        parts.extensions.insert(AccessContext {
+            principal: Principal {
+                id: principal.to_string(),
+                tenant: Some("test-tenant".to_string()),
+                roles: roles.into_iter().map(str::to_string).collect(),
+                scopes: scopes.into_iter().map(str::to_string).collect(),
+                allowed_clusters: Some(BTreeSet::from(["local-dev".to_string()])),
+            },
+            client: Some("oauth-test".to_string()),
+        });
+        let mut context = RequestContext::new(NumberOrString::Number(id), peer.clone());
+        context.extensions.insert(parts);
+        context
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn local_context(peer: &rmcp::service::Peer<RoleServer>, id: i64) -> RequestContext<RoleServer> {
+        RequestContext::new(NumberOrString::Number(id), peer.clone())
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn list_topics_request(limit: Option<u32>, cursor: Option<String>) -> CallToolRequestParams {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("cluster".to_string(), json!("local-dev"));
+        if let Some(limit) = limit {
+            arguments.insert("limit".to_string(), json!(limit));
+        }
+        if let Some(cursor) = cursor {
+            arguments.insert("cursor".to_string(), json!(cursor));
+        }
+        CallToolRequestParams::new("rocketmq_list_topics").with_arguments(arguments)
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn complete_tool_response(response: CallToolResponse) -> rmcp::model::CallToolResult {
+        match response {
+            CallToolResponse::Complete(result) => result,
+            response => panic!("expected a completed tool response, got {response:?}"),
+        }
     }
 
     #[test]

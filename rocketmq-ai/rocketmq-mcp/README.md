@@ -52,7 +52,7 @@ The server targets MCP protocol version `2025-11-25`. Clients requesting another
 
 Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
 
-Read-only Tool calls also return a ResourceLink for the corresponding live Resource. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh.
+Read-only Tool calls also return a ResourceLink for the corresponding live Resource. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh. Each verified request selects one of two closed query visibility classes: read-only HTTP principals and local read-only stdio profiles use `standard`, while principals or local profiles with diagnosis or planning access use `sensitive`. Requests share query state within a class, but ordinary cache entries, snapshots, singleflight work, and continuation cursors never cross classes.
 Both surfaces pass through the same authorization, audit, redaction, row-bound, byte-bound, and stable-error pipeline. Arrays are bounded to 1,000 rows, structured output to 1 MiB, and truncation is reported with `partial = true` and the stable `output_rows_truncated` warning.
 
 ## Build
@@ -142,7 +142,7 @@ headers or tokens in a broadly readable ConfigMap; use an access-restricted,
 secret-mounted configuration file when headers are required. Raw headers,
 resource attributes, and collector endpoints are not written to startup logs.
 
-Cache keys include the schema version, visibility class, query kind, resolved cluster, and normalized query parameters. Failures are not cached. Concurrent misses for the same key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
+Cache keys include the schema version, the stable `standard` or `sensitive` visibility name, query kind, resolved cluster, and normalized query parameters. The shared query state never retains a principal identifier, tenant, role, scope, client identifier, or bearer token. Failures are not cached. Concurrent misses for the same class and key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
 
 Audit records use `schema_version = 1`, redact sensitive assignments and control characters before admission, and
 bound every variable-length field. Shutdown closes admission, drains accepted records in FIFO order, flushes the sink,
