@@ -141,7 +141,7 @@ impl McpApp {
             telemetry_handle,
         )
         .map_err(|error| crate::error::McpError::infrastructure("initialize MCP client runtime", error))?;
-        let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()).with_visibility_class("local"));
+        let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()));
         Ok(Self {
             config,
             guard,
@@ -151,6 +151,16 @@ impl McpApp {
             service_context,
             telemetry: Arc::new(std::sync::Mutex::new(None)),
         })
+    }
+
+    #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+    pub(crate) fn with_test_session_factory(
+        mut self,
+        factory: crate::adapter::admin_session::ProtocolTestSessionFactory,
+    ) -> Self {
+        let factory = AdminCoreSessionFactory::new(self.client_runtime.clone()).with_test_session_factory(factory);
+        self.query = Arc::new(QueryFacade::with_factory(self.config.clone(), factory));
+        self
     }
 
     /// Initializes telemetry and background work only after the composition root has

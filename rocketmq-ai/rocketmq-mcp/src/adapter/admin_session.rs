@@ -136,20 +136,33 @@ pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
 #[derive(Clone)]
 pub(crate) struct AdminCoreSessionFactory {
     client_runtime: Arc<ClientRuntime>,
+    #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+    test_session_factory: Option<ProtocolTestSessionFactory>,
 }
 
 impl std::fmt::Debug for AdminCoreSessionFactory {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AdminCoreSessionFactory")
-            .field("client_runtime", &"explicit")
-            .finish()
+        let mut debug = formatter.debug_struct("AdminCoreSessionFactory");
+        debug.field("client_runtime", &"explicit");
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        debug.field("test_session_factory", &self.test_session_factory.is_some());
+        debug.finish()
     }
 }
 
 impl AdminCoreSessionFactory {
     pub(crate) fn new(client_runtime: Arc<ClientRuntime>) -> Self {
-        Self { client_runtime }
+        Self {
+            client_runtime,
+            #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+            test_session_factory: None,
+        }
+    }
+
+    #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+    pub(crate) fn with_test_session_factory(mut self, factory: ProtocolTestSessionFactory) -> Self {
+        self.test_session_factory = Some(factory);
+        self
     }
 }
 
@@ -157,6 +170,14 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
     type Session = AdminCoreSession;
 
     async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(factory) = &self.test_session_factory {
+            return Ok(AdminCoreSession {
+                cluster,
+                admin: None,
+                test_session: Some(factory.start()),
+            });
+        }
         let mut builder = ReadAdminBuilder::new(self.client_runtime.clone()).namesrv_addr(cluster.namesrv_addr.clone());
         if let Some(credentials) = cluster.credentials.clone() {
             builder = builder.credentials(credentials);
@@ -165,6 +186,8 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
         Ok(AdminCoreSession {
             cluster,
             admin: Some(admin),
+            #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+            test_session: None,
         })
     }
 }
@@ -172,6 +195,8 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
 pub(crate) struct AdminCoreSession {
     cluster: ResolvedCluster,
     admin: Option<ReadAdminGuard>,
+    #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+    test_session: Option<ProtocolTestSession>,
 }
 
 impl AdminCoreSession {
@@ -184,6 +209,10 @@ impl AdminCoreSession {
 
 impl AdminSession for AdminCoreSession {
     async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.broker_rows().await;
+        }
         let request = ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
             .map_err(ToolExecutionError::backend)?;
         let result = self
@@ -195,6 +224,10 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.topic_inventory().await;
+        }
         let request = TopicInventoryRequest::new(Some(self.cluster.rocketmq_cluster_name.clone()));
         let result = self
             .admin_mut()?
@@ -205,6 +238,10 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.topic_route(topic).await;
+        }
         let request = GetTopicRouteRequest::try_new(topic).map_err(ToolExecutionError::backend)?;
         let route = self
             .admin_mut()?
@@ -244,6 +281,10 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_groups().await;
+        }
         let result = self
             .admin_mut()?
             .list_consumer_groups_with_evidence(&ListConsumerGroupsRequest)
@@ -267,6 +308,10 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_group_inventory().await;
+        }
         let result = self
             .admin_mut()?
             .list_consumer_group_inventory_with_evidence(&ListConsumerGroupsRequest)
@@ -279,6 +324,10 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         groups: &[String],
     ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_groups_exact(groups).await;
+        }
         let request = ExactConsumerGroupEnrichmentRequest::try_new(groups.iter().cloned())
             .map_err(ToolExecutionError::backend)?;
         let result = self
@@ -308,6 +357,10 @@ impl AdminSession for AdminCoreSession {
         topic: &str,
         consumer_group: &str,
     ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_lag(topic, consumer_group).await;
+        }
         let request =
             QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ToolExecutionError::backend)?;
         let result = self
@@ -349,6 +402,10 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         broker_name: &str,
     ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.probe_broker_runtime_target(broker_name).await;
+        }
         let request = ProbeBrokerRuntimeTargetRequest::try_new(
             self.cluster.rocketmq_cluster_name.clone(),
             broker_name.to_string(),
@@ -361,12 +418,157 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn shutdown(mut self) -> Result<(), ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = self.test_session.take() {
+            return session.shutdown().await;
+        }
         if let Some(admin) = self.admin.take() {
             admin.shutdown().await;
         }
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+mod protocol_test_support {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use tokio::sync::Barrier;
+
+    use super::*;
+
+    #[derive(Debug, Default)]
+    pub(crate) struct ProtocolTestCounters {
+        pub(crate) starts: AtomicUsize,
+        pub(crate) shutdowns: AtomicUsize,
+        pub(crate) broker_queries: AtomicUsize,
+        pub(crate) topic_inventory_queries: AtomicUsize,
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct ProtocolTestGate {
+        entered: AtomicUsize,
+        release: Barrier,
+    }
+
+    impl ProtocolTestGate {
+        pub(crate) fn new(expected_loaders: usize) -> Self {
+            Self {
+                entered: AtomicUsize::new(0),
+                release: Barrier::new(expected_loaders + 1),
+            }
+        }
+
+        async fn wait(&self) {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            self.release.wait().await;
+        }
+
+        pub(crate) async fn wait_until_entered(&self, expected: usize) {
+            for _ in 0..10_000 {
+                if self.entered.load(Ordering::SeqCst) == expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(self.entered.load(Ordering::SeqCst), expected);
+        }
+
+        pub(crate) async fn release(&self) {
+            self.release.wait().await;
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct ProtocolTestSessionFactory {
+        pub(crate) counters: Arc<ProtocolTestCounters>,
+        gate: Option<Arc<ProtocolTestGate>>,
+    }
+
+    impl ProtocolTestSessionFactory {
+        pub(crate) fn new(gate: Option<Arc<ProtocolTestGate>>) -> Self {
+            Self {
+                counters: Arc::new(ProtocolTestCounters::default()),
+                gate,
+            }
+        }
+
+        pub(super) fn start(&self) -> ProtocolTestSession {
+            self.counters.starts.fetch_add(1, Ordering::SeqCst);
+            ProtocolTestSession {
+                counters: self.counters.clone(),
+                gate: self.gate.clone(),
+            }
+        }
+    }
+
+    pub(crate) struct ProtocolTestSession {
+        counters: Arc<ProtocolTestCounters>,
+        gate: Option<Arc<ProtocolTestGate>>,
+    }
+
+    impl AdminSession for ProtocolTestSession {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+            self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
+            Ok(QueryPayload::complete(Vec::new()))
+        }
+
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+            self.counters.topic_inventory_queries.fetch_add(1, Ordering::SeqCst);
+            if let Some(gate) = &self.gate {
+                gate.wait().await;
+            }
+            Ok(vec!["payments".to_string(), "orders".to_string()])
+        }
+
+        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+            Ok(SessionTopicRoute {
+                brokers: Vec::new(),
+                queues: Vec::new(),
+            })
+        }
+
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+            Ok(QueryPayload::complete(Vec::new()))
+        }
+
+        async fn consumer_lag(
+            &mut self,
+            _topic: &str,
+            _consumer_group: &str,
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+            Ok(QueryPayload::complete(SessionConsumerLag {
+                queues: Vec::new(),
+                total_lag: 0,
+                consume_tps: 0.0,
+                inflight_total: 0,
+            }))
+        }
+
+        async fn probe_broker_runtime_target(
+            &mut self,
+            _broker_name: &str,
+        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+            Ok(BrokerRuntimeTargetStatus::NotFound)
+        }
+
+        async fn shutdown(self) -> Result<(), ToolExecutionError> {
+            self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+}
+
+#[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+pub(crate) use protocol_test_support::ProtocolTestCounters;
+#[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+pub(crate) use protocol_test_support::ProtocolTestGate;
+#[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+pub(crate) use protocol_test_support::ProtocolTestSession;
+#[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+pub(crate) use protocol_test_support::ProtocolTestSessionFactory;
 
 fn map_broker_summary(row: &rocketmq_admin_core::core::broker::BrokerSummary) -> BrokerSummary {
     BrokerSummary {

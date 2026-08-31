@@ -71,7 +71,7 @@ Confirm each control in the deployed configuration before exposing the endpoint:
 | Redaction | `security.sanitize_output = true` in production. Internal addresses, credentials, bearer tokens, and sensitive assignments do not leave through tool/resource output or audit records; audit records may contain bounded principal and client identifiers for accountability. | Sanitized sample output and audit record review. |
 | Row and byte bounds | Arrays are capped at 1,000 rows and structured output at 1 MiB. Row truncation reports `partial = true` and `output_rows_truncated`; oversized output returns `output_too_large`. HTTP request bodies are also capped at 1 MiB. | Boundary probes that verify the stable warning/error without retaining sensitive payloads. |
 | Audit | Keep `audit.enabled = true`; choose `file` or `tracing` for durable operations evidence and size the count and byte queues deliberately. Records are redacted, bounded, and drained FIFO during shutdown. | Sink-health, accepted/written/drop, pending-record, and flush evidence. |
-| Cache | Cache keys include schema version, visibility class, query kind, resolved cluster, and normalized parameters. Failures are not cached; misses are coalesced; TTLs and capacity are reviewed for the workload. | Hit/miss/bypass and invalidation observations, with no secret query values. |
+| Cache and visibility | Every verified request maps to the closed `standard` or `sensitive` visibility class. Read-only HTTP principals and local read-only stdio profiles use `standard`; diagnosis/planning principals and local diagnose/operator profiles use `sensitive`. Cache keys include only the stable class name, schema version, query kind, resolved cluster, and normalized parameters. Ordinary entries, snapshots, cursors, and singleflight work are shared within a class and isolated across classes. Principal, tenant, role, scope, client, and bearer-token values are not retained in query state. Failures are not cached; TTLs and capacity are reviewed for the workload. | Allowed Tool and live Resource probes for both classes; same-class hit/coalescing evidence; cross-class miss and cursor-context rejection without a backend reload; query-state review with identity and credential values omitted. |
 | Mutation boundary | Keep the RocketMQ user least-privileged and retain the `read-client-adapter` dependency boundary. No Apply path, mutation feature, or mutation admin API is part of the MCP binary. | Read-only boundary check and dependency review. |
 
 ## Validation stages
@@ -94,6 +94,7 @@ Check that:
 4. The permission file allows only the intended tools and clusters, and planning remains disabled unless the
    feature, runtime opt-in, policy, and principal scope are all intentionally enabled.
 5. Audit and cache capacities, TTLs, and diagnosis thresholds are explicit and reviewed.
+6. The same verified principal maps to the same visibility class for Tool and live Resource requests; a `standard` cursor is rejected in `sensitive` context, and conversely, without a RocketMQ query.
 
 ### 3. Startup checks
 

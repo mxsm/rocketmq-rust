@@ -27,6 +27,7 @@ use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConsumerLag;
 use crate::adapter::admin_session::SessionTopicRoute;
 use crate::config::McpConfig;
+use crate::guard::context::VisibilityClass;
 use crate::infrastructure::cache::CacheMetricsSnapshot;
 use crate::infrastructure::cache::QueryCache;
 use crate::infrastructure::snapshot::SnapshotKind;
@@ -173,7 +174,7 @@ pub(crate) struct QueryFacade<F> {
     control: WorkflowControl,
     cache: QueryCache,
     snapshots: SnapshotStore,
-    visibility_class: String,
+    visibility_class: VisibilityClass,
 }
 
 impl<F> fmt::Debug for QueryFacade<F>
@@ -206,7 +207,7 @@ where
             config,
             factory,
             control,
-            visibility_class: "local".to_string(),
+            visibility_class: VisibilityClass::default(),
         }
     }
 
@@ -215,9 +216,14 @@ where
         self
     }
 
-    pub(crate) fn with_visibility_class(mut self, visibility_class: impl Into<String>) -> Self {
-        self.visibility_class = visibility_class.into();
+    pub(crate) fn with_visibility_class(mut self, visibility_class: VisibilityClass) -> Self {
+        self.visibility_class = visibility_class;
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visibility_class(&self) -> VisibilityClass {
+        self.visibility_class
     }
 
     pub(crate) fn cache_metrics(&self) -> CacheMetricsSnapshot {
@@ -656,7 +662,7 @@ where
             cluster.name.clone(),
             filter.clone(),
             page,
-            self.visibility_class.clone(),
+            self.visibility_class.as_str(),
         )?;
         self.snapshots
             .get_or_load(
@@ -704,7 +710,7 @@ where
             filter.clone(),
             selection_mode,
             page,
-            self.visibility_class.clone(),
+            self.visibility_class.as_str(),
         )?;
         self.snapshots
             .get_or_load(
@@ -748,7 +754,7 @@ where
             cluster.name.clone(),
             format!("topic={topic}"),
             page,
-            self.visibility_class.clone(),
+            self.visibility_class.as_str(),
         )?;
         self.snapshots
             .get_or_load(
@@ -779,7 +785,7 @@ where
             cluster.name.clone(),
             format!("topic={topic}|group={consumer_group}"),
             page,
-            self.visibility_class.clone(),
+            self.visibility_class.as_str(),
         )?;
         self.snapshots
             .get_or_load(
@@ -879,7 +885,7 @@ where
     fn cache_key(&self, kind: &str, cluster: &str, parameters: &str) -> String {
         format!(
             "{SCHEMA_VERSION}|{}|{kind}|cluster={}|{parameters}",
-            self.visibility_class,
+            self.visibility_class.as_str(),
             cluster.trim()
         )
     }
@@ -1962,14 +1968,16 @@ mod tests {
         let factory = FakeSessionFactory::default();
         let counters = factory.counters.clone();
         let facade = QueryFacade::with_factory(example_config(), factory);
+        let tool_query = facade.clone().with_visibility_class(VisibilityClass::Sensitive);
+        let resource_query = facade.clone().with_visibility_class(VisibilityClass::Sensitive);
         let request = ListTopicsArgs {
             cluster: Some("local-dev".to_string()),
             filter: None,
             page: PageRequest::default(),
         };
 
-        let tool_result = facade.list_topics(request).await.unwrap();
-        let resource_result = resources::reader::read_resource(&facade, "rocketmq://clusters/local-dev/topics")
+        let tool_result = tool_query.list_topics(request).await.unwrap();
+        let resource_result = resources::reader::read_resource(&resource_query, "rocketmq://clusters/local-dev/topics")
             .await
             .unwrap();
         let payload = match &resource_result.contents[0] {
@@ -2095,8 +2103,8 @@ mod tests {
         let factory = FakeSessionFactory::default();
         let counters = factory.counters.clone();
         let facade = QueryFacade::with_factory(example_config(), factory);
-        let reader = facade.clone().with_visibility_class("reader");
-        let topology_reader = facade.with_visibility_class("topology-reader");
+        let reader = facade.clone().with_visibility_class(VisibilityClass::Standard);
+        let topology_reader = facade.with_visibility_class(VisibilityClass::Sensitive);
         let request = || ListTopicsArgs {
             cluster: Some("local-dev".to_string()),
             filter: None,
@@ -2111,6 +2119,178 @@ mod tests {
         assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn query_facade_same_class_shares_ordinary_cache_and_snapshot_state() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let first = facade.clone().with_visibility_class(VisibilityClass::Standard);
+        let second = facade.with_visibility_class(VisibilityClass::Standard);
+
+        let topic_args = || ListTopicsArgs {
+            cluster: Some("local-dev".to_string()),
+            filter: None,
+            page: PageRequest::default(),
+        };
+        assert_eq!(
+            first.list_topics(topic_args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(
+            second.list_topics(topic_args()).await.unwrap().cache_status,
+            CacheStatus::Hit
+        );
+
+        let broker_args = || DescribeBrokerArgs {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+        };
+        assert_eq!(
+            first.describe_broker(broker_args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(
+            second.describe_broker(broker_args()).await.unwrap().cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn query_facade_different_classes_isolate_ordinary_cache_and_snapshot_state() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let standard = facade.clone().with_visibility_class(VisibilityClass::Standard);
+        let sensitive = facade.with_visibility_class(VisibilityClass::Sensitive);
+
+        let topic_args = || ListTopicsArgs {
+            cluster: Some("local-dev".to_string()),
+            filter: None,
+            page: PageRequest::default(),
+        };
+        assert_eq!(
+            standard.list_topics(topic_args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(
+            sensitive.list_topics(topic_args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+
+        let broker_args = || DescribeBrokerArgs {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+        };
+        assert_eq!(
+            standard.describe_broker(broker_args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(
+            sensitive.describe_broker(broker_args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cross_class_cursor_replay_fails_without_an_upstream_reload() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let standard = facade.clone().with_visibility_class(VisibilityClass::Standard);
+        let sensitive = facade.with_visibility_class(VisibilityClass::Sensitive);
+        let first = standard
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        let error = sensitive
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: first.page.next_cursor.clone(),
+                },
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ToolExecutionError::InvalidArguments(_)));
+        assert!(error.to_string().contains("requested query context"));
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn singleflight_coalesces_within_class_but_not_across_classes() {
+        let gate = Arc::new(TopicInventoryGate::new(2));
+        gate.arm();
+        let factory = FakeSessionFactory {
+            topic_inventory_gate: Some(gate.clone()),
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let start = Arc::new(Barrier::new(5));
+        let mut tasks = tokio::task::JoinSet::new();
+        for visibility in [
+            VisibilityClass::Standard,
+            VisibilityClass::Standard,
+            VisibilityClass::Sensitive,
+            VisibilityClass::Sensitive,
+        ] {
+            let request_facade = facade.clone().with_visibility_class(visibility);
+            let start = start.clone();
+            tasks.spawn(async move {
+                start.wait().await;
+                request_facade
+                    .list_topics(ListTopicsArgs {
+                        cluster: Some("local-dev".to_string()),
+                        filter: None,
+                        page: PageRequest::default(),
+                    })
+                    .await
+                    .unwrap()
+                    .cache_status
+            });
+        }
+
+        start.wait().await;
+        wait_for_atomic_count(&gate.entered, 2).await;
+        for _ in 0..10_000 {
+            if facade.cache_metrics().coalesced_waiters == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(facade.cache_metrics().coalesced_waiters, 2);
+        gate.release().await;
+
+        let mut statuses = Vec::new();
+        while let Some(status) = tasks.join_next().await {
+            statuses.push(status.unwrap());
+        }
+        assert_eq!(
+            statuses.iter().filter(|status| **status == CacheStatus::Miss).count(),
+            2
+        );
+        assert_eq!(statuses.iter().filter(|status| **status == CacheStatus::Hit).count(), 2);
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
