@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::context::ErrorContext;
-use crate::context::Sensitive;
+use crate::fields;
 use crate::kind::ErrorKind;
 use thiserror::Error;
 
@@ -96,23 +96,21 @@ impl ObservabilityError {
     /// Returns the context.
     pub fn context(&self) -> ErrorContext {
         match self {
-            Self::FeatureDisabled(feature) => ErrorContext::new().with_field("feature", *feature),
-            Self::InvalidConfig(reason)
-            | Self::MetricsInit(reason)
-            | Self::TracesInit(reason)
-            | Self::LogsInit(reason)
-            | Self::LoggingInit(reason)
-            | Self::MetricsShutdown(reason)
-            | Self::TracesShutdown(reason)
-            | Self::LogsShutdown(reason) => {
-                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
-            }
-            Self::InvalidLogFilter { filter, error } => ErrorContext::new()
-                .with_sensitive("filter", Sensitive::new(filter.clone()))
-                .with_sensitive("error", Sensitive::new(error.clone())),
+            Self::FeatureDisabled(feature) => ErrorContext::new().with_text(fields::FEATURE, *feature),
+            Self::InvalidConfig(_)
+            | Self::MetricsInit(_)
+            | Self::TracesInit(_)
+            | Self::LogsInit(_)
+            | Self::LoggingInit(_)
+            | Self::MetricsShutdown(_)
+            | Self::TracesShutdown(_)
+            | Self::LogsShutdown(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+            Self::InvalidLogFilter { .. } => ErrorContext::new()
+                .with_secret_presence(fields::FILTER_PRESENT)
+                .with_secret_presence(fields::ERROR_PRESENT),
             Self::SubscriberInstallFailed { attempted, installed } => ErrorContext::new()
-                .with_field("attempted", attempted.to_string())
-                .with_field("installed", installed.to_string()),
+                .with_bool(fields::ATTEMPTED, *attempted)
+                .with_bool(fields::INSTALLED, *installed),
         }
     }
 

@@ -251,18 +251,19 @@ single redaction-aware line using the same registry.
 process boundaries, but external adapters should prefer `public_message()`,
 `context()`, or `boundary_view()`.
 
-Sensitive values should be passed through `Sensitive<T>` or added with
-`ErrorContext::with_sensitive`. Sensitive fields render as `<redacted>`.
+Catalog-owned typed keys fix each field's value shape, visibility, and bound.
+Secret-bearing input is never passed into `ErrorContext`; callers record only
+its presence through a value-free secret-presence key.
 
 ```rust
+use rocketmq_error::fields;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::Sensitive;
 
 let context = ErrorContext::new()
-    .with_field("topic", "TopicA")
-    .with_sensitive("token", Sensitive::new("plain-token"));
+    .with_text(fields::TOPIC, "TopicA")
+    .with_secret_presence(fields::CREDENTIALS_PRESENT);
 
-assert_eq!(context.to_string(), "topic=TopicA, token=<redacted>");
+assert_eq!(context.to_string(), "topic=TopicA, credentials_present=<redacted>");
 ```
 
 ## Recovery and Observability

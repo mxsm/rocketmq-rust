@@ -19,7 +19,7 @@
 use thiserror::Error;
 
 use crate::context::ErrorContext;
-use crate::context::Sensitive;
+use crate::fields;
 use crate::kind::ErrorKind;
 
 /// Tools-specific errors for admin operations
@@ -302,45 +302,35 @@ impl ToolsError {
     pub fn context(&self) -> ErrorContext {
         match self {
             Self::TopicNotFound { topic } | Self::TopicAlreadyExists { topic } => {
-                ErrorContext::new().with_field("topic", topic.as_str())
+                ErrorContext::new().with_text(fields::TOPIC, topic)
             }
-            Self::TopicInvalid { reason } | Self::ClusterInvalid { reason } => {
-                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
+            Self::TopicInvalid { .. } | Self::ClusterInvalid { .. } => {
+                ErrorContext::new().with_secret_presence(fields::REASON_PRESENT)
             }
-            Self::ClusterNotFound { cluster } => ErrorContext::new().with_field("cluster", cluster.as_str()),
+            Self::ClusterNotFound { cluster } => ErrorContext::new().with_text(fields::CLUSTER, cluster),
             Self::BrokerNotFound { broker } | Self::BrokerOffline { broker } => {
-                ErrorContext::new().with_sensitive("broker", Sensitive::new(broker.clone()))
+                ErrorContext::new().with_text(fields::BROKER, broker)
             }
-            Self::ConsumerGroupNotFound { group } => ErrorContext::new().with_field("group", group.as_str()),
-            Self::ConsumerOffline { consumer } => {
-                ErrorContext::new().with_sensitive("consumer", Sensitive::new(consumer.clone()))
-            }
-            Self::NameServerUnreachable { addr } => {
-                ErrorContext::new().with_sensitive("addr", Sensitive::new(addr.clone()))
-            }
-            Self::NameServerConfigInvalid { reason } => {
-                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
-            }
-            Self::InvalidConfiguration { field, reason } | Self::ValidationError { field, reason } => {
-                ErrorContext::new()
-                    .with_field("field", field.as_str())
-                    .with_field("reason", reason.as_str())
-            }
-            Self::MissingRequiredField { field } => ErrorContext::new().with_field("field", field.as_str()),
-            Self::ValidationFailed { message } => ErrorContext::new().with_field("message", message.as_str()),
-            Self::PermissionDenied { operation } => ErrorContext::new().with_field("operation", operation.as_str()),
-            Self::InvalidPermission { value, allowed } => {
-                ErrorContext::new().with_field("value", value.to_string()).with_field(
-                    "allowed",
+            Self::ConsumerGroupNotFound { group } => ErrorContext::new().with_text(fields::GROUP, group),
+            Self::ConsumerOffline { consumer } => ErrorContext::new().with_text(fields::CONSUMER, consumer),
+            Self::NameServerUnreachable { addr } => ErrorContext::new().with_text(fields::ADDR, addr),
+            Self::NameServerConfigInvalid { .. } => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+            Self::InvalidConfiguration { field, .. } | Self::ValidationError { field, .. } => ErrorContext::new()
+                .with_text(fields::FIELD, field)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::MissingRequiredField { field } => ErrorContext::new().with_text(fields::FIELD, field),
+            Self::ValidationFailed { .. } => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
+            Self::PermissionDenied { operation } => ErrorContext::new().with_text(fields::OPERATION, operation),
+            Self::InvalidPermission { value, allowed } => ErrorContext::new()
+                .with_i64(fields::PERMISSION_VALUE, i64::from(*value))
+                .with_text(
+                    fields::ALLOWED,
                     allowed.iter().map(i32::to_string).collect::<Vec<_>>().join(","),
-                )
-            }
+                ),
             Self::OperationTimeout { operation, duration_ms } => ErrorContext::new()
-                .with_field("operation", operation.as_str())
-                .with_field("duration_ms", duration_ms.to_string()),
-            Self::Internal { message } => {
-                ErrorContext::new().with_sensitive("message", Sensitive::new(message.clone()))
-            }
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_u64(fields::DURATION_MS, *duration_ms),
+            Self::Internal { .. } => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
         }
     }
 }

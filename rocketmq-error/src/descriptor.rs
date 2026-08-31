@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use crate::field::FieldSchema;
 use crate::projection::ProjectionSpec;
 use crate::CanonicalCondition;
 use crate::ErrorSeverity;
@@ -78,8 +79,9 @@ impl fmt::Display for ErrorCode {
 ///
 /// A descriptor owns the stable code, protocol-independent condition, fixed
 /// public message, operational severity, recovery hint, and explicit boundary
-/// projections for an error. Catalog consumers can inspect this metadata but
-/// cannot construct or modify descriptors outside this crate.
+/// projections for an error. Its ordered field schemas define the only context
+/// accepted by later descriptor-aware views. Catalog consumers can inspect
+/// this metadata but cannot construct or modify descriptors outside this crate.
 ///
 /// ```compile_fail
 /// use rocketmq_error::{
@@ -93,6 +95,7 @@ impl fmt::Display for ErrorCode {
 ///     severity: ErrorSeverity::Error,
 ///     recovery_hint: RecoveryHint::OperatorAction,
 ///     projection: todo!(),
+///     fields: &[],
 /// };
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,26 +106,32 @@ pub struct ErrorDescriptor {
     severity: ErrorSeverity,
     recovery_hint: RecoveryHint,
     projection: ProjectionSpec,
+    fields: &'static [FieldSchema],
 }
 
 impl ErrorDescriptor {
     #[inline]
-    pub(crate) const fn new(
+    pub(crate) const fn try_new(
         code: ErrorCode,
         condition: CanonicalCondition,
         public_message: &'static str,
         severity: ErrorSeverity,
         recovery_hint: RecoveryHint,
         projection: ProjectionSpec,
-    ) -> Self {
-        Self {
+        fields: &'static [FieldSchema],
+    ) -> Option<Self> {
+        if !valid_descriptor_fields(fields) {
+            return None;
+        }
+        Some(Self {
             code,
             condition,
             public_message,
             severity,
             recovery_hint,
             projection,
-        }
+            fields,
+        })
     }
 
     /// Returns the stable dotted catalog code.
@@ -160,6 +169,46 @@ impl ErrorDescriptor {
     pub const fn projection(&self) -> ProjectionSpec {
         self.projection
     }
+
+    /// Returns allowed context schemas in catalog declaration order.
+    #[inline]
+    pub const fn fields(&self) -> &'static [FieldSchema] {
+        self.fields
+    }
+}
+
+const fn valid_descriptor_fields(fields: &[FieldSchema]) -> bool {
+    if fields.len() > 16 {
+        return false;
+    }
+    let mut index = 0;
+    while index < fields.len() {
+        let mut other = index + 1;
+        while other < fields.len() {
+            if const_str_eq(fields[index].name(), fields[other].name()) {
+                return false;
+            }
+            other += 1;
+        }
+        index += 1;
+    }
+    true
+}
+
+const fn const_str_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }
 
 const fn is_valid_catalog_code(value: &str) -> bool {
@@ -187,4 +236,20 @@ const fn is_valid_catalog_code(value: &str) -> bool {
     }
 
     !starts_segment && segment_count >= 3
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::fields;
+
+    use super::*;
+
+    #[test]
+    fn descriptor_field_lists_reject_duplicate_names_and_capacity_overflow() {
+        let duplicate = [fields::OPERATION.schema(), fields::OPERATION_DIAGNOSTIC.schema()];
+        assert!(!valid_descriptor_fields(&duplicate));
+
+        let too_many = [fields::TOPIC.schema(); 17];
+        assert!(!valid_descriptor_fields(&too_many));
+    }
 }

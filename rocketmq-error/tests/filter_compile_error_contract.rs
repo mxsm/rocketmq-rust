@@ -46,8 +46,10 @@ fn compile_error_contract_is_typed_and_redaction_safe() {
     let unified: RocketMQError = error.into();
     assert_eq!(unified.kind(), ErrorKind::Filter);
     let unified_context = unified.context().to_string();
-    assert!(unified_context.contains("filter_compile_kind=UnexpectedToken"));
-    assert!(unified_context.contains("filter_compile_source=Sql92"));
+    assert!(unified_context.contains("filter_compile_kind=<redacted>"));
+    assert!(unified_context.contains("filter_compile_source=<redacted>"));
+    assert!(!unified_context.contains("UnexpectedToken"));
+    assert!(!unified_context.contains("Sql92"));
     assert!(!unified_context.contains("secret_expression"));
 }
 

@@ -15,6 +15,7 @@
 #[test]
 fn error_crate_public_api_exposes_only_typed_error_surface() {
     let source = include_str!("../src/lib.rs");
+    let context_source = include_str!("../src/context.rs");
     let removed_symbols = [
         concat!("Legacy", "RocketMQResult"),
         concat!("pub enum Rocket", "mqError"),
@@ -32,6 +33,17 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         );
     }
 
+    for removed_builder in ["with_field", "push_field", "with_sensitive", "push_sensitive"] {
+        assert!(
+            !context_source.contains(removed_builder),
+            "removed builder {removed_builder}"
+        );
+    }
+    assert!(!source.contains("RedactionKind"));
+    assert!(!context_source.contains("pub fn fields("));
+    assert!(context_source.contains("pub fn public_fields("));
+    assert!(context_source.contains("with_secret_presence(mut self, key: FieldKey<SecretPresenceField>)"));
+
     for module in [
         "auth_error",
         "boundary",
@@ -41,6 +53,7 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         "controller_error",
         "descriptor",
         "domain",
+        "field",
         "filter_error",
         "kind",
         "observability_error",

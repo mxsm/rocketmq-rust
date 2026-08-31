@@ -796,14 +796,30 @@ def check_anyhow_result_allowlist() -> list[Finding]:
 
 def check_redaction_guards() -> list[Finding]:
     required_tokens = {
+        ROOT / "rocketmq-error" / "src" / "field.rs": [
+            "pub enum ContextVisibility",
+            "    Public,",
+            "    Diagnostic,",
+            "SecretPresenceOnly",
+            "pub enum FieldValueKind",
+            "pub struct FieldSchema",
+            "pub struct FieldKey<T>",
+        ],
         ROOT / "rocketmq-error" / "src" / "context.rs": [
             'pub const REDACTED: &str = "<redacted>";',
             'f.write_str("Sensitive(<redacted>)")',
+            "pub fn with_secret_presence(mut self, key: FieldKey<SecretPresenceField>) -> Self",
+            "pub fn public_fields(&self)",
+            "pub const fn is_truncated(&self) -> bool",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
-            "secret_key=<redacted>",
-            "token=<redacted>",
             "error_context_redacts_sensitive_fields",
+        ],
+        ROOT / "rocketmq-error" / "tests" / "error_context_visibility.rs": [
+            "const SENTINEL",
+            "Bearer token-secret secret_key=sk signature=sig password=pw",
+            "sentinel_never_enters_context_or_safe_boundary_output",
+            "with_secret_presence(fields::CREDENTIALS_PRESENT)",
         ],
         ROOT / "rocketmq-model" / "src" / "common" / "base" / "plain_access_config.rs": [
             "debug_and_display_redact_secret_key",
@@ -874,6 +890,12 @@ def check_redaction_guards() -> list[Finding]:
         for needle in needles:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required redaction token missing: {needle}"))
+
+    context_path = ROOT / "rocketmq-error" / "src" / "context.rs"
+    context_text = read_text(context_path)
+    for removed_builder in ("with_field", "push_field", "with_sensitive", "push_sensitive"):
+        if re.search(rf"pub\s+fn\s+{removed_builder}\b", context_text):
+            findings.append(Finding(context_path, 1, f"public string-key context builder remains: {removed_builder}"))
 
     debug_field_pattern = re.compile(r'\.field\("([^"]+)",')
     redaction_paths = [
