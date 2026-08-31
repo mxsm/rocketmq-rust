@@ -38,11 +38,13 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         "cli",
         "context",
         "controller_error",
+        "descriptor",
         "domain",
         "filter_error",
         "kind",
         "observability_error",
         "policy",
+        "recovery",
         "spec",
         "unified",
     ] {
@@ -56,4 +58,9 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
     accepts_domain_error(&rocketmq_error::RocketMQError::invariant_violated(
         "public root contract compiles",
     ));
+
+    let condition = rocketmq_error::CanonicalCondition::Unavailable;
+    let recovery = rocketmq_error::RecoveryHint::Backoff;
+    assert_eq!(condition.as_str(), "unavailable");
+    assert_eq!(recovery.as_str(), "backoff");
 }

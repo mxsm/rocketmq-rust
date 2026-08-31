@@ -16,10 +16,10 @@
 
 use std::error::Error as StdError;
 
+use crate::descriptor::ErrorCode;
 use crate::AuthError;
 use crate::BoundaryErrorView;
 use crate::ControllerError;
-use crate::ErrorCode;
 use crate::ErrorContext;
 use crate::ErrorKind;
 use crate::ErrorSeverity;

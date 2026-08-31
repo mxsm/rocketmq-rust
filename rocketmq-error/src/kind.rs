@@ -14,33 +14,7 @@
 
 use std::fmt;
 
-/// Stable machine-readable error code.
-///
-/// `ErrorCode` values are intentionally separate from display messages. Protocol
-/// mapping, retry policy, and observability should use the code, not formatted
-/// error text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ErrorCode(&'static str);
-
-impl ErrorCode {
-    /// Create a stable error code.
-    #[inline]
-    pub const fn new(value: &'static str) -> Self {
-        Self(value)
-    }
-
-    /// Return the stable code string.
-    #[inline]
-    pub const fn as_str(self) -> &'static str {
-        self.0
-    }
-}
-
-impl fmt::Display for ErrorCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
-    }
-}
+use crate::descriptor::ErrorCode;
 
 /// Architectural boundary where an error belongs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

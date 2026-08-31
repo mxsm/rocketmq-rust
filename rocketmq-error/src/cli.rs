@@ -14,9 +14,9 @@
 
 //! CLI-facing error projection.
 
+use crate::descriptor::ErrorCode;
 use crate::CliExitCode;
 use crate::ErrorCategory;
-use crate::ErrorCode;
 use crate::ErrorContext;
 use crate::RocketMQError;
 
