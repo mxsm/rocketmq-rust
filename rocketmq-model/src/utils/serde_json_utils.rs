@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::SerializationError;
+
 pub struct SerdeJsonUtils;
 
 impl SerdeJsonUtils {
@@ -41,7 +43,7 @@ impl SerdeJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        Ok(serde_json::from_str(json)?)
+        Ok(serde_json::from_str(json).map_err(|error| SerializationError::source("deserialize", "JSON", error))?)
     }
 
     /// Deserialize JSON from a byte slice into a Rust type.
@@ -50,7 +52,7 @@ impl SerdeJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        Ok(serde_json::from_slice(json)?)
+        Ok(serde_json::from_slice(json).map_err(|error| SerializationError::source("deserialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON string (compact format).
@@ -59,7 +61,7 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_string(value)?)
+        Ok(serde_json::to_string(value).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON string (pretty-printed format).
@@ -68,7 +70,8 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_string_pretty(value)?)
+        Ok(serde_json::to_string_pretty(value)
+            .map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON byte vector (compact format).
@@ -77,7 +80,7 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_vec(value)?)
+        Ok(serde_json::to_vec(value).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
@@ -86,12 +89,14 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_vec_pretty(value)?)
+        Ok(serde_json::to_vec_pretty(value).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
+
     use serde_json::json;
     use serde_json::Value;
 
@@ -109,6 +114,23 @@ mod tests {
         let json = "invalid";
         let result: Result<Value, _> = SerdeJsonUtils::from_json_str(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn json_decode_preserves_source_and_public_boundary() {
+        let error = SerdeJsonUtils::from_json_str::<Value>("invalid").unwrap_err();
+
+        assert_eq!(error.to_string(), "deserialize failed (JSON)");
+        assert_eq!(error.boundary_view().message(), "Serialization failed");
+
+        let direct_source = StdError::source(&error).expect("JSON error source");
+        assert!(direct_source.downcast_ref::<serde_json::Error>().is_some());
+
+        let rocketmq_error::RocketMQError::Serialization(serialization) = &error else {
+            panic!("expected serialization error");
+        };
+        let json = StdError::source(serialization).expect("JSON error source");
+        assert!(json.downcast_ref::<serde_json::Error>().is_some());
     }
 
     #[test]

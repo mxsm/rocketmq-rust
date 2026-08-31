@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use rocketmq_error::SerializationError;
 use rocketmq_model::message::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -102,11 +103,17 @@ impl ConsumeStats {
             }
             append_message_queue_object_key(&mut body, queue)?;
             body.push(':');
-            body.push_str(&serde_json::to_string(offset)?);
+            body.push_str(
+                &serde_json::to_string(offset)
+                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            );
         }
 
         body.push_str("},\"consumeTps\":");
-        body.push_str(&serde_json::to_string(&self.consume_tps)?);
+        body.push_str(
+            &serde_json::to_string(&self.consume_tps)
+                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
         body.push('}');
         Ok(body)
     }
@@ -166,9 +173,15 @@ pub(crate) fn append_message_queue_object_key(
 ) -> rocketmq_error::RocketMQResult<()> {
     output.push('{');
     output.push_str("\"topic\":");
-    output.push_str(&serde_json::to_string(queue.topic_str())?);
+    output.push_str(
+        &serde_json::to_string(queue.topic_str())
+            .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+    );
     output.push_str(",\"brokerName\":");
-    output.push_str(&serde_json::to_string(queue.broker_name().as_str())?);
+    output.push_str(
+        &serde_json::to_string(queue.broker_name().as_str())
+            .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+    );
     output.push_str(",\"queueId\":");
     output.push_str(&queue.queue_id().to_string());
     output.push('}');

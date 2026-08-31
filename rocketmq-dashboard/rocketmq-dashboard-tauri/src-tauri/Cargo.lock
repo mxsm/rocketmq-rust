@@ -3849,8 +3849,6 @@ dependencies = [
 name = "rocketmq-error"
 version = "1.0.0"
 dependencies = [
- "anyhow",
- "serde_json",
  "thiserror 2.0.20",
 ]
 

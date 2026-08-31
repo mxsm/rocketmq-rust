@@ -21,6 +21,7 @@ use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SerializationError;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
@@ -355,7 +356,8 @@ impl ReplicasManager {
             broker_id,
             register_check_code: format!("{};{}", self.broker_address, current_millis()),
         };
-        let content = serde_json::to_vec(&record)?;
+        let content =
+            serde_json::to_vec(&record).map_err(|error| SerializationError::source("serialize", "JSON", error))?;
         Ok(ControllerBrokerIdPersistencePlan::PersistPending {
             target: self.temp_metadata_path.clone(),
             content,
@@ -398,7 +400,8 @@ impl ReplicasManager {
         };
         Ok(Some(ControllerBrokerIdCommitSnapshot {
             target: self.metadata_path.clone(),
-            content: serde_json::to_vec(&record)?,
+            content: serde_json::to_vec(&record)
+                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
             record,
             temporary: self.temp_metadata_path.clone(),
         }))

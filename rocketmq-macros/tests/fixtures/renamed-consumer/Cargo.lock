@@ -18,12 +18,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -117,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "cheetah-string"
-version = "3.0.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "352256e2fe5dedcda13ebaefb12a6a7d7012ce0706f874bc469bd131c0b0f2ef"
+checksum = "0b57c1a05a24835a7eb67f14f7aade9e6d2bb683ccce58cd0ab0ce16224881fa"
 dependencies = [
  "bytes",
  "memchr",
@@ -703,8 +697,6 @@ dependencies = [
 name = "rocketmq-error"
 version = "1.0.0"
 dependencies = [
- "anyhow",
- "serde_json",
  "thiserror",
 ]
 

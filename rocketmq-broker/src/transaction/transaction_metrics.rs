@@ -27,6 +27,7 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SerializationError;
 use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
@@ -140,7 +141,8 @@ impl TransactionMetrics {
             generation,
             topics: self.inner.topics.read().clone(),
         };
-        let body = serde_json::to_vec(&checkpoint)?;
+        let body =
+            serde_json::to_vec(&checkpoint).map_err(|error| SerializationError::source("serialize", "JSON", error))?;
         write_checkpoint(&self.inner.checkpoint_path, &body)?;
         self.inner.generation.store(generation, Ordering::Release);
         if self.inner.revision.load(Ordering::Acquire) == snapshot_revision {
@@ -172,7 +174,8 @@ fn read_checkpoint(path: &Path) -> RocketMQResult<Option<TransactionMetricsCheck
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let checkpoint: TransactionMetricsCheckpoint = serde_json::from_slice(&body)?;
+    let checkpoint: TransactionMetricsCheckpoint =
+        serde_json::from_slice(&body).map_err(|error| SerializationError::source("deserialize", "JSON", error))?;
     if checkpoint.version != CHECKPOINT_VERSION {
         return Err(RocketMQError::ConfigInvalidValue {
             key: "transactionMetrics.version",
@@ -220,4 +223,38 @@ fn backup_path(path: &Path) -> PathBuf {
 
 fn temporary_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.tmp", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as StdError;
+    use std::fs;
+
+    use rocketmq_error::RocketMQError;
+
+    use super::read_checkpoint;
+
+    #[test]
+    fn invalid_checkpoint_preserves_json_source_and_public_boundary() {
+        let directory = tempfile::tempdir().expect("create temporary checkpoint directory");
+        let checkpoint_path = directory.path().join("transaction-metrics.json");
+        fs::write(&checkpoint_path, b"not json").expect("write invalid checkpoint");
+
+        let error = read_checkpoint(&checkpoint_path).expect_err("invalid checkpoint must fail to decode");
+
+        assert_eq!(error.to_string(), "deserialize failed (JSON)");
+        assert_eq!(error.boundary_view().message(), "Serialization failed");
+        assert!(StdError::source(&error)
+            .expect("outer error must preserve the source")
+            .downcast_ref::<serde_json::Error>()
+            .is_some());
+
+        let RocketMQError::Serialization(serialization) = &error else {
+            panic!("invalid JSON must map to a serialization error");
+        };
+        assert!(StdError::source(serialization)
+            .expect("serialization error must preserve the JSON source")
+            .downcast_ref::<serde_json::Error>()
+            .is_some());
+    }
 }

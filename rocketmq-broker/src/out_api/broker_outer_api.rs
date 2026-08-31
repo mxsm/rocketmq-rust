@@ -24,6 +24,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SerializationError;
 use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -1165,7 +1166,9 @@ impl BrokerOuterAPI {
         let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
-                return Ok(Some(serde_json::from_slice(body.as_ref())?));
+                return serde_json::from_slice(body.as_ref())
+                    .map(Some)
+                    .map_err(|error| SerializationError::source("deserialize", "JSON", error).into());
             }
             Ok(None)
         } else {
@@ -1312,7 +1315,7 @@ impl BrokerOuterAPI {
                 .body()
                 .map(|body| serde_json::from_slice(body.as_ref()))
                 .transpose()
-                .map_err(Into::into),
+                .map_err(|error| SerializationError::source("deserialize", "JSON", error).into()),
             _ => Err(RocketMQError::BrokerOperationFailed {
                 operation: "send_heartbeat_to_controller",
                 code: response.code(),
@@ -1341,7 +1344,7 @@ impl BrokerOuterAPI {
                 .body()
                 .map(|body| serde_json::from_slice(body.as_ref()))
                 .transpose()
-                .map_err(Into::into),
+                .map_err(|error| SerializationError::source("deserialize", "JSON", error).into()),
             _ => Err(RocketMQError::BrokerOperationFailed {
                 operation: "send_heartbeat_to_controller_sync",
                 code: response.code(),

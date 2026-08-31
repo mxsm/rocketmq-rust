@@ -267,19 +267,13 @@ assert_eq!(
 - `Error`
 - `Critical`
 
-## Feature Flags
+## 依赖边界
 
-默认 feature 集为空。
-
-| Feature | 启用内容 |
-| --- | --- |
-| `with_serde` | 将 `serde_json` 转换为 `SerializationError` 和 `RocketMQError` |
-| `with_config` | 将 `config::ConfigError` 转换为 `RocketMQError` |
-
-```toml
-[dependencies]
-rocketmq-error = { version = "1.0.0", features = ["with_serde", "with_config"] }
-```
+`rocketmq-error` 没有可选 feature，也不依赖 JSON 或配置实现。执行 JSON
+操作的 crate 在转换为 `RocketMQError` 前，使用
+`SerializationError::source("serialize", "JSON", error)` 或
+`SerializationError::source("deserialize", "JSON", error)` 保留类型化原因。
+边界视图仍只暴露固定的公开消息，不会暴露渲染后的原因文本。
 
 ## 使用模式
 

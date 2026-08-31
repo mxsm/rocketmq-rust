@@ -1323,24 +1323,6 @@ impl From<std::str::Utf8Error> for RocketMQError {
     }
 }
 
-#[cfg(feature = "with_serde")]
-impl From<serde_json::Error> for RocketMQError {
-    #[inline]
-    fn from(e: serde_json::Error) -> Self {
-        Self::Serialization(SerializationError::from(e))
-    }
-}
-
-#[cfg(feature = "with_config")]
-impl From<config::ConfigError> for RocketMQError {
-    fn from(e: config::ConfigError) -> Self {
-        Self::ConfigParseFailed {
-            key: "unknown",
-            reason: e.to_string(),
-        }
-    }
-}
-
 // ============================================================================
 // Service Error (moved from ServiceError)
 // ============================================================================

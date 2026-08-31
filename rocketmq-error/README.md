@@ -307,19 +307,14 @@ Current severities are:
 - `Error`
 - `Critical`
 
-## Feature Flags
+## Dependency Boundary
 
-The default feature set is empty.
-
-| Feature | Enables |
-| --- | --- |
-| `with_serde` | `serde_json` conversion into `SerializationError` and `RocketMQError` |
-| `with_config` | `config::ConfigError` conversion into `RocketMQError` |
-
-```toml
-[dependencies]
-rocketmq-error = { version = "1.0.0", features = ["with_serde", "with_config"] }
-```
+`rocketmq-error` has no opt-in features and does not depend on JSON or
+configuration implementations. The crate that performs JSON work preserves its
+typed cause with `SerializationError::source("serialize", "JSON", error)` or
+`SerializationError::source("deserialize", "JSON", error)` before converting
+to `RocketMQError`. Boundary views continue to expose only the fixed public
+message, never rendered source text.
 
 ## Usage Patterns
 

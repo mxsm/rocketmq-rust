@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_error::SerializationError;
 use serde::ser::SerializeStruct;
 use serde::Deserialize;
 use serde::Serialize;
@@ -230,20 +231,21 @@ pub trait RemotingDeserializable {
 
 impl<T: Serialize> RemotingSerializable for T {
     fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
-        Ok(serde_json::to_vec(self)?)
+        Ok(serde_json::to_vec(self).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
     fn serialize_json(&self) -> rocketmq_error::RocketMQResult<String> {
-        Ok(serde_json::to_string(self)?)
+        Ok(serde_json::to_string(self).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
     fn serialize_json_pretty(&self) -> rocketmq_error::RocketMQResult<String> {
-        Ok(serde_json::to_string_pretty(self)?)
+        Ok(serde_json::to_string_pretty(self)
+            .map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 }
 
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
     fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output> {
-        Ok(serde_json::from_slice(bytes)?)
+        Ok(serde_json::from_slice(bytes).map_err(|error| SerializationError::source("deserialize", "JSON", error))?)
     }
 }
 
@@ -423,5 +425,62 @@ impl SerializeType {
 
     pub fn get_code(&self) -> u8 {
         *self as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as StdError;
+
+    use serde::Deserialize;
+    use serde::Serialize;
+    use serde::Serializer;
+
+    use super::RemotingDeserializable;
+    use super::RemotingSerializable;
+
+    struct FailingJsonSerialize;
+
+    impl Serialize for FailingJsonSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(<S::Error as serde::ser::Error>::custom(
+                "forced JSON serialization failure",
+            ))
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DecodedValue;
+
+    fn assert_json_source(error: &rocketmq_error::RocketMQError) {
+        let direct_source = StdError::source(error).expect("JSON error source");
+        assert!(direct_source.downcast_ref::<serde_json::Error>().is_some());
+
+        let rocketmq_error::RocketMQError::Serialization(serialization) = error else {
+            panic!("expected serialization error");
+        };
+        let json = StdError::source(serialization).expect("JSON error source");
+        assert!(json.downcast_ref::<serde_json::Error>().is_some());
+    }
+
+    #[test]
+    fn protocol_json_encode_preserves_source_and_public_boundary() {
+        let error = FailingJsonSerialize.encode().unwrap_err();
+
+        assert_eq!(error.to_string(), "serialize failed (JSON)");
+        assert_eq!(error.boundary_view().message(), "Serialization failed");
+        assert_json_source(&error);
+    }
+
+    #[test]
+    fn protocol_json_decode_preserves_source_and_public_boundary() {
+        let error = DecodedValue::decode(b"invalid").unwrap_err();
+
+        assert_eq!(error.to_string(), "deserialize failed (JSON)");
+        assert_eq!(error.boundary_view().message(), "Serialization failed");
+        assert_json_source(&error);
     }
 }
