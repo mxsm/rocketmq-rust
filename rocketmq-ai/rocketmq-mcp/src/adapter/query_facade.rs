@@ -24,12 +24,16 @@ use crate::adapter::admin_session::AdminCoreSessionFactory;
 use crate::adapter::admin_session::AdminSession;
 use crate::adapter::admin_session::AdminSessionFactory;
 use crate::adapter::admin_session::ResolvedCluster;
+use crate::adapter::admin_session::SessionConnections;
 use crate::adapter::admin_session::SessionConsumerLag;
 use crate::adapter::admin_session::SessionTopicRoute;
+use crate::adapter::identifier_alias::IdentifierAliasError;
+use crate::adapter::identifier_alias::IdentifierAliaser;
 use crate::config::McpConfig;
 use crate::guard::context::VisibilityClass;
 use crate::infrastructure::cache::CacheMetricsSnapshot;
 use crate::infrastructure::cache::QueryCache;
+use crate::infrastructure::snapshot::RetainedSize;
 use crate::infrastructure::snapshot::SnapshotKind;
 use crate::infrastructure::snapshot::SnapshotRequest;
 use crate::infrastructure::snapshot::SnapshotSelectionMode;
@@ -37,6 +41,7 @@ use crate::infrastructure::snapshot::SnapshotStore;
 use crate::infrastructure::snapshot::SnapshotView;
 use crate::infrastructure::snapshot::SnapshotWeight;
 use crate::model::contract::observed_at;
+use crate::model::contract::observed_at_from_millis;
 use crate::model::contract::paginate;
 use crate::model::contract::Page;
 use crate::model::contract::PageRequest;
@@ -60,12 +65,23 @@ use crate::tools::config_tools::BrokerConfigSummaryArgs;
 use crate::tools::config_tools::BrokerConfigSummaryOutput;
 use crate::tools::config_tools::BrokerLogFilterStateArgs;
 use crate::tools::config_tools::BrokerLogFilterStateOutput;
+use crate::tools::config_tools::ConsumerGroupConfigStateArgs;
+use crate::tools::config_tools::ConsumerGroupConfigStateOutput;
+use crate::tools::config_tools::TopicConfigStateArgs;
+use crate::tools::config_tools::TopicConfigStateOutput;
+use crate::tools::connection_tools::ConnectionRow;
+use crate::tools::connection_tools::ListConsumerConnectionsArgs;
+use crate::tools::connection_tools::ListConsumerConnectionsOutput;
+use crate::tools::connection_tools::ListProducerConnectionsArgs;
+use crate::tools::connection_tools::ListProducerConnectionsOutput;
 use crate::tools::consumer_tools::ListConsumerGroupsArgs;
 use crate::tools::consumer_tools::ListConsumerGroupsOutput;
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
 use crate::tools::executor::ToolExecutionError;
+use crate::tools::message_tools::MessageMetadataArgs;
+use crate::tools::message_tools::MessageMetadataOutput;
 use crate::tools::proxy_tools::ProxyDrainStateArgs;
 use crate::tools::proxy_tools::ProxyDrainStateOutput;
 use crate::tools::topic_tools::DescribeTopicArgs;
@@ -94,6 +110,28 @@ impl Default for WorkflowControl {
 }
 
 type WorkflowFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ToolExecutionError>> + Send + 'a>>;
+
+#[derive(Debug, Clone)]
+struct ConnectionSnapshot {
+    rows: Vec<ConnectionRow>,
+    queried_broker_count: usize,
+}
+
+impl RetainedSize for ConnectionRow {
+    fn retained_heap_size(&self) -> usize {
+        self.broker_name
+            .capacity()
+            .saturating_add(self.client_alias.capacity())
+            .saturating_add(self.language.capacity())
+            .saturating_add(self.last_update_at.as_ref().map_or(0, |timestamp| timestamp.capacity()))
+    }
+}
+
+impl RetainedSize for ConnectionSnapshot {
+    fn retained_heap_size(&self) -> usize {
+        self.rows.retained_heap_size()
+    }
+}
 
 pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     fn cluster_overview(
@@ -213,6 +251,61 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         }
     }
 
+    fn list_consumer_connections(
+        &self,
+        _args: ListConsumerConnectionsArgs,
+    ) -> impl Future<Output = Result<QueryResult<ListConsumerConnectionsOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "consumer connection observations are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn list_producer_connections(
+        &self,
+        _args: ListProducerConnectionsArgs,
+    ) -> impl Future<Output = Result<QueryResult<ListProducerConnectionsOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "producer connection observations are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn message_metadata(
+        &self,
+        _args: MessageMetadataArgs,
+    ) -> impl Future<Output = Result<QueryResult<MessageMetadataOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "message metadata is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn topic_config_state(
+        &self,
+        _args: TopicConfigStateArgs,
+    ) -> impl Future<Output = Result<QueryResult<TopicConfigStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Topic configuration state is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn consumer_group_config_state(
+        &self,
+        _args: ConsumerGroupConfigStateArgs,
+    ) -> impl Future<Output = Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Consumer Group configuration state is unavailable".to_string(),
+            ))
+        }
+    }
+
     fn diagnose_consumer_lag(
         &self,
         args: DiagnoseConsumerLagArgs,
@@ -226,6 +319,7 @@ pub(crate) struct QueryFacade<F> {
     control: WorkflowControl,
     cache: QueryCache,
     snapshots: SnapshotStore,
+    aliases: IdentifierAliaser,
     visibility_class: VisibilityClass,
 }
 
@@ -256,6 +350,7 @@ where
         Self {
             cache: QueryCache::new(config.cache.enabled, config.cache.max_entries),
             snapshots: SnapshotStore::new(config.cache.cursor_snapshot_max_entries),
+            aliases: IdentifierAliaser::default(),
             config,
             factory,
             control,
@@ -715,6 +810,189 @@ where
             .await
     }
 
+    pub(crate) async fn list_consumer_connections(
+        &self,
+        mut args: ListConsumerConnectionsArgs,
+    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let snapshot = self
+            .connection_snapshot(
+                SnapshotKind::ConsumerConnections,
+                cluster.clone(),
+                format!("consumer_group={}", args.consumer_group),
+                args.page.clone(),
+                |session| {
+                    let group = args.consumer_group.clone();
+                    Box::pin(async move { session.consumer_connections(&group).await })
+                },
+            )
+            .await?;
+        let page = self.snapshots.page(&snapshot, &snapshot.payload.data.rows)?;
+        Ok(query_result_from_snapshot(
+            &snapshot,
+            snapshot.payload.completeness().wrap(ListConsumerConnectionsOutput {
+                cluster: cluster.name,
+                consumer_group: args.consumer_group,
+                queried_broker_count: snapshot.payload.data.queried_broker_count,
+                page,
+                generated_at: observed_at(),
+            }),
+        ))
+    }
+
+    pub(crate) async fn list_producer_connections(
+        &self,
+        mut args: ListProducerConnectionsArgs,
+    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.topic = normalized_identifier("topic", &args.topic)?;
+        args.producer_group = normalized_identifier("producer_group", &args.producer_group)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let selector = format!("topic={}|producer_group={}", args.topic, args.producer_group);
+        let snapshot = self
+            .connection_snapshot(
+                SnapshotKind::ProducerConnections,
+                cluster.clone(),
+                selector,
+                args.page.clone(),
+                |session| {
+                    let topic = args.topic.clone();
+                    let producer_group = args.producer_group.clone();
+                    Box::pin(async move { session.producer_connections(&topic, &producer_group).await })
+                },
+            )
+            .await?;
+        let page = self.snapshots.page(&snapshot, &snapshot.payload.data.rows)?;
+        Ok(query_result_from_snapshot(
+            &snapshot,
+            snapshot.payload.completeness().wrap(ListProducerConnectionsOutput {
+                cluster: cluster.name,
+                topic: args.topic,
+                producer_group: args.producer_group,
+                queried_broker_count: snapshot.payload.data.queried_broker_count,
+                page,
+                generated_at: observed_at(),
+            }),
+        ))
+    }
+
+    pub(crate) async fn message_metadata(
+        &self,
+        mut args: MessageMetadataArgs,
+    ) -> Result<QueryResult<MessageMetadataOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.message_id = normalized_identifier("message_id", &args.message_id)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let lookup_alias = self.aliases.message_alias(&args.message_id).map_err(alias_error)?;
+        let key = self.cache_key("message_metadata", &cluster.name, &format!("message={lookup_alias}"));
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        let aliases = self.aliases.clone();
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, cluster| {
+                        Box::pin(async move {
+                            let metadata = session.message_metadata(&args.message_id).await?;
+                            let message_alias = aliases.message_alias(&metadata.message_id).map_err(alias_error)?;
+                            let unique_message_alias = metadata
+                                .unique_message_id
+                                .as_deref()
+                                .map(|message_id| aliases.unique_message_alias(message_id))
+                                .transpose()
+                                .map_err(alias_error)?;
+                            Ok(QueryPayload::complete(MessageMetadataOutput {
+                                cluster: cluster.name.clone(),
+                                message_alias,
+                                unique_message_alias,
+                                topic: metadata.topic,
+                                born_at: observed_at_from_millis(metadata.born_timestamp),
+                                stored_at: observed_at_from_millis(metadata.store_timestamp),
+                                queue_id: metadata.queue_id,
+                                queue_offset: metadata.queue_offset,
+                                store_size: metadata.store_size,
+                                reconsume_times: metadata.reconsume_times,
+                                sys_flag: metadata.sys_flag,
+                                flag: metadata.flag,
+                                prepared_transaction_offset: metadata.prepared_transaction_offset,
+                            }))
+                        })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
+    pub(crate) async fn topic_config_state(
+        &self,
+        mut args: TopicConfigStateArgs,
+    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.topic = normalized_identifier("topic", &args.topic)?;
+        args.broker_names = normalized_broker_names(args.broker_names)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let key = self.cache_key(
+            "topic_config_state",
+            &cluster.name,
+            &format!("topic={}|brokers={}", args.topic, args.broker_names.join(",")),
+        );
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.topic_config_state(&args.topic, &args.broker_names).await })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
+    pub(crate) async fn consumer_group_config_state(
+        &self,
+        mut args: ConsumerGroupConfigStateArgs,
+    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.group = normalized_identifier("group", &args.group)?;
+        args.broker_names = normalized_broker_names(args.broker_names)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let key = self.cache_key(
+            "consumer_group_config_state",
+            &cluster.name,
+            &format!("group={}|brokers={}", args.group, args.broker_names.join(",")),
+        );
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move {
+                            session
+                                .consumer_group_config_state(&args.group, &args.broker_names)
+                                .await
+                        })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
     pub(crate) async fn diagnose_consumer_lag(
         &self,
         mut args: DiagnoseConsumerLagArgs,
@@ -976,6 +1254,47 @@ where
             .await
     }
 
+    async fn connection_snapshot<O>(
+        &self,
+        kind: SnapshotKind,
+        cluster: ResolvedCluster,
+        selector: String,
+        page: PageRequest,
+        operation: O,
+    ) -> Result<SnapshotView<ConnectionSnapshot>, ToolExecutionError>
+    where
+        O: for<'a> FnOnce(&'a mut F::Session) -> WorkflowFuture<'a, QueryPayload<SessionConnections>>,
+    {
+        let request = SnapshotRequest::try_new_with_selection(
+            kind,
+            cluster.name.clone(),
+            selector,
+            SnapshotSelectionMode::ExactIdentifier,
+            &page,
+            self.visibility_class.as_str(),
+        )?;
+        let aliases = self.aliases.clone();
+        self.snapshots
+            .get_or_load(
+                request,
+                page.cursor.as_deref(),
+                self.cursor_snapshot_ttl(),
+                self.snapshot_response_ttl(self.config.cache.consumer_lag_ttl_ms),
+                |connections: &ConnectionSnapshot| SnapshotWeight::detail(connections.rows.len()),
+                &self.control.cancellation,
+                || {
+                    self.run_workflow(cluster, move |session, _| {
+                        let observations = operation(session);
+                        Box::pin(async move {
+                            let observations = observations.await?;
+                            project_connections(observations, &aliases)
+                        })
+                    })
+                },
+            )
+            .await
+    }
+
     fn cursor_snapshot_ttl(&self) -> Duration {
         Duration::from_millis(self.config.cache.cursor_snapshot_ttl_ms)
     }
@@ -1180,6 +1499,41 @@ where
         args: ProxyDrainStateArgs,
     ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError> {
         QueryFacade::proxy_drain_state(self, args).await
+    }
+
+    async fn list_consumer_connections(
+        &self,
+        args: ListConsumerConnectionsArgs,
+    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolExecutionError> {
+        QueryFacade::list_consumer_connections(self, args).await
+    }
+
+    async fn list_producer_connections(
+        &self,
+        args: ListProducerConnectionsArgs,
+    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolExecutionError> {
+        QueryFacade::list_producer_connections(self, args).await
+    }
+
+    async fn message_metadata(
+        &self,
+        args: MessageMetadataArgs,
+    ) -> Result<QueryResult<MessageMetadataOutput>, ToolExecutionError> {
+        QueryFacade::message_metadata(self, args).await
+    }
+
+    async fn topic_config_state(
+        &self,
+        args: TopicConfigStateArgs,
+    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolExecutionError> {
+        QueryFacade::topic_config_state(self, args).await
+    }
+
+    async fn consumer_group_config_state(
+        &self,
+        args: ConsumerGroupConfigStateArgs,
+    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+        QueryFacade::consumer_group_config_state(self, args).await
     }
 
     async fn diagnose_consumer_lag(
@@ -1430,6 +1784,67 @@ fn normalized_logical_identifier(field: &str, value: &str) -> Result<String, Too
     }
 }
 
+fn normalized_broker_names(mut broker_names: Vec<String>) -> Result<Vec<String>, ToolExecutionError> {
+    const MAX_BROKER_NAMES: usize = 64;
+    if broker_names.is_empty() || broker_names.len() > MAX_BROKER_NAMES {
+        return Err(ToolExecutionError::InvalidArguments(format!(
+            "broker_names must contain between 1 and {MAX_BROKER_NAMES} logical Brokers"
+        )));
+    }
+    broker_names = broker_names
+        .into_iter()
+        .map(|broker_name| normalized_logical_identifier("broker_names", &broker_name))
+        .collect::<Result<Vec<_>, _>>()?;
+    broker_names.sort();
+    broker_names.dedup();
+    Ok(broker_names)
+}
+
+fn project_connections(
+    observations: QueryPayload<SessionConnections>,
+    aliases: &IdentifierAliaser,
+) -> Result<QueryPayload<ConnectionSnapshot>, ToolExecutionError> {
+    let mut completeness = observations.completeness();
+    if observations.data.truncated {
+        completeness.partial = true;
+        completeness.warnings.push("connection_rows_truncated".to_string());
+    }
+    let queried_broker_count = observations.data.queried_broker_count;
+    let mut rows = observations
+        .data
+        .rows
+        .into_iter()
+        .map(|row| {
+            Ok(ConnectionRow {
+                broker_name: row.broker_name,
+                client_alias: aliases
+                    .client_alias(&row.client_id, &row.client_addr)
+                    .map_err(alias_error)?,
+                language: row.language,
+                version: row.version,
+                last_update_at: row.last_update_timestamp.and_then(observed_at_from_millis),
+            })
+        })
+        .collect::<Result<Vec<_>, ToolExecutionError>>()?;
+    rows.sort_by(|left, right| {
+        left.broker_name
+            .cmp(&right.broker_name)
+            .then(left.client_alias.cmp(&right.client_alias))
+            .then(left.language.cmp(&right.language))
+            .then(left.version.cmp(&right.version))
+            .then(left.last_update_at.cmp(&right.last_update_at))
+    });
+    rows.dedup();
+    Ok(completeness.wrap(ConnectionSnapshot {
+        rows,
+        queried_broker_count,
+    }))
+}
+
+fn alias_error(error: IdentifierAliasError) -> ToolExecutionError {
+    ToolExecutionError::Internal(error.to_string())
+}
+
 fn normalized_broker_logger(logger: &str) -> Result<String, ToolExecutionError> {
     if logger != logger.trim()
         || logger.is_empty()
@@ -1468,6 +1883,8 @@ mod tests {
     use tokio::sync::Barrier;
     use tokio_util::sync::CancellationToken;
 
+    use crate::adapter::admin_session::SessionConnectionRow;
+    use crate::adapter::admin_session::SessionMessageMetadata;
     use crate::config::McpConfig;
     use crate::model::contract::CacheStatus;
     use crate::resources;
@@ -1491,6 +1908,11 @@ mod tests {
         broker_log_filter_queries: AtomicUsize,
         proxy_drain_queries: AtomicUsize,
         proxy_endpoint_mismatches: AtomicUsize,
+        consumer_connection_queries: AtomicUsize,
+        producer_connection_queries: AtomicUsize,
+        message_metadata_queries: AtomicUsize,
+        topic_config_state_queries: AtomicUsize,
+        consumer_group_config_state_queries: AtomicUsize,
         topic_inventory_queries: AtomicUsize,
         consumer_group_queries: AtomicUsize,
         consumer_group_inventory_queries: AtomicUsize,
@@ -1545,6 +1967,38 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), expected);
     }
 
+    async fn assert_new_tool_cancelled<T, Call, CallFuture, Count>(call: Call, count: Count)
+    where
+        T: Send + 'static,
+        Call: FnOnce(QueryFacade<FakeSessionFactory>) -> CallFuture,
+        CallFuture: Future<Output = Result<T, ToolExecutionError>> + Send + 'static,
+        Count: Fn(&LifecycleCounters) -> usize,
+    {
+        let factory = FakeSessionFactory {
+            hang_broker_query: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let cancellation = CancellationToken::new();
+        let facade = QueryFacade::with_factory_and_control(
+            example_config(),
+            factory,
+            WorkflowControl::new(Duration::from_secs(30), cancellation.clone()),
+        );
+        let task = tokio::spawn(call(facade));
+        for _ in 0..10_000 {
+            if count(&counters) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(count(&counters), 1);
+        cancellation.cancel();
+        assert!(matches!(task.await.unwrap(), Err(ToolExecutionError::Cancelled)));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
     #[derive(Clone, Default)]
     struct FakeSessionFactory {
         counters: Arc<LifecycleCounters>,
@@ -1564,6 +2018,7 @@ mod tests {
         many_route_rows: bool,
         many_lag_rows: bool,
         fail_group_enrichment: bool,
+        truncated_connections: bool,
         yield_snapshot_queries: bool,
     }
 
@@ -1591,6 +2046,7 @@ mod tests {
                 many_route_rows: self.many_route_rows,
                 many_lag_rows: self.many_lag_rows,
                 fail_group_enrichment: self.fail_group_enrichment,
+                truncated_connections: self.truncated_connections,
                 yield_snapshot_queries: self.yield_snapshot_queries,
             })
         }
@@ -1615,6 +2071,7 @@ mod tests {
         many_route_rows: bool,
         many_lag_rows: bool,
         fail_group_enrichment: bool,
+        truncated_connections: bool,
         yield_snapshot_queries: bool,
     }
 
@@ -1905,10 +2362,172 @@ mod tests {
             Ok(QueryPayload::complete(output))
         }
 
+        async fn consumer_connections(
+            &mut self,
+            _consumer_group: &str,
+        ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+            self.counters.consumer_connection_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_broker_query {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("raw-client-secret backend failure"));
+            }
+            let result = SessionConnections {
+                rows: connection_rows(),
+                queried_broker_count: 2,
+                truncated: self.truncated_connections,
+            };
+            Ok(if self.partial_sources {
+                partial_payload(result, QuerySource::ConsumerConnection, "broker-b")
+            } else {
+                QueryPayload::complete(result)
+            })
+        }
+
+        async fn producer_connections(
+            &mut self,
+            _topic: &str,
+            _producer_group: &str,
+        ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+            self.counters.producer_connection_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_broker_query {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("raw-producer-secret backend failure"));
+            }
+            let result = SessionConnections {
+                rows: connection_rows(),
+                queried_broker_count: 2,
+                truncated: self.truncated_connections,
+            };
+            Ok(if self.partial_sources {
+                partial_payload(result, QuerySource::ProducerConnection, "broker-b")
+            } else {
+                QueryPayload::complete(result)
+            })
+        }
+
+        async fn message_metadata(&mut self, _message_id: &str) -> Result<SessionMessageMetadata, ToolExecutionError> {
+            self.counters.message_metadata_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_broker_query {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("raw-message-secret backend failure"));
+            }
+            Ok(SessionMessageMetadata {
+                message_id: "RAW-OFFSET-MESSAGE-ID".to_string(),
+                unique_message_id: Some("RAW-UNIQUE-MESSAGE-ID".to_string()),
+                topic: "orders".to_string(),
+                born_timestamp: 1_000,
+                store_timestamp: 2_000,
+                queue_id: 1,
+                queue_offset: 2,
+                store_size: 3,
+                reconsume_times: 4,
+                sys_flag: 5,
+                flag: 6,
+                prepared_transaction_offset: 7,
+            })
+        }
+
+        async fn topic_config_state(
+            &mut self,
+            topic: &str,
+            _broker_names: &[String],
+        ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolExecutionError> {
+            self.counters.topic_config_state_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_broker_query {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("raw-address backend failure"));
+            }
+            let output = TopicConfigStateOutput {
+                cluster: self.cluster.name.clone(),
+                topic: topic.to_string(),
+                brokers: vec![crate::tools::config_tools::TopicConfigStateRow {
+                    broker_name: "broker-a".to_string(),
+                    version: 9,
+                    read_queue_nums: 8,
+                    write_queue_nums: 8,
+                    order: false,
+                }],
+            };
+            Ok(if self.partial_sources {
+                partial_payload(output, QuerySource::TopicConfig, "broker-b")
+            } else {
+                QueryPayload::complete(output)
+            })
+        }
+
+        async fn consumer_group_config_state(
+            &mut self,
+            group: &str,
+            _broker_names: &[String],
+        ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+            self.counters
+                .consumer_group_config_state_queries
+                .fetch_add(1, Ordering::SeqCst);
+            if self.hang_broker_query {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("raw-address backend failure"));
+            }
+            let output = ConsumerGroupConfigStateOutput {
+                cluster: self.cluster.name.clone(),
+                group: group.to_string(),
+                brokers: vec![crate::tools::config_tools::ConsumerGroupConfigStateRow {
+                    broker_name: "broker-a".to_string(),
+                    version: 10,
+                    retry_max_times: 16,
+                    retry_queue_nums: 1,
+                    consume_timeout_minutes: 15,
+                    consume_enable: true,
+                    consume_from_min_enable: false,
+                    consume_broadcast_enable: false,
+                    consume_message_orderly: false,
+                    broker_id: 0,
+                    which_broker_when_consume_slowly: 1,
+                    notify_consumer_ids_changed_enable: true,
+                    group_sys_flag: 0,
+                }],
+            };
+            Ok(if self.partial_sources {
+                partial_payload(output, QuerySource::ConsumerGroupConfig, "broker-b")
+            } else {
+                QueryPayload::complete(output)
+            })
+        }
+
         async fn shutdown(self) -> Result<(), ToolExecutionError> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    fn connection_rows() -> Vec<SessionConnectionRow> {
+        vec![
+            SessionConnectionRow {
+                broker_name: "broker-b".to_string(),
+                client_id: "raw-client-b".to_string(),
+                client_addr: "10.0.0.2:2000".to_string(),
+                language: "JAVA".to_string(),
+                version: 2,
+                last_update_timestamp: Some(2_000),
+            },
+            SessionConnectionRow {
+                broker_name: "broker-a".to_string(),
+                client_id: "raw-client-a".to_string(),
+                client_addr: "10.0.0.1:1000".to_string(),
+                language: "RUST".to_string(),
+                version: 1,
+                last_update_timestamp: Some(1_000),
+            },
+        ]
     }
 
     fn partial_payload<T>(data: T, source: QuerySource, logical_target: &str) -> QueryPayload<T> {
@@ -1923,6 +2542,395 @@ mod tests {
                 logical_target,
             )],
         )
+    }
+
+    #[tokio::test]
+    async fn new_read_tools_cache_safe_projections_and_single_snapshot_pages() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let consumer_args = |cursor| ListConsumerConnectionsArgs {
+            cluster: "local-dev".to_string(),
+            consumer_group: "group-a".to_string(),
+            page: PageRequest { limit: Some(1), cursor },
+        };
+        let first_consumer = facade.list_consumer_connections(consumer_args(None)).await.unwrap();
+        let first_alias = first_consumer.data.page.items[0].client_alias.clone();
+        let second_consumer = facade
+            .list_consumer_connections(consumer_args(first_consumer.data.page.next_cursor.clone()))
+            .await
+            .unwrap();
+        let replay_consumer = facade.list_consumer_connections(consumer_args(None)).await.unwrap();
+        assert_ne!(first_alias, second_consumer.data.page.items[0].client_alias);
+        assert_eq!(first_alias, replay_consumer.data.page.items[0].client_alias);
+        assert_eq!(counters.consumer_connection_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        let consumer_json = serde_json::to_string(&first_consumer.data).unwrap();
+        assert!(!consumer_json.contains("raw-client"));
+        assert!(!consumer_json.contains("10.0.0."));
+
+        let producer_args = |cursor| ListProducerConnectionsArgs {
+            cluster: "local-dev".to_string(),
+            topic: "orders".to_string(),
+            producer_group: "producer-a".to_string(),
+            page: PageRequest { limit: Some(1), cursor },
+        };
+        let first_producer = facade.list_producer_connections(producer_args(None)).await.unwrap();
+        facade
+            .list_producer_connections(producer_args(first_producer.data.page.next_cursor.clone()))
+            .await
+            .unwrap();
+        assert_eq!(counters.producer_connection_queries.load(Ordering::SeqCst), 1);
+        assert!(!serde_json::to_string(&first_producer.data).unwrap().contains("10.0.0."));
+
+        let raw_lookup = "RAW-LOOKUP-MESSAGE-ID";
+        let message_args = || MessageMetadataArgs {
+            cluster: "local-dev".to_string(),
+            message_id: raw_lookup.to_string(),
+        };
+        let message = facade.message_metadata(message_args()).await.unwrap();
+        let message_replay = facade.message_metadata(message_args()).await.unwrap();
+        assert_eq!(message.cache_status, CacheStatus::Miss);
+        assert_eq!(message_replay.cache_status, CacheStatus::Hit);
+        assert_eq!(message.data.message_alias, message_replay.data.message_alias);
+        let message_json = serde_json::to_string(&message.data).unwrap();
+        for raw in [raw_lookup, "RAW-OFFSET-MESSAGE-ID", "RAW-UNIQUE-MESSAGE-ID"] {
+            assert!(!message_json.contains(raw));
+        }
+        for forbidden in ["body", "properties", "born_host", "store_host", "endpoint"] {
+            assert!(!message_json.contains(forbidden));
+        }
+        assert_eq!(counters.message_metadata_queries.load(Ordering::SeqCst), 1);
+
+        let topic_state = facade
+            .topic_config_state(TopicConfigStateArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                broker_names: vec!["broker-b".to_string(), "broker-a".to_string(), "broker-b".to_string()],
+            })
+            .await
+            .unwrap();
+        let topic_state_replay = facade
+            .topic_config_state(TopicConfigStateArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                broker_names: vec!["broker-a".to_string(), "broker-b".to_string()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(topic_state.data.brokers[0].version, 9);
+        assert_eq!(topic_state_replay.cache_status, CacheStatus::Hit);
+        assert_eq!(counters.topic_config_state_queries.load(Ordering::SeqCst), 1);
+
+        let group_state = facade
+            .consumer_group_config_state(ConsumerGroupConfigStateArgs {
+                cluster: "local-dev".to_string(),
+                group: "group-a".to_string(),
+                broker_names: vec!["broker-b".to_string(), "broker-a".to_string(), "broker-a".to_string()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(group_state.data.brokers[0].retry_max_times, 16);
+        assert_eq!(counters.consumer_group_config_state_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn connection_cursors_bind_exact_selector_limit_and_visibility_without_requery() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let first = facade
+            .list_producer_connections(ListProducerConnectionsArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                producer_group: "producer-a".to_string(),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: None,
+                },
+            })
+            .await
+            .unwrap();
+        let cursor = first.data.page.next_cursor.unwrap();
+        for (topic, producer_group, limit) in [
+            ("payments", "producer-a", 1),
+            ("orders", "producer-b", 1),
+            ("orders", "producer-a", 2),
+        ] {
+            let result = facade
+                .list_producer_connections(ListProducerConnectionsArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: topic.to_string(),
+                    producer_group: producer_group.to_string(),
+                    page: PageRequest {
+                        limit: Some(limit),
+                        cursor: Some(cursor.clone()),
+                    },
+                })
+                .await;
+            assert!(matches!(result, Err(ToolExecutionError::InvalidArguments(_))));
+        }
+        let sensitive = facade.with_visibility_class(VisibilityClass::Sensitive);
+        let cross_visibility = sensitive
+            .list_producer_connections(ListProducerConnectionsArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                producer_group: "producer-a".to_string(),
+                page: PageRequest {
+                    limit: Some(1),
+                    cursor: Some(cursor),
+                },
+            })
+            .await;
+        assert!(matches!(cross_visibility, Err(ToolExecutionError::InvalidArguments(_))));
+        assert_eq!(counters.producer_connection_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn new_read_tools_preserve_partial_truncated_and_cache_evidence() {
+        let factory = FakeSessionFactory {
+            partial_sources: true,
+            truncated_connections: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let consumer = facade
+            .list_consumer_connections(ListConsumerConnectionsArgs {
+                cluster: "local-dev".to_string(),
+                consumer_group: "group-a".to_string(),
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap();
+        assert!(consumer.partial);
+        assert!(consumer.warnings.contains(&"connection_rows_truncated".to_string()));
+        assert_eq!(consumer.source_failures[0].source, QuerySource::ConsumerConnection);
+
+        let producer_args = || ListProducerConnectionsArgs {
+            cluster: "local-dev".to_string(),
+            topic: "orders".to_string(),
+            producer_group: "producer-a".to_string(),
+            page: PageRequest::default(),
+        };
+        let producer = facade.list_producer_connections(producer_args()).await.unwrap();
+        let producer_replay = facade.list_producer_connections(producer_args()).await.unwrap();
+        assert!(producer.partial);
+        assert_eq!(producer.warnings, producer_replay.warnings);
+        assert_eq!(producer.source_failures, producer_replay.source_failures);
+
+        let topic = facade
+            .topic_config_state(TopicConfigStateArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                broker_names: vec!["broker-a".to_string(), "broker-b".to_string()],
+            })
+            .await
+            .unwrap();
+        assert!(topic.partial);
+        assert_eq!(topic.source_failures[0].source, QuerySource::TopicConfig);
+        let group = facade
+            .consumer_group_config_state(ConsumerGroupConfigStateArgs {
+                cluster: "local-dev".to_string(),
+                group: "group-a".to_string(),
+                broker_names: vec!["broker-a".to_string(), "broker-b".to_string()],
+            })
+            .await
+            .unwrap();
+        assert!(group.partial);
+        assert_eq!(group.source_failures[0].source, QuerySource::ConsumerGroupConfig);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn every_new_read_tool_total_backend_failure_shuts_down() {
+        let factory = FakeSessionFactory {
+            fail_exact_read: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let failures = [
+            facade
+                .list_consumer_connections(ListConsumerConnectionsArgs {
+                    cluster: "local-dev".to_string(),
+                    consumer_group: "group-a".to_string(),
+                    page: PageRequest::default(),
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .list_producer_connections(ListProducerConnectionsArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: "orders".to_string(),
+                    producer_group: "producer-a".to_string(),
+                    page: PageRequest::default(),
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .message_metadata(MessageMetadataArgs {
+                    cluster: "local-dev".to_string(),
+                    message_id: "RAW-MESSAGE-ID".to_string(),
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .topic_config_state(TopicConfigStateArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: "orders".to_string(),
+                    broker_names: vec!["broker-a".to_string()],
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .consumer_group_config_state(ConsumerGroupConfigStateArgs {
+                    cluster: "local-dev".to_string(),
+                    group: "group-a".to_string(),
+                    broker_names: vec!["broker-a".to_string()],
+                })
+                .await
+                .map(|_| ()),
+        ];
+        assert!(failures
+            .iter()
+            .all(|result| matches!(result, Err(ToolExecutionError::Backend(_)))));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn every_new_read_tool_timeout_shuts_down_without_sleep() {
+        let factory = FakeSessionFactory {
+            hang_broker_query: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory_and_control(
+            example_config(),
+            factory,
+            WorkflowControl::new(Duration::from_millis(10), CancellationToken::new()),
+        );
+        let failures = [
+            facade
+                .list_consumer_connections(ListConsumerConnectionsArgs {
+                    cluster: "local-dev".to_string(),
+                    consumer_group: "group-a".to_string(),
+                    page: PageRequest::default(),
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .list_producer_connections(ListProducerConnectionsArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: "orders".to_string(),
+                    producer_group: "producer-a".to_string(),
+                    page: PageRequest::default(),
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .message_metadata(MessageMetadataArgs {
+                    cluster: "local-dev".to_string(),
+                    message_id: "RAW-MESSAGE-ID".to_string(),
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .topic_config_state(TopicConfigStateArgs {
+                    cluster: "local-dev".to_string(),
+                    topic: "orders".to_string(),
+                    broker_names: vec!["broker-a".to_string()],
+                })
+                .await
+                .map(|_| ()),
+            facade
+                .consumer_group_config_state(ConsumerGroupConfigStateArgs {
+                    cluster: "local-dev".to_string(),
+                    group: "group-a".to_string(),
+                    broker_names: vec!["broker-a".to_string()],
+                })
+                .await
+                .map(|_| ()),
+        ];
+        assert!(failures
+            .iter()
+            .all(|result| matches!(result, Err(ToolExecutionError::TimedOut { timeout_ms: 10 }))));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn every_new_read_tool_cancellation_shuts_down_without_sleep() {
+        assert_new_tool_cancelled(
+            |facade| async move {
+                facade
+                    .list_consumer_connections(ListConsumerConnectionsArgs {
+                        cluster: "local-dev".to_string(),
+                        consumer_group: "group-a".to_string(),
+                        page: PageRequest::default(),
+                    })
+                    .await
+            },
+            |counters| counters.consumer_connection_queries.load(Ordering::SeqCst),
+        )
+        .await;
+        assert_new_tool_cancelled(
+            |facade| async move {
+                facade
+                    .list_producer_connections(ListProducerConnectionsArgs {
+                        cluster: "local-dev".to_string(),
+                        topic: "orders".to_string(),
+                        producer_group: "producer-a".to_string(),
+                        page: PageRequest::default(),
+                    })
+                    .await
+            },
+            |counters| counters.producer_connection_queries.load(Ordering::SeqCst),
+        )
+        .await;
+        assert_new_tool_cancelled(
+            |facade| async move {
+                facade
+                    .message_metadata(MessageMetadataArgs {
+                        cluster: "local-dev".to_string(),
+                        message_id: "RAW-MESSAGE-ID".to_string(),
+                    })
+                    .await
+            },
+            |counters| counters.message_metadata_queries.load(Ordering::SeqCst),
+        )
+        .await;
+        assert_new_tool_cancelled(
+            |facade| async move {
+                facade
+                    .topic_config_state(TopicConfigStateArgs {
+                        cluster: "local-dev".to_string(),
+                        topic: "orders".to_string(),
+                        broker_names: vec!["broker-a".to_string()],
+                    })
+                    .await
+            },
+            |counters| counters.topic_config_state_queries.load(Ordering::SeqCst),
+        )
+        .await;
+        assert_new_tool_cancelled(
+            |facade| async move {
+                facade
+                    .consumer_group_config_state(ConsumerGroupConfigStateArgs {
+                        cluster: "local-dev".to_string(),
+                        group: "group-a".to_string(),
+                        broker_names: vec!["broker-a".to_string()],
+                    })
+                    .await
+            },
+            |counters| counters.consumer_group_config_state_queries.load(Ordering::SeqCst),
+        )
+        .await;
     }
 
     #[test]

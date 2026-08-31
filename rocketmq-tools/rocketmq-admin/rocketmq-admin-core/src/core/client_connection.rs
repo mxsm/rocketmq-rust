@@ -24,6 +24,7 @@ use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
 pub const MAX_CLIENT_CONNECTION_ROWS: usize = 10_000;
+pub const MAX_TOPIC_PRODUCER_BROKERS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryConsumerConnectionsRequest {
@@ -115,6 +116,41 @@ pub struct ListProducerConnectionsResult {
     pub truncated: bool,
 }
 
+/// Exact Topic and Producer-group selection for a bounded connection query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryTopicProducerConnectionsRequest {
+    pub cluster: String,
+    pub topic: String,
+    pub producer_group: String,
+    pub max_connections: usize,
+}
+
+impl QueryTopicProducerConnectionsRequest {
+    pub fn try_new(
+        cluster: impl Into<String>,
+        topic: impl Into<String>,
+        producer_group: impl Into<String>,
+        max_connections: usize,
+    ) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            topic: required("topic", topic)?,
+            producer_group: required("producer_group", producer_group)?,
+            max_connections: validated_limit(max_connections)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryTopicProducerConnectionsResult {
+    pub topic: String,
+    pub producer_group: String,
+    pub connections: Vec<ClientConnectionObservation>,
+    pub queried_broker_count: usize,
+    pub failed_brokers: Vec<String>,
+    pub truncated: bool,
+}
+
 /// Producer and consumer connection queries available to read-only
 /// integrations. The contract deliberately contains no mutation operations.
 pub trait ClientConnectionQueryAdmin: Send {
@@ -151,6 +187,32 @@ pub trait ClientConnectionQueryAdmin: Send {
                 .map(AdminQueryResult::complete)
         })
     }
+
+    /// Queries one exact Producer group only at Brokers advertised by both the
+    /// selected cluster and the selected Topic route.
+    fn query_topic_producer_connections<'a>(
+        &'a mut self,
+        _request: &'a QueryTopicProducerConnectionsRequest,
+    ) -> AdminFuture<'a, QueryTopicProducerConnectionsResult> {
+        Box::pin(async {
+            Err(AdminError::backend(
+                "query_topic_producer_connections",
+                "Topic-scoped Producer connections are not implemented by this adapter",
+            ))
+        })
+    }
+
+    /// Evidence-aware sibling of [`Self::query_topic_producer_connections`].
+    fn query_topic_producer_connections_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryTopicProducerConnectionsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicProducerConnectionsResult>> {
+        Box::pin(async move {
+            self.query_topic_producer_connections(request)
+                .await
+                .map(AdminQueryResult::complete)
+        })
+    }
 }
 
 fn validated_limit(limit: usize) -> AdminResult<usize> {
@@ -175,6 +237,9 @@ mod tests {
         assert!(QueryConsumerConnectionsRequest::try_new("cluster-a", "", 1).is_err());
         assert!(QueryConsumerConnectionsRequest::try_new("cluster-a", "group-a", 0).is_err());
         assert!(ListProducerConnectionsRequest::try_new("cluster-a", MAX_CLIENT_CONNECTION_ROWS + 1).is_err());
+        assert!(QueryTopicProducerConnectionsRequest::try_new("cluster-a", "orders", "producer-a", 1).is_ok());
+        assert!(QueryTopicProducerConnectionsRequest::try_new("cluster-a", "", "producer-a", 1).is_err());
+        assert!(QueryTopicProducerConnectionsRequest::try_new("cluster-a", "orders", "", 1).is_err());
     }
 
     #[test]

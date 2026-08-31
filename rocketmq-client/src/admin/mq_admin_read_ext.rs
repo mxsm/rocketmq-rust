@@ -25,6 +25,7 @@ use std::net::SocketAddr;
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
 use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
@@ -285,6 +286,18 @@ pub trait MQAdminMessageReadExt: Send {
         topic: CheetahString,
         message_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageMetadataRead>;
+
+    /// Looks up one offset message identifier and derives the authoritative
+    /// Topic from the returned message.
+    async fn query_message_metadata_by_id(
+        &self,
+        _message_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
+        Err(rocketmq_error::RocketMQError::ResponseProcessFailed {
+            operation: "query_message_metadata_by_id",
+            reason: "Topic-free message metadata lookup is not implemented by this adapter".to_owned(),
+        })
+    }
 }
 
 impl MQAdminReadExt for DefaultMQAdminExt {
@@ -692,23 +705,11 @@ impl MQAdminMessageReadExt for DefaultMQAdminExt {
         topic: CheetahString,
         message_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
-        MessageDecoder::validate_message_id(message_id.as_str())
-            .map_err(|error| rocketmq_error::RocketMQError::IllegalArgument(format!("Invalid message ID: {error}")))?;
-        let decoded = MessageDecoder::decode_message_id(message_id.as_str()).map_err(|error| {
-            rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {error}"))
-        })?;
-        let broker_addr = CheetahString::from_string(format!("{}:{}", decoded.address.ip(), decoded.address.port()));
+        let (broker_addr, header) = message_lookup_target(message_id.as_str(), Some(topic.clone()))?;
         let message = self
             .inner()
             .mq_client_api()?
-            .view_message(
-                &broker_addr,
-                ViewMessageRequestHeader {
-                    topic: Some(topic.clone()),
-                    offset: decoded.offset,
-                },
-                self.inner().remoting_timeout_millis()?,
-            )
+            .view_message(&broker_addr, header, self.inner().remoting_timeout_millis()?)
             .await?;
         Ok(MessageMetadataRead {
             topic: topic.to_string(),
@@ -728,6 +729,55 @@ impl MQAdminMessageReadExt for DefaultMQAdminExt {
             flag: message.flag(),
             prepared_transaction_offset: message.prepared_transaction_offset(),
         })
+    }
+
+    async fn query_message_metadata_by_id(
+        &self,
+        message_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
+        let (broker_addr, header) = message_lookup_target(message_id.as_str(), None)?;
+        let message = self
+            .inner()
+            .mq_client_api()?
+            .view_message(&broker_addr, header, self.inner().remoting_timeout_millis()?)
+            .await?;
+        let topic = message.topic().to_string();
+        Ok(project_message_metadata(message, topic))
+    }
+}
+
+fn message_lookup_target(
+    message_id: &str,
+    topic: Option<CheetahString>,
+) -> rocketmq_error::RocketMQResult<(CheetahString, ViewMessageRequestHeader)> {
+    MessageDecoder::validate_message_id(message_id)
+        .map_err(|error| rocketmq_error::RocketMQError::IllegalArgument(format!("Invalid message ID: {error}")))?;
+    let decoded = MessageDecoder::decode_message_id(message_id).map_err(|error| {
+        rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {error}"))
+    })?;
+    Ok((
+        CheetahString::from_string(decoded.address.to_string()),
+        ViewMessageRequestHeader {
+            topic,
+            offset: decoded.offset,
+        },
+    ))
+}
+
+fn project_message_metadata(message: MessageExt, topic: String) -> MessageMetadataRead {
+    MessageMetadataRead {
+        topic,
+        message_id: message.msg_id().to_string(),
+        unique_message_id: None,
+        born_timestamp: message.born_timestamp(),
+        store_timestamp: message.store_timestamp(),
+        queue_id: message.queue_id(),
+        queue_offset: message.queue_offset(),
+        store_size: message.store_size(),
+        reconsume_times: message.reconsume_times(),
+        sys_flag: message.sys_flag(),
+        flag: message.flag(),
+        prepared_transaction_offset: message.prepared_transaction_offset(),
     }
 }
 
@@ -867,14 +917,20 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
     use rocketmq_model::common::mix_all;
     use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 
     use super::consume_stats_read_targets;
     use super::fetch_topic_inventory_from;
+    use super::message_lookup_target;
     use super::parse_allowlisted_value;
+    use super::project_message_metadata;
     use super::BrokerReadFailure;
     use super::ConsumeStatsReadTarget;
     use super::ReadFailureCode;
@@ -889,6 +945,36 @@ mod tests {
             broker_addrs,
             None,
         )
+    }
+
+    #[test]
+    fn topic_free_message_lookup_decodes_exact_endpoint_and_offset() {
+        let (address, header) = message_lookup_target("7F00000100002A9F000000000000002A", None).unwrap();
+
+        assert_eq!(address, "127.0.0.1:10911");
+        assert_eq!(header.offset, 42);
+        assert!(header.topic.is_none());
+        assert!(message_lookup_target("not-a-message-id", None).is_err());
+    }
+
+    #[test]
+    fn topic_free_metadata_projection_ignores_body_properties_and_hosts() {
+        let mut message = MessageExt::default();
+        message.set_topic("actual-topic".into());
+        message.set_msg_id("raw-offset-id".into());
+        message.set_body(Bytes::from_static(b"must-not-be-read"));
+        message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            "must-not-be-read".into(),
+        );
+        message.set_born_host("192.0.2.10:1234".parse().unwrap());
+        message.set_store_host("192.0.2.11:10911".parse().unwrap());
+
+        let metadata = project_message_metadata(message, "actual-topic".to_owned());
+
+        assert_eq!(metadata.topic, "actual-topic");
+        assert_eq!(metadata.message_id, "raw-offset-id");
+        assert_eq!(metadata.unique_message_id, None);
     }
 
     #[tokio::test]

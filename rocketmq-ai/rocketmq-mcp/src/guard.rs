@@ -500,6 +500,11 @@ fn requires_explicit_cluster(tool_name: &str) -> bool {
             | "rocketmq_get_broker_config_summary"
             | "rocketmq_get_broker_log_filter_state"
             | "rocketmq_get_proxy_drain_state"
+            | "rocketmq_list_consumer_connections"
+            | "rocketmq_list_producer_connections"
+            | "rocketmq_get_message_metadata"
+            | "rocketmq_get_topic_config_state"
+            | "rocketmq_get_consumer_group_config_state"
     )
 }
 

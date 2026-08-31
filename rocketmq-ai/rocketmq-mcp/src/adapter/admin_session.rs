@@ -23,10 +23,18 @@ use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeTargetRequest;
 use rocketmq_admin_core::core::broker::QueryBrokerAllowlistedConfigTargetRequest;
 use rocketmq_admin_core::core::broker::QueryBrokerDiagnosticsTargetRequest;
 use rocketmq_admin_core::core::broker::QueryBrokerLogFilterStateTargetRequest;
+use rocketmq_admin_core::core::client_connection::ClientConnectionQueryAdmin;
+use rocketmq_admin_core::core::client_connection::QueryConsumerConnectionsRequest;
+use rocketmq_admin_core::core::client_connection::QueryTopicProducerConnectionsRequest;
+use rocketmq_admin_core::core::config_state::ConfigStateQueryAdmin;
+use rocketmq_admin_core::core::config_state::ConsumerGroupConfigStateRequest;
+use rocketmq_admin_core::core::config_state::TopicConfigStateRequest;
 use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
 use rocketmq_admin_core::core::consumer::ExactConsumerGroupEnrichmentRequest;
 use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
+use rocketmq_admin_core::core::message::MessageMetadataQueryAdmin;
+use rocketmq_admin_core::core::message::MessageMetadataRequest;
 use rocketmq_admin_core::core::proxy::ProxyQueryAdmin;
 use rocketmq_admin_core::core::proxy::QueryProxyDrainStateRequest;
 use rocketmq_admin_core::core::security::AdminCredentials;
@@ -48,6 +56,10 @@ use crate::tools::broker_tools::BrokerDiagnosticsOutput;
 use crate::tools::cluster_tools::BrokerSummary;
 use crate::tools::config_tools::BrokerConfigSummaryOutput;
 use crate::tools::config_tools::BrokerLogFilterStateOutput;
+use crate::tools::config_tools::ConsumerGroupConfigStateOutput;
+use crate::tools::config_tools::ConsumerGroupConfigStateRow;
+use crate::tools::config_tools::TopicConfigStateOutput;
+use crate::tools::config_tools::TopicConfigStateRow;
 use crate::tools::consumer_tools::ConsumerGroupSummary;
 use crate::tools::consumer_tools::QueueLag;
 use crate::tools::executor::ToolExecutionError;
@@ -75,6 +87,39 @@ pub(crate) struct SessionConsumerLag {
     pub total_lag: i64,
     pub consume_tps: f64,
     pub inflight_total: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionConnectionRow {
+    pub broker_name: String,
+    pub client_id: String,
+    pub client_addr: String,
+    pub language: String,
+    pub version: i32,
+    pub last_update_timestamp: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionConnections {
+    pub rows: Vec<SessionConnectionRow>,
+    pub queried_broker_count: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionMessageMetadata {
+    pub message_id: String,
+    pub unique_message_id: Option<String>,
+    pub topic: String,
+    pub born_timestamp: i64,
+    pub store_timestamp: i64,
+    pub queue_id: i32,
+    pub queue_offset: i64,
+    pub store_size: i32,
+    pub reconsume_times: i32,
+    pub sys_flag: i32,
+    pub flag: i32,
+    pub prepared_transaction_offset: i64,
 }
 
 pub(crate) trait AdminSession: Send {
@@ -177,6 +222,64 @@ pub(crate) trait AdminSession: Send {
         async {
             Err(ToolExecutionError::Backend(
                 "Proxy drain state is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn consumer_connections(
+        &mut self,
+        _consumer_group: &str,
+    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "consumer connection observations are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn producer_connections(
+        &mut self,
+        _topic: &str,
+        _producer_group: &str,
+    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "producer connection observations are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn message_metadata(
+        &mut self,
+        _message_id: &str,
+    ) -> impl Future<Output = Result<SessionMessageMetadata, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "message metadata is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn topic_config_state(
+        &mut self,
+        _topic: &str,
+        _broker_names: &[String],
+    ) -> impl Future<Output = Result<QueryPayload<TopicConfigStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Topic configuration state is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn consumer_group_config_state(
+        &mut self,
+        _group: &str,
+        _broker_names: &[String],
+    ) -> impl Future<Output = Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Consumer Group configuration state is unavailable".to_string(),
             ))
         }
     }
@@ -641,6 +744,200 @@ impl AdminSession for AdminCoreSession {
             },
         };
         Ok(QueryPayload::new(output, false, warnings, Vec::new()))
+    }
+
+    async fn consumer_connections(
+        &mut self,
+        consumer_group: &str,
+    ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_connections(consumer_group).await;
+        }
+        const MAX_CONNECTIONS: usize = 1_000;
+        let request = QueryConsumerConnectionsRequest::try_new(
+            self.cluster.rocketmq_cluster_name.clone(),
+            consumer_group,
+            MAX_CONNECTIONS,
+        )
+        .map_err(|_| ToolExecutionError::InvalidArguments("invalid consumer connection selector".to_string()))?;
+        let result = self
+            .admin_mut()?
+            .query_consumer_connections_with_evidence(&request)
+            .await
+            .map_err(|_| ToolExecutionError::Backend("consumer connection source is unavailable".to_string()))?;
+        Ok(QueryPayload::from_admin(result).map(|result| SessionConnections {
+            rows: result
+                .connections
+                .into_iter()
+                .map(|row| SessionConnectionRow {
+                    broker_name: row.broker_name,
+                    client_id: row.client_id,
+                    client_addr: row.client_addr,
+                    language: row.language,
+                    version: row.version,
+                    last_update_timestamp: row.last_update_timestamp,
+                })
+                .collect(),
+            queried_broker_count: result.queried_broker_count,
+            truncated: result.truncated,
+        }))
+    }
+
+    async fn producer_connections(
+        &mut self,
+        topic: &str,
+        producer_group: &str,
+    ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.producer_connections(topic, producer_group).await;
+        }
+        const MAX_CONNECTIONS: usize = 1_000;
+        let request = QueryTopicProducerConnectionsRequest::try_new(
+            self.cluster.rocketmq_cluster_name.clone(),
+            topic,
+            producer_group,
+            MAX_CONNECTIONS,
+        )
+        .map_err(|_| ToolExecutionError::InvalidArguments("invalid producer connection selector".to_string()))?;
+        let result = self
+            .admin_mut()?
+            .query_topic_producer_connections_with_evidence(&request)
+            .await
+            .map_err(|_| ToolExecutionError::Backend("producer connection source is unavailable".to_string()))?;
+        Ok(QueryPayload::from_admin(result).map(|result| SessionConnections {
+            rows: result
+                .connections
+                .into_iter()
+                .map(|row| SessionConnectionRow {
+                    broker_name: row.broker_name,
+                    client_id: row.client_id,
+                    client_addr: row.client_addr,
+                    language: row.language,
+                    version: row.version,
+                    last_update_timestamp: row.last_update_timestamp,
+                })
+                .collect(),
+            queried_broker_count: result.queried_broker_count,
+            truncated: result.truncated,
+        }))
+    }
+
+    async fn message_metadata(&mut self, message_id: &str) -> Result<SessionMessageMetadata, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.message_metadata(message_id).await;
+        }
+        let request = MessageMetadataRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), message_id)
+            .map_err(|_| ToolExecutionError::InvalidArguments("invalid message identifier".to_string()))?;
+        let metadata = MessageMetadataQueryAdmin::query_message_metadata(self.admin_mut()?.inner_mut(), &request)
+            .await
+            .map_err(|_| ToolExecutionError::Backend("message metadata source is unavailable".to_string()))?;
+        Ok(SessionMessageMetadata {
+            message_id: metadata.message_id,
+            unique_message_id: metadata.unique_message_id,
+            topic: metadata.topic,
+            born_timestamp: metadata.born_timestamp,
+            store_timestamp: metadata.store_timestamp,
+            queue_id: metadata.queue_id,
+            queue_offset: metadata.queue_offset,
+            store_size: metadata.store_size,
+            reconsume_times: metadata.reconsume_times,
+            sys_flag: metadata.sys_flag,
+            flag: metadata.flag,
+            prepared_transaction_offset: metadata.prepared_transaction_offset,
+        })
+    }
+
+    async fn topic_config_state(
+        &mut self,
+        topic: &str,
+        broker_names: &[String],
+    ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.topic_config_state(topic, broker_names).await;
+        }
+        let request = TopicConfigStateRequest::try_new(
+            self.cluster.rocketmq_cluster_name.clone(),
+            topic,
+            broker_names.iter().cloned(),
+        )
+        .map_err(|_| ToolExecutionError::InvalidArguments("invalid Topic configuration selector".to_string()))?;
+        let result = self
+            .admin_mut()?
+            .query_topic_config_state(&request)
+            .await
+            .map_err(|_| ToolExecutionError::Backend("Topic configuration state source is unavailable".to_string()))?;
+        let cluster = self.cluster.name.clone();
+        Ok(QueryPayload::from_admin(result).map(|result| TopicConfigStateOutput {
+            cluster,
+            topic: result.topic,
+            brokers: result
+                .states
+                .into_iter()
+                .map(|row| TopicConfigStateRow {
+                    broker_name: row.broker_name,
+                    version: row.version,
+                    read_queue_nums: row.read_queue_nums,
+                    write_queue_nums: row.write_queue_nums,
+                    order: row.order,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn consumer_group_config_state(
+        &mut self,
+        group: &str,
+        broker_names: &[String],
+    ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_group_config_state(group, broker_names).await;
+        }
+        let request = ConsumerGroupConfigStateRequest::try_new(
+            self.cluster.rocketmq_cluster_name.clone(),
+            group,
+            broker_names.iter().cloned(),
+        )
+        .map_err(|_| {
+            ToolExecutionError::InvalidArguments("invalid Consumer Group configuration selector".to_string())
+        })?;
+        let result = self
+            .admin_mut()?
+            .query_consumer_group_config_state(&request)
+            .await
+            .map_err(|_| {
+                ToolExecutionError::Backend("Consumer Group configuration state source is unavailable".to_string())
+            })?;
+        let cluster = self.cluster.name.clone();
+        Ok(
+            QueryPayload::from_admin(result).map(|result| ConsumerGroupConfigStateOutput {
+                cluster,
+                group: result.group,
+                brokers: result
+                    .states
+                    .into_iter()
+                    .map(|row| ConsumerGroupConfigStateRow {
+                        broker_name: row.broker_name,
+                        version: row.version,
+                        retry_max_times: row.retry_max_times,
+                        retry_queue_nums: row.retry_queue_nums,
+                        consume_timeout_minutes: row.consume_timeout_minutes,
+                        consume_enable: row.consume_enable,
+                        consume_from_min_enable: row.consume_from_min_enable,
+                        consume_broadcast_enable: row.consume_broadcast_enable,
+                        consume_message_orderly: row.consume_message_orderly,
+                        broker_id: row.broker_id,
+                        which_broker_when_consume_slowly: row.which_broker_when_consume_slowly,
+                        notify_consumer_ids_changed_enable: row.notify_consumer_ids_changed_enable,
+                        group_sys_flag: row.group_sys_flag,
+                    })
+                    .collect(),
+            }),
+        )
     }
 
     async fn shutdown(mut self) -> Result<(), ToolExecutionError> {
