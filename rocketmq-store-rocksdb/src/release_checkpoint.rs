@@ -33,13 +33,13 @@ use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpoint
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseCheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
-use rocketmq_store_api::checkpoint::CheckpointValidationError as ReleaseCheckpointValidationError;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
 use rocketmq_store_api::path_to_file_uri;
-use rocketmq_store_api::CheckpointArtifactError;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_store_api::StoreContractViolation;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::RELEASE_CHECKPOINT_MANIFEST_FILE;
 use thiserror::Error;
 
@@ -204,7 +204,7 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         }
         let deadline = authorization_deadline(authorization)?;
         let checkpoint_path =
-            file_uri_to_path(&manifest.artifact.uri).map_err(RocksDbReleaseCheckpointError::Artifact)?;
+            file_uri_to_path(&manifest.artifact.uri).map_err(RocksDbReleaseCheckpointError::Validation)?;
         let checkpoint_for_verify = checkpoint_path.clone();
         let expected_sha256 = manifest.artifact.sha256.clone();
         let expected_length = manifest.artifact.length_bytes;
@@ -316,13 +316,13 @@ pub enum RocksDbReleaseCheckpointError {
     #[error("RocksDB operation failed: {0}")]
     Store(String),
     #[error("checkpoint artifact failed: {0}")]
-    Artifact(#[source] CheckpointArtifactError),
+    Artifact(#[source] StoreError),
     #[error("failed to serialize RocksDB checkpoint manifest: {0}")]
     Serialize(String),
     #[error("system clock error: {0}")]
     Clock(String),
     #[error("checkpoint validation failed: {0}")]
-    Validation(#[from] ReleaseCheckpointValidationError),
+    Validation(#[from] StoreContractViolation),
     #[error("{operation} failed for {path}: {source}")]
     Io {
         operation: &'static str,

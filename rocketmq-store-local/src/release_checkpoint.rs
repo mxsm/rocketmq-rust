@@ -41,14 +41,14 @@ use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffset
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseCheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
-use rocketmq_store_api::checkpoint::CheckpointValidationError as ReleaseCheckpointValidationError;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
 use rocketmq_store_api::path_to_file_uri;
-use rocketmq_store_api::CheckpointArtifactError;
 use rocketmq_store_api::CheckpointDirectoryDigest;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_store_api::StoreContractViolation;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::RELEASE_CHECKPOINT_MANIFEST_FILE;
 use sha2::Digest;
 use sha2::Sha256;
@@ -564,7 +564,7 @@ pub enum LocalReleaseCheckpointError {
     #[error("checkpoint path escaped its root: {0}")]
     PathEscaped(PathBuf),
     #[error("checkpoint artifact failed: {0}")]
-    Artifact(#[from] CheckpointArtifactError),
+    Artifact(#[from] StoreError),
     #[error("failed to serialize checkpoint manifest")]
     Serialize(#[source] serde_json::Error),
     #[error("system clock error")]
@@ -574,7 +574,7 @@ pub enum LocalReleaseCheckpointError {
     #[error("blocking checkpoint operation failed")]
     Runtime(#[source] RuntimeError),
     #[error("checkpoint validation failed: {0}")]
-    Validation(#[from] ReleaseCheckpointValidationError),
+    Validation(#[from] StoreContractViolation),
     #[error("{operation} failed for {path}: {source}")]
     Io {
         operation: &'static str,

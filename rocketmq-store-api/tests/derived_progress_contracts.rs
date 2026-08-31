@@ -13,15 +13,13 @@
 // limitations under the License.
 
 use rocketmq_store_api::CursorAdvanceDisposition;
-use rocketmq_store_api::CursorAdvanceError;
 use rocketmq_store_api::DerivedCheckpoint;
-use rocketmq_store_api::DerivedCheckpointDecodeError;
 use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedProgress;
 use rocketmq_store_api::DerivedRecordId;
-use rocketmq_store_api::DerivedRecordIdError;
 use rocketmq_store_api::LegacyDerivedCursorV0;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::DERIVED_CHECKPOINT_ENCODED_LEN;
 use rocketmq_store_api::DERIVED_CHECKPOINT_FORMAT_VERSION;
 
@@ -54,13 +52,13 @@ fn cursor_fails_closed_on_epoch_gap_or_partial_overlap() {
     let cursor = DerivedCursor::restore(4, 20);
     let other_epoch = DerivedRecordId::try_new(5, 20, 4).expect("record is valid");
     assert_eq!(
-        CursorAdvanceError::SourceEpochMismatch { expected: 4, actual: 5 },
+        StoreContractViolation::DerivedCursorSourceEpochMismatch { expected: 4, actual: 5 },
         cursor.prepare(other_epoch).expect_err("epoch change must fail")
     );
 
     let gap = DerivedRecordId::try_new(4, 24, 4).expect("record is valid");
     assert_eq!(
-        CursorAdvanceError::Gap {
+        StoreContractViolation::DerivedCursorGap {
             expected: 20,
             actual: 24,
         },
@@ -69,7 +67,7 @@ fn cursor_fails_closed_on_epoch_gap_or_partial_overlap() {
 
     let overlap = DerivedRecordId::try_new(4, 16, 8).expect("record is valid");
     assert_eq!(
-        CursorAdvanceError::PartialOverlap {
+        StoreContractViolation::DerivedCursorPartialOverlap {
             committed: 20,
             record_start: 16,
             record_end: 24,
@@ -81,11 +79,11 @@ fn cursor_fails_closed_on_epoch_gap_or_partial_overlap() {
 #[test]
 fn record_identity_rejects_empty_and_overflowing_ranges() {
     assert_eq!(
-        DerivedRecordIdError::EmptyRecord,
+        StoreContractViolation::DerivedRecordEmpty,
         DerivedRecordId::try_new(1, 0, 0).expect_err("zero-length record must fail")
     );
     assert_eq!(
-        DerivedRecordIdError::RangeOverflow,
+        StoreContractViolation::DerivedRecordRangeOverflow,
         DerivedRecordId::try_new(1, u64::MAX, 1).expect_err("overflowing range must fail")
     );
 }
@@ -130,7 +128,7 @@ fn derived_engine_codes_remain_append_only_and_timer_completion_is_six() {
     let encoded = timer.encode();
     assert_eq!(encoded[10], 6);
     assert_eq!(
-        DerivedCheckpointDecodeError::EngineMismatch {
+        StoreContractViolation::DerivedCheckpointEngineMismatch {
             expected: DerivedEngine::Compaction,
             actual: DerivedEngine::TimerCompletion,
         },
@@ -140,7 +138,7 @@ fn derived_engine_codes_remain_append_only_and_timer_completion_is_six() {
     let mut unknown = encoded;
     unknown[10] = 7;
     assert_eq!(
-        DerivedCheckpointDecodeError::UnknownEngine(7),
+        StoreContractViolation::DerivedCheckpointUnknownEngine(7),
         DerivedCheckpoint::decode(&unknown, DerivedEngine::TimerCompletion).expect_err("unknown code must fail closed")
     );
 }
@@ -151,7 +149,7 @@ fn checkpoint_rejects_corruption_wrong_owner_and_future_version() {
     let encoded = checkpoint.encode();
 
     assert_eq!(
-        DerivedCheckpointDecodeError::EngineMismatch {
+        StoreContractViolation::DerivedCheckpointEngineMismatch {
             expected: DerivedEngine::Tiered,
             actual: DerivedEngine::Index,
         },
@@ -161,14 +159,14 @@ fn checkpoint_rejects_corruption_wrong_owner_and_future_version() {
     let mut corrupted = encoded;
     corrupted[20] ^= 0x40;
     assert_eq!(
-        DerivedCheckpointDecodeError::ChecksumMismatch,
+        StoreContractViolation::DerivedCheckpointChecksumMismatch,
         DerivedCheckpoint::decode(&corrupted, DerivedEngine::Index).expect_err("corruption must fail")
     );
 
     let mut future = encoded;
     future[8..10].copy_from_slice(&(DERIVED_CHECKPOINT_FORMAT_VERSION + 1).to_be_bytes());
     assert_eq!(
-        DerivedCheckpointDecodeError::UnsupportedVersion(DERIVED_CHECKPOINT_FORMAT_VERSION + 1),
+        StoreContractViolation::DerivedCheckpointUnsupportedVersion(DERIVED_CHECKPOINT_FORMAT_VERSION + 1),
         DerivedCheckpoint::decode(&future, DerivedEngine::Index).expect_err("future version must fail")
     );
 }

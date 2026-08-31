@@ -22,11 +22,11 @@ use std::rc::Rc;
 
 use bytes::Bytes;
 use rocketmq_store_api::DerivedCheckpoint;
-use rocketmq_store_api::DerivedCheckpointDecodeError;
 use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::LegacyDerivedCursorV0;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::DERIVED_CHECKPOINT_ENCODED_LEN;
 use rocketmq_store_local::commit_log::record::CommitLogFrameSource;
 use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
@@ -308,7 +308,7 @@ fn corrupted_checkpoint_fails_closed_without_replaying_from_zero() {
     };
     assert!(matches!(
         error,
-        DerivedCursorOwnerError::Checkpoint(DerivedCheckpointDecodeError::ChecksumMismatch)
+        DerivedCursorOwnerError::Checkpoint(StoreContractViolation::DerivedCheckpointChecksumMismatch)
     ));
 }
 

@@ -17,7 +17,7 @@ use std::fmt;
 
 use bytes::Bytes;
 use rocketmq_store_api::DerivedRecordId;
-use rocketmq_store_api::DerivedRecordIdError;
+use rocketmq_store_api::StoreContractViolation;
 
 use super::owner::CheckpointPersistence;
 use super::owner::DerivedCursorOwner;
@@ -164,7 +164,7 @@ pub enum DerivedReplayError<SinkError, PersistenceError> {
     StartCursor(FrameCursorStartError),
     OffsetNotRepresentable(u64),
     FrameTooLarge(usize),
-    Record(DerivedRecordIdError),
+    Record(StoreContractViolation),
     Sink(SinkError),
     Owner(DerivedCursorOwnerError<PersistenceError>),
 }

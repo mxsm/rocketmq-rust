@@ -21,8 +21,8 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_store_api::HaContractError;
 use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::SyncStateSetEpoch;
 use rocketmq_store_api::WriteAuthority;
 
@@ -50,7 +50,7 @@ impl NotifyState {
         master_epoch: MasterEpoch,
         sync_state_set_epoch: SyncStateSetEpoch,
         master_address: Option<String>,
-    ) -> Result<Self, HaContractError> {
+    ) -> Result<Self, StoreContractViolation> {
         Ok(Self {
             authority: WriteAuthority::try_from_u64(master_broker_id, master_epoch)?,
             sync_state_set_epoch,

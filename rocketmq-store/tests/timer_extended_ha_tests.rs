@@ -14,13 +14,13 @@
 
 #![cfg(feature = "extended_timeline")]
 
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::TimerPayloadStoreLocator;
 use rocketmq_store_api::TimerSnapshotFile;
 use rocketmq_store_api::TimerSnapshotManifest;
-use rocketmq_store_api::TimerSnapshotValidationError;
 use rocketmq_store_api::TimerSourceCqOffset;
 use rocketmq_store_api::TimerTimelineIndexKind;
 use rocketmq_store_api::TIMER_SNAPSHOT_SCHEMA_VERSION;
@@ -67,7 +67,10 @@ fn snapshot_manifest_fences_both_incremental_replay_streams() {
 
     let mut damaged = manifest;
     damaged.completion_physical_cursor += 1;
-    assert_eq!(damaged.validate(), Err(TimerSnapshotValidationError::ChecksumMismatch));
+    assert_eq!(
+        damaged.validate(),
+        Err(StoreContractViolation::TimerSnapshotChecksumMismatch)
+    );
 }
 
 #[test]

@@ -16,7 +16,8 @@
 
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
+
+use crate::StoreContractViolation;
 
 /// Current route format written by the Java-compatible timer engine.
 pub const JAVA_COMPAT_TIMER_FORMAT_VERSION: u16 = 1;
@@ -97,12 +98,12 @@ impl TimerEngineId {
     ///
     /// # Errors
     ///
-    /// Returns [`TimerContractError::UnknownEngine`] when `value` is not a known engine id.
-    pub fn parse(value: &str) -> Result<Self, TimerContractError> {
+    /// Returns [`StoreContractViolation::TimerUnknownEngine`] when `value` is not a known engine id.
+    pub fn parse(value: &str) -> Result<Self, StoreContractViolation> {
         match value {
             "F" => Ok(Self::JavaCompat),
             "R" => Ok(Self::ExtendedTimeline),
-            value => Err(TimerContractError::UnknownEngine(value.to_owned())),
+            value => Err(StoreContractViolation::TimerUnknownEngine(value.to_owned())),
         }
     }
 }
@@ -183,10 +184,10 @@ impl TimerPayloadLocator {
     ///
     /// # Errors
     ///
-    /// Returns [`TimerContractError::InvalidPayloadLocator`] for a negative offset or zero size.
-    pub const fn try_new(commit_log_offset: i64, size: u32) -> Result<Self, TimerContractError> {
+    /// Returns [`StoreContractViolation::TimerInvalidPayloadLocator`] for a negative offset or zero size.
+    pub const fn try_new(commit_log_offset: i64, size: u32) -> Result<Self, StoreContractViolation> {
         if commit_log_offset < 0 || size == 0 {
-            return Err(TimerContractError::InvalidPayloadLocator);
+            return Err(StoreContractViolation::TimerInvalidPayloadLocator);
         }
         Ok(Self {
             commit_log_offset,
@@ -224,7 +225,7 @@ impl TimerPayloadStoreLocator {
     ///
     /// # Errors
     ///
-    /// Returns [`TimerContractError::InvalidPayloadStoreLocator`] when `length` is zero.
+    /// Returns [`StoreContractViolation::TimerInvalidPayloadStoreLocator`] when `length` is zero.
     pub const fn try_new(
         due_day_utc: i32,
         lane: u16,
@@ -232,9 +233,9 @@ impl TimerPayloadStoreLocator {
         offset: u64,
         length: u32,
         checksum: u32,
-    ) -> Result<Self, TimerContractError> {
+    ) -> Result<Self, StoreContractViolation> {
         if length == 0 {
-            return Err(TimerContractError::InvalidPayloadStoreLocator);
+            return Err(StoreContractViolation::TimerInvalidPayloadStoreLocator);
         }
         Ok(Self {
             due_day_utc,
@@ -316,17 +317,17 @@ impl PersistedTimerRoute {
     ///
     /// # Errors
     ///
-    /// Returns [`TimerContractError::InvalidRoute`] when the version or token is empty.
+    /// Returns [`StoreContractViolation::TimerInvalidRoute`] when the version or token is empty.
     pub fn try_new(
         engine_id: TimerEngineId,
         format_version: u16,
         normalization_policy_fingerprint: u64,
         generation: TimerGeneration,
         delivery_token: impl Into<String>,
-    ) -> Result<Self, TimerContractError> {
+    ) -> Result<Self, StoreContractViolation> {
         let delivery_token = delivery_token.into();
         if format_version == 0 || delivery_token.is_empty() {
-            return Err(TimerContractError::InvalidRoute);
+            return Err(StoreContractViolation::TimerInvalidRoute);
         }
         Ok(Self {
             engine_id,
@@ -361,21 +362,4 @@ impl PersistedTimerRoute {
     pub fn delivery_token(&self) -> &str {
         &self.delivery_token
     }
-}
-
-/// Validation error for stable timer contracts.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub enum TimerContractError {
-    /// The persisted engine id is not recognized.
-    #[error("unknown timer engine id: {0}")]
-    UnknownEngine(String),
-    /// The payload locator cannot identify a non-empty CommitLog record.
-    #[error("timer payload locator requires a non-negative offset and non-zero size")]
-    InvalidPayloadLocator,
-    /// The long-horizon payload locator identifies an empty record.
-    #[error("timer payload-store locator requires a non-zero length")]
-    InvalidPayloadStoreLocator,
-    /// The immutable route is incomplete.
-    #[error("timer route requires a non-zero format version and non-empty delivery token")]
-    InvalidRoute,
 }

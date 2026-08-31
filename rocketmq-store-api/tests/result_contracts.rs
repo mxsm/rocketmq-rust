@@ -19,11 +19,11 @@ use std::sync::Mutex;
 
 use bytes::Bytes;
 use rocketmq_store_api::AppendReceipt;
-use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::DerivedProgress;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::LeasedBytes;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreHealthSnapshot;
 
 #[test]
@@ -56,12 +56,12 @@ fn rejected_receipt_has_no_synthetic_appended_range() {
 #[test]
 fn receipt_rejects_empty_and_reversed_ranges() {
     assert_eq!(
-        AppendReceiptError::EmptyRange,
+        StoreContractViolation::AppendReceiptEmptyRange,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..40, 40, 39, Durability::Memory)
             .expect_err("empty range must fail")
     );
     assert_eq!(
-        AppendReceiptError::ReversedRange,
+        StoreContractViolation::AppendReceiptReversedRange,
         AppendReceipt::try_new(
             AppendStatus::PutOk,
             std::ops::Range { start: 60, end: 40 },
@@ -76,7 +76,7 @@ fn receipt_rejects_empty_and_reversed_ranges() {
 #[test]
 fn receipt_requires_the_appended_watermark_to_cover_the_range() {
     assert_eq!(
-        AppendReceiptError::AppendedWatermarkBehindRange,
+        StoreContractViolation::AppendReceiptAppendedWatermarkBehindRange,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 59, 48, Durability::Memory)
             .expect_err("append watermark behind range must fail")
     );
@@ -85,12 +85,12 @@ fn receipt_requires_the_appended_watermark_to_cover_the_range() {
 #[test]
 fn receipt_rejects_a_durable_watermark_ahead_of_appended_progress() {
     assert_eq!(
-        AppendReceiptError::DurableWatermarkAheadOfAppended,
+        StoreContractViolation::AppendReceiptDurableWatermarkAheadOfAppended,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 60, 61, Durability::Local)
             .expect_err("durable progress cannot exceed appended progress")
     );
     assert_eq!(
-        AppendReceiptError::DurableWatermarkAheadOfAppended,
+        StoreContractViolation::AppendReceiptDurableWatermarkAheadOfAppended,
         AppendReceipt::try_rejected(AppendStatus::ServiceUnavailable, 60, 61)
             .expect_err("rejected receipt watermarks must also be ordered")
     );
@@ -99,12 +99,12 @@ fn receipt_rejects_a_durable_watermark_ahead_of_appended_progress() {
 #[test]
 fn receipt_requires_local_and_replicated_durability_to_be_reached() {
     assert_eq!(
-        AppendReceiptError::DurableWatermarkBehindRange,
+        StoreContractViolation::AppendReceiptDurableWatermarkBehindRange,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 59, Durability::Local)
             .expect_err("claimed durability must cover range")
     );
     assert_eq!(
-        AppendReceiptError::ReplicatedDurabilityRequiresDecision,
+        StoreContractViolation::AppendReceiptReplicatedDurabilityRequiresDecision,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 59, Durability::Replicated)
             .expect_err("replicated durability requires a canonical decision")
     );
@@ -113,7 +113,7 @@ fn receipt_requires_local_and_replicated_durability_to_be_reached() {
 #[test]
 fn local_receipt_constructor_cannot_claim_replicated_durability() {
     assert_eq!(
-        AppendReceiptError::ReplicatedDurabilityRequiresDecision,
+        StoreContractViolation::AppendReceiptReplicatedDurabilityRequiresDecision,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 60, Durability::Replicated)
             .expect_err("local watermarks alone cannot prove replication")
     );
@@ -122,7 +122,7 @@ fn local_receipt_constructor_cannot_claim_replicated_durability() {
 #[test]
 fn receipt_rejects_memory_durability_after_local_durability_is_reached() {
     assert_eq!(
-        AppendReceiptError::MemoryDurabilityAlreadyCovered,
+        StoreContractViolation::AppendReceiptMemoryDurabilityAlreadyCovered,
         AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 60, Durability::Memory)
             .expect_err("memory durability must not under-report reached local durability")
     );
@@ -131,12 +131,12 @@ fn receipt_rejects_memory_durability_after_local_durability_is_reached() {
 #[test]
 fn receipt_rejects_status_and_range_misuse() {
     assert_eq!(
-        AppendReceiptError::RejectedStatusWithRange,
+        StoreContractViolation::AppendReceiptRejectedStatusWithRange,
         AppendReceipt::try_new(AppendStatus::ServiceUnavailable, 40..60, 80, 48, Durability::Memory,)
             .expect_err("rejected status must not carry a range")
     );
     assert_eq!(
-        AppendReceiptError::AcceptedStatusWithoutRange,
+        StoreContractViolation::AppendReceiptAcceptedStatusWithoutRange,
         AppendReceipt::try_rejected(AppendStatus::PutOk, 80, 48)
             .expect_err("accepted status must not use rejected constructor")
     );

@@ -37,43 +37,19 @@ pub struct CheckpointDirectoryDigest {
     pub sha256: String,
 }
 
-/// Failure while resolving or hashing a checkpoint artifact.
+use crate::StoreContractViolation;
+use crate::StoreError;
+use crate::StoreErrorKind;
+use crate::StoreOperation;
+
+/// Private filesystem failure while reading a checkpoint artifact.
 #[derive(Debug, Error)]
-pub enum CheckpointArtifactError {
-    /// The artifact exceeded its configured byte budget.
-    #[error("checkpoint is {actual} bytes, exceeding the {maximum} byte limit")]
-    CheckpointTooLarge {
-        /// Observed bytes.
-        actual: u64,
-        /// Configured maximum bytes.
-        maximum: u64,
-    },
-    /// The artifact contains no payload bytes.
-    #[error("checkpoint payload is empty")]
-    EmptyCheckpoint,
-    /// A symbolic link was found in the artifact.
-    #[error("checkpoint contains symbolic link {}", .0.display())]
-    SymbolicLink(PathBuf),
-    /// A discovered entry escaped the checkpoint root.
-    #[error("checkpoint path escaped its root: {}", .0.display())]
-    PathEscaped(PathBuf),
-    /// An entry was neither a regular file nor a directory.
-    #[error("checkpoint contains unsupported file type {}", .0.display())]
-    UnsupportedFileType(PathBuf),
-    /// The checkpoint URI is not a supported local file URI.
-    #[error("unsupported checkpoint URI: {0}")]
-    UnsupportedUri(String),
-    /// A filesystem operation failed.
-    #[error("{operation} failed for {path}: {source}")]
-    Io {
-        /// Stable operation name.
-        operation: &'static str,
-        /// Affected path.
-        path: PathBuf,
-        /// Original I/O error.
-        #[source]
-        source: std::io::Error,
-    },
+#[error("{operation} failed for {path}: {source}")]
+struct CheckpointArtifactIoError {
+    operation: &'static str,
+    path: PathBuf,
+    #[source]
+    source: std::io::Error,
 }
 
 /// Hashes all regular files in stable relative-path order.
@@ -84,12 +60,14 @@ pub enum CheckpointArtifactError {
 ///
 /// # Errors
 ///
-/// Returns [`CheckpointArtifactError`] when the artifact cannot be traversed
-/// safely, read, or kept within `max_checkpoint_bytes`.
+/// Returns [`StoreError`] when the artifact cannot be traversed safely, read,
+/// or kept within `max_checkpoint_bytes`. Deterministic shape violations are
+/// preserved as a typed [`StoreContractViolation`] source; filesystem failures
+/// retain their private typed source and underlying [`std::io::Error`].
 pub fn hash_checkpoint_directory(
     checkpoint_root: &Path,
     max_checkpoint_bytes: u64,
-) -> Result<CheckpointDirectoryDigest, CheckpointArtifactError> {
+) -> Result<CheckpointDirectoryDigest, StoreError> {
     let checkpoint_root = checkpoint_root
         .canonicalize()
         .map_err(|source| io_error("canonicalize checkpoint", checkpoint_root, source))?;
@@ -112,25 +90,24 @@ pub fn hash_checkpoint_directory(
             if read == 0 {
                 break;
             }
-            length_bytes =
-                length_bytes
-                    .checked_add(read as u64)
-                    .ok_or(CheckpointArtifactError::CheckpointTooLarge {
-                        actual: u64::MAX,
-                        maximum: max_checkpoint_bytes,
-                    })?;
+            length_bytes = length_bytes.checked_add(read as u64).ok_or_else(|| {
+                artifact_contract(StoreContractViolation::CheckpointArtifactTooLarge {
+                    actual: u64::MAX,
+                    maximum: max_checkpoint_bytes,
+                })
+            })?;
             if length_bytes > max_checkpoint_bytes {
-                return Err(CheckpointArtifactError::CheckpointTooLarge {
+                return Err(artifact_contract(StoreContractViolation::CheckpointArtifactTooLarge {
                     actual: length_bytes,
                     maximum: max_checkpoint_bytes,
-                });
+                }));
             }
             hasher.update(&buffer[..read]);
         }
     }
 
     if length_bytes == 0 {
-        return Err(CheckpointArtifactError::EmptyCheckpoint);
+        return Err(artifact_contract(StoreContractViolation::CheckpointArtifactEmpty));
     }
     Ok(CheckpointDirectoryDigest {
         length_bytes,
@@ -157,12 +134,12 @@ pub fn path_to_file_uri(path: &Path) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`CheckpointArtifactError::UnsupportedUri`] when `uri` is not a
-/// local file URI.
-pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, CheckpointArtifactError> {
+/// Returns [`StoreContractViolation::CheckpointArtifactUnsupportedUri`] when
+/// `uri` is not a local file URI.
+pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, StoreContractViolation> {
     let raw = uri
         .strip_prefix("file:///")
-        .ok_or_else(|| CheckpointArtifactError::UnsupportedUri(uri.to_string()))?;
+        .ok_or_else(|| StoreContractViolation::CheckpointArtifactUnsupportedUri(uri.to_string()))?;
     #[cfg(windows)]
     let path = PathBuf::from(raw.replace('/', "\\"));
     #[cfg(not(windows))]
@@ -170,7 +147,7 @@ pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, CheckpointArtifactError> {
     Ok(path)
 }
 
-fn collect_regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, CheckpointArtifactError> {
+fn collect_regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, StoreError> {
     let mut pending = vec![root.to_path_buf()];
     let mut files = Vec::new();
     while let Some(directory) = pending.pop() {
@@ -182,18 +159,24 @@ fn collect_regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, Checkpo
             let metadata =
                 fs::symlink_metadata(&path).map_err(|source| io_error("inspect checkpoint entry", &path, source))?;
             if metadata.file_type().is_symlink() {
-                return Err(CheckpointArtifactError::SymbolicLink(path));
+                return Err(artifact_contract(
+                    StoreContractViolation::CheckpointArtifactSymbolicLink(path),
+                ));
             }
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
                 let relative = path
                     .strip_prefix(root)
-                    .map_err(|_| CheckpointArtifactError::PathEscaped(path.clone()))?
+                    .map_err(|_| {
+                        artifact_contract(StoreContractViolation::CheckpointArtifactPathEscaped(path.clone()))
+                    })?
                     .to_path_buf();
                 files.push((relative, path));
             } else {
-                return Err(CheckpointArtifactError::UnsupportedFileType(path));
+                return Err(artifact_contract(
+                    StoreContractViolation::CheckpointArtifactUnsupportedFileType(path),
+                ));
             }
         }
     }
@@ -214,10 +197,14 @@ fn portable_relative_path(path: &Path) -> String {
         .join("/")
 }
 
-fn io_error(operation: &'static str, path: &Path, source: std::io::Error) -> CheckpointArtifactError {
-    CheckpointArtifactError::Io {
+fn artifact_contract(source: StoreContractViolation) -> StoreError {
+    StoreError::new(StoreErrorKind::InvalidRequest, StoreOperation::Read).with_source(source)
+}
+
+fn io_error(operation: &'static str, path: &Path, source: std::io::Error) -> StoreError {
+    StoreError::new(StoreErrorKind::Io, StoreOperation::Read).with_source(CheckpointArtifactIoError {
         operation,
         path: path.to_path_buf(),
         source,
-    }
+    })
 }

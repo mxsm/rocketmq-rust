@@ -801,5 +801,5 @@ pub(crate) enum IndexMigrationError {
     #[error(transparent)]
     Commit(#[from] SegmentedCommitError),
     #[error(transparent)]
-    Snapshot(#[from] rocketmq_store_api::TimerSnapshotValidationError),
+    Snapshot(#[from] rocketmq_store_api::StoreContractViolation),
 }

@@ -294,9 +294,9 @@ pub(crate) enum TimelineSnapshotError {
     #[error(transparent)]
     Completion(#[from] super::TimelineCompletionError),
     #[error(transparent)]
-    Artifact(#[from] rocketmq_store_api::CheckpointArtifactError),
+    Artifact(#[from] rocketmq_store_api::StoreError),
     #[error(transparent)]
-    Manifest(#[from] rocketmq_store_api::TimerSnapshotValidationError),
+    Manifest(#[from] rocketmq_store_api::StoreContractViolation),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("CLOCK_UNSAFE prevents Extended snapshot publication")]

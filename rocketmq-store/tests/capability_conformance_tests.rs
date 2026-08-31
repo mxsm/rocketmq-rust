@@ -31,11 +31,11 @@ use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreHealthError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::StorePorts;
-use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::MessageReader;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreLifecycle;
@@ -113,12 +113,15 @@ fn store_receipt_reports_invalid_projection_without_panicking() {
         80,
         48,
     );
-    assert_eq!(Some(&AppendReceiptError::EmptyRange), receipt.canonical().err());
+    assert_eq!(
+        Some(&StoreContractViolation::AppendReceiptEmptyRange),
+        receipt.canonical().err()
+    );
     assert_eq!(PutMessageStatus::PutOk, receipt.result().put_message_status());
 
     let remote = store_append_receipt(PutMessageResult::new(PutMessageStatus::PutOk, None, true), 80, 48);
     assert_eq!(
-        Some(&AppendReceiptError::AcceptedStatusWithoutRange),
+        Some(&StoreContractViolation::AppendReceiptAcceptedStatusWithoutRange),
         remote.canonical().err()
     );
     assert!(remote.result().remote_put());

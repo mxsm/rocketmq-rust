@@ -35,7 +35,6 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_store_api::AppendReceipt;
-use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::FlushBacklog as ApiFlushBacklog;
@@ -47,6 +46,7 @@ use rocketmq_store_api::QueryResult;
 use rocketmq_store_api::ReadCacheState;
 use rocketmq_store_api::SelectResult;
 use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
@@ -706,7 +706,7 @@ impl<T> BrokerReplicationStore for T where T: BackendOps {}
 #[derive(Clone)]
 pub struct StoreAppendReceipt {
     result: PutMessageResult,
-    canonical: Result<AppendReceipt, AppendReceiptError>,
+    canonical: Result<AppendReceipt, StoreContractViolation>,
     appended_watermark: i64,
     durable_watermark: i64,
 }
@@ -718,7 +718,7 @@ impl StoreAppendReceipt {
     }
 
     /// Returns the canonical backend-neutral receipt projection.
-    pub fn canonical(&self) -> Result<&AppendReceipt, &AppendReceiptError> {
+    pub fn canonical(&self) -> Result<&AppendReceipt, &StoreContractViolation> {
         self.canonical.as_ref()
     }
 

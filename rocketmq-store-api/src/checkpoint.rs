@@ -18,11 +18,10 @@
 //! remaining independent from `rocketmq-protocol`. Wire/domain conversion is
 //! owned by the Broker maintenance ingress.
 
-use std::error::Error as StdError;
-use std::fmt;
-
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::StoreContractViolation;
 
 /// Current Store checkpoint manifest schema.
 pub const CHECKPOINT_SCHEMA_VERSION: u16 = 1;
@@ -57,20 +56,20 @@ impl CheckpointOffsets {
     /// # Errors
     ///
     /// Returns a typed invariant error for a negative or out-of-order offset.
-    pub fn validate(self) -> Result<(), CheckpointValidationError> {
+    pub fn validate(self) -> Result<(), StoreContractViolation> {
         if self.appended_offset < 0 || self.durable_offset < 0 || self.consume_queue_offset < 0 || self.index_offset < 0
         {
-            return Err(CheckpointValidationError::InvalidOffsets(
+            return Err(StoreContractViolation::CheckpointInvalidOffsets(
                 "checkpoint offsets cannot be negative".to_string(),
             ));
         }
         if self.durable_offset > self.appended_offset {
-            return Err(CheckpointValidationError::InvalidOffsets(
+            return Err(StoreContractViolation::CheckpointInvalidOffsets(
                 "durable_offset cannot exceed appended_offset".to_string(),
             ));
         }
         if self.consume_queue_offset > self.durable_offset || self.index_offset > self.durable_offset {
-            return Err(CheckpointValidationError::InvalidOffsets(
+            return Err(StoreContractViolation::CheckpointInvalidOffsets(
                 "derived offsets cannot exceed durable_offset".to_string(),
             ));
         }
@@ -89,10 +88,10 @@ pub struct CheckpointStorageIdentity {
 }
 
 impl CheckpointStorageIdentity {
-    fn validate(&self) -> Result<(), CheckpointValidationError> {
+    fn validate(&self) -> Result<(), StoreContractViolation> {
         require_identifier("storageIdentity.volumeId", &self.volume_id)?;
         if self.wal_generation == 0 {
-            return Err(CheckpointValidationError::InvalidField {
+            return Err(StoreContractViolation::CheckpointInvalidField {
                 field: "storageIdentity.walGeneration",
                 reason: "must be greater than zero".to_string(),
             });
@@ -131,9 +130,9 @@ impl CheckpointArtifact {
     /// # Errors
     ///
     /// Returns a typed validation error when the artifact is incomplete.
-    pub fn validate(&self) -> Result<(), CheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), StoreContractViolation> {
         if self.schema_version != CHECKPOINT_SCHEMA_VERSION {
-            return Err(CheckpointValidationError::SchemaVersion {
+            return Err(StoreContractViolation::CheckpointSchemaVersion {
                 expected: CHECKPOINT_SCHEMA_VERSION,
                 actual: self.schema_version,
             });
@@ -185,7 +184,7 @@ impl CheckpointRequest {
     ///
     /// Returns a typed validation error when a required identity, generation,
     /// offset, or storage identity is invalid.
-    pub fn validate(&self) -> Result<(), CheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), StoreContractViolation> {
         require_identifier("checkpointId", &self.checkpoint_id)?;
         require_identifier("checkpointSetId", &self.checkpoint_set_id)?;
         require_identifier("barrierId", &self.barrier_id)?;
@@ -225,13 +224,13 @@ impl CheckpointManifest {
     ///
     /// Returns a typed validation error for incomplete artifact metadata,
     /// invalid offsets/storage identity, or destructive rollback semantics.
-    pub fn validate(&self) -> Result<(), CheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), StoreContractViolation> {
         self.artifact.validate()?;
         require_identifier("memberId", &self.member_id)?;
         self.offsets.validate()?;
         self.storage_identity.validate()?;
         if !self.wal_retained || !self.persistent_volume_retained {
-            return Err(CheckpointValidationError::DestructiveRollback);
+            return Err(StoreContractViolation::CheckpointDestructiveRollback);
         }
         Ok(())
     }
@@ -266,7 +265,7 @@ impl CheckpointRestoreVerification {
     ///
     /// Returns a typed validation error when any integrity, offset, WAL, or PVC
     /// proof is absent.
-    pub fn validate(&self) -> Result<(), CheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), StoreContractViolation> {
         require_identifier("checkpointId", &self.checkpoint_id)?;
         if self.generation == 0 || self.verified_at_unix_millis == 0 {
             return invalid_field("generation/verifiedAtUnixMillis", "must be greater than zero");
@@ -277,59 +276,13 @@ impl CheckpointRestoreVerification {
             || !self.wal_retained
             || !self.persistent_volume_retained
         {
-            return Err(CheckpointValidationError::RestoreVerificationIncomplete);
+            return Err(StoreContractViolation::CheckpointRestoreVerificationIncomplete);
         }
         Ok(())
     }
 }
 
-/// Store checkpoint domain invariant violation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CheckpointValidationError {
-    /// Represents the schema version case.
-    SchemaVersion {
-        /// The expected value.
-        expected: u16,
-        /// The actual value.
-        actual: u16,
-    },
-    /// Represents the invalid field case.
-    InvalidField {
-        /// The field value.
-        field: &'static str,
-        /// The reason value.
-        reason: String,
-    },
-    /// Represents the invalid offsets case.
-    InvalidOffsets(String),
-    /// Represents the destructive rollback case.
-    DestructiveRollback,
-    /// Represents the restore verification incomplete case.
-    RestoreVerificationIncomplete,
-}
-
-impl fmt::Display for CheckpointValidationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SchemaVersion { expected, actual } => {
-                write!(
-                    formatter,
-                    "checkpoint schema version {actual} does not match {expected}"
-                )
-            }
-            Self::InvalidField { field, reason } => write!(formatter, "invalid checkpoint field {field}: {reason}"),
-            Self::InvalidOffsets(reason) => write!(formatter, "invalid checkpoint offsets: {reason}"),
-            Self::DestructiveRollback => {
-                formatter.write_str("checkpoint permits destructive WAL or persistent-volume replacement")
-            }
-            Self::RestoreVerificationIncomplete => formatter.write_str("checkpoint restore verification is incomplete"),
-        }
-    }
-}
-
-impl StdError for CheckpointValidationError {}
-
-fn require_identifier(field: &'static str, value: &str) -> Result<(), CheckpointValidationError> {
+fn require_identifier(field: &'static str, value: &str) -> Result<(), StoreContractViolation> {
     if value.is_empty()
         || value.len() > 256
         || !value
@@ -341,7 +294,7 @@ fn require_identifier(field: &'static str, value: &str) -> Result<(), Checkpoint
     Ok(())
 }
 
-fn require_sha256(value: &str) -> Result<(), CheckpointValidationError> {
+fn require_sha256(value: &str) -> Result<(), StoreContractViolation> {
     if value.len() != 64
         || !value
             .bytes()
@@ -352,8 +305,8 @@ fn require_sha256(value: &str) -> Result<(), CheckpointValidationError> {
     Ok(())
 }
 
-fn invalid_field<T>(field: &'static str, reason: impl Into<String>) -> Result<T, CheckpointValidationError> {
-    Err(CheckpointValidationError::InvalidField {
+fn invalid_field<T>(field: &'static str, reason: impl Into<String>) -> Result<T, StoreContractViolation> {
+    Err(StoreContractViolation::CheckpointInvalidField {
         field,
         reason: reason.into(),
     })
@@ -400,7 +353,7 @@ mod tests {
         };
         assert!(matches!(
             offsets.validate(),
-            Err(CheckpointValidationError::InvalidOffsets(_))
+            Err(StoreContractViolation::CheckpointInvalidOffsets(_))
         ));
     }
 }

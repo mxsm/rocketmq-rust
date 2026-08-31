@@ -18,7 +18,13 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::io::Read;
 use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
+
+use crate::StoreContractViolation;
+use crate::StoreError;
+use crate::StoreErrorKind;
+use crate::StoreOperation;
 
 /// Current Extended Timeline snapshot manifest schema.
 pub const TIMER_SNAPSHOT_SCHEMA_VERSION: u16 = 1;
@@ -100,15 +106,17 @@ pub struct TimerSnapshotManifest {
 
 impl TimerSnapshotManifest {
     /// Computes and stores the canonical manifest checksum.
-    pub fn seal(&mut self) -> Result<(), TimerSnapshotValidationError> {
+    pub fn seal(&mut self) -> Result<(), StoreContractViolation> {
         self.checksum = hex::encode(self.digest()?);
         Ok(())
     }
 
     /// Validates shape, cursor monotonicity, file identities, and checksum.
-    pub fn validate(&self) -> Result<(), TimerSnapshotValidationError> {
+    pub fn validate(&self) -> Result<(), StoreContractViolation> {
         if self.schema_version != TIMER_SNAPSHOT_SCHEMA_VERSION {
-            return Err(TimerSnapshotValidationError::UnsupportedVersion(self.schema_version));
+            return Err(StoreContractViolation::TimerSnapshotUnsupportedVersion(
+                self.schema_version,
+            ));
         }
         match self.timeline_index_kind {
             TimerTimelineIndexKind::RocksDb => {
@@ -117,7 +125,7 @@ impl TimerSnapshotManifest {
                     || self.native_manifest_checksum.is_some()
                     || !self.native_files.is_empty()
                 {
-                    return Err(TimerSnapshotValidationError::InvalidNativeBinding);
+                    return Err(StoreContractViolation::TimerSnapshotInvalidNativeBinding);
                 }
             }
             TimerTimelineIndexKind::Segmented => {
@@ -126,7 +134,7 @@ impl TimerSnapshotManifest {
                     || !matches!(self.native_manifest_checksum, Some(value) if value > 0)
                     || self.native_files.is_empty()
                 {
-                    return Err(TimerSnapshotValidationError::InvalidNativeBinding);
+                    return Err(StoreContractViolation::TimerSnapshotInvalidNativeBinding);
                 }
             }
         }
@@ -141,7 +149,7 @@ impl TimerSnapshotManifest {
             || self.format_fingerprint == 0
             || self.timeline_checkpoint_uri.is_empty()
         {
-            return Err(TimerSnapshotValidationError::InvalidMetadata);
+            return Err(StoreContractViolation::TimerSnapshotInvalidMetadata);
         }
         for file in self.payload_files.iter().chain(&self.native_files) {
             if file.relative_path.is_empty()
@@ -154,12 +162,12 @@ impl TimerSnapshotManifest {
                 || file.sha256.len() != 64
                 || !file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
-                return Err(TimerSnapshotValidationError::InvalidFile);
+                return Err(StoreContractViolation::TimerSnapshotInvalidFile);
             }
         }
         let expected = hex::encode(self.digest()?);
         if self.checksum != expected {
-            return Err(TimerSnapshotValidationError::ChecksumMismatch);
+            return Err(StoreContractViolation::TimerSnapshotChecksumMismatch);
         }
         Ok(())
     }
@@ -168,24 +176,28 @@ impl TimerSnapshotManifest {
     ///
     /// # Errors
     ///
-    /// Returns [`TimerSnapshotValidationError::ArtifactMissing`] if a file cannot be opened or
-    /// read, and [`TimerSnapshotValidationError::ArtifactDigestMismatch`] if its bytes differ.
-    pub fn validate_artifact_files(&self, artifact_root: impl AsRef<Path>) -> Result<(), TimerSnapshotValidationError> {
-        self.validate()?;
+    /// Returns [`StoreError`] if a file cannot be opened or read, and preserves
+    /// [`StoreContractViolation::TimerSnapshotArtifactDigestMismatch`] as a
+    /// typed source if its declared identity differs.
+    pub fn validate_artifact_files(&self, artifact_root: impl AsRef<Path>) -> Result<(), StoreError> {
+        self.validate().map_err(snapshot_contract)?;
         let root = artifact_root.as_ref();
         for expected in self.payload_files.iter().chain(&self.native_files) {
             let path = expected
                 .relative_path
                 .split('/')
                 .fold(root.to_path_buf(), |path, component| path.join(component));
-            let mut file = std::fs::File::open(path).map_err(|_| TimerSnapshotValidationError::ArtifactMissing)?;
+            let mut file = std::fs::File::open(&path)
+                .map_err(|source| snapshot_io("open timer snapshot artifact", &path, source))?;
             if file
                 .metadata()
-                .map_err(|_| TimerSnapshotValidationError::ArtifactMissing)?
+                .map_err(|source| snapshot_io("inspect timer snapshot artifact", &path, source))?
                 .len()
                 != expected.length
             {
-                return Err(TimerSnapshotValidationError::ArtifactDigestMismatch);
+                return Err(snapshot_contract(
+                    StoreContractViolation::TimerSnapshotArtifactDigestMismatch,
+                ));
             }
             let mut hasher = Sha256::new();
             let mut remaining = expected.length;
@@ -193,18 +205,21 @@ impl TimerSnapshotManifest {
             while remaining > 0 {
                 let chunk = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
                 file.read_exact(&mut buffer[..chunk])
-                    .map_err(|_| TimerSnapshotValidationError::ArtifactMissing)?;
+                    .map_err(|source| snapshot_io("read timer snapshot artifact", &path, source))?;
                 hasher.update(&buffer[..chunk]);
-                remaining -= u64::try_from(chunk).map_err(|_| TimerSnapshotValidationError::InvalidMetadata)?;
+                remaining -= u64::try_from(chunk)
+                    .map_err(|_| snapshot_contract(StoreContractViolation::TimerSnapshotInvalidMetadata))?;
             }
             if hex::encode(hasher.finalize()) != expected.sha256 {
-                return Err(TimerSnapshotValidationError::ArtifactDigestMismatch);
+                return Err(snapshot_contract(
+                    StoreContractViolation::TimerSnapshotArtifactDigestMismatch,
+                ));
             }
         }
         Ok(())
     }
 
-    fn digest(&self) -> Result<[u8; 32], TimerSnapshotValidationError> {
+    fn digest(&self) -> Result<[u8; 32], StoreContractViolation> {
         let mut hasher = Sha256::new();
         hasher.update(self.schema_version.to_be_bytes());
         hasher.update(self.generation.to_be_bytes());
@@ -229,8 +244,8 @@ impl TimerSnapshotManifest {
     }
 }
 
-fn update_files(hasher: &mut Sha256, files: &[TimerSnapshotFile]) -> Result<(), TimerSnapshotValidationError> {
-    let file_count = u32::try_from(files.len()).map_err(|_| TimerSnapshotValidationError::InvalidMetadata)?;
+fn update_files(hasher: &mut Sha256, files: &[TimerSnapshotFile]) -> Result<(), StoreContractViolation> {
+    let file_count = u32::try_from(files.len()).map_err(|_| StoreContractViolation::TimerSnapshotInvalidMetadata)?;
     hasher.update(file_count.to_be_bytes());
     for file in files {
         update_text(hasher, &file.relative_path)?;
@@ -240,37 +255,32 @@ fn update_files(hasher: &mut Sha256, files: &[TimerSnapshotFile]) -> Result<(), 
     Ok(())
 }
 
-fn update_text(hasher: &mut Sha256, value: &str) -> Result<(), TimerSnapshotValidationError> {
-    let length = u32::try_from(value.len()).map_err(|_| TimerSnapshotValidationError::InvalidMetadata)?;
+fn update_text(hasher: &mut Sha256, value: &str) -> Result<(), StoreContractViolation> {
+    let length = u32::try_from(value.len()).map_err(|_| StoreContractViolation::TimerSnapshotInvalidMetadata)?;
     hasher.update(length.to_be_bytes());
     hasher.update(value.as_bytes());
     Ok(())
 }
 
-/// Extended Timeline snapshot manifest validation failure.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum TimerSnapshotValidationError {
-    /// The reader does not support this manifest version.
-    #[error("unsupported timer snapshot schema version: {0}")]
-    UnsupportedVersion(u16),
-    /// Required generations, epochs, cursors, or URIs are invalid.
-    #[error("invalid timer snapshot metadata")]
-    InvalidMetadata,
-    /// A payload file path, length, or digest is invalid.
-    #[error("invalid timer snapshot file")]
-    InvalidFile,
-    /// Canonical manifest checksum does not match.
-    #[error("timer snapshot manifest checksum mismatch")]
-    ChecksumMismatch,
-    /// Native fields are missing, zero, or present for a RocksDB-only snapshot.
-    #[error("invalid native Timeline snapshot binding")]
-    InvalidNativeBinding,
-    /// A declared artifact file is absent or unreadable.
-    #[error("timer snapshot artifact file is missing or unreadable")]
-    ArtifactMissing,
-    /// A declared artifact file has the wrong length or SHA-256 digest.
-    #[error("timer snapshot artifact file identity does not match its manifest")]
-    ArtifactDigestMismatch,
+#[derive(Debug, Error)]
+#[error("{operation} failed for {path}: {source}")]
+struct TimerSnapshotIoError {
+    operation: &'static str,
+    path: PathBuf,
+    #[source]
+    source: std::io::Error,
+}
+
+fn snapshot_contract(source: StoreContractViolation) -> StoreError {
+    StoreError::new(StoreErrorKind::InvalidRequest, StoreOperation::Read).with_source(source)
+}
+
+fn snapshot_io(operation: &'static str, path: &Path, source: std::io::Error) -> StoreError {
+    StoreError::new(StoreErrorKind::Io, StoreOperation::Read).with_source(TimerSnapshotIoError {
+        operation,
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -314,7 +324,10 @@ mod tests {
         let mut decoded: TimerSnapshotManifest = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, manifest);
         decoded.completion_physical_cursor += 1;
-        assert_eq!(decoded.validate(), Err(TimerSnapshotValidationError::ChecksumMismatch));
+        assert_eq!(
+            decoded.validate(),
+            Err(StoreContractViolation::TimerSnapshotChecksumMismatch)
+        );
     }
 
     #[test]
@@ -322,6 +335,9 @@ mod tests {
         let mut manifest = manifest();
         manifest.payload_files[0].relative_path = "payload\\..\\outside".to_owned();
         manifest.seal().unwrap();
-        assert_eq!(manifest.validate(), Err(TimerSnapshotValidationError::InvalidFile));
+        assert_eq!(
+            manifest.validate(),
+            Err(StoreContractViolation::TimerSnapshotInvalidFile)
+        );
     }
 }

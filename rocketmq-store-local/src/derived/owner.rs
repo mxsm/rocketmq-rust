@@ -16,13 +16,12 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use rocketmq_store_api::CursorAdvanceDisposition;
-use rocketmq_store_api::CursorAdvanceError;
 use rocketmq_store_api::DerivedCheckpoint;
-use rocketmq_store_api::DerivedCheckpointDecodeError;
 use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::LegacyDerivedCursorV0;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::DERIVED_CHECKPOINT_ENCODED_LEN;
 
 /// Persistence boundary owned independently by one derived engine.
@@ -174,8 +173,8 @@ pub enum DerivedCommitOutcome {
 #[derive(Debug)]
 pub enum DerivedCursorOwnerError<E> {
     Persistence(E),
-    Checkpoint(DerivedCheckpointDecodeError),
-    Cursor(CursorAdvanceError),
+    Checkpoint(StoreContractViolation),
+    Cursor(StoreContractViolation),
     SourceEpochMismatch { expected: u64, actual: u64 },
 }
 
