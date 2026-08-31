@@ -16,9 +16,9 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::descriptor::ErrorCode;
 use crate::BoundaryErrorView;
 use crate::DomainError;
-use crate::ErrorCode;
 use crate::ErrorContext;
 use crate::ErrorKind;
 use crate::ErrorSeverity;

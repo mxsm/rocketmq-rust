@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::descriptor::ErrorCode;
 use crate::ErrorCategory;
-use crate::ErrorCode;
 use crate::ErrorContext;
 use crate::ErrorKind;
 use crate::ErrorSeverity;
