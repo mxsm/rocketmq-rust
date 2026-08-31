@@ -812,6 +812,16 @@ def check_redaction_guards() -> list[Finding]:
             "pub fn public_fields(&self)",
             "pub const fn is_truncated(&self) -> bool",
         ],
+        ROOT / "rocketmq-error" / "src" / "view.rs": [
+            "pub struct PublicErrorView",
+            "pub struct DiagnosticView",
+            "pub enum ViewContextViolation",
+            "ViewValueRef::Redacted",
+        ],
+        ROOT / "rocketmq-error" / "tests" / "error_safe_views.rs": [
+            "const SENTINEL",
+            "secret_sentinel_never_enters_safe_views_or_violations",
+        ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
             "error_context_redacts_sensitive_fields",
         ],

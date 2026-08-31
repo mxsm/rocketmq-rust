@@ -69,6 +69,7 @@ mod recovery;
 mod shared;
 mod spec;
 mod unified;
+mod view;
 
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
@@ -147,3 +148,10 @@ pub use unified::RpcClientError;
 pub use unified::SerializationError;
 pub use unified::ServiceError as UnifiedServiceError;
 pub use unified::ToolsError;
+pub use view::DiagnosticFields;
+pub use view::DiagnosticView;
+pub use view::PublicErrorView;
+pub use view::PublicFields;
+pub use view::ViewContextViolation;
+pub use view::ViewFieldRef;
+pub use view::ViewValueRef;
