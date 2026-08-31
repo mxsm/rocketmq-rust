@@ -296,6 +296,7 @@ impl ProxyStatusMapper {
             GrpcStatusCode::FailedPrecondition => TonicCode::FailedPrecondition,
             GrpcStatusCode::Unimplemented => TonicCode::Unimplemented,
             GrpcStatusCode::Unavailable => TonicCode::Unavailable,
+            GrpcStatusCode::DataLoss => TonicCode::DataLoss,
             GrpcStatusCode::Internal => TonicCode::Internal,
         }
     }
@@ -303,6 +304,7 @@ impl ProxyStatusMapper {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::GrpcStatusCode;
     use rocketmq_error::RocketMQError;
     use rocketmq_protocol::code::response_code::ResponseCode;
 
@@ -472,6 +474,14 @@ mod tests {
         assert_eq!(
             ProxyStatusMapper::to_tonic_status(&not_master).code(),
             tonic::Code::FailedPrecondition
+        );
+    }
+
+    #[test]
+    fn data_loss_status_maps_to_tonic_data_loss() {
+        assert_eq!(
+            ProxyStatusMapper::grpc_status_to_tonic_code(GrpcStatusCode::DataLoss),
+            tonic::Code::DataLoss
         );
     }
 

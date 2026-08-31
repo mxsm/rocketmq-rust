@@ -35,6 +35,7 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
     for module in [
         "auth_error",
         "boundary",
+        "catalog",
         "cli",
         "context",
         "controller_error",
@@ -44,6 +45,7 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         "kind",
         "observability_error",
         "policy",
+        "projection",
         "recovery",
         "spec",
         "unified",
@@ -63,4 +65,10 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
     let recovery = rocketmq_error::RecoveryHint::Backoff;
     assert_eq!(condition.as_str(), "unavailable");
     assert_eq!(recovery.as_str(), "backoff");
+
+    let descriptor: &'static rocketmq_error::ErrorDescriptor =
+        rocketmq_error::descriptor_by_code("route.topic.not_found").expect("catalog descriptor");
+    let projection: rocketmq_error::ProjectionSpec = descriptor.projection();
+    assert_eq!(descriptor, &rocketmq_error::ROUTE_TOPIC_NOT_FOUND);
+    assert_eq!(projection.grpc().status, rocketmq_error::GrpcStatusCode::NotFound);
 }

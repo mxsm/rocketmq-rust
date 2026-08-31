@@ -14,6 +14,11 @@
 
 use std::fmt;
 
+use crate::projection::ProjectionSpec;
+use crate::CanonicalCondition;
+use crate::ErrorSeverity;
+use crate::RecoveryHint;
+
 /// Stable machine-readable error code.
 ///
 /// `ErrorCode` values are intentionally separate from display messages.
@@ -66,6 +71,94 @@ impl ErrorCode {
 impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)
+    }
+}
+
+/// Immutable catalog metadata for one canonical error identity.
+///
+/// A descriptor owns the stable code, protocol-independent condition, fixed
+/// public message, operational severity, recovery hint, and explicit boundary
+/// projections for an error. Catalog consumers can inspect this metadata but
+/// cannot construct or modify descriptors outside this crate.
+///
+/// ```compile_fail
+/// use rocketmq_error::{
+///     CanonicalCondition, ErrorCode, ErrorDescriptor, ErrorSeverity, RecoveryHint,
+/// };
+///
+/// let descriptor = ErrorDescriptor {
+///     code: ErrorCode::try_new("example.operation.failed").unwrap(),
+///     condition: CanonicalCondition::Internal,
+///     public_message: "The operation failed",
+///     severity: ErrorSeverity::Error,
+///     recovery_hint: RecoveryHint::OperatorAction,
+///     projection: todo!(),
+/// };
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorDescriptor {
+    code: ErrorCode,
+    condition: CanonicalCondition,
+    public_message: &'static str,
+    severity: ErrorSeverity,
+    recovery_hint: RecoveryHint,
+    projection: ProjectionSpec,
+}
+
+impl ErrorDescriptor {
+    #[inline]
+    pub(crate) const fn new(
+        code: ErrorCode,
+        condition: CanonicalCondition,
+        public_message: &'static str,
+        severity: ErrorSeverity,
+        recovery_hint: RecoveryHint,
+        projection: ProjectionSpec,
+    ) -> Self {
+        Self {
+            code,
+            condition,
+            public_message,
+            severity,
+            recovery_hint,
+            projection,
+        }
+    }
+
+    /// Returns the stable dotted catalog code.
+    #[inline]
+    pub const fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    /// Returns the protocol-independent canonical condition.
+    #[inline]
+    pub const fn condition(&self) -> CanonicalCondition {
+        self.condition
+    }
+
+    /// Returns the fixed, boundary-safe public message.
+    #[inline]
+    pub const fn public_message(&self) -> &'static str {
+        self.public_message
+    }
+
+    /// Returns the operational severity.
+    #[inline]
+    pub const fn severity(&self) -> ErrorSeverity {
+        self.severity
+    }
+
+    /// Returns the catalog-owned recovery advice.
+    #[inline]
+    pub const fn recovery_hint(&self) -> RecoveryHint {
+        self.recovery_hint
+    }
+
+    /// Returns the explicit boundary projections.
+    #[inline]
+    pub const fn projection(&self) -> ProjectionSpec {
+        self.projection
     }
 }
 
