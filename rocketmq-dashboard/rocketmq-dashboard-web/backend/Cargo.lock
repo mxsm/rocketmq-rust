@@ -314,17 +314,6 @@ dependencies = [
 
 [[package]]
 name = "cheetah-string"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34617d68520087a27a373f84fa30b683ef46c83603143e861a22fdcd65daab55"
-dependencies = [
- "bytes",
- "memchr",
- "serde",
-]
-
-[[package]]
-name = "cheetah-string"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b57c1a05a24835a7eb67f14f7aade9e6d2bb683ccce58cd0ab0ce16224881fa"
@@ -2559,7 +2548,7 @@ name = "rocketmq-admin-core"
 version = "1.0.0"
 dependencies = [
  "bytes",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "futures",
  "regex",
  "rocketmq-client-rust",
@@ -2583,7 +2572,7 @@ dependencies = [
  "aes-gcm",
  "arc-swap",
  "base64 0.23.1",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "chrono",
  "hex",
  "hmac 0.13.0",
@@ -2614,7 +2603,7 @@ version = "1.0.0"
 dependencies = [
  "arc-swap",
  "bytes",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "dashmap",
  "futures",
  "num_cpus",
@@ -2653,7 +2642,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "cheetah-string 2.1.0",
+ "cheetah-string",
  "chrono",
  "fs4",
  "futures-util",
@@ -2702,7 +2691,7 @@ dependencies = [
  "base64 0.23.1",
  "byteorder",
  "bytes",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "chrono",
  "crc",
  "dashmap",
@@ -2725,7 +2714,7 @@ name = "rocketmq-observability"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "chrono",
  "chrono-tz",
  "dashmap",
@@ -2758,7 +2747,7 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "bytes",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "chrono",
  "flate2",
  "itoa",
@@ -2779,7 +2768,7 @@ dependencies = [
 name = "rocketmq-runtime"
 version = "1.0.0"
 dependencies = [
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "chrono",
  "config",
  "cron",
@@ -2805,7 +2794,7 @@ dependencies = [
 name = "rocketmq-security-api"
 version = "1.0.0"
 dependencies = [
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "serde",
  "thiserror",
  "zeroize",
@@ -2820,7 +2809,7 @@ dependencies = [
  "bitvec",
  "bytemuck",
  "bytes",
- "cheetah-string 3.1.0",
+ "cheetah-string",
  "dashmap",
  "flate2",
  "flume 0.12.0",
