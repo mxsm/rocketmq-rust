@@ -447,7 +447,15 @@ struct SessionSendHandle {
     request_sequence: AtomicU64,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
+    #[allow(
+        dead_code,
+        reason = "diagnostic peer metadata is exposed only through the feature-gated session harness"
+    )]
     transport_peer_addr: SocketAddr,
+    #[allow(
+        dead_code,
+        reason = "diagnostic PROXY metadata is exposed only through the feature-gated session harness"
+    )]
     proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
     connection_id: ConnectionId,
     frame_limits: FrameLimits,
@@ -518,11 +526,13 @@ impl SessionHandle {
     }
 
     /// Returns the socket peer before trusted PROXY source rewriting.
+    #[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
     pub fn transport_peer_addr(&self) -> SocketAddr {
         self.send.transport_peer_addr
     }
 
     /// Returns trusted PROXY source metadata for this session, when present.
+    #[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
     pub fn proxy_protocol(&self) -> Option<&Arc<ProxyProtocolMetadata>> {
         self.send.proxy_protocol.as_ref()
     }
@@ -558,6 +568,7 @@ impl SessionHandle {
         snapshot
     }
 
+    #[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
     pub fn operation_context(&self) -> &OperationContext {
         &self.request_operation
     }
@@ -637,6 +648,7 @@ impl SessionHandle {
     ///
     /// Returns an error if any stage of the server-owned close report is unhealthy or if the close
     /// coordinator terminates without publishing completion.
+    #[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
     pub async fn retire(&self) -> rocketmq_error::RocketMQResult<()> {
         self.request_close();
         self.wait_for_close_completion().await.map(|_| ())
@@ -996,6 +1008,10 @@ impl TransportListener {
     }
 
     /// Applies one symmetric frame profile to plaintext/TLS readers and writers.
+    #[allow(
+        dead_code,
+        reason = "custom frame limits are used by the feature-gated session harness"
+    )]
     pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
@@ -1009,6 +1025,10 @@ impl TransportListener {
     }
 
     /// Applies the trusted PROXY protocol policy before TLS/application negotiation.
+    #[allow(
+        dead_code,
+        reason = "custom PROXY policy is used by the feature-gated session harness"
+    )]
     pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> RocketMQResult<Self> {
         config.validate()?;
         self.proxy_protocol = config;
@@ -1585,6 +1605,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
 /// Runs an already-connected socket through the canonical framed session
 /// reader and bounded writer runtime.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
 pub async fn run_connected_session<H>(
     connection: Connection,
     local_addr: SocketAddr,
@@ -1665,6 +1686,7 @@ pub(crate) async fn run_connected_session_authorized<R>(
 }
 
 /// Runs an already-connected stream with explicit bounded I/O policy.
+#[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
 pub async fn run_connected_session_with_io_policy<H>(
     connection: Connection,
     local_addr: SocketAddr,
