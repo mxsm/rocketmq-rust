@@ -20,6 +20,8 @@ pub mod default_mq_admin_ext_impl;
 mod mq_admin_mutation_ext;
 #[cfg(feature = "admin-read")]
 mod mq_admin_read_ext;
+#[cfg(feature = "admin-read")]
+mod mq_admin_topic_stats_read_ext;
 
 #[cfg(feature = "admin-full")]
 pub use capability::AuthAdmin;
@@ -75,3 +77,5 @@ pub use mq_admin_read_ext::ReadFailureCode;
 pub use mq_admin_read_ext::SubscriptionGroupConfigVersioned;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::TopicConfigVersioned;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_topic_stats_read_ext::MQAdminTopicStatsReadExt;

@@ -91,6 +91,8 @@ use crate::tools::topic_tools::ListTopicsOutput;
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 use crate::tools::topic_tools::QueryTopicRouteOutput;
 
+mod topic_observation;
+
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowControl {
     timeout: Duration,
@@ -153,6 +155,30 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         args: QueryTopicRouteArgs,
     ) -> impl Future<Output = Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError>> + Send;
+
+    fn topic_stats(
+        &self,
+        _args: crate::tools::topic_tools::GetTopicStatsArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolExecutionError>> + Send
+    {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Topic statistics are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn topic_config(
+        &self,
+        _args: crate::tools::config_tools::GetTopicConfigArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError>> + Send
+    {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Topic configuration is unavailable".to_string(),
+            ))
+        }
+    }
 
     fn list_consumer_groups(
         &self,
@@ -1442,6 +1468,20 @@ where
         args: QueryTopicRouteArgs,
     ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
         QueryFacade::query_topic_route(self, args).await
+    }
+
+    async fn topic_stats(
+        &self,
+        args: crate::tools::topic_tools::GetTopicStatsArgs,
+    ) -> Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolExecutionError> {
+        QueryFacade::topic_stats(self, args).await
+    }
+
+    async fn topic_config(
+        &self,
+        args: crate::tools::config_tools::GetTopicConfigArgs,
+    ) -> Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+        QueryFacade::topic_config(self, args).await
     }
 
     async fn list_consumer_groups(

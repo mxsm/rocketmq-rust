@@ -16,6 +16,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+mod observation;
+
+pub use observation::GetTopicConfigArgs;
+pub use observation::GetTopicConfigOutput;
+pub use observation::TopicConfigDifferenceField;
+pub use observation::TopicConfigObservationRow;
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerConfigSummaryArgs {

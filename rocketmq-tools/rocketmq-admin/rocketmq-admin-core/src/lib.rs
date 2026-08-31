@@ -31,6 +31,10 @@ mod exact_broker;
 #[path = "client_adapter/read_queries.rs"]
 mod read_queries;
 
+#[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/topic_observation.rs"]
+mod topic_observation;
+
 #[cfg(feature = "client-adapter")]
 pub mod client_adapter;
 

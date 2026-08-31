@@ -132,6 +132,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -344,6 +345,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -605,6 +607,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -829,6 +832,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -1207,6 +1211,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -1447,6 +1452,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -1719,6 +1725,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -2336,6 +2343,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -2777,6 +2785,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -3020,6 +3029,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -3279,6 +3289,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -3775,6 +3786,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -4088,6 +4100,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -4344,6 +4357,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -4563,6 +4577,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -4717,6 +4732,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -5020,6 +5036,7 @@ expression: contracts
             "consumer_connection",
             "producer_connection",
             "topic_config",
+            "topic_stats",
             "consumer_group_config",
             "subscription_groups",
             "topic_route"
@@ -5120,5 +5137,506 @@ expression: contracts
       "type": "object"
     },
     "title": "RocketMQ consumer group configuration state"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ Topic statistics"
+    },
+    "description": "Get a bounded snapshot page of deterministic per-queue Topic statistics and aggregate totals.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint32",
+          "maximum": 200,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "topic"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_topic_stats",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "GetTopicStatsOutput": {
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "has_more": {
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/TopicStatsQueueRow"
+              },
+              "type": "array"
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "queue_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            },
+            "total_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_message_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "topic",
+            "total_message_count",
+            "queue_count",
+            "truncated",
+            "items",
+            "count",
+            "total_count",
+            "has_more",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        },
+        "TopicStatsQueueRow": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "last_update_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "message_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "queue_id": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "broker_name",
+            "queue_id",
+            "min_offset",
+            "max_offset",
+            "message_count"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetTopicStatsOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ Topic statistics"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ Topic configuration"
+    },
+    "description": "Get fixed address-free Topic configuration observations and semantic differences across Brokers.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "topic"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_topic_config",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "GetTopicConfigOutput": {
+          "properties": {
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/TopicConfigObservationRow"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "inconsistent_fields": {
+              "items": {
+                "$ref": "#/$defs/TopicConfigDifferenceField"
+              },
+              "type": "array"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cluster",
+            "topic",
+            "brokers",
+            "inconsistent_fields",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        },
+        "TopicConfigDifferenceField": {
+          "enum": [
+            "read_queue_nums",
+            "write_queue_nums",
+            "perm",
+            "order",
+            "message_type"
+          ],
+          "type": "string"
+        },
+        "TopicConfigObservationRow": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "message_type": {
+              "type": "string"
+            },
+            "order": {
+              "type": "boolean"
+            },
+            "perm": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "read_queue_nums": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "version": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "write_queue_nums": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "broker_name",
+            "version",
+            "read_queue_nums",
+            "write_queue_nums",
+            "perm",
+            "order",
+            "message_type"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetTopicConfigOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ Topic configuration"
   }
 ]

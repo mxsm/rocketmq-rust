@@ -50,6 +50,8 @@ pub enum ToolId {
     GetMessageMetadata,
     GetTopicConfigState,
     GetConsumerGroupConfigState,
+    GetTopicStats,
+    GetTopicConfig,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
     #[cfg(feature = "change-planning")]
@@ -81,6 +83,8 @@ impl ToolId {
         Self::GetMessageMetadata,
         Self::GetTopicConfigState,
         Self::GetConsumerGroupConfigState,
+        Self::GetTopicStats,
+        Self::GetTopicConfig,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
         #[cfg(feature = "change-planning")]
@@ -221,6 +225,20 @@ impl ToolId {
                 "Get version-CAS observations for one Consumer Group at bounded logical Brokers.",
                 RiskLevel::ReadOnly,
             ),
+            Self::GetTopicStats => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_topic_stats",
+                "RocketMQ Topic statistics",
+                "Get a bounded snapshot page of deterministic per-queue Topic statistics and aggregate totals.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetTopicConfig => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_topic_config",
+                "RocketMQ Topic configuration",
+                "Get fixed address-free Topic configuration observations and semantic differences across Brokers.",
+                RiskLevel::ReadOnly,
+            ),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => ToolDescriptor::read_only(
                 self,
@@ -319,6 +337,12 @@ impl ToolId {
                 config_tools::ConsumerGroupConfigStateArgs,
                 config_tools::ConsumerGroupConfigStateOutput,
             >(),
+            Self::GetTopicStats => {
+                descriptor.build::<topic_tools::GetTopicStatsArgs, topic_tools::GetTopicStatsOutput>()
+            }
+            Self::GetTopicConfig => {
+                descriptor.build::<config_tools::GetTopicConfigArgs, config_tools::GetTopicConfigOutput>()
+            }
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => descriptor.build::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(),
             #[cfg(feature = "change-planning")]
@@ -468,9 +492,9 @@ mod tests {
             ]
         );
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 19);
         #[cfg(feature = "change-planning")]
-        assert_eq!(names.len(), 22);
+        assert_eq!(names.len(), 24);
     }
 
     #[test]
@@ -481,6 +505,8 @@ mod tests {
             ToolId::GetMessageMetadata,
             ToolId::GetTopicConfigState,
             ToolId::GetConsumerGroupConfigState,
+            ToolId::GetTopicStats,
+            ToolId::GetTopicConfig,
         ];
         for tool_id in expected {
             let descriptor = tool_id.descriptor();

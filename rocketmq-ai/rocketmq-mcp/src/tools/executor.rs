@@ -681,6 +681,42 @@ where
                     success_unlinked_result(descriptor, request_id, cluster, summary, output)
                 })
             }
+            ToolId::GetTopicStats => {
+                let args = match decode_args::<topic_tools::GetTopicStatsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.topic_stats(args).await.and_then(|output| {
+                    let summary = summary_topic_stats(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetTopicConfig => {
+                let args = match decode_args::<config_tools::GetTopicConfigArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.topic_config(args).await.and_then(|output| {
+                    let summary = summary_topic_config(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
             #[cfg(feature = "change-planning")]
             ToolId::PlanCreateTopic => {
                 let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
@@ -1121,6 +1157,23 @@ fn summary_consumer_group_config_state(output: &config_tools::ConsumerGroupConfi
     )
 }
 
+fn summary_topic_stats(output: &topic_tools::GetTopicStatsOutput) -> String {
+    format!(
+        "Topic {} on cluster {} returned {} of {} queue statistics.",
+        output.topic, output.cluster, output.page.count, output.queue_count
+    )
+}
+
+fn summary_topic_config(output: &config_tools::GetTopicConfigOutput) -> String {
+    format!(
+        "Topic {} on cluster {} returned {} Broker configurations with {} semantic differences.",
+        output.topic,
+        output.cluster,
+        output.brokers.len(),
+        output.inconsistent_fields.len()
+    )
+}
+
 #[cfg(feature = "change-planning")]
 fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
     format!(
@@ -1458,6 +1511,66 @@ mod tests {
                 cluster: args.cluster,
                 group: args.group,
                 brokers,
+            }))
+        }
+
+        async fn topic_stats(
+            &self,
+            args: topic_tools::GetTopicStatsArgs,
+        ) -> Result<QueryResult<topic_tools::GetTopicStatsOutput>, ToolExecutionError> {
+            let broker_name = if args.topic == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            let items = vec![topic_tools::TopicStatsQueueRow {
+                broker_name,
+                queue_id: 0,
+                min_offset: 0,
+                max_offset: 10,
+                message_count: 10,
+                last_update_at: None,
+            }];
+            Ok(QueryResult::bypass(topic_tools::GetTopicStatsOutput {
+                cluster: args.cluster,
+                topic: args.topic,
+                total_message_count: 10,
+                queue_count: 1,
+                truncated: false,
+                page: crate::model::contract::Page {
+                    count: items.len(),
+                    total_count: items.len(),
+                    items,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn topic_config(
+            &self,
+            args: config_tools::GetTopicConfigArgs,
+        ) -> Result<QueryResult<config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+            let broker_name = if args.topic == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            Ok(QueryResult::bypass(config_tools::GetTopicConfigOutput {
+                cluster: args.cluster,
+                topic: args.topic,
+                brokers: vec![config_tools::TopicConfigObservationRow {
+                    broker_name,
+                    version: 1,
+                    read_queue_nums: 8,
+                    write_queue_nums: 8,
+                    perm: 6,
+                    order: false,
+                    message_type: "NORMAL".to_string(),
+                }],
+                inconsistent_fields: Vec::new(),
+                generated_at: "transient-test-time".to_string(),
             }))
         }
 
@@ -1807,6 +1920,14 @@ mod tests {
                 ToolId::GetConsumerGroupConfigState,
                 serde_json::json!({"cluster":"local-dev","group":"group-a","broker_names":["broker-a"]}),
             ),
+            (
+                ToolId::GetTopicStats,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","limit":1}),
+            ),
+            (
+                ToolId::GetTopicConfig,
+                serde_json::json!({"cluster":"local-dev","topic":"orders"}),
+            ),
         ];
         for (tool, arguments) in calls {
             let result = executor
@@ -1866,6 +1987,14 @@ mod tests {
             (
                 ToolId::GetConsumerGroupConfigState,
                 serde_json::json!({"cluster":"local-dev","group":"group-a","broker_names":["broker-a"]}),
+            ),
+            (
+                ToolId::GetTopicStats,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","limit":1}),
+            ),
+            (
+                ToolId::GetTopicConfig,
+                serde_json::json!({"cluster":"local-dev","topic":"orders"}),
             ),
         ];
         for (tool, arguments) in calls {
@@ -1946,6 +2075,14 @@ mod tests {
             (
                 ToolId::GetConsumerGroupConfigState,
                 serde_json::json!({"cluster":"local-dev","group":"oversized","broker_names":["broker-a"]}),
+            ),
+            (
+                ToolId::GetTopicStats,
+                serde_json::json!({"cluster":"local-dev","topic":"oversized"}),
+            ),
+            (
+                ToolId::GetTopicConfig,
+                serde_json::json!({"cluster":"local-dev","topic":"oversized"}),
             ),
         ];
         for (tool, arguments) in calls {
