@@ -118,7 +118,7 @@ impl SourceFailure {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct QueryPayload<T> {
     pub data: T,
     pub partial: bool,

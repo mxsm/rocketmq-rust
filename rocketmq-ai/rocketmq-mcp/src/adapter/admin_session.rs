@@ -21,6 +21,7 @@ use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
 use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeTargetRequest;
 use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
+use rocketmq_admin_core::core::consumer::ExactConsumerGroupEnrichmentRequest;
 use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
 use rocketmq_admin_core::core::security::AdminCredentials;
@@ -31,6 +32,7 @@ use rocketmq_admin_core::core::topic::TopicQueryAdmin;
 use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminGuard;
+use serde::Serialize;
 
 use crate::model::contract::observed_at_from_millis;
 use crate::model::contract::QueryPayload;
@@ -49,13 +51,13 @@ pub(crate) struct ResolvedCluster {
     pub credentials: Option<AdminCredentials>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct SessionTopicRoute {
     pub brokers: Vec<TopicRouteBroker>,
     pub queues: Vec<TopicRouteQueue>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct SessionConsumerLag {
     pub queues: Vec<QueueLag>,
     pub total_lag: i64,
@@ -78,6 +80,37 @@ pub(crate) trait AdminSession: Send {
     fn consumer_groups(
         &mut self,
     ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError>> + Send;
+
+    fn consumer_group_inventory(
+        &mut self,
+    ) -> impl Future<Output = Result<QueryPayload<Vec<String>>, ToolExecutionError>> + Send {
+        async {
+            self.consumer_groups().await.map(|groups| {
+                groups.map(|groups| {
+                    let mut names = groups.into_iter().map(|group| group.group).collect::<Vec<_>>();
+                    names.sort();
+                    names.dedup();
+                    names
+                })
+            })
+        }
+    }
+
+    fn consumer_groups_exact(
+        &mut self,
+        groups: &[String],
+    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError>> + Send {
+        async move {
+            self.consumer_groups().await.map(|result| {
+                result.map(|summaries| {
+                    summaries
+                        .into_iter()
+                        .filter(|summary| groups.binary_search(&summary.group).is_ok())
+                        .collect()
+                })
+            })
+        }
+    }
 
     fn consumer_lag(
         &mut self,
@@ -214,6 +247,43 @@ impl AdminSession for AdminCoreSession {
         let result = self
             .admin_mut()?
             .list_consumer_groups_with_evidence(&ListConsumerGroupsRequest)
+            .await
+            .map_err(ToolExecutionError::backend)?;
+        Ok(QueryPayload::from_admin(result).map(|result| {
+            result
+                .groups
+                .into_iter()
+                .map(|group| ConsumerGroupSummary {
+                    group: group.group,
+                    version: group.version,
+                    client_count: group.client_count,
+                    consume_type: group.consume_type,
+                    message_model: group.message_model,
+                    consume_tps: group.consume_tps,
+                    diff_total: group.diff_total,
+                })
+                .collect()
+        }))
+    }
+
+    async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolExecutionError> {
+        let result = self
+            .admin_mut()?
+            .list_consumer_group_inventory_with_evidence(&ListConsumerGroupsRequest)
+            .await
+            .map_err(ToolExecutionError::backend)?;
+        Ok(QueryPayload::from_admin(result).map(|result| result.groups))
+    }
+
+    async fn consumer_groups_exact(
+        &mut self,
+        groups: &[String],
+    ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        let request = ExactConsumerGroupEnrichmentRequest::try_new(groups.iter().cloned())
+            .map_err(ToolExecutionError::backend)?;
+        let result = self
+            .admin_mut()?
+            .enrich_consumer_groups_exact_with_evidence(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| {

@@ -84,6 +84,41 @@ expression: surface
       "name": "rocketmq_broker",
       "title": "RocketMQ broker",
       "uriTemplate": "rocketmq://clusters/{cluster}/brokers/{broker}"
+    },
+    {
+      "description": "Read a filtered page from one stable topic inventory snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topics_page",
+      "title": "RocketMQ topic page",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics{?filter,limit,cursor}"
+    },
+    {
+      "description": "Read a bounded page from one stable topic detail snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topic_page",
+      "title": "RocketMQ topic detail page",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics/{topic}{?limit,cursor}"
+    },
+    {
+      "description": "Read a bounded page from one stable topic route snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topic_route_page",
+      "title": "RocketMQ topic route page",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics/{topic}/route{?limit,cursor}"
+    },
+    {
+      "description": "Read and enrich one filtered page from a stable consumer-group inventory snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_consumer_groups_page",
+      "title": "RocketMQ consumer group page",
+      "uriTemplate": "rocketmq://clusters/{cluster}/consumer-groups{?filter,limit,cursor}"
+    },
+    {
+      "description": "Read a bounded page from one stable consumer-lag snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_consumer_lag_page",
+      "title": "RocketMQ consumer lag page",
+      "uriTemplate": "rocketmq://clusters/{cluster}/consumer-groups/{group}/lag{?topic,limit,cursor}"
     }
   ],
   "resources": [

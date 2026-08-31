@@ -19,7 +19,6 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::adapter::query_facade::ReadOnlyQuery;
-use crate::model::contract::PageRequest;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::resources::uri::ResourceKind;
 use crate::resources::uri::RocketmqResourceUri;
@@ -74,8 +73,8 @@ where
             let output = query
                 .list_topics(ListTopicsArgs {
                     cluster: Some(cluster.clone()),
-                    filter: None,
-                    page: PageRequest::default(),
+                    filter: uri.query().filter.clone(),
+                    page: uri.query().page.clone(),
                 })
                 .await?;
             Ok(live_payload(uri, "topics", output, |data| json!(data.page)))
@@ -85,7 +84,7 @@ where
                 .describe_topic(DescribeTopicArgs {
                     cluster: cluster.clone(),
                     topic: topic.clone(),
-                    page: PageRequest::default(),
+                    page: uri.query().page.clone(),
                 })
                 .await?;
             Ok(live_payload(uri, "topic", output, |data| json!(data)))
@@ -95,7 +94,7 @@ where
                 .query_topic_route(QueryTopicRouteArgs {
                     cluster: cluster.clone(),
                     topic: topic.clone(),
-                    page: PageRequest::default(),
+                    page: uri.query().page.clone(),
                 })
                 .await?;
             Ok(live_payload(uri, "route", output, |data| json!(data)))
@@ -127,34 +126,15 @@ where
             let output = query
                 .list_consumer_groups(ListConsumerGroupsArgs {
                     cluster: Some(cluster.clone()),
-                    filter: None,
-                    page: PageRequest::default(),
+                    filter: uri.query().filter.clone(),
+                    page: uri.query().page.clone(),
                 })
                 .await?;
             Ok(live_payload(uri, "consumer_groups", output, |data| json!(data.page)))
         }
         ResourceKind::ConsumerGroup(group) => {
-            let output = query
-                .list_consumer_groups(ListConsumerGroupsArgs {
-                    cluster: Some(cluster.clone()),
-                    filter: Some(group.clone()),
-                    page: PageRequest::default(),
-                })
-                .await?;
-            let consumer_group = output
-                .data
-                .page
-                .items
-                .iter()
-                .find(|item| item.group == *group)
-                .cloned()
-                .ok_or_else(|| {
-                    ToolExecutionError::InvalidArguments(format!(
-                        "consumer group not found in cluster {}: {group}",
-                        cluster
-                    ))
-                })?;
-            Ok(live_payload(uri, "consumer_group", output, |_| json!(consumer_group)))
+            let output = query.describe_consumer_group(cluster.clone(), group.clone()).await?;
+            Ok(live_payload(uri, "consumer_group", output, |data| json!(data)))
         }
         ResourceKind::ConsumerLag { group, topic } => {
             let output = query
@@ -162,7 +142,7 @@ where
                     cluster: cluster.clone(),
                     topic: topic.clone(),
                     consumer_group: group.clone(),
-                    page: PageRequest::default(),
+                    page: uri.query().page.clone(),
                 })
                 .await?;
             Ok(live_payload(uri, "consumer_lag", output, |data| json!(data)))

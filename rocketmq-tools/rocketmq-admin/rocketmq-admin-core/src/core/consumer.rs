@@ -42,6 +42,74 @@ pub struct ListConsumerGroupsResult {
     pub groups: Vec<ConsumerGroupSummary>,
 }
 
+/// Cheap, ordered consumer-group inventory without per-group enrichment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumerGroupInventoryResult {
+    pub groups: Vec<String>,
+}
+
+/// Validated logical groups selected for bounded exact enrichment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExactConsumerGroupEnrichmentRequest {
+    groups: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for ExactConsumerGroupEnrichmentRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireRequest {
+            groups: Vec<String>,
+        }
+
+        let request = WireRequest::deserialize(deserializer)?;
+        Self::try_new(request.groups).map_err(serde::de::Error::custom)
+    }
+}
+
+impl ExactConsumerGroupEnrichmentRequest {
+    /// Maximum number of logical groups accepted by one enrichment request.
+    pub const MAX_GROUPS: usize = 200;
+
+    /// Normalizes, sorts, deduplicates, and bounds exact logical group names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when a name is blank or the unique
+    /// group count exceeds [`Self::MAX_GROUPS`].
+    pub fn try_new<I, S>(groups: I) -> AdminResult<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut groups = groups
+            .into_iter()
+            .map(|group| {
+                let group = required("consumerGroup", group)?;
+                validate_subscription_group_name(&group)
+                    .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+                Ok(group)
+            })
+            .collect::<AdminResult<Vec<_>>>()?;
+        groups.sort();
+        groups.dedup();
+        if groups.len() > Self::MAX_GROUPS {
+            return Err(crate::core::AdminError::invalid_argument(
+                "consumerGroups",
+                format!("must contain at most {} unique groups", Self::MAX_GROUPS),
+            ));
+        }
+        Ok(Self { groups })
+    }
+
+    #[must_use]
+    pub fn groups(&self) -> &[String] {
+        &self.groups
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryConsumerLagRequest {
     pub topic: String,
@@ -1011,6 +1079,40 @@ pub trait ConsumerAdmin: Send {
         Box::pin(async move { self.list_consumer_groups(request).await.map(AdminQueryResult::complete) })
     }
 
+    /// Evidence-aware cheap inventory sibling of [`Self::list_consumer_groups`].
+    ///
+    /// Implementations must use a single inventory source and perform no
+    /// per-group enrichment. The default fails closed when that capability is
+    /// unavailable.
+    fn list_consumer_group_inventory_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "list_consumer_group_inventory_with_evidence",
+                "cheap consumer group inventory is not implemented by this adapter",
+            ))
+        })
+    }
+
+    /// Evidence-aware bounded enrichment for an exact logical group set.
+    ///
+    /// Implementations must contact only the selected groups and must not
+    /// obtain an unbounded consumer-group inventory. The default fails closed
+    /// when bounded enrichment is unavailable.
+    fn enrich_consumer_groups_exact_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a ExactConsumerGroupEnrichmentRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "enrich_consumer_groups_exact_with_evidence",
+                "bounded exact consumer group enrichment is not implemented by this adapter",
+            ))
+        })
+    }
+
     fn query_consumer_lag_with_evidence<'a>(
         &'a mut self,
         request: &'a QueryConsumerLagRequest,
@@ -1087,6 +1189,38 @@ pub trait ConsumerQueryAdmin: Send {
         request: &'a ListConsumerGroupsRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
         Box::pin(async move { self.list_consumer_groups(request).await.map(AdminQueryResult::complete) })
+    }
+    /// Evidence-aware cheap inventory sibling of [`Self::list_consumer_groups`].
+    ///
+    /// Implementations must use a single inventory source and perform no
+    /// per-group enrichment. The default fails closed when that capability is
+    /// unavailable.
+    fn list_consumer_group_inventory_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "list_consumer_group_inventory_with_evidence",
+                "cheap consumer group inventory is not implemented by this adapter",
+            ))
+        })
+    }
+    /// Evidence-aware bounded enrichment for an exact logical group set.
+    ///
+    /// Implementations must contact only the selected groups and must not
+    /// obtain an unbounded consumer-group inventory. The default fails closed
+    /// when bounded enrichment is unavailable.
+    fn enrich_consumer_groups_exact_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a ExactConsumerGroupEnrichmentRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "enrich_consumer_groups_exact_with_evidence",
+                "bounded exact consumer group enrichment is not implemented by this adapter",
+            ))
+        })
     }
     /// Evidence-aware sibling of [`Self::query_consumer_lag`].
     fn query_consumer_lag_with_evidence<'a>(
@@ -1203,6 +1337,18 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerQueryAdmin for T {
         request: &'a ListConsumerGroupsRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
         ConsumerAdmin::list_consumer_groups_with_evidence(self, request)
+    }
+    fn list_consumer_group_inventory_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
+        ConsumerAdmin::list_consumer_group_inventory_with_evidence(self, request)
+    }
+    fn enrich_consumer_groups_exact_with_evidence<'a>(
+        &'a mut self,
+        request: &'a ExactConsumerGroupEnrichmentRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
+        ConsumerAdmin::enrich_consumer_groups_exact_with_evidence(self, request)
     }
     fn query_consumer_lag_with_evidence<'a>(
         &'a mut self,
@@ -1359,9 +1505,57 @@ mod tests {
     }
 
     #[test]
+    fn exact_consumer_group_enrichment_request_is_sorted_unique_and_bounded() {
+        let request = ExactConsumerGroupEnrichmentRequest::try_new([" group-b ", "group-a", "group-b"]).unwrap();
+        assert_eq!(request.groups(), ["group-a", "group-b"]);
+        assert!(ExactConsumerGroupEnrichmentRequest::try_new([" "]).is_err());
+        assert!(ExactConsumerGroupEnrichmentRequest::try_new(["group.with.dot"]).is_err());
+        assert!(ExactConsumerGroupEnrichmentRequest::try_new(["g".repeat(256)]).is_err());
+        assert!(ExactConsumerGroupEnrichmentRequest::try_new(["g".repeat(255)]).is_ok());
+        assert!(ExactConsumerGroupEnrichmentRequest::try_new(
+            (0..=ExactConsumerGroupEnrichmentRequest::MAX_GROUPS).map(|index| format!("group-{index}"))
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<ExactConsumerGroupEnrichmentRequest>(serde_json::json!({
+                "groups": [" "]
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn existing_consumer_admin_implementation_does_not_require_diagnostics() {
         let mut admin = ExistingConsumerAdmin;
         let _: &mut dyn ConsumerAdmin = &mut admin;
+    }
+
+    #[tokio::test]
+    async fn cheap_inventory_defaults_fail_closed_without_full_enrichment() {
+        let mut admin = ExistingConsumerAdmin;
+        let inventory =
+            ConsumerAdmin::list_consumer_group_inventory_with_evidence(&mut admin, &ListConsumerGroupsRequest)
+                .await
+                .unwrap_err();
+        assert!(matches!(
+            inventory,
+            crate::core::AdminError::Backend {
+                operation: "list_consumer_group_inventory_with_evidence",
+                ..
+            }
+        ));
+
+        let exact = ExactConsumerGroupEnrichmentRequest::try_new(["orders"]).unwrap();
+        let enrichment = ConsumerQueryAdmin::enrich_consumer_groups_exact_with_evidence(&mut admin, &exact)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            enrichment,
+            crate::core::AdminError::Backend {
+                operation: "enrich_consumer_groups_exact_with_evidence",
+                ..
+            }
+        ));
     }
 
     #[test]
