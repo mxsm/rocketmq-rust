@@ -88,103 +88,58 @@ impl PartialEq for GroupForbidden {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use cheetah_string::CheetahString;
 
     use super::*;
 
     #[test]
-    fn group_forbidden_new_creates_instance_with_correct_values() {
-        let group_forbidden = GroupForbidden::new(
-            CheetahString::from("testTopic"),
-            CheetahString::from("testGroup"),
-            Some(true),
-        );
-        assert_eq!(group_forbidden.topic(), &CheetahString::from("testTopic"));
-        assert_eq!(group_forbidden.group(), "testGroup");
-        assert_eq!(group_forbidden.readable(), Some(true));
-    }
-
-    #[test]
-    fn group_forbidden_new_creates_instance_with_none_readable() {
-        let group_forbidden =
-            GroupForbidden::new(CheetahString::from("testTopic"), CheetahString::from("testGroup"), None);
-        assert_eq!(group_forbidden.topic(), &CheetahString::from("testTopic"));
-        assert_eq!(group_forbidden.group(), "testGroup");
-        assert_eq!(group_forbidden.readable(), None);
-    }
-
-    #[test]
-    fn group_forbidden_setters_update_values_correctly() {
+    fn methods_serde_and_display_preserve_group_forbidden() {
         let mut group_forbidden = GroupForbidden::new(
             CheetahString::from("initialTopic"),
             CheetahString::from("initialGroup"),
             Some(false),
         );
-        group_forbidden.set_topic(CheetahString::from("newTopic"));
-        group_forbidden.set_group(CheetahString::from("newGroup"));
+        group_forbidden.set_topic(CheetahString::from("testTopic"));
+        group_forbidden.set_group(CheetahString::from("testGroup"));
         group_forbidden.set_readable(Some(true));
 
-        assert_eq!(group_forbidden.topic(), &CheetahString::from("newTopic"));
-        assert_eq!(group_forbidden.group(), "newGroup");
+        assert_eq!(group_forbidden.topic(), &CheetahString::from("testTopic"));
+        assert_eq!(group_forbidden.group(), "testGroup");
         assert_eq!(group_forbidden.readable(), Some(true));
-    }
-
-    #[test]
-    fn group_forbidden_display_formats_correctly() {
-        let group_forbidden = GroupForbidden::new(
-            CheetahString::from("testTopic"),
-            CheetahString::from("testGroup"),
-            Some(true),
-        );
-        let display = format!("{}", group_forbidden);
         assert_eq!(
-            display,
+            group_forbidden.to_string(),
             "GroupForbidden [topic=testTopic, group=testGroup, readable=Some(true)]"
         );
+
+        let json = serde_json::to_string(&group_forbidden).unwrap();
+        assert_eq!(json, r#"{"topic":"testTopic","group":"testGroup","readable":true}"#);
+        let decoded: GroupForbidden = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, group_forbidden);
     }
 
     #[test]
-    fn group_forbidden_equality_works_correctly() {
-        let group_forbidden1 = GroupForbidden::new(
-            CheetahString::from("testTopic"),
-            CheetahString::from("testGroup"),
-            Some(true),
-        );
-        let group_forbidden2 = GroupForbidden::new(
-            CheetahString::from("testTopic"),
-            CheetahString::from("testGroup"),
-            Some(true),
-        );
-        let group_forbidden3 = GroupForbidden::new(
-            CheetahString::from("differentTopic"),
-            CheetahString::from("testGroup"),
-            Some(true),
-        );
-
-        assert_eq!(group_forbidden1, group_forbidden2);
-        assert_ne!(group_forbidden1, group_forbidden3);
-    }
-
-    #[test]
-    fn group_forbidden_hash_works_correctly() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hash;
-        use std::hash::Hasher;
-
+    fn equality_and_hash_use_all_fields() {
         let group_forbidden = GroupForbidden::new(
             CheetahString::from("testTopic"),
             CheetahString::from("testGroup"),
             Some(true),
         );
+        let equal = GroupForbidden::new(
+            CheetahString::from("testTopic"),
+            CheetahString::from("testGroup"),
+            Some(true),
+        );
+        assert_eq!(group_forbidden, equal);
+        assert!(HashSet::from([group_forbidden.clone()]).contains(&equal));
 
-        let mut hasher = DefaultHasher::new();
-        group_forbidden.hash(&mut hasher);
-        let hash1 = hasher.finish();
-
-        let mut hasher = DefaultHasher::new();
-        group_forbidden.hash(&mut hasher);
-        let hash2 = hasher.finish();
-
-        assert_eq!(hash1, hash2);
+        for different in [
+            GroupForbidden::new("differentTopic".into(), "testGroup".into(), Some(true)),
+            GroupForbidden::new("testTopic".into(), "differentGroup".into(), Some(true)),
+            GroupForbidden::new("testTopic".into(), "testGroup".into(), None),
+        ] {
+            assert_ne!(group_forbidden, different);
+        }
     }
 }
