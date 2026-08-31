@@ -207,7 +207,8 @@ impl ErrorContextField {
     ///
     /// Public callers can obtain fields only through
     /// [`ErrorContext::public_fields`], which excludes diagnostic and
-    /// secret-presence entries.
+    /// secret-presence entries. Descriptor-validated views apply their own
+    /// descriptor declaration ordering before exposing context fields.
     #[inline]
     pub fn value(&self) -> FieldValueRef<'_> {
         self.value.as_ref()
@@ -298,6 +299,7 @@ impl ErrorContext {
             .filter(|field| matches!(field.visibility(), ContextVisibility::Public))
     }
 
+    /// Returns retained fields to crate-private descriptor validators.
     pub(crate) fn fields(&self) -> &[ErrorContextField] {
         &self.fields
     }

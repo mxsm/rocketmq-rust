@@ -62,6 +62,7 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         "recovery",
         "spec",
         "unified",
+        "view",
     ] {
         assert!(
             !source.contains(&format!("pub mod {module};")),
@@ -84,4 +85,12 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
     let projection: rocketmq_error::ProjectionSpec = descriptor.projection();
     assert_eq!(descriptor, &rocketmq_error::ROUTE_TOPIC_NOT_FOUND);
     assert_eq!(projection.grpc().status, rocketmq_error::GrpcStatusCode::NotFound);
+
+    let context = rocketmq_error::ErrorContext::new();
+    let public = rocketmq_error::PublicErrorView::try_new(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND, &context)
+        .expect("public view");
+    let diagnostic = rocketmq_error::DiagnosticView::try_new(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND, &context)
+        .expect("diagnostic view");
+    assert_eq!(public.code(), descriptor.code());
+    assert_eq!(diagnostic.projection(), projection);
 }
