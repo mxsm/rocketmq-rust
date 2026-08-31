@@ -85,11 +85,6 @@ pub enum SerializationError {
     #[error("UTF-8 encoding error: {0}")]
     Utf8Error(#[from] std::str::Utf8Error),
 
-    /// JSON serialization error
-    #[cfg(feature = "with_serde")]
-    #[error("JSON error: {0}")]
-    JsonError(String),
-
     /// Protobuf serialization error
     #[error("Protobuf error: {0}")]
     ProtobufError(String),
@@ -184,13 +179,6 @@ impl SerializationError {
     }
 }
 
-#[cfg(feature = "with_serde")]
-impl From<serde_json::Error> for SerializationError {
-    fn from(e: serde_json::Error) -> Self {
-        Self::JsonError(e.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,14 +229,5 @@ mod tests {
             err.to_string(),
             "UTF-8 encoding error: invalid utf-8 sequence of 1 bytes from index 1"
         );
-    }
-
-    #[cfg(feature = "with_serde")]
-    #[test]
-    fn test_json_error() {
-        let json_result: Result<serde_json::Value, _> = serde_json::from_str("{ invalid }");
-        let json_error = json_result.err().unwrap();
-        let err = SerializationError::from(json_error);
-        assert!(err.to_string().contains("JSON error"));
     }
 }

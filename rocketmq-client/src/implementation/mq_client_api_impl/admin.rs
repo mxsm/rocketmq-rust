@@ -15,6 +15,7 @@
 use super::request_builder::*;
 use super::response_decoder::*;
 use super::*;
+use rocketmq_error::SerializationError;
 use rocketmq_model::topic::TopicConfig;
 use rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
@@ -22,10 +23,16 @@ use rocketmq_protocol::protocol::header::get_all_subscription_group_request_head
 use rocketmq_protocol::protocol::header::get_all_topic_config_request_header::GetAllTopicConfigRequestHeader;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::protocol::DataVersion;
+use serde::de::DeserializeOwned;
 
 #[cfg(feature = "admin-full")]
 mod compatibility;
 mod versioned_config;
+
+fn decode_admin_json<T: DeserializeOwned>(bytes: &[u8]) -> RocketMQResult<T> {
+    serde_json::from_slice(bytes)
+        .map_err(|error| RocketMQError::from(SerializationError::source("deserialize", "JSON", error)))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MetadataPageAction {
@@ -1507,7 +1514,7 @@ impl MQClientAPIImpl {
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                let body: QueryConsumeTimeSpanBody = serde_json::from_slice(body.as_ref())?;
+                let body: QueryConsumeTimeSpanBody = decode_admin_json(body.as_ref())?;
                 return Ok(body.consume_time_span_set);
             }
         }
@@ -1554,7 +1561,7 @@ impl MQClientAPIImpl {
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return serde_json::from_slice(body.as_ref()).map_err(Into::into);
+                return decode_admin_json(body.as_ref());
             }
         }
         Err(mq_client_err!(
@@ -1685,7 +1692,7 @@ impl MQClientAPIImpl {
             let body = response
                 .get_body()
                 .ok_or_else(|| mq_client_err!("query_subscription_by_consumer response body is empty".to_string()))?;
-            let response_body: QuerySubscriptionResponseBody = serde_json::from_slice(body.as_ref())?;
+            let response_body: QuerySubscriptionResponseBody = decode_admin_json(body.as_ref())?;
             return response_body.subscription_data.ok_or_else(|| {
                 mq_client_err!("query_subscription_by_consumer response subscriptionData is empty".to_string())
             });
@@ -3578,5 +3585,27 @@ mod metadata_pagination_tests {
         assert_eq!(groups.sequence, 0);
         assert!(groups.groups.is_empty());
         assert_eq!(groups.version.as_ref(), Some(&second));
+    }
+}
+
+#[cfg(test)]
+mod json_error_boundary_tests {
+    use std::error::Error as StdError;
+
+    #[test]
+    fn admin_json_decode_preserves_source_and_public_boundary() {
+        let error = super::decode_admin_json::<serde_json::Value>(b"invalid").unwrap_err();
+
+        assert_eq!(error.to_string(), "deserialize failed (JSON)");
+        assert_eq!(error.boundary_view().message(), "Serialization failed");
+
+        let direct_source = StdError::source(&error).expect("JSON error source");
+        assert!(direct_source.downcast_ref::<serde_json::Error>().is_some());
+
+        let rocketmq_error::RocketMQError::Serialization(serialization) = &error else {
+            panic!("expected serialization error");
+        };
+        let json = StdError::source(serialization).expect("JSON error source");
+        assert!(json.downcast_ref::<serde_json::Error>().is_some());
     }
 }

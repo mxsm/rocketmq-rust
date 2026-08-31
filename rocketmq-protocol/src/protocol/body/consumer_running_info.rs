@@ -18,6 +18,7 @@ use std::fmt::Display;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SerializationError;
 use rocketmq_model::message::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -91,20 +92,35 @@ impl ConsumerRunningInfo {
     pub fn to_java_compatible_json(&self) -> RocketMQResult<String> {
         let mut body = String::new();
         body.push_str("{\"properties\":");
-        body.push_str(&serde_json::to_string(&self.properties)?);
+        body.push_str(
+            &serde_json::to_string(&self.properties)
+                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
         body.push_str(",\"subscriptionSet\":");
-        body.push_str(&serde_json::to_string(&self.subscription_set)?);
+        body.push_str(
+            &serde_json::to_string(&self.subscription_set)
+                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
         body.push_str(",\"mqTable\":{");
         append_process_queue_map(&mut body, &self.mq_table)?;
         body.push_str("},\"mqPopTable\":{");
         append_pop_process_queue_map(&mut body, &self.mq_pop_table)?;
         body.push_str("},\"statusTable\":");
-        body.push_str(&serde_json::to_string(&self.status_table)?);
+        body.push_str(
+            &serde_json::to_string(&self.status_table)
+                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
         body.push_str(",\"userConsumerInfo\":");
-        body.push_str(&serde_json::to_string(&self.user_consumer_info)?);
+        body.push_str(
+            &serde_json::to_string(&self.user_consumer_info)
+                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
         if let Some(jstack) = &self.jstack {
             body.push_str(",\"jstack\":");
-            body.push_str(&serde_json::to_string(jstack)?);
+            body.push_str(
+                &serde_json::to_string(jstack)
+                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            );
         }
         body.push('}');
         Ok(body)
@@ -177,7 +193,9 @@ fn append_process_queue_map(
         }
         append_message_queue_object_key(output, queue)?;
         output.push(':');
-        output.push_str(&serde_json::to_string(info)?);
+        output.push_str(
+            &serde_json::to_string(info).map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
     }
     Ok(())
 }
@@ -192,7 +210,9 @@ fn append_pop_process_queue_map(
         }
         append_message_queue_object_key(output, queue)?;
         output.push(':');
-        output.push_str(&serde_json::to_string(info)?);
+        output.push_str(
+            &serde_json::to_string(info).map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+        );
     }
     Ok(())
 }

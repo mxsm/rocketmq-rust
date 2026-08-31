@@ -174,7 +174,8 @@ impl SimdJsonUtils {
         T: serde::Serialize,
     {
         // simd-json doesn't support pretty printing, fall back to serde_json
-        Ok(serde_json::to_string_pretty(value)?)
+        Ok(serde_json::to_string_pretty(value)
+            .map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON byte vector (compact format) using SIMD acceleration.
@@ -219,7 +220,7 @@ impl SimdJsonUtils {
         T: serde::Serialize,
     {
         // simd-json doesn't support pretty printing, fall back to serde_json
-        Ok(serde_json::to_vec_pretty(value)?)
+        Ok(serde_json::to_vec_pretty(value).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON byte vector using a preallocated writer.

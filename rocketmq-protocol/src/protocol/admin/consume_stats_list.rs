@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::SerializationError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -55,7 +56,10 @@ impl ConsumeStatsList {
                 if group_index > 0 {
                     body.push(',');
                 }
-                body.push_str(&serde_json::to_string(group)?);
+                body.push_str(
+                    &serde_json::to_string(group)
+                        .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                );
                 body.push(':');
                 body.push('[');
                 for (stats_index, stats) in stats_list.iter().enumerate() {
@@ -71,7 +75,10 @@ impl ConsumeStatsList {
 
         body.push_str("],\"brokerAddr\":");
         match &self.broker_addr {
-            Some(broker_addr) => body.push_str(&serde_json::to_string(broker_addr)?),
+            Some(broker_addr) => body.push_str(
+                &serde_json::to_string(broker_addr)
+                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            ),
             None => body.push_str("null"),
         }
         body.push_str(",\"totalDiff\":");

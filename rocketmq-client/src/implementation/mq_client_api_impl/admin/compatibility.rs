@@ -80,7 +80,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                let body: QueryConsumeTimeSpanBody = serde_json::from_slice(body.as_ref())?;
+                let body: QueryConsumeTimeSpanBody = super::decode_admin_json(body.as_ref())?;
                 return Ok(body.consume_time_span_set);
             }
         }
@@ -338,7 +338,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
             let body = response
                 .get_body()
                 .ok_or_else(|| mq_client_err!("query_subscription_by_consumer response body is empty"))?;
-            let response_body: QuerySubscriptionResponseBody = serde_json::from_slice(body.as_ref())?;
+            let response_body: QuerySubscriptionResponseBody = super::decode_admin_json(body.as_ref())?;
             return response_body
                 .subscription_data
                 .ok_or_else(|| mq_client_err!("query_subscription_by_consumer response subscriptionData is empty"));

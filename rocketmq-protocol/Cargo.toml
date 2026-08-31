@@ -37,7 +37,7 @@ flate2 = { version = "1.1.9", features = ["zlib"], default-features = false }
 lz4_flex = { version = "0.14", default-features = false, features = ["alloc"] }
 itoa = "1.0.18"
 memchr = "2.8.0"
-rocketmq-error = { workspace = true, features = ["with_serde"] }
+rocketmq-error.workspace = true
 bytemuck = "1.25.0"
 chrono = "0.4.45"
 rocketmq-macros.workspace = true

@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::SerializationError;
 use rocketmq_model::message::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -64,7 +65,10 @@ impl GetConsumerStatusBody {
             if index > 0 {
                 body.push(',');
             }
-            body.push_str(&serde_json::to_string(client_id.as_str())?);
+            body.push_str(
+                &serde_json::to_string(client_id.as_str())
+                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            );
             body.push_str(":{");
             append_offset_map(&mut body, offsets)?;
             body.push('}');
