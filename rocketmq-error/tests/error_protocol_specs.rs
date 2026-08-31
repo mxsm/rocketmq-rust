@@ -5,6 +5,7 @@ use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RemotingResponseCode;
 use rocketmq_error::ALL_ERROR_SPECS;
+use rocketmq_error::STORAGE_COMMIT_LOG_CORRUPT_RECORD;
 
 #[test]
 fn selected_error_kinds_have_protocol_primitives() {
@@ -62,4 +63,15 @@ fn protocol_primitive_numeric_values_match_external_boundary_numbers() {
     assert_eq!(RemotingResponseCode::InvalidParameter.as_i32(), 29);
     assert_eq!(HttpStatusCode::BAD_REQUEST.as_u16(), 400);
     assert_eq!(HttpStatusCode::NOT_FOUND.as_u16(), 404);
+}
+
+#[test]
+fn storage_corruption_descriptor_uses_data_loss_status() {
+    let projection = STORAGE_COMMIT_LOG_CORRUPT_RECORD.projection();
+
+    assert_eq!(projection.remoting().code, RemotingResponseCode::SystemError);
+    assert_eq!(projection.grpc().payload, GrpcPayloadCode::InternalError);
+    assert_eq!(projection.grpc().status, GrpcStatusCode::DataLoss);
+    assert_eq!(projection.http().status, HttpStatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(projection.cli().exit_code, CliExitCode::DATA);
 }

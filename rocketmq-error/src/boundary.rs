@@ -312,6 +312,8 @@ pub enum GrpcStatusCode {
     Unimplemented,
     /// Represents the unavailable case.
     Unavailable,
+    /// Represents the data loss case.
+    DataLoss,
     /// Represents the internal case.
     Internal,
 }
