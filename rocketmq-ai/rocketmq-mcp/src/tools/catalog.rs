@@ -23,8 +23,10 @@ use crate::tools::broker_tools;
 #[cfg(feature = "change-planning")]
 use crate::tools::change_tools;
 use crate::tools::cluster_tools;
+use crate::tools::config_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
+use crate::tools::proxy_tools;
 use crate::tools::topic_tools;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +38,10 @@ pub enum ToolId {
     ListConsumerGroups,
     GetConsumerLag,
     DescribeBroker,
+    GetBrokerDiagnostics,
+    GetBrokerConfigSummary,
+    GetBrokerLogFilterState,
+    GetProxyDrainState,
     DiagnoseConsumerLag,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
@@ -58,6 +64,10 @@ impl ToolId {
         Self::ListConsumerGroups,
         Self::GetConsumerLag,
         Self::DescribeBroker,
+        Self::GetBrokerDiagnostics,
+        Self::GetBrokerConfigSummary,
+        Self::GetBrokerLogFilterState,
+        Self::GetProxyDrainState,
         Self::DiagnoseConsumerLag,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
@@ -128,6 +138,34 @@ impl ToolId {
                 "RocketMQ broker description",
                 "Describe broker state without exposing internal addresses by default.",
                 RiskLevel::ReadOnly,
+            ),
+            Self::GetBrokerDiagnostics => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_broker_diagnostics",
+                "RocketMQ broker diagnostics",
+                "Get bounded readiness, store, recovery, and security diagnostics for one logical Broker.",
+                RiskLevel::Diagnose,
+            ),
+            Self::GetBrokerConfigSummary => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_broker_config_summary",
+                "RocketMQ broker configuration summary",
+                "Get the fixed allowlisted configuration summary for one logical Broker.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetBrokerLogFilterState => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_broker_log_filter_state",
+                "RocketMQ broker log-filter state",
+                "Get the temporary state of one allowlisted rocketmq_broker logger target.",
+                RiskLevel::Diagnose,
+            ),
+            Self::GetProxyDrainState => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_proxy_drain_state",
+                "RocketMQ Proxy drain state",
+                "Get bounded drain progress for one configured logical Proxy alias.",
+                RiskLevel::Diagnose,
             ),
             Self::DiagnoseConsumerLag => ToolDescriptor::read_only(
                 self,
@@ -200,6 +238,18 @@ impl ToolId {
             }
             Self::DescribeBroker => {
                 descriptor.build::<broker_tools::DescribeBrokerArgs, broker_tools::DescribeBrokerOutput>()
+            }
+            Self::GetBrokerDiagnostics => {
+                descriptor.build::<broker_tools::BrokerDiagnosticsArgs, broker_tools::BrokerDiagnosticsOutput>()
+            }
+            Self::GetBrokerConfigSummary => {
+                descriptor.build::<config_tools::BrokerConfigSummaryArgs, config_tools::BrokerConfigSummaryOutput>()
+            }
+            Self::GetBrokerLogFilterState => {
+                descriptor.build::<config_tools::BrokerLogFilterStateArgs, config_tools::BrokerLogFilterStateOutput>()
+            }
+            Self::GetProxyDrainState => {
+                descriptor.build::<proxy_tools::ProxyDrainStateArgs, proxy_tools::ProxyDrainStateOutput>()
             }
             Self::DiagnoseConsumerLag => {
                 descriptor.build::<diagnosis_tools::DiagnoseConsumerLagArgs, crate::model::diagnosis::DiagnosisReport>()
@@ -336,7 +386,7 @@ mod tests {
             .map(|tool_id| tool_id.descriptor().name)
             .collect::<Vec<_>>();
         assert_eq!(
-            &names[..8],
+            &names[..12],
             &[
                 "rocketmq_get_cluster_overview",
                 "rocketmq_list_topics",
@@ -345,11 +395,40 @@ mod tests {
                 "rocketmq_list_consumer_groups",
                 "rocketmq_get_consumer_lag",
                 "rocketmq_describe_broker",
+                "rocketmq_get_broker_diagnostics",
+                "rocketmq_get_broker_config_summary",
+                "rocketmq_get_broker_log_filter_state",
+                "rocketmq_get_proxy_drain_state",
                 "rocketmq_diagnose_consumer_lag",
             ]
         );
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 12);
+    }
+
+    #[test]
+    fn broker_and_proxy_contracts_have_exact_risk_and_read_only_annotations() {
+        let expected = [
+            (ToolId::GetBrokerDiagnostics, RiskLevel::Diagnose),
+            (ToolId::GetBrokerConfigSummary, RiskLevel::ReadOnly),
+            (ToolId::GetBrokerLogFilterState, RiskLevel::Diagnose),
+            (ToolId::GetProxyDrainState, RiskLevel::Diagnose),
+        ];
+        for (tool_id, risk) in expected {
+            let descriptor = tool_id.descriptor();
+            assert_eq!(descriptor.risk_level, risk);
+            assert!(descriptor.annotations.read_only);
+            assert!(!descriptor.annotations.destructive);
+            assert!(descriptor.annotations.idempotent);
+            let definition = tool_id.definition();
+            assert!(definition.output_schema.is_some());
+            assert_eq!(
+                definition.input_schema.get("additionalProperties"),
+                Some(&serde_json::Value::Bool(false)),
+                "{} must reject unknown arguments",
+                descriptor.name
+            );
+        }
     }
 
     #[test]

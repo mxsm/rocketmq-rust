@@ -42,8 +42,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     pub(super) fn is_address_reachable_inner(&self, addr: &CheetahString) {
         match self.reconcile_cached_connection_inner(addr) {
             CachedConnectionState::Healthy => {}
-            CachedConnectionState::UnhealthyRetired => warn!("Removed unhealthy connection for {}", addr),
-            CachedConnectionState::Absent => debug!("No connection found for {}", addr),
+            CachedConnectionState::UnhealthyRetired => warn!("Removed unhealthy connection"),
+            CachedConnectionState::Absent => debug!("No connection found"),
         }
     }
 
@@ -51,7 +51,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         for addr in &addrs {
             let key = CheetahString::from(addr.as_str());
             if !self.connection_registry.remove_sessions_by_identity(&key).is_empty() {
-                info!("Closed client connection for {}", addr);
+                info!("Closed client connection");
             }
         }
     }

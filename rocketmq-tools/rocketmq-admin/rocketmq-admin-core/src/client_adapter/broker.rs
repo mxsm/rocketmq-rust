@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
@@ -22,7 +23,9 @@ use crate::core::broker::project_broker_diagnostics;
 use crate::core::broker::project_broker_log_filter_state;
 use crate::core::broker::BrokerAdmin;
 use crate::core::broker::BrokerAllowlistedConfig;
+use crate::core::broker::BrokerAllowlistedConfigTarget;
 use crate::core::broker::BrokerLogFilterState;
+use crate::core::broker::BrokerLogFilterStateTarget;
 use crate::core::broker::BrokerRuntimeTargetStatus;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
@@ -31,9 +34,12 @@ use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
 use crate::core::broker::ProbeBrokerRuntimeTargetRequest;
 use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
+use crate::core::broker::QueryBrokerAllowlistedConfigTargetRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
+use crate::core::broker::QueryBrokerDiagnosticsTargetRequest;
 use crate::core::broker::QueryBrokerLogFilterStateRequest;
+use crate::core::broker::QueryBrokerLogFilterStateTargetRequest;
 use crate::core::query::AdminQueryFailureCode;
 use crate::core::query::AdminQueryResult;
 use crate::core::query::AdminQuerySource;
@@ -353,6 +359,61 @@ impl BrokerAdmin for AdminSession {
         })
     }
 
+    fn query_broker_diagnostics_target_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryBrokerDiagnosticsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let (targets, mut failures) = exact_broker_targets(
+                &self.inner,
+                request.cluster(),
+                request.broker_name(),
+                AdminQuerySource::BrokerRuntime,
+            )
+            .await?;
+            let observed_at_millis = self.clock.now_millis();
+            let mut brokers = Vec::new();
+            let mut successful_sources = 0usize;
+            for (broker_id, broker_addr) in targets {
+                let logical_target = broker_instance_target(request.broker_name(), broker_id);
+                match self.inner.fetch_broker_runtime_stats(broker_addr).await {
+                    Ok(runtime) => {
+                        successful_sources += 1;
+                        brokers.push(project_broker_diagnostics(
+                            request.broker_name().to_string(),
+                            broker_id,
+                            &runtime,
+                        ));
+                    }
+                    Err(error) => {
+                        failures.push(source_failure(AdminQuerySource::BrokerRuntime, &logical_target, &error))
+                    }
+                }
+            }
+            brokers.sort_by_key(|broker| broker.broker_id);
+            let unavailable_brokers = failures.len();
+            let partial_diagnostics = brokers
+                .iter()
+                .any(|broker| broker.coverage != crate::core::broker::BrokerDiagnosticsCoverage::Available);
+            let data = QueryBrokerDiagnosticsResult {
+                schema_version: crate::core::broker::BROKER_DIAGNOSTICS_SCHEMA_VERSION.to_owned(),
+                observed_at_millis,
+                brokers,
+                unavailable_brokers,
+                partial: unavailable_brokers > 0 || partial_diagnostics,
+            };
+            let mut result = AdminQueryResult::from_sources(data, successful_sources, failures)?;
+            if partial_diagnostics {
+                result.partial = true;
+                result.warnings.push("broker_diagnostics_incomplete".to_string());
+                result.warnings.sort();
+                result.warnings.dedup();
+            }
+            Ok(result)
+        })
+    }
+
     fn query_allowlisted_config<'a>(
         &'a mut self,
         request: &'a QueryBrokerAllowlistedConfigRequest,
@@ -375,6 +436,50 @@ impl BrokerAdmin for AdminSession {
         })
     }
 
+    fn query_allowlisted_config_target_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerAllowlistedConfigTarget>>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let (targets, mut failures) = exact_broker_targets(
+                &self.inner,
+                request.cluster(),
+                request.broker_name(),
+                AdminQuerySource::BrokerConfig,
+            )
+            .await?;
+            let mut rows = Vec::new();
+            let mut successful_sources = 0usize;
+            for (broker_id, broker_addr) in targets {
+                let logical_target = broker_instance_target(request.broker_name(), broker_id);
+                match rocketmq_client_rust::MQAdminReadExt::get_broker_config_allowlisted(&self.inner, broker_addr)
+                    .await
+                {
+                    Ok(config) => {
+                        successful_sources += 1;
+                        rows.push(BrokerAllowlistedConfigTarget {
+                            broker_name: request.broker_name().to_string(),
+                            broker_id,
+                            config: BrokerAllowlistedConfig {
+                                generation: config.generation,
+                                send_message_thread_pool_nums: config.send_message_thread_pool_nums,
+                                pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
+                                flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
+                                max_client_event_count: config.max_client_event_count,
+                            },
+                        });
+                    }
+                    Err(error) => {
+                        failures.push(source_failure(AdminQuerySource::BrokerConfig, &logical_target, &error))
+                    }
+                }
+            }
+            rows.sort_by_key(|row| row.broker_id);
+            AdminQueryResult::from_sources(rows, successful_sources, failures)
+        })
+    }
+
     fn query_log_filter_state<'a>(
         &'a mut self,
         request: &'a QueryBrokerLogFilterStateRequest,
@@ -389,6 +494,61 @@ impl BrokerAdmin for AdminSession {
             Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
+
+    fn query_log_filter_state_target_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerLogFilterStateTarget>>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let (targets, mut failures) = exact_broker_targets(
+                &self.inner,
+                request.cluster(),
+                request.broker_name(),
+                AdminQuerySource::BrokerLogFilter,
+            )
+            .await?;
+            let mut rows = Vec::new();
+            let mut successful_sources = 0usize;
+            for (broker_id, broker_addr) in targets {
+                let logical_target = broker_instance_target(request.broker_name(), broker_id);
+                match self.inner.fetch_broker_runtime_stats(broker_addr).await {
+                    Ok(runtime) => {
+                        successful_sources += 1;
+                        rows.push(BrokerLogFilterStateTarget {
+                            broker_name: request.broker_name().to_string(),
+                            broker_id,
+                            state: project_broker_log_filter_state(request.logger().to_string(), &runtime),
+                        });
+                    }
+                    Err(error) => failures.push(source_failure(
+                        AdminQuerySource::BrokerLogFilter,
+                        &logical_target,
+                        &error,
+                    )),
+                }
+            }
+            rows.sort_by_key(|row| row.broker_id);
+            AdminQueryResult::from_sources(rows, successful_sources, failures)
+        })
+    }
+}
+
+async fn exact_broker_targets(
+    admin: &DefaultMQAdminExt,
+    cluster: &str,
+    broker_name: &str,
+    source: AdminQuerySource,
+) -> Result<(Vec<(u64, CheetahString)>, Vec<AdminSourceFailure>), AdminError> {
+    let cluster_info = admin
+        .examine_broker_cluster_info()
+        .await
+        .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+    crate::exact_broker::resolve_exact_broker_targets(cluster_info, cluster, broker_name, source)
+}
+
+fn broker_instance_target(broker_name: &str, broker_id: u64) -> String {
+    format!("{broker_name}.{broker_id}")
 }
 
 fn source_failure(source: AdminQuerySource, logical_target: &str, error: &RocketMQError) -> AdminSourceFailure {

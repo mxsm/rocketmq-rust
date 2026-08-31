@@ -32,6 +32,8 @@ use crate::core::AdminResult;
 pub const BROKER_DIAGNOSTICS_SCHEMA_VERSION: &str = "rocketmq.admin-broker-diagnostics.v1";
 /// Stable schema version emitted by the bounded Broker log-filter query.
 pub const BROKER_LOG_FILTER_STATE_SCHEMA_VERSION: &str = "rocketmq.admin-broker-log-filter-state.v1";
+/// Maximum number of physical instances accepted for one logical Broker.
+pub const MAX_EXACT_BROKER_INSTANCES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListBrokersRequest {
@@ -120,6 +122,54 @@ impl QueryBrokerDiagnosticsRequest {
         Ok(Self {
             cluster: required("cluster", cluster)?,
         })
+    }
+}
+
+/// Exact logical Broker target for bounded diagnostics queries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QueryBrokerDiagnosticsTargetRequest {
+    cluster: String,
+    broker_name: String,
+}
+
+impl QueryBrokerDiagnosticsTargetRequest {
+    /// Creates a diagnostics request for one logical Broker name in one cluster.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `cluster` is blank or `broker_name` is not a
+    /// bounded logical name. Network addresses are intentionally rejected.
+    pub fn try_new(cluster: impl Into<String>, broker_name: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            broker_name: logical_broker_name(broker_name)?,
+        })
+    }
+
+    #[must_use]
+    pub fn cluster(&self) -> &str {
+        &self.cluster
+    }
+
+    #[must_use]
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+}
+
+impl<'de> Deserialize<'de> for QueryBrokerDiagnosticsTargetRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireRequest {
+            cluster: String,
+            broker_name: String,
+        }
+        let wire = WireRequest::deserialize(deserializer)?;
+        Self::try_new(wire.cluster, wire.broker_name).map_err(serde::de::Error::custom)
     }
 }
 
@@ -301,6 +351,54 @@ impl QueryBrokerAllowlistedConfigRequest {
     }
 }
 
+/// Exact logical Broker target for fixed allowlisted configuration reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QueryBrokerAllowlistedConfigTargetRequest {
+    cluster: String,
+    broker_name: String,
+}
+
+impl QueryBrokerAllowlistedConfigTargetRequest {
+    /// Creates a fixed allowlisted configuration request for one logical Broker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `cluster` is blank or `broker_name` is not a
+    /// bounded logical name. Network addresses are intentionally rejected.
+    pub fn try_new(cluster: impl Into<String>, broker_name: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            broker_name: logical_broker_name(broker_name)?,
+        })
+    }
+
+    #[must_use]
+    pub fn cluster(&self) -> &str {
+        &self.cluster
+    }
+
+    #[must_use]
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+}
+
+impl<'de> Deserialize<'de> for QueryBrokerAllowlistedConfigTargetRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireRequest {
+            cluster: String,
+            broker_name: String,
+        }
+        let wire = WireRequest::deserialize(deserializer)?;
+        Self::try_new(wire.cluster, wire.broker_name).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Fixed, non-sensitive Broker properties supported by supervised SRE changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerAllowlistedConfig {
@@ -309,6 +407,14 @@ pub struct BrokerAllowlistedConfig {
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
     pub max_client_event_count: Option<i32>,
+}
+
+/// One address-free Broker instance configuration observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerAllowlistedConfigTarget {
+    pub broker_name: String,
+    pub broker_id: u64,
+    pub config: BrokerAllowlistedConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +463,67 @@ impl QueryBrokerLogFilterStateRequest {
     }
 }
 
+/// Exact logical Broker target for one allowlisted logger read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QueryBrokerLogFilterStateTargetRequest {
+    cluster: String,
+    broker_name: String,
+    logger: String,
+}
+
+impl QueryBrokerLogFilterStateTargetRequest {
+    /// Creates a log-filter query for one logical Broker and logger namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `cluster` is blank, `broker_name` is not a
+    /// bounded logical name, or `logger` is not a strict ASCII Rust module path
+    /// rooted at `rocketmq_broker`.
+    pub fn try_new(
+        cluster: impl Into<String>,
+        broker_name: impl Into<String>,
+        logger: impl Into<String>,
+    ) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            broker_name: logical_broker_name(broker_name)?,
+            logger: logical_broker_logger(logger)?,
+        })
+    }
+
+    #[must_use]
+    pub fn cluster(&self) -> &str {
+        &self.cluster
+    }
+
+    #[must_use]
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+
+    #[must_use]
+    pub fn logger(&self) -> &str {
+        &self.logger
+    }
+}
+
+impl<'de> Deserialize<'de> for QueryBrokerLogFilterStateTargetRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireRequest {
+            cluster: String,
+            broker_name: String,
+            logger: String,
+        }
+        let wire = WireRequest::deserialize(deserializer)?;
+        Self::try_new(wire.cluster, wire.broker_name, wire.logger).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerLogFilterState {
     pub schema_version: String,
@@ -366,6 +533,14 @@ pub struct BrokerLogFilterState {
     pub active_operation_id: Option<String>,
     pub last_completed_operation_id: Option<String>,
     pub expires_at_millis: Option<u64>,
+}
+
+/// One address-free Broker instance log-filter observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerLogFilterStateTarget {
+    pub broker_name: String,
+    pub broker_id: u64,
+    pub state: BrokerLogFilterState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,10 +641,44 @@ pub trait BrokerAdmin: Send {
         request: &'a QueryBrokerDiagnosticsRequest,
     ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult>;
 
+    /// Evidence-aware exact logical-target diagnostics query.
+    ///
+    /// Explicit metadata non-membership is `NotFound`. Missing or inconsistent
+    /// metadata is a backend error. Partial physical-source success returns rows
+    /// with bounded evidence; total source failure returns an error.
+    fn query_broker_diagnostics_target_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerDiagnosticsTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryBrokerDiagnosticsResult>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_broker_diagnostics_target",
+                "exact Broker diagnostics are not implemented by this adapter",
+            ))
+        })
+    }
+
     fn query_allowlisted_config<'a>(
         &'a mut self,
         request: &'a QueryBrokerAllowlistedConfigRequest,
     ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
+
+    /// Evidence-aware exact logical-target allowlisted configuration query.
+    ///
+    /// Explicit metadata non-membership is `NotFound`. Missing or inconsistent
+    /// metadata is a backend error. Partial physical-source success returns rows
+    /// with bounded evidence; total source failure returns an error.
+    fn query_allowlisted_config_target_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerAllowlistedConfigTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerAllowlistedConfigTarget>>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_allowlisted_config_target",
+                "exact Broker configuration query is not implemented by this adapter",
+            ))
+        })
+    }
 
     fn query_log_filter_state<'a>(
         &'a mut self,
@@ -479,6 +688,23 @@ pub trait BrokerAdmin: Send {
             Err(crate::core::AdminError::backend(
                 "query_log_filter_state",
                 "typed Broker log-filter query is not implemented by this adapter",
+            ))
+        })
+    }
+
+    /// Evidence-aware exact logical-target log-filter query.
+    ///
+    /// Explicit metadata non-membership is `NotFound`. Missing or inconsistent
+    /// metadata is a backend error. Partial physical-source success returns rows
+    /// with bounded evidence; total source failure returns an error.
+    fn query_log_filter_state_target_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerLogFilterStateTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerLogFilterStateTarget>>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_log_filter_state_target",
+                "exact Broker log-filter query is not implemented by this adapter",
             ))
         })
     }
@@ -527,10 +753,44 @@ pub trait BrokerQueryAdmin: Send {
         request: &'a QueryBrokerDiagnosticsRequest,
     ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult>;
 
+    /// Evidence-aware exact logical-target diagnostics query.
+    ///
+    /// Explicit metadata non-membership is `NotFound`. Missing or inconsistent
+    /// metadata is a backend error. Partial physical-source success returns rows
+    /// with bounded evidence; total source failure returns an error.
+    fn query_broker_diagnostics_target_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerDiagnosticsTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryBrokerDiagnosticsResult>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_broker_diagnostics_target",
+                "exact Broker diagnostics are not implemented by this adapter",
+            ))
+        })
+    }
+
     fn query_allowlisted_config<'a>(
         &'a mut self,
         request: &'a QueryBrokerAllowlistedConfigRequest,
     ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
+
+    /// Evidence-aware exact logical-target allowlisted configuration query.
+    ///
+    /// Explicit metadata non-membership is `NotFound`. Missing or inconsistent
+    /// metadata is a backend error. Partial physical-source success returns rows
+    /// with bounded evidence; total source failure returns an error.
+    fn query_allowlisted_config_target_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerAllowlistedConfigTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerAllowlistedConfigTarget>>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_allowlisted_config_target",
+                "exact Broker configuration query is not implemented by this adapter",
+            ))
+        })
+    }
 
     fn query_log_filter_state<'a>(
         &'a mut self,
@@ -540,6 +800,23 @@ pub trait BrokerQueryAdmin: Send {
             Err(crate::core::AdminError::backend(
                 "query_log_filter_state",
                 "typed Broker log-filter query is not implemented by this adapter",
+            ))
+        })
+    }
+
+    /// Evidence-aware exact logical-target log-filter query.
+    ///
+    /// Explicit metadata non-membership is `NotFound`. Missing or inconsistent
+    /// metadata is a backend error. Partial physical-source success returns rows
+    /// with bounded evidence; total source failure returns an error.
+    fn query_log_filter_state_target_with_evidence<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerLogFilterStateTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerLogFilterStateTarget>>> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_log_filter_state_target",
+                "exact Broker log-filter query is not implemented by this adapter",
             ))
         })
     }
@@ -585,6 +862,13 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
         BrokerAdmin::query_broker_diagnostics(self, request)
     }
 
+    fn query_broker_diagnostics_target_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryBrokerDiagnosticsResult>> {
+        BrokerAdmin::query_broker_diagnostics_target_with_evidence(self, request)
+    }
+
     fn query_allowlisted_config<'a>(
         &'a mut self,
         request: &'a QueryBrokerAllowlistedConfigRequest,
@@ -592,11 +876,25 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
         BrokerAdmin::query_allowlisted_config(self, request)
     }
 
+    fn query_allowlisted_config_target_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerAllowlistedConfigTarget>>> {
+        BrokerAdmin::query_allowlisted_config_target_with_evidence(self, request)
+    }
+
     fn query_log_filter_state<'a>(
         &'a mut self,
         request: &'a QueryBrokerLogFilterStateRequest,
     ) -> AdminFuture<'a, BrokerLogFilterState> {
         BrokerAdmin::query_log_filter_state(self, request)
+    }
+
+    fn query_log_filter_state_target_with_evidence<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateTargetRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerLogFilterStateTarget>>> {
+        BrokerAdmin::query_log_filter_state_target_with_evidence(self, request)
     }
 }
 
@@ -690,6 +988,112 @@ fn broker_logger(logger: impl Into<String>) -> AdminResult<String> {
     }
 }
 
+fn logical_broker_name(broker_name: impl Into<String>) -> AdminResult<String> {
+    let broker_name = required("broker_name", broker_name)?;
+    if broker_name.len() > 100
+        || broker_name.parse::<std::net::IpAddr>().is_ok()
+        || broker_name.parse::<std::net::SocketAddr>().is_ok()
+        || broker_name.contains([':', '/', '\\', '@', '=', '&', '?'])
+        || broker_name.chars().any(char::is_control)
+        || !broker_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        Err(crate::core::AdminError::invalid_argument(
+            "broker_name",
+            "must be a logical Broker identifier of at most 100 bytes",
+        ))
+    } else {
+        Ok(broker_name)
+    }
+}
+
+/// Returns whether a value is one bounded RocketMQ remoting `host:port` endpoint.
+///
+/// DNS names, IPv4, and bracketed IPv6 are supported. URLs, user information,
+/// paths, queries, whitespace, zero ports, and unbracketed IPv6 are rejected.
+#[must_use]
+pub fn is_valid_remoting_endpoint(endpoint: &str) -> bool {
+    if endpoint.is_empty()
+        || endpoint.len() > 512
+        || endpoint.chars().any(char::is_whitespace)
+        || endpoint
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | '?' | '#' | '@' | '='))
+    {
+        return false;
+    }
+    let (host, port) = if let Some(rest) = endpoint.strip_prefix('[') {
+        let Some((host, port)) = rest.split_once("]:") else {
+            return false;
+        };
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        (host, port)
+    } else {
+        let Some((host, port)) = endpoint.rsplit_once(':') else {
+            return false;
+        };
+        if host.contains(':') || !valid_remoting_host(host) {
+            return false;
+        }
+        (host, port)
+    };
+    !host.is_empty() && port.parse::<u16>().is_ok_and(|port| port != 0)
+}
+
+fn valid_remoting_host(host: &str) -> bool {
+    if host.parse::<std::net::Ipv4Addr>().is_ok() {
+        return true;
+    }
+    if host
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.')
+    {
+        return false;
+    }
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+}
+
+fn logical_broker_logger(logger: impl Into<String>) -> AdminResult<String> {
+    let logger = logger.into();
+    let valid = logger == logger.trim()
+        && logger.len() <= 128
+        && logger
+            .strip_prefix("rocketmq_broker::")
+            .is_some_and(valid_rust_module_path);
+    if valid {
+        Ok(logger)
+    } else {
+        Err(crate::core::AdminError::invalid_argument(
+            "logger",
+            "must be an allowlisted rocketmq_broker:: target of at most 128 bytes",
+        ))
+    }
+}
+
+fn valid_rust_module_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.split("::").all(|segment| {
+            let mut characters = segment.chars();
+            characters
+                .next()
+                .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+                && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+}
+
 fn bounded_operation_id(operation_id: impl Into<String>) -> AdminResult<String> {
     let operation_id = required("operation_id", operation_id)?;
     if operation_id.len() > 128 || operation_id.chars().any(char::is_control) {
@@ -736,7 +1140,10 @@ fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
 #[cfg(any(feature = "read-client-adapter", test))]
 pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, runtime: &KVTable) -> BrokerDiagnostics {
     let schema = runtime_value(runtime, "sreDiagnosticsSchemaVersion");
-    if schema != Some("rocketmq.broker-diagnostics.v1") {
+    if !matches!(
+        schema,
+        Some("rocketmq.broker-diagnostics.v1" | "rocketmq.broker-diagnostics.legacy")
+    ) {
         return unsupported_diagnostics(broker_name, broker_id);
     }
 
@@ -964,9 +1371,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diagnostics_projection_uses_real_generation_and_never_serializes_unknown_kv_fields() {
+    fn diagnostics_projection_accepts_the_current_broker_contract_and_uses_safe_fields_only() {
         let table = HashMap::from([
-            ("sreDiagnosticsSchemaVersion", "rocketmq.broker-diagnostics.v1"),
+            ("sreDiagnosticsSchemaVersion", "rocketmq.broker-diagnostics.legacy"),
             ("sreDiagnosticsObservedAtMillis", "1000"),
             ("brokerConfigGeneration", "9"),
             ("brokerReady", "true"),
@@ -975,7 +1382,7 @@ mod tests {
             ("brokerRegistrationAccepting", "true"),
             ("brokerRegistrationConfigured", "true"),
             ("brokerRole", "ASYNC_MASTER"),
-            ("storeType", "local"),
+            ("storeType", "LocalFile"),
             ("timerWheelEnabled", "false"),
             ("transientStorePoolEnabled", "false"),
             ("tieredStoreConfigured", "false"),
@@ -1019,6 +1426,10 @@ mod tests {
         let diagnostics = project_broker_diagnostics("broker-a".to_owned(), 0, &KVTable { table });
 
         assert_eq!(diagnostics.config.as_ref().map(|config| config.generation), Some(9));
+        assert_eq!(
+            diagnostics.config.as_ref().map(|config| config.store_type.as_str()),
+            Some("LocalFile")
+        );
         assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Available);
         let encoded = serde_json::to_string(&diagnostics).expect("diagnostics should serialize");
         assert!(!encoded.contains("secretAccessKey"));
@@ -1030,6 +1441,63 @@ mod tests {
         let diagnostics = project_broker_diagnostics("broker-a".to_owned(), 0, &KVTable { table: HashMap::new() });
         assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Unsupported);
         assert!(diagnostics.config.is_none());
+    }
+
+    #[test]
+    fn logical_broker_requests_validate_construction_and_deserialization() {
+        let diagnostics = QueryBrokerDiagnosticsTargetRequest::try_new("DefaultCluster", "broker-a").unwrap();
+        assert_eq!(diagnostics.cluster(), "DefaultCluster");
+        assert_eq!(diagnostics.broker_name(), "broker-a");
+        assert!(QueryBrokerDiagnosticsTargetRequest::try_new("DefaultCluster", "127.0.0.1:10911").is_err());
+        assert!(serde_json::from_str::<QueryBrokerDiagnosticsTargetRequest>(
+            r#"{"cluster":"DefaultCluster","broker_name":"broker-a","broker_addr":"secret:10911"}"#,
+        )
+        .is_err());
+
+        let config = serde_json::from_str::<QueryBrokerAllowlistedConfigTargetRequest>(
+            r#"{"cluster":"DefaultCluster","broker_name":"broker-a"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.cluster(), "DefaultCluster");
+        assert_eq!(config.broker_name(), "broker-a");
+
+        let log = QueryBrokerLogFilterStateTargetRequest::try_new(
+            "DefaultCluster",
+            "broker-a",
+            "rocketmq_broker::processor::send_message",
+        )
+        .unwrap();
+        assert_eq!(log.logger(), "rocketmq_broker::processor::send_message");
+        for invalid in [
+            "rocketmq_broker::",
+            "rocketmq_broker::processor::",
+            "rocketmq_broker::processor target",
+            "rocketmq_broker::127.0.0.1:10911",
+            " rocketmq_broker::processor",
+        ] {
+            assert!(QueryBrokerLogFilterStateTargetRequest::try_new("DefaultCluster", "broker-a", invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn remoting_endpoint_validation_accepts_only_one_safe_host_and_port() {
+        for valid in ["127.0.0.1:10911", "broker-a.internal:10911", "[2001:db8::1]:10911"] {
+            assert!(is_valid_remoting_endpoint(valid), "endpoint={valid}");
+        }
+        for invalid in [
+            "https://broker-a.internal:10911",
+            "broker-a.internal:10911/path",
+            "user@broker-a.internal:10911",
+            "broker-a.internal:10911?token=secret",
+            " broker-a.internal:10911",
+            "broker-a.internal:10911 ",
+            "2001:db8::1:10911",
+            "broker-a.internal:0",
+            "broker-a.internal:65536",
+            "999.999.999.999:10911",
+        ] {
+            assert!(!is_valid_remoting_endpoint(invalid), "endpoint={invalid}");
+        }
     }
 
     #[test]
@@ -1085,5 +1553,44 @@ mod tests {
         assert!(!encoded.contains("sreLogFilterEffective"));
         assert!(!encoded.contains("secretToken"));
         assert!(!encoded.contains("must-not-escape"));
+    }
+
+    #[test]
+    fn address_log_filter_apis_preserve_their_legacy_acceptance_contract() {
+        let query = QueryBrokerLogFilterStateRequest::try_new(
+            " broker.internal:10911 ",
+            " rocketmq_broker::processor/legacy-target ",
+        )
+        .unwrap();
+        assert_eq!(query.broker_addr, "broker.internal:10911");
+        assert_eq!(query.logger, "rocketmq_broker::processor/legacy-target");
+
+        let request = SetBrokerLogFilterTtlRequest::try_new(
+            "broker.internal:10911",
+            "rocketmq_broker::processor/legacy-target",
+            BrokerLogLevel::Debug,
+            60,
+            "incident/123.op",
+        )
+        .unwrap();
+        assert_eq!(request.operation_id, "incident/123.op");
+    }
+
+    #[test]
+    fn legacy_log_filter_projection_preserves_bounded_operation_identifiers() {
+        let table = HashMap::from([
+            ("sreLogFilterControlSupported", "true"),
+            ("sreLogFilterEffective", "rocketmq_broker::processor=debug"),
+            ("sreLogFilterActiveOperationId", "http://secret.internal/token"),
+        ])
+        .into_iter()
+        .map(|(key, value)| (CheetahString::from(key), CheetahString::from(value)))
+        .collect();
+        let state = project_broker_log_filter_state("rocketmq_broker::processor".to_owned(), &KVTable { table });
+
+        assert_eq!(
+            state.active_operation_id.as_deref(),
+            Some("http://secret.internal/token")
+        );
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -200,6 +201,21 @@ impl McpConfig {
             if let Some(credentials) = &cluster.credentials {
                 credentials.validate_reference(&cluster.name)?;
                 credentials.resolve(&cluster.name)?;
+            }
+            let mut proxy_names = BTreeSet::new();
+            for proxy in &cluster.proxies {
+                validate_logical_alias("clusters.proxies.name", &proxy.name)?;
+                if !rocketmq_admin_core::core::broker::is_valid_remoting_endpoint(&proxy.endpoint) {
+                    return Err(McpError::InvalidConfig(
+                        "clusters.proxies.endpoint must be a single bounded remoting host:port".to_string(),
+                    ));
+                }
+                if !proxy_names.insert(proxy.name.as_str()) {
+                    return Err(McpError::InvalidConfig(format!(
+                        "clusters `{}` contains duplicate Proxy alias `{}`",
+                        cluster.name, proxy.name
+                    )));
+                }
             }
         }
 
@@ -635,7 +651,7 @@ pub enum JwtAlgorithm {
     Rs256,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, PartialEq, Eq)]
 pub struct ClusterConfig {
     pub name: String,
     pub namesrv_addr: String,
@@ -653,6 +669,9 @@ pub struct ClusterConfig {
     /// Secret values are never accepted inline in the MCP configuration.
     #[serde(default)]
     pub credentials: Option<ClusterCredentialReference>,
+    /// Logical Proxy aliases. Endpoints are internal-only topology data.
+    #[serde(default)]
+    pub proxies: Vec<ProxyAlias>,
 }
 
 impl ClusterConfig {
@@ -665,6 +684,45 @@ impl ClusterConfig {
             .as_ref()
             .map(|reference| reference.resolve(&self.name))
             .transpose()
+    }
+
+    pub(crate) fn proxy_endpoint(&self, proxy_name: &str) -> Option<&str> {
+        self.proxies
+            .iter()
+            .find(|proxy| proxy.name == proxy_name)
+            .map(|proxy| proxy.endpoint.as_str())
+    }
+}
+
+impl std::fmt::Debug for ClusterConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClusterConfig")
+            .field("name", &self.name)
+            .field("namesrv_addr", &self.namesrv_addr)
+            .field("default", &self.default)
+            .field("rocketmq_cluster_name", &self.rocketmq_cluster_name)
+            .field("tenant", &self.tenant)
+            .field("credentials", &self.credentials)
+            .field("proxies", &self.proxies)
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyAlias {
+    pub name: String,
+    pub endpoint: String,
+}
+
+impl std::fmt::Debug for ProxyAlias {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyAlias")
+            .field("name", &self.name)
+            .field("endpoint", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -892,6 +950,26 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), McpError> {
     Ok(())
 }
 
+fn validate_logical_alias(field: &str, value: &str) -> Result<(), McpError> {
+    if value != value.trim()
+        || value.is_empty()
+        || value.len() > 100
+        || value.parse::<std::net::IpAddr>().is_ok()
+        || value.parse::<std::net::SocketAddr>().is_ok()
+        || value.contains([':', '/', '\\', '@', '=', '&', '?'])
+        || value.chars().any(char::is_control)
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        Err(McpError::InvalidConfig(format!(
+            "{field} must be a logical identifier of at most 100 bytes"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_jwks_ca_file(path: &Path) -> Result<(), McpError> {
     let bytes = std::fs::read(path).map_err(|error| {
         McpError::InvalidConfig(format!(
@@ -976,6 +1054,110 @@ mod tests {
         assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
         assert_eq!(config.logging.filter.as_deref(), Some("info"));
         assert!(config.server.log_level.is_none());
+        assert_eq!(config.clusters[0].proxies.len(), 1);
+        assert_eq!(config.clusters[0].proxy_endpoint("proxy-local"), Some("127.0.0.1:8081"));
+    }
+
+    #[test]
+    fn cluster_proxy_aliases_are_optional_validated_and_cluster_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            example_config_path()
+                .parent()
+                .expect("example config has a parent")
+                .join("permissions.example.toml"),
+            temp.path().join("permissions.example.toml"),
+        )
+        .unwrap();
+        let example = std::fs::read_to_string(example_config_path()).unwrap();
+        let (prefix, proxy_and_suffix) = example.split_once("[[clusters.proxies]]").unwrap();
+        let (_, suffix) = proxy_and_suffix.split_once("[security]").unwrap();
+        let legacy_path = temp.path().join("legacy-mcp.toml");
+        std::fs::write(&legacy_path, format!("{prefix}[security]{suffix}")).unwrap();
+        let legacy = McpConfig::load(&legacy_path).expect("legacy TOML without proxies must deserialize");
+        assert!(legacy.clusters[0].proxies.is_empty());
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters[0].proxies.clear();
+        config
+            .validate()
+            .expect("legacy configurations without proxies remain valid");
+        assert_eq!(config.clusters[0].proxy_endpoint("proxy-local"), None);
+
+        config.clusters[0].proxies = vec![
+            ProxyAlias {
+                name: "proxy-a".to_string(),
+                endpoint: "internal-a:8081".to_string(),
+            },
+            ProxyAlias {
+                name: "proxy-a".to_string(),
+                endpoint: "internal-b:8081".to_string(),
+            },
+        ];
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate Proxy alias"));
+
+        config.clusters[0].proxies[1].name = "proxy-b".to_string();
+        config.clusters[0].proxies[1].endpoint.clear();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("clusters.proxies.endpoint"));
+
+        config.clusters[0].proxies[1].endpoint = "https://internal-b:8081/path".to_string();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("clusters.proxies.endpoint"));
+
+        config.clusters[0].proxies[1].endpoint = "internal-b:8081".to_string();
+        config.clusters[0].proxies[1].name = " proxy-b ".to_string();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("clusters.proxies.name"));
+
+        config.clusters[0].proxies[1].name = "proxy-b".to_string();
+        config.clusters[0].proxies[1].endpoint = "internal-b:8081".to_string();
+        let mut secondary = config.clusters[0].clone();
+        secondary.name = "secondary".to_string();
+        secondary.namesrv_addr = "127.0.0.2:9876".to_string();
+        secondary.default = Some(false);
+        secondary.proxies = vec![ProxyAlias {
+            name: "proxy-a".to_string(),
+            endpoint: "secondary-internal:8081".to_string(),
+        }];
+        config.clusters.push(secondary);
+        config.validate().unwrap();
+        assert_eq!(config.clusters[0].proxy_endpoint("proxy-a"), Some("internal-a:8081"));
+        assert_eq!(
+            config.clusters[1].proxy_endpoint("proxy-a"),
+            Some("secondary-internal:8081")
+        );
+    }
+
+    #[test]
+    fn proxy_alias_debug_and_validation_never_expose_endpoints() {
+        const ENDPOINT_SENTINEL: &str = "private-proxy-endpoint.example:18081";
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters[0].proxies = vec![ProxyAlias {
+            name: "proxy-a".to_string(),
+            endpoint: ENDPOINT_SENTINEL.to_string(),
+        }];
+        let debug = format!("{config:?}");
+        assert!(debug.contains("proxy-a"));
+        assert!(!debug.contains(ENDPOINT_SENTINEL));
+
+        config.clusters[0].proxies[0].name = "127.0.0.1:8081".to_string();
+        let error = config.validate().unwrap_err();
+        assert!(!error.to_string().contains(ENDPOINT_SENTINEL));
+        assert!(!format!("{error:?}").contains(ENDPOINT_SENTINEL));
     }
 
     #[test]

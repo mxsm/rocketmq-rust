@@ -36,6 +36,8 @@ pub const SOURCE_FAILURE_OVERFLOW_WARNING: &str = "source_failures_truncated";
 #[serde(rename_all = "snake_case")]
 pub enum AdminQuerySource {
     BrokerRuntime,
+    BrokerConfig,
+    BrokerLogFilter,
     ConsumerStatistics,
     ConsumerConnection,
     ProducerConnection,

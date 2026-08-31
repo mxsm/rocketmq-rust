@@ -58,18 +58,17 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             .is_some()
     }
 
-    fn start_go_away_drain(&self, identity: CheetahString, session: TransportSession<PR>) {
+    fn start_go_away_drain(&self, _identity: CheetahString, session: TransportSession<PR>) {
         session.begin_drain();
         let drain_timeout = session.max_pending_request_age();
-        let task_name = format!("rocketmq.transport.go-away-drain.{identity}");
-        let spawned = self.spawn_worker_task(task_name, async move {
+        let spawned = self.spawn_worker_task("rocketmq.transport.go-away-drain", async move {
             let report = session.drain_and_close(drain_timeout).await;
             if !report.is_healthy() {
                 warn!(report = %report.to_json(), "GO_AWAY session drain was unhealthy");
             }
         });
         if spawned.is_none() {
-            warn!(%identity, "GO_AWAY session drain could not be scheduled because the client is shutting down");
+            warn!("GO_AWAY session drain could not be scheduled because the client is shutting down");
         }
     }
 
@@ -157,7 +156,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 let selection_generation = selection.state.generation();
                 let mut client = selection.session;
                 debug!(
-                    selected = %metric_identity,
                     generation = selection_generation,
                     "Sending one-way request to selected nameserver"
                 );
@@ -228,16 +226,15 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             if target == "<nameserver>" {
                 if let Some(state) = nameserver_diagnostics.as_ref() {
                     error!(
-                        "Failed to get client for <nameserver>. Diagnostics: configured_list={:?}, available_set={:?}, \\
-                         cached_choice={:?}, connections={}",
-                        state.endpoints(),
-                        state.available(),
-                        state.chosen(),
-                        self.connection_registry.len()
+                        configured = state.endpoints().len(),
+                        available = state.available().len(),
+                        cached_choice = state.chosen().is_some(),
+                        connections = self.connection_registry.len(),
+                        "Failed to get client for <nameserver>"
                     );
                 }
             } else {
-                error!("Failed to get client for {}", target);
+                error!("Failed to get client for direct endpoint");
             }
 
             RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
@@ -313,7 +310,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                             true,
                         );
                         debug!(
-                            remote_addr = %identity,
+                            endpoint_kind = if nameserver_request { "nameserver" } else { "direct" },
                             elapsed_ms = latency.as_millis() as u64,
                             "request completed with GO_AWAY retry disabled"
                         );
@@ -397,7 +394,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                         true,
                     );
                     debug!(
-                        remote_addr = %identity,
+                        endpoint_kind = if nameserver_request { "nameserver" } else { "direct" },
                         nameserver_generation = ?nameserver_generation,
                         elapsed_ms = latency.as_millis() as u64,
                         "request completed"
@@ -425,9 +422,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                         false,
                     );
                     warn!(
-                        remote_addr = %identity,
+                        endpoint_kind = if nameserver_request { "nameserver" } else { "direct" },
                         elapsed_ms = latency.as_millis() as u64,
-                        error = ?error,
                         "request failed"
                     );
                     return Err(error);

@@ -537,6 +537,7 @@ mod tests {
                 rocketmq_cluster_name: None,
                 tenant: None,
                 credentials: None,
+                proxies: Vec::new(),
             }],
         )
         .unwrap()

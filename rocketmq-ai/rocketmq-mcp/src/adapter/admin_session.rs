@@ -20,10 +20,15 @@ use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
 use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
 use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeTargetRequest;
+use rocketmq_admin_core::core::broker::QueryBrokerAllowlistedConfigTargetRequest;
+use rocketmq_admin_core::core::broker::QueryBrokerDiagnosticsTargetRequest;
+use rocketmq_admin_core::core::broker::QueryBrokerLogFilterStateTargetRequest;
 use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
 use rocketmq_admin_core::core::consumer::ExactConsumerGroupEnrichmentRequest;
 use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
+use rocketmq_admin_core::core::proxy::ProxyQueryAdmin;
+use rocketmq_admin_core::core::proxy::QueryProxyDrainStateRequest;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::TopicInventoryAdmin;
@@ -34,12 +39,19 @@ use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminGuard;
 use serde::Serialize;
 
+use crate::adapter::admin_session_projection::bounded_proxy_operation_id;
+use crate::adapter::admin_session_projection::map_broker_diagnostics;
+use crate::adapter::admin_session_projection::safe_operation_id;
 use crate::model::contract::observed_at_from_millis;
 use crate::model::contract::QueryPayload;
+use crate::tools::broker_tools::BrokerDiagnosticsOutput;
 use crate::tools::cluster_tools::BrokerSummary;
+use crate::tools::config_tools::BrokerConfigSummaryOutput;
+use crate::tools::config_tools::BrokerLogFilterStateOutput;
 use crate::tools::consumer_tools::ConsumerGroupSummary;
 use crate::tools::consumer_tools::QueueLag;
 use crate::tools::executor::ToolExecutionError;
+use crate::tools::proxy_tools::ProxyDrainStateOutput;
 use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
 
@@ -122,6 +134,52 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         broker_name: &str,
     ) -> impl Future<Output = Result<BrokerRuntimeTargetStatus, ToolExecutionError>> + Send;
+
+    fn broker_diagnostics(
+        &mut self,
+        _broker_name: &str,
+    ) -> impl Future<Output = Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "exact Broker diagnostics are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn broker_config_summary(
+        &mut self,
+        _broker_name: &str,
+    ) -> impl Future<Output = Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "exact Broker configuration is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn broker_log_filter_state(
+        &mut self,
+        _broker_name: &str,
+        _logger: &str,
+    ) -> impl Future<Output = Result<QueryPayload<BrokerLogFilterStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "exact Broker log-filter state is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn proxy_drain_state(
+        &mut self,
+        _proxy_name: &str,
+        _proxy_endpoint: &str,
+    ) -> impl Future<Output = Result<QueryPayload<ProxyDrainStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Proxy drain state is unavailable".to_string(),
+            ))
+        }
+    }
 
     fn shutdown(self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
 }
@@ -417,6 +475,174 @@ impl AdminSession for AdminCoreSession {
             .map_err(ToolExecutionError::backend)
     }
 
+    async fn broker_diagnostics(
+        &mut self,
+        broker_name: &str,
+    ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+        let request =
+            QueryBrokerDiagnosticsTargetRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), broker_name)
+                .map_err(map_logical_admin_error)?;
+        let result = self
+            .admin_mut()?
+            .query_broker_diagnostics_target_with_evidence(&request)
+            .await
+            .map_err(map_logical_admin_error)?;
+        let cluster = self.cluster.name.clone();
+        Ok(QueryPayload::from_admin(result).map(|result| BrokerDiagnosticsOutput {
+            cluster,
+            broker_name: request.broker_name().to_string(),
+            diagnostics_schema_version: rocketmq_admin_core::core::broker::BROKER_DIAGNOSTICS_SCHEMA_VERSION
+                .to_string(),
+            observed_at_millis: result.observed_at_millis,
+            brokers: result.brokers.iter().map(map_broker_diagnostics).collect(),
+            unavailable_brokers: result.unavailable_brokers,
+        }))
+    }
+
+    async fn broker_config_summary(
+        &mut self,
+        broker_name: &str,
+    ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+        let request =
+            QueryBrokerAllowlistedConfigTargetRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), broker_name)
+                .map_err(map_logical_admin_error)?;
+        let result = self
+            .admin_mut()?
+            .query_allowlisted_config_target_with_evidence(&request)
+            .await
+            .map_err(map_logical_admin_error)?;
+        let cluster = self.cluster.name.clone();
+        Ok(QueryPayload::from_admin(result).map(|rows| BrokerConfigSummaryOutput {
+            cluster,
+            broker_name: request.broker_name().to_string(),
+            brokers: rows
+                .into_iter()
+                .map(|row| crate::tools::config_tools::BrokerConfigSummaryRow {
+                    broker_name: row.broker_name,
+                    broker_id: row.broker_id,
+                    generation: row.config.generation,
+                    send_message_thread_pool_nums: row.config.send_message_thread_pool_nums,
+                    pull_message_thread_pool_nums: row.config.pull_message_thread_pool_nums,
+                    flush_delay_offset_interval_ms: row.config.flush_delay_offset_interval_ms,
+                    max_client_event_count: row.config.max_client_event_count,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn broker_log_filter_state(
+        &mut self,
+        broker_name: &str,
+        logger: &str,
+    ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolExecutionError> {
+        let request = QueryBrokerLogFilterStateTargetRequest::try_new(
+            self.cluster.rocketmq_cluster_name.clone(),
+            broker_name,
+            logger,
+        )
+        .map_err(map_logical_admin_error)?;
+        let result = self
+            .admin_mut()?
+            .query_log_filter_state_target_with_evidence(&request)
+            .await
+            .map_err(map_logical_admin_error)?;
+        let cluster = self.cluster.name.clone();
+        let payload = QueryPayload::from_admin(result);
+        let mut sanitized = false;
+        let brokers = payload
+            .data
+            .into_iter()
+            .map(|row| {
+                let (active_operation_id, active_sanitized) = safe_operation_id(row.state.active_operation_id);
+                let (last_completed_operation_id, completed_sanitized) =
+                    safe_operation_id(row.state.last_completed_operation_id);
+                sanitized |= active_sanitized || completed_sanitized;
+                crate::tools::config_tools::BrokerLogFilterStateRow {
+                    broker_name: row.broker_name,
+                    broker_id: row.broker_id,
+                    state_schema_version: rocketmq_admin_core::core::broker::BROKER_LOG_FILTER_STATE_SCHEMA_VERSION
+                        .to_string(),
+                    supported: row.state.supported,
+                    logger: request.logger().to_string(),
+                    level: row.state.level.map(|level| match level {
+                        rocketmq_admin_core::core::broker::BrokerLogLevel::Info => {
+                            crate::tools::config_tools::BrokerLogLevel::Info
+                        }
+                        rocketmq_admin_core::core::broker::BrokerLogLevel::Debug => {
+                            crate::tools::config_tools::BrokerLogLevel::Debug
+                        }
+                    }),
+                    active_operation_id,
+                    last_completed_operation_id,
+                    expires_at_millis: row.state.expires_at_millis,
+                }
+            })
+            .collect();
+        let mut warnings = payload.warnings;
+        if sanitized {
+            warnings.push("broker_log_filter_operation_id_sanitized".to_string());
+        }
+        Ok(QueryPayload::new(
+            BrokerLogFilterStateOutput {
+                cluster,
+                broker_name: request.broker_name().to_string(),
+                logger: request.logger().to_string(),
+                brokers,
+            },
+            payload.partial,
+            warnings,
+            payload.source_failures,
+        ))
+    }
+
+    async fn proxy_drain_state(
+        &mut self,
+        proxy_name: &str,
+        proxy_endpoint: &str,
+    ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolExecutionError> {
+        let request = QueryProxyDrainStateRequest {
+            proxy_addr: proxy_endpoint.to_string(),
+        };
+        let state = self
+            .admin_mut()?
+            .query_drain_state(&request)
+            .await
+            .map_err(|_| ToolExecutionError::Backend("Proxy drain source is unavailable".to_string()))?;
+        let (operation_id, warnings) = bounded_proxy_operation_id(state.operation_id);
+        let output = ProxyDrainStateOutput {
+            cluster: self.cluster.name.clone(),
+            proxy_name: proxy_name.to_string(),
+            state_schema_version: "rocketmq.proxy-drain.v1".to_string(),
+            phase: match state.phase {
+                rocketmq_admin_core::core::proxy::ProxyDrainPhase::Accepting => {
+                    crate::tools::proxy_tools::ProxyDrainPhase::Accepting
+                }
+                rocketmq_admin_core::core::proxy::ProxyDrainPhase::Draining => {
+                    crate::tools::proxy_tools::ProxyDrainPhase::Draining
+                }
+                rocketmq_admin_core::core::proxy::ProxyDrainPhase::Drained => {
+                    crate::tools::proxy_tools::ProxyDrainPhase::Drained
+                }
+            },
+            operation_id,
+            admission_open: state.admission_open,
+            routing_open: state.routing_open,
+            readiness_published: state.readiness_published,
+            zero_pending: state.zero_pending,
+            pending: crate::tools::proxy_tools::ProxyDrainPending {
+                active_connections: state.pending.active_connections,
+                sessions: state.pending.sessions,
+                receipt_handles: state.pending.receipt_handles,
+                prepared_transactions: state.pending.prepared_transactions,
+                telemetry_links: state.pending.telemetry_links,
+                remoting_channels: state.pending.remoting_channels,
+                telemetry_commands: state.pending.telemetry_commands,
+                rpc_in_flight: state.pending.rpc_in_flight,
+            },
+        };
+        Ok(QueryPayload::new(output, false, warnings, Vec::new()))
+    }
+
     async fn shutdown(mut self) -> Result<(), ToolExecutionError> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = self.test_session.take() {
@@ -584,5 +810,17 @@ fn map_broker_summary(row: &rocketmq_admin_core::core::broker::BrokerSummary) ->
         hour: row.hour.clone(),
         space: row.space.clone(),
         broker_active: row.broker_active,
+    }
+}
+
+fn map_logical_admin_error(error: rocketmq_admin_core::core::AdminError) -> ToolExecutionError {
+    match error {
+        rocketmq_admin_core::core::AdminError::InvalidArgument { field, reason } => {
+            ToolExecutionError::InvalidArguments(format!("{field}: {reason}"))
+        }
+        rocketmq_admin_core::core::AdminError::NotFound { resource, name } => {
+            ToolExecutionError::InvalidArguments(format!("{resource} not found: {name}"))
+        }
+        _ => ToolExecutionError::Backend("RocketMQ logical target source is unavailable".to_string()),
     }
 }

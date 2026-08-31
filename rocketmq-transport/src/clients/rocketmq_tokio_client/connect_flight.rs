@@ -121,6 +121,14 @@ where
     flight: Arc<ConnectFlight<PR>>,
 }
 
+fn connection_worker_task_name(_endpoint: &CheetahString) -> String {
+    "rocketmq.transport.connect".to_string()
+}
+
+fn log_connection_failure(_endpoint: &CheetahString, endpoint_kind: &'static str) {
+    error!(endpoint_kind, "Failed to connect");
+}
+
 impl<PR> FlightCompletionGuard<PR>
 where
     PR: Sync + Clone + Send + 'static,
@@ -179,7 +187,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         match self.create_client_until(addr, RequestDeadline::after(duration)).await {
             Ok(client) => client,
             Err(error) => {
-                error!(remote_addr = %addr, error = ?error, "Failed to create remoting client");
+                let _ = error;
+                error!("Failed to create remoting client");
                 None
             }
         }
@@ -239,10 +248,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             let lease_for_task = lease.clone();
             let connect_timeout = self.tokio_client_config.connect.timeout;
             let commit_fence = worker_owner.commit_fence();
-            let spawned = self.spawn_worker_task_with_owner(
-                &worker_owner,
-                format!("rocketmq.transport.connect.{target}"),
-                async move {
+            let spawned =
+                self.spawn_worker_task_with_owner(&worker_owner, connection_worker_task_name(&target), async move {
                     let _completion_guard = completion_guard;
                     client.connect_attempts.fetch_add(1, Ordering::Relaxed);
                     let result = client
@@ -260,8 +267,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                         Err(RocketMQError::ClientNotStarted)
                     };
                     flight_for_task.complete(result);
-                },
-            );
+                });
             if spawned.is_none() {
                 flight.complete_not_started();
                 self.connection_registry.remove_flight_if_matches(&target, &flight);
@@ -279,6 +285,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         commit_fence: &ConnectionCommitFence,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
+        let endpoint_kind = if lease.is_some() { "nameserver" } else { "direct" };
         if !self.matches_connection_commit_fence(commit_fence) {
             return Err(RocketMQError::ClientNotStarted);
         }
@@ -301,7 +308,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 .allow_request(),
         };
         if !allowed {
-            warn!("Circuit breaker OPEN for {}, rejecting connection attempt", addr);
+            warn!(endpoint_kind, "Circuit breaker OPEN, rejecting connection attempt");
             return Ok(None);
         }
 
@@ -363,7 +370,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                             && self.can_commit_endpoint_lease(session_lease.as_ref())
                     }) {
                     Some(client) => {
-                        info!("Successfully created client for {}", addr);
+                        info!(endpoint_kind, "Successfully created client");
                         Ok(Some(client))
                     }
                     None => {
@@ -378,7 +385,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 }
             }
             Err(error) => {
-                error!(remote_addr = %addr, error = ?error, "Failed to connect");
+                log_connection_failure(addr, endpoint_kind);
                 if !self.matches_connection_commit_fence(commit_fence) {
                     return Err(RocketMQError::ClientNotStarted);
                 }
@@ -405,6 +412,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;
+    use std::fmt;
     use std::io;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -415,9 +423,65 @@ mod tests {
     use tokio::sync::Barrier;
     use tokio::sync::Notify;
     use tokio::task::JoinSet;
+    use tracing::field::Field;
+    use tracing::field::Visit;
+    use tracing::span::Attributes;
+    use tracing::span::Id;
+    use tracing::span::Record;
+    use tracing::Event;
+    use tracing::Metadata;
+    use tracing::Subscriber;
 
     use super::*;
     use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+
+    struct CapturingSubscriber(Arc<std::sync::Mutex<String>>);
+
+    impl Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut output = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            event.record(&mut StringVisitor(&mut output));
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    struct StringVisitor<'a>(&'a mut String);
+
+    impl Visit for StringVisitor<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+            use std::fmt::Write as _;
+
+            let _ = write!(self.0, "{}={value:?};", field.name());
+        }
+    }
+
+    #[test]
+    fn direct_endpoint_is_absent_from_connection_logs_and_worker_names() {
+        let endpoint = CheetahString::from_static_str("proxy-secret.internal:18081");
+        let captured = Arc::new(std::sync::Mutex::new(String::new()));
+        tracing::subscriber::with_default(CapturingSubscriber(Arc::clone(&captured)), || {
+            log_connection_failure(&endpoint, "direct");
+        });
+
+        let logs = captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!logs.contains(endpoint.as_str()));
+        assert!(!connection_worker_task_name(&endpoint).contains(endpoint.as_str()));
+    }
 
     async fn assert_connect_flight_preserves_failure(error: RocketMQError) {
         const WAITERS: usize = 3;

@@ -126,6 +126,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -334,6 +336,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -591,6 +595,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -811,6 +817,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -1185,6 +1193,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -1421,6 +1431,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -1689,6 +1701,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
@@ -1791,6 +1805,1558 @@ expression: contracts
       "type": "object"
     },
     "title": "RocketMQ broker description"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ broker diagnostics"
+    },
+    "description": "Get bounded readiness, store, recovery, and security diagnostics for one logical Broker.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_name": {
+          "type": "string"
+        },
+        "cluster": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "broker_name"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_broker_diagnostics",
+    "outputSchema": {
+      "$defs": {
+        "AuthSecurityDiagnostics": {
+          "properties": {
+            "acl_file_watch_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "acl_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "acl_reload_attempts": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "acl_reload_failures": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "acl_reload_skipped": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "acl_reload_successes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "authentication_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "authorization_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "credential_rotation_supported": {
+              "type": "boolean"
+            },
+            "supported": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "supported",
+            "credential_rotation_supported"
+          ],
+          "type": "object"
+        },
+        "BackgroundIndexRebuildDiagnostics": {
+          "properties": {
+            "backlog_bytes": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "bytes_per_second": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "current_safe_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "effective_enabled": {
+              "type": "boolean"
+            },
+            "failure_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gray_mode": {
+              "type": "boolean"
+            },
+            "rebuilt_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rebuilt_messages": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "$ref": "#/$defs/BackgroundIndexRebuildState"
+            },
+            "target_offset": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "state",
+            "effective_enabled",
+            "gray_mode",
+            "current_safe_offset",
+            "target_offset",
+            "backlog_bytes",
+            "rebuilt_bytes",
+            "rebuilt_messages",
+            "failure_count",
+            "bytes_per_second"
+          ],
+          "type": "object"
+        },
+        "BackgroundIndexRebuildState": {
+          "enum": [
+            "idle",
+            "running",
+            "paused",
+            "completed",
+            "retrying",
+            "failed",
+            "shutdown",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "BrokerDiagnosticsCoverage": {
+          "enum": [
+            "available",
+            "partial",
+            "unsupported"
+          ],
+          "type": "string"
+        },
+        "BrokerDiagnosticsOutput": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/BrokerDiagnosticsRow"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "diagnostics_schema_version": {
+              "type": "string"
+            },
+            "observed_at_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unavailable_brokers": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cluster",
+            "broker_name",
+            "diagnostics_schema_version",
+            "observed_at_millis",
+            "brokers",
+            "unavailable_brokers"
+          ],
+          "type": "object"
+        },
+        "BrokerDiagnosticsRow": {
+          "properties": {
+            "auth": {
+              "$ref": "#/$defs/AuthSecurityDiagnostics"
+            },
+            "background_index_rebuild": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BackgroundIndexRebuildDiagnostics"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "broker_name": {
+              "type": "string"
+            },
+            "config": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerRuntimeConfigSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "coverage": {
+              "$ref": "#/$defs/BrokerDiagnosticsCoverage"
+            },
+            "ha": {
+              "$ref": "#/$defs/HaDiagnostics"
+            },
+            "observed_at_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "readiness": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerReadinessDiagnostics"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "recovery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RecoveryDiagnostics"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rocksdb": {
+              "$ref": "#/$defs/RocksDbMaintenanceDiagnostics"
+            },
+            "store_health": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StoreHealthDiagnostics"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tiered": {
+              "$ref": "#/$defs/TieredDispatchDiagnostics"
+            },
+            "warnings": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "broker_name",
+            "broker_id",
+            "coverage",
+            "ha",
+            "rocksdb",
+            "tiered",
+            "auth",
+            "warnings"
+          ],
+          "type": "object"
+        },
+        "BrokerReadinessDiagnostics": {
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "ready": {
+              "type": "boolean"
+            },
+            "registration_accepting": {
+              "type": "boolean"
+            },
+            "registration_configured": {
+              "type": "boolean"
+            },
+            "shutdown": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ready",
+            "active",
+            "shutdown",
+            "registration_accepting",
+            "registration_configured"
+          ],
+          "type": "object"
+        },
+        "BrokerRole": {
+          "enum": [
+            "ASYNC_MASTER",
+            "SYNC_MASTER",
+            "SLAVE",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "BrokerRuntimeConfigSummary": {
+          "properties": {
+            "broker_role": {
+              "$ref": "#/$defs/BrokerRole"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "store_type": {
+              "$ref": "#/$defs/BrokerStoreType"
+            },
+            "tiered_store_configured": {
+              "type": "boolean"
+            },
+            "timer_wheel_enabled": {
+              "type": "boolean"
+            },
+            "transient_store_pool_enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "generation",
+            "broker_role",
+            "store_type",
+            "timer_wheel_enabled",
+            "transient_store_pool_enabled",
+            "tiered_store_configured"
+          ],
+          "type": "object"
+        },
+        "BrokerStoreType": {
+          "enum": [
+            "LocalFile",
+            "RocksDB",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "HaAckPolicy": {
+          "enum": [
+            "all_in_sync_set",
+            "local_durable",
+            "replica_count"
+          ],
+          "type": "string"
+        },
+        "HaDecisionCode": {
+          "enum": [
+            "waiting_for_replica_progress",
+            "not_observed"
+          ],
+          "type": "string"
+        },
+        "HaDiagnostics": {
+          "properties": {
+            "ack_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HaAckPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "decision_code": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HaDecisionCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "master_epoch": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_replica_lag_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "required_ack_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HaRole"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "supported": {
+              "type": "boolean"
+            },
+            "sync_state_set_epoch": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "sync_state_set_size": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "supported"
+          ],
+          "type": "object"
+        },
+        "HaRole": {
+          "enum": [
+            "master",
+            "replica"
+          ],
+          "type": "string"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "RecoveryDiagnostics": {
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "failed_phase_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "fallback_phase_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "fallback_reason_present": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "index_files_rebuilt": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "index_files_removed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "invalid_messages": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "phase_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "recovered_messages": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "scanned_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "total_duration_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "truncated_files": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "available"
+          ],
+          "type": "object"
+        },
+        "RocksDbMaintenanceDiagnostics": {
+          "properties": {
+            "maintenance_running": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "message_maintenance_running": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "supported": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "supported"
+          ],
+          "type": "object"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        },
+        "StoreHealthDiagnostics": {
+          "properties": {
+            "dispatch_behind_bytes": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "ha_pending_oldest_wait_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ha_pending_request_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "last_flush_error": {
+              "type": "boolean"
+            },
+            "os_page_cache_busy": {
+              "type": "boolean"
+            },
+            "shutdown": {
+              "type": "boolean"
+            },
+            "sync_flush": {
+              "$ref": "#/$defs/SyncFlushDiagnostics"
+            },
+            "transient_store_pool_deficient": {
+              "type": "boolean"
+            },
+            "writeable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "writeable",
+            "last_flush_error",
+            "os_page_cache_busy",
+            "transient_store_pool_deficient",
+            "dispatch_behind_bytes",
+            "shutdown",
+            "ha_pending_request_count",
+            "ha_pending_oldest_wait_millis",
+            "sync_flush"
+          ],
+          "type": "object"
+        },
+        "SyncFlushDiagnostics": {
+          "properties": {
+            "oldest_wait_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "queue_depth": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "timeout_total": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "queue_depth",
+            "timeout_total",
+            "oldest_wait_millis"
+          ],
+          "type": "object"
+        },
+        "TieredDispatchDiagnostics": {
+          "properties": {
+            "configured": {
+              "type": "boolean"
+            },
+            "dispatch_ready": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "minimum_pinned_wal_segment": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "configured"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/BrokerDiagnosticsOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ broker diagnostics"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ broker configuration summary"
+    },
+    "description": "Get the fixed allowlisted configuration summary for one logical Broker.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_name": {
+          "type": "string"
+        },
+        "cluster": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "broker_name"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_broker_config_summary",
+    "outputSchema": {
+      "$defs": {
+        "BrokerConfigSummaryOutput": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/BrokerConfigSummaryRow"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cluster",
+            "broker_name",
+            "brokers"
+          ],
+          "type": "object"
+        },
+        "BrokerConfigSummaryRow": {
+          "properties": {
+            "broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "broker_name": {
+              "type": "string"
+            },
+            "flush_delay_offset_interval_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_client_event_count": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pull_message_thread_pool_nums": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "send_message_thread_pool_nums": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "broker_name",
+            "broker_id",
+            "generation"
+          ],
+          "type": "object"
+        },
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/BrokerConfigSummaryOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ broker configuration summary"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ broker log-filter state"
+    },
+    "description": "Get the temporary state of one allowlisted rocketmq_broker logger target.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_name": {
+          "type": "string"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "logger": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "broker_name",
+        "logger"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_broker_log_filter_state",
+    "outputSchema": {
+      "$defs": {
+        "BrokerLogFilterStateOutput": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/BrokerLogFilterStateRow"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "logger": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cluster",
+            "broker_name",
+            "logger",
+            "brokers"
+          ],
+          "type": "object"
+        },
+        "BrokerLogFilterStateRow": {
+          "properties": {
+            "active_operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "broker_name": {
+              "type": "string"
+            },
+            "expires_at_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "last_completed_operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "level": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "logger": {
+              "type": "string"
+            },
+            "state_schema_version": {
+              "type": "string"
+            },
+            "supported": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "broker_name",
+            "broker_id",
+            "state_schema_version",
+            "supported",
+            "logger"
+          ],
+          "type": "object"
+        },
+        "BrokerLogLevel": {
+          "enum": [
+            "INFO",
+            "DEBUG"
+          ],
+          "type": "string"
+        },
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/BrokerLogFilterStateOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ broker log-filter state"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ Proxy drain state"
+    },
+    "description": "Get bounded drain progress for one configured logical Proxy alias.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "proxy_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "proxy_name"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_proxy_drain_state",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ProxyDrainPending": {
+          "properties": {
+            "active_connections": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prepared_transactions": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "receipt_handles": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "remoting_channels": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rpc_in_flight": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sessions": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "telemetry_commands": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "telemetry_links": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "active_connections",
+            "sessions",
+            "receipt_handles",
+            "prepared_transactions",
+            "telemetry_links",
+            "remoting_channels",
+            "telemetry_commands",
+            "rpc_in_flight"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainPhase": {
+          "enum": [
+            "accepting",
+            "draining",
+            "drained"
+          ],
+          "type": "string"
+        },
+        "ProxyDrainStateOutput": {
+          "properties": {
+            "admission_open": {
+              "type": "boolean"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pending": {
+              "$ref": "#/$defs/ProxyDrainPending"
+            },
+            "phase": {
+              "$ref": "#/$defs/ProxyDrainPhase"
+            },
+            "proxy_name": {
+              "type": "string"
+            },
+            "readiness_published": {
+              "type": "boolean"
+            },
+            "routing_open": {
+              "type": "boolean"
+            },
+            "state_schema_version": {
+              "type": "string"
+            },
+            "zero_pending": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "proxy_name",
+            "state_schema_version",
+            "phase",
+            "admission_open",
+            "routing_open",
+            "readiness_published",
+            "zero_pending",
+            "pending"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ProxyDrainStateOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ Proxy drain state"
   },
   {
     "annotations": {
@@ -2181,6 +3747,8 @@ expression: contracts
         "QuerySource": {
           "enum": [
             "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
             "consumer_statistics",
             "consumer_connection",
             "producer_connection",
