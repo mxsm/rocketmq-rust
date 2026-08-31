@@ -104,6 +104,11 @@ use crate::core::topic::TopicQueryAdmin;
 use crate::core::topic::TopicQueue;
 use crate::core::topic::TopicRoute;
 use crate::core::topic::TopicSummary;
+use crate::core::topic_observation::QueryTopicConfigRequest;
+use crate::core::topic_observation::QueryTopicConfigResult;
+use crate::core::topic_observation::QueryTopicStatsRequest;
+use crate::core::topic_observation::QueryTopicStatsResult;
+use crate::core::topic_observation::TopicObservationQueryAdmin;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
@@ -1186,6 +1191,28 @@ impl ConfigStateQueryAdmin for ReadAdminSession {
         Box::pin(async move {
             self.ensure_open()?;
             crate::read_queries::query_consumer_group_config_state(&self.inner, request).await
+        })
+    }
+}
+
+impl TopicObservationQueryAdmin for ReadAdminSession {
+    fn query_topic_stats<'a>(
+        &'a mut self,
+        request: &'a QueryTopicStatsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicStatsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::topic_observation::query_topic_stats(&self.inner, request).await
+        })
+    }
+
+    fn query_topic_config<'a>(
+        &'a mut self,
+        request: &'a QueryTopicConfigRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicConfigResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::topic_observation::query_topic_config(&self.inner, request).await
         })
     }
 }

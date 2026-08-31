@@ -66,6 +66,9 @@ use crate::tools::executor::ToolExecutionError;
 use crate::tools::proxy_tools::ProxyDrainStateOutput;
 use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
+use crate::tools::topic_tools::TopicStatsQueueRow;
+
+mod topic_observation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCluster {
@@ -87,6 +90,14 @@ pub(crate) struct SessionConsumerLag {
     pub total_lag: i64,
     pub consume_tps: f64,
     pub inflight_total: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionTopicStats {
+    pub total_message_count: u64,
+    pub queue_count: usize,
+    pub queues: Vec<TopicStatsQueueRow>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +144,29 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         topic: &str,
     ) -> impl Future<Output = Result<SessionTopicRoute, ToolExecutionError>> + Send;
+
+    fn topic_stats(
+        &mut self,
+        _topic: &str,
+    ) -> impl Future<Output = Result<QueryPayload<SessionTopicStats>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Topic statistics are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn topic_config(
+        &mut self,
+        _topic: &str,
+    ) -> impl Future<Output = Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError>>
+           + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Topic configuration is unavailable".to_string(),
+            ))
+        }
+    }
 
     fn consumer_groups(
         &mut self,
@@ -439,6 +473,25 @@ impl AdminSession for AdminCoreSession {
             .collect::<Vec<_>>();
         queues.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
         Ok(SessionTopicRoute { brokers, queues })
+    }
+
+    async fn topic_stats(&mut self, topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.topic_stats(topic).await;
+        }
+        self.query_topic_stats_observation(topic).await
+    }
+
+    async fn topic_config(
+        &mut self,
+        topic: &str,
+    ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.topic_config(topic).await;
+        }
+        self.query_topic_config_observation(topic).await
     }
 
     async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {

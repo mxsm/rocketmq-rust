@@ -35,6 +35,7 @@ pub enum QuerySource {
     ConsumerConnection,
     ProducerConnection,
     TopicConfig,
+    TopicStats,
     ConsumerGroupConfig,
     SubscriptionGroups,
     TopicRoute,
@@ -111,6 +112,7 @@ impl SourceFailure {
             AdminSource::ConsumerConnection => QuerySource::ConsumerConnection,
             AdminSource::ProducerConnection => QuerySource::ProducerConnection,
             AdminSource::TopicConfig => QuerySource::TopicConfig,
+            AdminSource::TopicStats => QuerySource::TopicStats,
             AdminSource::ConsumerGroupConfig => QuerySource::ConsumerGroupConfig,
             AdminSource::SubscriptionGroups => QuerySource::SubscriptionGroups,
         };

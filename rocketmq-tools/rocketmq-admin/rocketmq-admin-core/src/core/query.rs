@@ -42,6 +42,7 @@ pub enum AdminQuerySource {
     ConsumerConnection,
     ProducerConnection,
     TopicConfig,
+    TopicStats,
     ConsumerGroupConfig,
     SubscriptionGroups,
 }

@@ -21,6 +21,12 @@ use serde::Serialize;
 use crate::model::contract::Page;
 use crate::model::contract::PageRequest;
 
+mod observation;
+
+pub use observation::GetTopicStatsArgs;
+pub use observation::GetTopicStatsOutput;
+pub use observation::TopicStatsQueueRow;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ListTopicsArgs {

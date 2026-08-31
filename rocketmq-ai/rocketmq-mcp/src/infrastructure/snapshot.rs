@@ -48,6 +48,7 @@ use crate::tools::consumer_tools::QueueLag;
 use crate::tools::executor::ToolExecutionError;
 use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
+use crate::tools::topic_tools::TopicStatsQueueRow;
 
 const CURSOR_PREFIX: &str = "rmq-s2-";
 const MAX_SNAPSHOT_ENTRIES: usize = 10_000;
@@ -141,6 +142,14 @@ impl RetainedSize for TopicRouteQueue {
     }
 }
 
+impl RetainedSize for TopicStatsQueueRow {
+    fn retained_heap_size(&self) -> usize {
+        self.broker_name
+            .retained_heap_size()
+            .saturating_add(self.last_update_at.retained_heap_size())
+    }
+}
+
 impl RetainedSize for QueueLag {
     fn retained_heap_size(&self) -> usize {
         self.topic
@@ -160,6 +169,12 @@ impl RetainedSize for SessionTopicRoute {
 }
 
 impl RetainedSize for SessionConsumerLag {
+    fn retained_heap_size(&self) -> usize {
+        self.queues.retained_heap_size()
+    }
+}
+
+impl RetainedSize for crate::adapter::admin_session::SessionTopicStats {
     fn retained_heap_size(&self) -> usize {
         self.queues.retained_heap_size()
     }
@@ -202,6 +217,7 @@ pub(crate) enum SnapshotKind {
     TopicInventory,
     ConsumerGroupInventory,
     TopicRoute,
+    TopicStats,
     ConsumerLag,
     ConsumerConnections,
     ProducerConnections,
@@ -213,6 +229,7 @@ impl SnapshotKind {
             Self::TopicInventory => "topic_inventory",
             Self::ConsumerGroupInventory => "consumer_group_inventory",
             Self::TopicRoute => "topic_route",
+            Self::TopicStats => "topic_stats",
             Self::ConsumerLag => "consumer_lag",
             Self::ConsumerConnections => "consumer_connections",
             Self::ProducerConnections => "producer_connections",

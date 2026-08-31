@@ -164,6 +164,9 @@ fn normalize_source_failure(value: &Value) -> Option<Value> {
             | "producer_connection"
             | "subscription_groups"
             | "topic_route"
+            | "topic_config"
+            | "consumer_group_config"
+            | "topic_stats"
     ) || !matches!(
         code,
         "source_unavailable" | "timeout" | "permission_denied" | "not_found" | "rate_limited" | "invalid_response"
@@ -350,6 +353,50 @@ mod tests {
         assert!(!serialized.contains("10.0.0.1"));
         assert!(!serialized.contains("secret backend body"));
         assert!(!serialized.contains("raw_error"));
+    }
+
+    #[test]
+    fn config_and_topic_stats_sources_keep_only_closed_failure_metadata() {
+        let output = apply(json!({
+            "partial": true,
+            "warnings": ["source_failures_present"],
+            "source_failures": [
+                {
+                    "source": "topic_config",
+                    "code": "timeout",
+                    "retryable": true,
+                    "logical_target": "broker-a",
+                    "backend_text": "must not escape"
+                },
+                {
+                    "source": "consumer_group_config",
+                    "code": "not_found",
+                    "retryable": false,
+                    "logical_target": "broker-b",
+                    "address": "10.0.0.1:10911"
+                },
+                {
+                    "source": "topic_stats",
+                    "code": "invalid_response",
+                    "retryable": false,
+                    "logical_target": "broker-c",
+                    "attributes": { "secret": "value" }
+                }
+            ],
+            "data": {}
+        }))
+        .unwrap();
+
+        let failures = output["source_failures"].as_array().unwrap();
+        assert_eq!(failures.len(), 3);
+        assert_eq!(failures[0]["source"], "consumer_group_config");
+        assert_eq!(failures[1]["source"], "topic_config");
+        assert_eq!(failures[2]["source"], "topic_stats");
+        let serialized = output.to_string();
+        assert!(!serialized.contains("backend_text"));
+        assert!(!serialized.contains("address"));
+        assert!(!serialized.contains("attributes"));
+        assert!(!serialized.contains("must not escape"));
     }
 
     #[test]

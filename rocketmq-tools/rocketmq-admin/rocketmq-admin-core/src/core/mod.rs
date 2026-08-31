@@ -40,6 +40,7 @@ pub mod release_checkpoint;
 pub mod security;
 pub mod static_topic;
 pub mod topic;
+pub mod topic_observation;
 
 pub use self::error::AdminError;
 pub use self::error::AdminResult;
