@@ -165,7 +165,7 @@ uuid = { version = "1.23.3", features = [
 futures = "0.3"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 
-cheetah-string = { version = "3.0.0", features = ["serde", "bytes", "simd"] }
+cheetah-string = { version = "3.1.0", features = ["serde", "bytes", "simd"] }
 
 flate2   = "1.1.9"
 dashmap  = "6.2.1"
