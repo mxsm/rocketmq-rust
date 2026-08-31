@@ -2,112 +2,197 @@
 title: "Error Architecture Contribution Guide"
 permalink: /docs/error-contribution-guide/
 excerpt: "How to add, map, test, and review typed RocketMQ Rust errors."
-last_modified_at: 2026-07-04T00:00:00+08:00
+last_modified_at: 2026-08-31T00:00:00+08:00
 toc: true
 classes: wide
 ---
 
 # Error Architecture Contribution Guide
 
-This guide is the contribution contract for RocketMQ Rust error changes. The
-current direction is no-compatibility typed errors: new code must use the
-central `RocketMQError` architecture instead of adding legacy aliases or local
-string-only mappings.
+This guide separates rules effective in the current repository from the target
+opaque canonical architecture. The [Error Architecture Redesign
+ADR](07-error-architecture-adr.md) defines the target, and the [Error
+Architecture Inventory](07-error-inventory.md) pins the baseline and records
+pending migration evidence. Naming a target type here does not make a future
+API available to current callers.
 
-## Core Rules
+## Effective-now rules
 
-1. Use `rocketmq_error::RocketMQError` and `RocketMQResult<T>` for library
-   error contracts.
-2. Do not reintroduce `RocketmqError`, `RocketMqError`,
-   `LegacyRocketMQResult`, `LegacyResult`, or `rocketmq_error::Result`.
-3. Keep `anyhow` at application, binary, test, and one-shot tool boundaries.
-   Core library crates such as `rocketmq-error` and `rocketmq-common` must not
-   expose public `anyhow::Result` contracts.
-4. Add or reuse an `ErrorKind` and `ErrorSpec` entry before exposing a new
-   cross-boundary error.
-5. Boundary crates must map from `ErrorSpec` primitives instead of parsing
-   display text.
-6. Sensitive fields such as secret keys, tokens, signatures, and passwords must
-   be redacted in `Display`, `Debug`, logs, and exported diagnostics.
+At the pinned baseline, the effective central API is the public mega
+`RocketMQError` enum and the existing `ErrorKind`, `ErrorSpec`,
+`ALL_ERROR_SPECS`, `DomainError`, `ErrorContext`, `BoundaryErrorView`, and
+shared `Sensitive` support. Client callback errors are typed and `StoreError`
+is an opaque domain facade. Work in a crate must follow that crate's existing
+public API until its migration wave lands.
 
-## Where Changes Belong
+1. Preserve typed sources for I/O, serde, storage, raft, transport, and runtime
+   failures. Do not replace a source with rendered text.
+2. Keep public leaf error shapes frozen. Do not add consumer-facing enum
+   variants, constructors, or exhaustive matching surfaces merely to represent
+   a boundary condition.
+3. Treat arbitrary boundary remarks as bounded presentation text only. They
+   are not stable codes, public messages, retry signals, or catalog entries;
+   caller-provided strings must not become authoritative protocol meaning.
+4. Treat `Display`, `Debug`, and `source().to_string()` output as diagnostic
+   presentation, never as data for classification, mapping, retry, persistence,
+   or comparison.
+5. Use the existing typed error contracts and local boundary mappings without
+   widening public `anyhow` contracts. The baseline has no legacy
+   `RocketmqError`/`Legacy*` aliases and no public anyhow `Result` alias or
+   callers; do not reintroduce either.
+6. Redact secret keys, tokens, signatures, passwords, authorization values,
+   and equivalent sensitive data in public output, diagnostics, logs, traces,
+   and exported reports. Use the repository's existing shared redaction
+   support where available.
+
+These rules apply now, including while a private migration bridge is present.
+A bridge must remain private and temporary; it must not become a public,
+deprecated, feature-gated, or long-lived dual API.
+
+## Future target, not current imports
+
+When an owning migration lands, it follows these five layers exactly:
+
+1. **Outcome/Decision/Rejection:** public control-flow outcomes without leaf
+   representation; retry is not inferred from rendered text.
+2. **ContractViolation:** caller, protocol, and invariant violations kept
+   distinct from operational failures.
+3. **Private leaf `Error`:** domain implementation errors with typed source
+   chains and private representation.
+4. **Domain operational facade:** a narrow domain facade that hides private
+   leaves while retaining source and policy information.
+5. **Opaque canonical `Error` with safe projections:** one canonical value with
+   private representation, projected through `PublicErrorView` and
+   `DiagnosticView`.
+
+`ErrorCatalog`, boundary adapters, and presentation/observability are
+supporting mechanisms, not additional layers. The declarative catalog is the
+sole owner of stable dotted code, `CanonicalCondition`, fixed public message,
+severity, `RecoveryHint`, and projection metadata.
+
+Catalog codes use lowercase dotted stable domain semantics, for example
+`storage.commit_log.corrupt_record`. Never include a dynamic topic, group, path,
+broker address, or other runtime value in a code. `CanonicalCondition` is
+protocol-independent. Domain facades and private leaf errors cannot override
+the catalog code, condition, severity, `RecoveryHint`, or projection metadata.
+
+Context visibility is explicit: `Public` is safe for the public view,
+`Diagnostic` is restricted to controlled diagnostics and operational telemetry,
+and `SecretPresenceOnly` records only that secret-bearing data was present.
+`PublicErrorView` contains only catalog-approved identity, fixed public message,
+safe public context, and boundary-safe projection fields. `DiagnosticView` may
+add redacted context and typed source information according to its visibility
+policy.
+
+`RetryDecision` remains separate from canonical error identity. It uses
+operation idempotency, operation stage, and remaining budget together with the
+catalog's `RecoveryHint`; it never uses a response message or source string as
+the decision.
+
+These are target concepts, not instructions to add future imports to an
+unmigrated crate. A target API becomes usable only in the owning migration,
+with its inventory evidence and focused tests.
+
+## Where changes belong
 
 | Change type | Owner |
 | --- | --- |
-| New stable kind, code, severity, retry class, or redaction contract | `rocketmq-error` |
-| Remoting response code and remark conversion | `rocketmq-remoting::error_response` |
-| gRPC payload/status conversion | `rocketmq-proxy::status` |
-| Broker or NameServer external response conversion | Processor code using `rocketmq_remoting::error_response` |
+| Current leaf/source type and source preservation | Owning domain crate |
+| Future canonical identity, catalog policy, redaction, or recovery contract | `rocketmq-error` |
+| Remoting response code and safe remark conversion | Remoting boundary adapter |
+| gRPC payload/status conversion | Proxy gRPC boundary adapter |
+| Broker or NameServer external response conversion | Processor code using the remoting adapter |
 | Dashboard or HTTP conversion | Dashboard boundary error wrapper |
 | CLI display and exit behavior | CLI/tool boundary |
-| Domain-local storage, auth, controller, or client source preservation | Owning crate, then convert to `RocketMQError` at the boundary |
+| Domain-local storage, auth, controller, or client source preservation | Owning crate, then canonical conversion during migration |
 
-## Adding A New Error
+Do not create a second semantic catalog in a boundary crate. During migration,
+keep an existing local mapper buildable while removing new display-text and
+arbitrary-remark decisions. Preserve remoting numeric codes and headers,
+gRPC/HTTP external contracts, wire semantics, and persisted layouts with
+focused regression evidence when affected.
 
-Use this sequence for any new cross-boundary error:
+## Adding a new error
 
-1. Add or reuse an `ErrorKind`.
-2. Add a stable `ErrorCode` and `ErrorSpec` entry.
-3. Define retry, severity, observability, remoting, gRPC, HTTP, and CLI
-   primitive metadata.
-4. Add a typed `RocketMQError` variant or domain error conversion.
-5. Update the relevant boundary adapter if the default metadata is not enough.
-6. Add focused tests for the new kind and the affected boundary.
-7. Run the error guard and the relevant Cargo validation.
+For a current API change:
 
-```powershell
-python scripts/error_architecture_guard.py
-cargo fmt --all
-cargo test -p rocketmq-error
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
-```
+1. Reuse the owning crate's existing typed shape where possible.
+2. Preserve the typed source and record deliberate redaction.
+3. Keep boundary status and remark handling local until the canonical adapter
+   migration lands; do not add a new semantic mapping table.
+4. Add focused tests for source preservation, redaction, and boundary output.
+5. Add or update the inventory row. Mark target fields pending when catalog
+   migration has not happened; itemized classification remains a follow-up.
 
-## Boundary Mapping Pattern
+For a target migration, the owning change assigns the catalog's stable dotted
+code, `CanonicalCondition`, fixed public message, severity, `RecoveryHint`,
+projection metadata, context visibility, and source policy. It also migrates
+both producers and consumers before removing its private bridge. These are
+implementation requirements for that wave, not current API imports.
 
-Boundary code should look up the spec and convert primitive metadata into local
-wire types.
+## Boundary and redaction rules
 
-```rust
-use rocketmq_error::RocketMQError;
-use rocketmq_remoting::error_response;
+Future boundary adapters project catalog metadata into local protocol
+primitives and safe views. Until the adapter exists, preserve the current
+mapper without parsing display text or making an arbitrary remark authoritative.
 
-fn to_response(error: &RocketMQError, opaque: i32) -> RemotingCommand {
-    error_response::command_from_error_with_opaque(error, opaque)
-}
-```
+Public output uses only `PublicErrorView`; controlled diagnostics may use
+`DiagnosticView` with visibility checks and redaction. `SecretPresenceOnly`
+never carries a secret value. Typed source chains may be retained for
+diagnostics, but their rendered strings are not copied into stable fields.
 
-Do not add new mapping tables beside the boundary adapters unless the adapter
-itself is being extended.
+## Dependency-driven wave rule
 
-## Redaction Pattern
+The work is organized by producer/consumer dependency, not by a fixed PR list.
+A wave closes only after its producer and every known consumer migrate, focused
+tests and compatibility regression evidence pass, and the private bridge for
+that wave is removed. No bridge may become a V1/V2 API, deprecated shim,
+compatibility feature, or long-lived dual path.
 
-Prefer `Sensitive<T>` or a small local redaction helper. Never format secret
-material directly.
+The dependency order is: baseline and freezes; primitive layers, views, and
+catalog; domain leaf producers and facades; opaque canonical conversion;
+boundary projections and client retry decisions; remaining application
+consumers; bridge and local-table removal; then evidence and inventory update.
+Wave 0B specifically revalidates every inventory row and every current consumer
+before a row's ownership or status changes.
 
-```rust
-use rocketmq_error::Sensitive;
+## Lightweight governance and validation
 
-let secret = Sensitive::new(secret_key);
-tracing::warn!(secret = %secret, "authentication failed");
-```
+For implementation changes, run focused tests, the current error guard when
+applicable, targeted `rg` scans, `git diff --check`, relative Markdown link
+checks, and protocol/persistence regression checks when those contracts are
+affected. Rust changes use the root repository profile: package-scoped
+`cargo fmt -p <package> -- --check` and workspace Clippy with warnings denied.
+Documentation-only changes do not require Cargo validation.
 
-For custom `Debug` implementations, sensitive fields must render as
-`<redacted>` or route through an equivalent helper.
+This guide intentionally does not require content fingerprints, file hashes,
+complex AST gates, custom Clippy policy, or a heavy platform. The inventory's
+pinned Git commit identifies its source snapshot; it is not a content
+fingerprint requirement.
 
-## Review Checklist
+## Review checklist
 
-- Does the change add a typed error instead of a string-only internal error?
-- Does the new error have a stable `ErrorKind` and `ErrorSpec`?
-- Do remoting, gRPC, HTTP, CLI, retry, severity, and observability mappings
-  come from the central spec?
-- Are source errors preserved where they help debugging?
-- Are credentials, tokens, signatures, passwords, and authorization values
-  redacted?
-- Does the change avoid public `anyhow` in library APIs?
-- Did `python scripts/error_architecture_guard.py` pass?
-- Did the affected crate tests and required clippy command pass?
+- Is the change following the current crate API rather than assuming a future
+  canonical type is importable?
+- Are Outcome/Decision/Rejection, ContractViolation, private leaf `Error`,
+  domain facade, and opaque canonical `Error` kept distinct where migrated?
+- Are public leaf errors, arbitrary remarks, and source stringification kept
+  out of stable semantic contracts?
+- Does the declarative catalog remain the sole owner of dotted code,
+  `CanonicalCondition`, fixed public message, severity, `RecoveryHint`, and
+  projection metadata?
+- Do `PublicErrorView`, `DiagnosticView`, and context visibility prevent
+  sensitive data from crossing the wrong boundary?
+- Is `RetryDecision` based on idempotency, stage, and budget separately from
+  error identity?
+- Are remoting, gRPC, HTTP, wire, and persistence contracts backed by
+  regression evidence when affected?
+- Are producer and consumer migrations complete before removing the private
+  bridge?
+- Were focused tests, applicable guard, targeted scans, diff checks, and link
+  checks run according to the change scope?
 
-## Useful References
+## Useful references
 
 - [Error Architecture Redesign ADR](07-error-architecture-adr.md)
 - [Error Architecture Inventory](07-error-inventory.md)
