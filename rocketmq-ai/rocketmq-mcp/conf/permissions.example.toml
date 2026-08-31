@@ -8,6 +8,7 @@ allow_tools = [
   "rocketmq_list_consumer_groups",
   "rocketmq_get_consumer_lag",
   "rocketmq_describe_broker",
+  "rocketmq_get_broker_config_summary",
 ]
 deny_tools = ["*"]
 
@@ -16,6 +17,9 @@ include = ["read_only"]
 allowed_clusters = ["*"]
 allow_tools = [
   "rocketmq_diagnose_consumer_lag",
+  "rocketmq_get_broker_diagnostics",
+  "rocketmq_get_broker_log_filter_state",
+  "rocketmq_get_proxy_drain_state",
 ]
 
 [roles.operator]

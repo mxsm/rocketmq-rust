@@ -69,6 +69,12 @@ default = true
 # secret_key_env = "ROCKETMQ_MCP_RMQ_SECRET_KEY"
 # security_token_env = "ROCKETMQ_MCP_RMQ_SECURITY_TOKEN"
 
+[[clusters.proxies]]
+name = "proxy-local"
+# Internal endpoint: never exposed through Tool schemas, output, logs, audit,
+# cache keys, or configuration Debug formatting.
+endpoint = "127.0.0.1:8081"
+
 [security]
 profile = "diagnose"
 allow_change_planning = false

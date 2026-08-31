@@ -19,8 +19,10 @@ pub mod catalog;
 #[cfg(feature = "change-planning")]
 pub mod change_tools;
 pub mod cluster_tools;
+pub mod config_tools;
 pub mod consumer_tools;
 pub mod diagnosis_tools;
 pub mod executor;
 pub mod output_policy;
+pub mod proxy_tools;
 pub mod topic_tools;

@@ -345,8 +345,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         self.telemetry
             .record_nameserver_failover(TransportNameServerFailoverReason::Draining);
         let client = self.clone();
-        let task_name = format!("rocketmq.transport.nameserver-drain.{identity}");
-        let spawned = self.spawn_worker_task(task_name, async move {
+        let spawned = self.spawn_worker_task("rocketmq.transport.nameserver-drain", async move {
             let _drain_guard = drain_guard;
             let report = session.drain_and_close(drain_timeout).await;
             if !client.endpoint_state.is_current(&lease) {
@@ -382,7 +381,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     }
                 }
             }
-            debug!(%addr, "Cached nameserver is unhealthy, selecting new one");
+            debug!("Cached nameserver is unhealthy, selecting new one");
             self.telemetry
                 .record_nameserver_failover(TransportNameServerFailoverReason::Unhealthy);
         }
@@ -432,8 +431,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         });
         if candidates.is_empty() {
             error!(
-                configured = ?identities,
-                available = ?state.available(),
+                configured = identities.len(),
+                available = state.available().len(),
                 "Failed to select healthy nameserver"
             );
             return Ok(None);
@@ -449,7 +448,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 continue;
             };
             info!(
-                selected = %identity,
                 p99 = ?self.nameserver_health.p99(&identity, &lease),
                 errors = self.nameserver_health.error_count(&identity, &lease),
                 "Selected nameserver"
@@ -523,9 +521,9 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         for (identity, lease, is_available) in results {
             if lease.is_some_and(|lease| self.endpoint_state.update_availability(&lease, &identity, is_available)) {
                 if is_available {
-                    info!(%identity, "Nameserver is now available");
+                    info!("Nameserver is now available");
                 } else {
-                    warn!(%identity, "Nameserver is now unavailable");
+                    warn!("Nameserver is now unavailable");
                 }
             }
         }

@@ -194,6 +194,12 @@ impl Guard {
             _cluster_permit: None,
         };
 
+        if requires_explicit_cluster(tool_name) && guarded.cluster.is_none() {
+            let error = GuardError::InvalidArgument("cluster must not be empty".to_string());
+            guarded.record_failure(error.to_string());
+            return Err(error);
+        }
+
         if let Err(error) = self.validate_cluster(context, arguments) {
             guarded.record_failure(error.to_string());
             return Err(error);
@@ -487,6 +493,16 @@ fn extract_cluster(arguments: &JsonObject) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn requires_explicit_cluster(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "rocketmq_get_broker_diagnostics"
+            | "rocketmq_get_broker_config_summary"
+            | "rocketmq_get_broker_log_filter_state"
+            | "rocketmq_get_proxy_drain_state"
+    )
+}
+
 fn hash_arguments(arguments: &JsonObject) -> String {
     let bytes = serde_json::to_vec(arguments).unwrap_or_default();
     let digest = Sha256::digest(bytes);
@@ -521,6 +537,23 @@ mod tests {
         let records = guard.audit_log().records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    #[test]
+    fn exact_broker_and_proxy_tools_reject_blank_cluster_before_authorization() {
+        let guard = test_guard("diagnose", false, 60);
+        for tool in [
+            "rocketmq_get_broker_diagnostics",
+            "rocketmq_get_broker_config_summary",
+            "rocketmq_get_broker_log_filter_state",
+            "rocketmq_get_proxy_drain_state",
+        ] {
+            let arguments = serde_json::json!({ "cluster": "   " }).as_object().unwrap().clone();
+            let error = guard
+                .begin_tool_call(&guard.local_request_context(), tool, RiskLevel::ReadOnly, &arguments)
+                .unwrap_err();
+            assert!(matches!(error, GuardError::InvalidArgument(_)), "tool={tool}");
+        }
     }
 
     #[test]
@@ -721,6 +754,7 @@ mod tests {
                 rocketmq_cluster_name: None,
                 tenant: None,
                 credentials: None,
+                proxies: Vec::new(),
             }],
         )
         .unwrap()
@@ -751,6 +785,7 @@ mod tests {
                 rocketmq_cluster_name: None,
                 tenant: Some(tenant.to_string()),
                 credentials: None,
+                proxies: Vec::new(),
             }],
         )
         .unwrap()

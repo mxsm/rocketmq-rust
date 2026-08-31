@@ -157,6 +157,8 @@ fn normalize_source_failure(value: &Value) -> Option<Value> {
     if !matches!(
         source,
         "broker_runtime"
+            | "broker_config"
+            | "broker_log_filter"
             | "consumer_statistics"
             | "consumer_connection"
             | "producer_connection"
@@ -241,6 +243,12 @@ fn is_internal_topology_key(key: &str) -> bool {
             | "namesrvaddrs"
             | "brokeraddr"
             | "brokeraddrs"
+            | "proxyaddr"
+            | "proxyaddrs"
+            | "proxyendpoint"
+            | "proxyendpoints"
+            | "endpoint"
+            | "endpoints"
             | "clientip"
             | "clientaddr"
             | "remoteaddr"
@@ -266,7 +274,9 @@ mod tests {
                     "broker_name": "broker-a",
                     "broker_addr": "127.0.0.1:10911",
                     "broker_addrs": {"0": "127.0.0.1:10911"},
-                    "client_ip": "127.0.0.1"
+                    "client_ip": "127.0.0.1",
+                    "proxy_endpoint": "private-proxy.internal:8081",
+                    "endpoint": "private-proxy.internal:8081"
                 }]
             }
         }))
@@ -276,6 +286,7 @@ mod tests {
         assert!(!serialized.contains("namesrv_addr"));
         assert!(!serialized.contains("broker_addr"));
         assert!(!serialized.contains("client_ip"));
+        assert!(!serialized.contains("private-proxy.internal"));
         assert!(serialized.contains("broker-a"));
     }
 

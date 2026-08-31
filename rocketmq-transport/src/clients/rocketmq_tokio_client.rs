@@ -397,7 +397,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             .filter_map(|address| match NameServerEndpoint::legacy(address.clone()) {
                 Ok(endpoint) => Some(endpoint),
                 Err(error) => {
-                    warn!(%address, ?error, "ignored invalid legacy NameServer endpoint");
+                    let _ = error;
+                    warn!("ignored invalid legacy NameServer endpoint");
                     None
                 }
             })
@@ -452,10 +453,11 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     fn scan_idle_connections(&self) {
         let idle_threshold = self.tokio_client_config.maintenance.idle_scan_interval;
         let now_millis = current_millis();
-        for addr in self.connection_registry.remove_unhealthy_or_idle(|client| {
+        let removed = self.connection_registry.remove_unhealthy_or_idle(|client| {
             idle_threshold.is_some_and(|threshold| client.idle_for_at(now_millis) >= threshold)
-        }) {
-            warn!("[SCAN] Removed idle/unhealthy connection: {}", addr);
+        });
+        if !removed.is_empty() {
+            warn!(removed = removed.len(), "[SCAN] Removed idle/unhealthy connections");
         }
     }
 }

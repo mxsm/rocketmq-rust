@@ -29,6 +29,8 @@ pub const MAX_SOURCE_FAILURES: usize = 16;
 #[serde(rename_all = "snake_case")]
 pub enum QuerySource {
     BrokerRuntime,
+    BrokerConfig,
+    BrokerLogFilter,
     ConsumerStatistics,
     ConsumerConnection,
     ProducerConnection,
@@ -101,6 +103,8 @@ impl SourceFailure {
 
         let source = match failure.source() {
             AdminSource::BrokerRuntime => QuerySource::BrokerRuntime,
+            AdminSource::BrokerConfig => QuerySource::BrokerConfig,
+            AdminSource::BrokerLogFilter => QuerySource::BrokerLogFilter,
             AdminSource::ConsumerStatistics => QuerySource::ConsumerStatistics,
             AdminSource::ConsumerConnection => QuerySource::ConsumerConnection,
             AdminSource::ProducerConnection => QuerySource::ProducerConnection,

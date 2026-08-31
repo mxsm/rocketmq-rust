@@ -50,16 +50,24 @@ use crate::model::contract::SCHEMA_VERSION;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::service::diagnosis_collector::ConsumerLagEvidence;
 use crate::service::diagnosis_rules;
+use crate::tools::broker_tools::BrokerDiagnosticsArgs;
+use crate::tools::broker_tools::BrokerDiagnosticsOutput;
 use crate::tools::broker_tools::DescribeBrokerArgs;
 use crate::tools::broker_tools::DescribeBrokerOutput;
 use crate::tools::cluster_tools::ClusterOverviewArgs;
 use crate::tools::cluster_tools::ClusterOverviewOutput;
+use crate::tools::config_tools::BrokerConfigSummaryArgs;
+use crate::tools::config_tools::BrokerConfigSummaryOutput;
+use crate::tools::config_tools::BrokerLogFilterStateArgs;
+use crate::tools::config_tools::BrokerLogFilterStateOutput;
 use crate::tools::consumer_tools::ListConsumerGroupsArgs;
 use crate::tools::consumer_tools::ListConsumerGroupsOutput;
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
 use crate::tools::executor::ToolExecutionError;
+use crate::tools::proxy_tools::ProxyDrainStateArgs;
+use crate::tools::proxy_tools::ProxyDrainStateOutput;
 use crate::tools::topic_tools::DescribeTopicArgs;
 use crate::tools::topic_tools::DescribeTopicOutput;
 use crate::tools::topic_tools::ListTopicsArgs;
@@ -160,6 +168,50 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         args: DescribeBrokerArgs,
     ) -> impl Future<Output = Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError>> + Send;
+
+    fn broker_diagnostics(
+        &self,
+        _args: BrokerDiagnosticsArgs,
+    ) -> impl Future<Output = Result<QueryResult<BrokerDiagnosticsOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "exact Broker diagnostics are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn broker_config_summary(
+        &self,
+        _args: BrokerConfigSummaryArgs,
+    ) -> impl Future<Output = Result<QueryResult<BrokerConfigSummaryOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "exact Broker configuration is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn broker_log_filter_state(
+        &self,
+        _args: BrokerLogFilterStateArgs,
+    ) -> impl Future<Output = Result<QueryResult<BrokerLogFilterStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "exact Broker log-filter state is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn proxy_drain_state(
+        &self,
+        _args: ProxyDrainStateArgs,
+    ) -> impl Future<Output = Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Proxy drain state is unavailable".to_string(),
+            ))
+        }
+    }
 
     fn diagnose_consumer_lag(
         &self,
@@ -543,6 +595,126 @@ where
             .await
     }
 
+    pub(crate) async fn broker_diagnostics(
+        &self,
+        mut args: BrokerDiagnosticsArgs,
+    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let key = self.cache_key(
+            "broker_diagnostics",
+            &cluster.name,
+            &format!("broker={}", args.broker_name),
+        );
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.broker_diagnostics(&args.broker_name).await })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
+    pub(crate) async fn broker_config_summary(
+        &self,
+        mut args: BrokerConfigSummaryArgs,
+    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let key = self.cache_key(
+            "broker_config_summary",
+            &cluster.name,
+            &format!("broker={}", args.broker_name),
+        );
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.broker_config_summary(&args.broker_name).await })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
+    pub(crate) async fn broker_log_filter_state(
+        &self,
+        mut args: BrokerLogFilterStateArgs,
+    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
+        args.logger = normalized_broker_logger(&args.logger)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let key = self.cache_key(
+            "broker_log_filter_state",
+            &cluster.name,
+            &format!("broker={}|logger={}", args.broker_name, args.logger),
+        );
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.broker_log_filter_state(&args.broker_name, &args.logger).await })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
+    pub(crate) async fn proxy_drain_state(
+        &self,
+        mut args: ProxyDrainStateArgs,
+    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError> {
+        args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
+        args.proxy_name = normalized_logical_identifier("proxy_name", &args.proxy_name)?;
+        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let proxy_endpoint = self
+            .resolve_proxy_endpoint(&cluster.name, &args.proxy_name)?
+            .to_string();
+        let key = self.cache_key(
+            "proxy_drain_state",
+            &cluster.name,
+            &format!("proxy={}", args.proxy_name),
+        );
+        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        self.cache
+            .get_or_try_init_cancellable(
+                key,
+                ttl,
+                &self.control.cancellation,
+                || ToolExecutionError::Cancelled,
+                || async {
+                    self.run_workflow(cluster, move |session, _| {
+                        Box::pin(async move { session.proxy_drain_state(&args.proxy_name, &proxy_endpoint).await })
+                    })
+                    .await
+                },
+            )
+            .await
+    }
+
     pub(crate) async fn diagnose_consumer_lag(
         &self,
         mut args: DiagnoseConsumerLagArgs,
@@ -882,6 +1054,30 @@ where
         })
     }
 
+    fn resolve_required_cluster(&self, cluster: &str) -> Result<ResolvedCluster, ToolExecutionError> {
+        if cluster.trim().is_empty() {
+            return Err(ToolExecutionError::InvalidArguments(
+                "cluster must not be empty".to_string(),
+            ));
+        }
+        self.resolve_cluster(Some(cluster))
+    }
+
+    fn resolve_proxy_endpoint<'a>(
+        &'a self,
+        cluster_name: &str,
+        proxy_name: &str,
+    ) -> Result<&'a str, ToolExecutionError> {
+        self.config
+            .clusters
+            .iter()
+            .find(|cluster| cluster.name == cluster_name)
+            .and_then(|cluster| cluster.proxy_endpoint(proxy_name))
+            .ok_or_else(|| {
+                ToolExecutionError::InvalidArguments(format!("proxy not found in cluster {cluster_name}: {proxy_name}"))
+            })
+    }
+
     fn cache_key(&self, kind: &str, cluster: &str, parameters: &str) -> String {
         format!(
             "{SCHEMA_VERSION}|{}|{kind}|cluster={}|{parameters}",
@@ -956,6 +1152,34 @@ where
         args: DescribeBrokerArgs,
     ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
         QueryFacade::describe_broker(self, args).await
+    }
+
+    async fn broker_diagnostics(
+        &self,
+        args: BrokerDiagnosticsArgs,
+    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolExecutionError> {
+        QueryFacade::broker_diagnostics(self, args).await
+    }
+
+    async fn broker_config_summary(
+        &self,
+        args: BrokerConfigSummaryArgs,
+    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolExecutionError> {
+        QueryFacade::broker_config_summary(self, args).await
+    }
+
+    async fn broker_log_filter_state(
+        &self,
+        args: BrokerLogFilterStateArgs,
+    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolExecutionError> {
+        QueryFacade::broker_log_filter_state(self, args).await
+    }
+
+    async fn proxy_drain_state(
+        &self,
+        args: ProxyDrainStateArgs,
+    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError> {
+        QueryFacade::proxy_drain_state(self, args).await
     }
 
     async fn diagnose_consumer_lag(
@@ -1186,6 +1410,53 @@ fn normalized_identifier(field: &str, value: &str) -> Result<String, ToolExecuti
     Ok(value.to_string())
 }
 
+fn normalized_logical_identifier(field: &str, value: &str) -> Result<String, ToolExecutionError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 100
+        || value.parse::<std::net::IpAddr>().is_ok()
+        || value.parse::<std::net::SocketAddr>().is_ok()
+        || value.contains([':', '/', '\\', '@', '=', '&', '?'])
+        || value.chars().any(char::is_control)
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        Err(ToolExecutionError::InvalidArguments(format!(
+            "{field} must be a logical identifier of at most 100 bytes"
+        )))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn normalized_broker_logger(logger: &str) -> Result<String, ToolExecutionError> {
+    if logger != logger.trim()
+        || logger.is_empty()
+        || logger.len() > 128
+        || !logger
+            .strip_prefix("rocketmq_broker::")
+            .is_some_and(valid_rust_module_path)
+    {
+        Err(ToolExecutionError::InvalidArguments(
+            "logger must be an allowlisted rocketmq_broker:: target of at most 128 bytes".to_string(),
+        ))
+    } else {
+        Ok(logger.to_string())
+    }
+}
+
+fn valid_rust_module_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.split("::").all(|segment| {
+            let mut characters = segment.chars();
+            characters
+                .next()
+                .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+                && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -1215,6 +1486,11 @@ mod tests {
         starts: AtomicUsize,
         shutdowns: AtomicUsize,
         broker_queries: AtomicUsize,
+        broker_diagnostics_queries: AtomicUsize,
+        broker_config_queries: AtomicUsize,
+        broker_log_filter_queries: AtomicUsize,
+        proxy_drain_queries: AtomicUsize,
+        proxy_endpoint_mismatches: AtomicUsize,
         topic_inventory_queries: AtomicUsize,
         consumer_group_queries: AtomicUsize,
         consumer_group_inventory_queries: AtomicUsize,
@@ -1276,6 +1552,7 @@ mod tests {
         failed_selected_broker: bool,
         overflow_failed_selected_broker: bool,
         partial_sources: bool,
+        fail_exact_read: bool,
         hang_broker_query: bool,
         hang_topic_inventory: bool,
         topic_inventory_gate: Option<Arc<TopicInventoryGate>>,
@@ -1302,6 +1579,7 @@ mod tests {
                 failed_selected_broker: self.failed_selected_broker,
                 overflow_failed_selected_broker: self.overflow_failed_selected_broker,
                 partial_sources: self.partial_sources,
+                fail_exact_read: self.fail_exact_read,
                 hang_broker_query: self.hang_broker_query,
                 hang_topic_inventory: self.hang_topic_inventory,
                 topic_inventory_gate: self.topic_inventory_gate.clone(),
@@ -1325,6 +1603,7 @@ mod tests {
         failed_selected_broker: bool,
         overflow_failed_selected_broker: bool,
         partial_sources: bool,
+        fail_exact_read: bool,
         hang_broker_query: bool,
         hang_topic_inventory: bool,
         topic_inventory_gate: Option<Arc<TopicInventoryGate>>,
@@ -1517,6 +1796,115 @@ mod tests {
             }
         }
 
+        async fn broker_diagnostics(
+            &mut self,
+            broker_name: &str,
+        ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+            self.counters.broker_diagnostics_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_broker_query {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("exact read failed"));
+            }
+            let output = BrokerDiagnosticsOutput {
+                cluster: self.cluster.name.clone(),
+                broker_name: broker_name.to_string(),
+                diagnostics_schema_version: "1".to_string(),
+                observed_at_millis: 1,
+                brokers: Vec::new(),
+                unavailable_brokers: usize::from(self.partial_sources),
+            };
+            Ok(if self.partial_sources {
+                partial_payload(output, QuerySource::BrokerRuntime, broker_name)
+            } else {
+                QueryPayload::complete(output)
+            })
+        }
+
+        async fn broker_config_summary(
+            &mut self,
+            broker_name: &str,
+        ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+            self.counters.broker_config_queries.fetch_add(1, Ordering::SeqCst);
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("exact read failed"));
+            }
+            let output = BrokerConfigSummaryOutput {
+                cluster: self.cluster.name.clone(),
+                broker_name: broker_name.to_string(),
+                brokers: Vec::new(),
+            };
+            Ok(if self.partial_sources {
+                partial_payload(output, QuerySource::BrokerConfig, broker_name)
+            } else {
+                QueryPayload::complete(output)
+            })
+        }
+
+        async fn broker_log_filter_state(
+            &mut self,
+            broker_name: &str,
+            logger: &str,
+        ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolExecutionError> {
+            self.counters.broker_log_filter_queries.fetch_add(1, Ordering::SeqCst);
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("exact read failed"));
+            }
+            let output = BrokerLogFilterStateOutput {
+                cluster: self.cluster.name.clone(),
+                broker_name: broker_name.to_string(),
+                logger: logger.to_string(),
+                brokers: Vec::new(),
+            };
+            Ok(if self.partial_sources {
+                partial_payload(output, QuerySource::BrokerLogFilter, broker_name)
+            } else {
+                QueryPayload::complete(output)
+            })
+        }
+
+        async fn proxy_drain_state(
+            &mut self,
+            proxy_name: &str,
+            proxy_endpoint: &str,
+        ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolExecutionError> {
+            self.counters.proxy_drain_queries.fetch_add(1, Ordering::SeqCst);
+            if self.fail_exact_read {
+                return Err(ToolExecutionError::backend("exact read failed"));
+            }
+            let expected_endpoint = if self.cluster.name == "secondary" {
+                "proxy-secondary.internal:8081"
+            } else {
+                "127.0.0.1:8081"
+            };
+            if proxy_endpoint != expected_endpoint {
+                self.counters.proxy_endpoint_mismatches.fetch_add(1, Ordering::SeqCst);
+            }
+            let output = ProxyDrainStateOutput {
+                cluster: self.cluster.name.clone(),
+                proxy_name: proxy_name.to_string(),
+                state_schema_version: "1".to_string(),
+                phase: crate::tools::proxy_tools::ProxyDrainPhase::Accepting,
+                operation_id: None,
+                admission_open: true,
+                routing_open: true,
+                readiness_published: true,
+                zero_pending: true,
+                pending: crate::tools::proxy_tools::ProxyDrainPending {
+                    active_connections: 0,
+                    sessions: 0,
+                    receipt_handles: 0,
+                    prepared_transactions: 0,
+                    telemetry_links: 0,
+                    remoting_channels: 0,
+                    telemetry_commands: 0,
+                    rpc_in_flight: 0,
+                },
+            };
+            Ok(QueryPayload::complete(output))
+        }
+
         async fn shutdown(self) -> Result<(), ToolExecutionError> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -1550,8 +1938,15 @@ mod tests {
             consumer_groups: ListConsumerGroupsArgs,
             consumer_lag: QueryConsumerLagArgs,
             broker: DescribeBrokerArgs,
+            exact_reads: (
+                BrokerDiagnosticsArgs,
+                BrokerConfigSummaryArgs,
+                BrokerLogFilterStateArgs,
+                ProxyDrainStateArgs,
+            ),
             diagnosis: DiagnoseConsumerLagArgs,
         ) {
+            let (broker_diagnostics, broker_config, broker_log_filter, proxy_drain) = exact_reads;
             assert_send(query.cluster_overview(cluster_overview));
             assert_send(query.list_topics(list_topics));
             assert_send(query.describe_topic(describe_topic));
@@ -1559,6 +1954,10 @@ mod tests {
             assert_send(query.list_consumer_groups(consumer_groups));
             assert_send(query.query_consumer_lag(consumer_lag));
             assert_send(query.describe_broker(broker));
+            assert_send(query.broker_diagnostics(broker_diagnostics));
+            assert_send(query.broker_config_summary(broker_config));
+            assert_send(query.broker_log_filter_state(broker_log_filter));
+            assert_send(query.proxy_drain_state(proxy_drain));
             assert_send(query.diagnose_consumer_lag(diagnosis));
         }
 
@@ -1591,12 +1990,309 @@ mod tests {
                 cluster: "local-dev".to_string(),
                 broker_name: "broker-a".to_string(),
             },
+            (
+                BrokerDiagnosticsArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                },
+                BrokerConfigSummaryArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                },
+                BrokerLogFilterStateArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                    logger: "rocketmq_broker::processor".to_string(),
+                },
+                ProxyDrainStateArgs {
+                    cluster: "local-dev".to_string(),
+                    proxy_name: "proxy-local".to_string(),
+                },
+            ),
             DiagnoseConsumerLagArgs {
                 cluster: "local-dev".to_string(),
                 topic: "orders".to_string(),
                 consumer_group: "order-service".to_string(),
             },
         );
+    }
+
+    #[tokio::test]
+    async fn exact_read_tools_cache_complete_and_partial_evidence_without_requerying() {
+        let factory = FakeSessionFactory {
+            partial_sources: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let diagnostics = || BrokerDiagnosticsArgs {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+        };
+        let first = facade.broker_diagnostics(diagnostics()).await.unwrap();
+        let replay = facade.broker_diagnostics(diagnostics()).await.unwrap();
+        assert_eq!(first.cache_status, CacheStatus::Miss);
+        assert_eq!(replay.cache_status, CacheStatus::Hit);
+        assert_eq!(first.partial, replay.partial);
+        assert_eq!(first.warnings, replay.warnings);
+        assert_eq!(first.source_failures, replay.source_failures);
+
+        let config = || BrokerConfigSummaryArgs {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+        };
+        let first = facade.broker_config_summary(config()).await.unwrap();
+        let replay = facade.broker_config_summary(config()).await.unwrap();
+        assert_eq!(first.cache_status, CacheStatus::Miss);
+        assert_eq!(replay.cache_status, CacheStatus::Hit);
+        assert_eq!(first.partial, replay.partial);
+        assert_eq!(first.warnings, replay.warnings);
+        assert_eq!(first.source_failures, replay.source_failures);
+
+        let log_filter = || BrokerLogFilterStateArgs {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+            logger: "rocketmq_broker::processor".to_string(),
+        };
+        let first = facade.broker_log_filter_state(log_filter()).await.unwrap();
+        let replay = facade.broker_log_filter_state(log_filter()).await.unwrap();
+        assert_eq!(first.cache_status, CacheStatus::Miss);
+        assert_eq!(replay.cache_status, CacheStatus::Hit);
+        assert_eq!(first.partial, replay.partial);
+        assert_eq!(first.warnings, replay.warnings);
+        assert_eq!(first.source_failures, replay.source_failures);
+
+        let proxy = || ProxyDrainStateArgs {
+            cluster: "local-dev".to_string(),
+            proxy_name: "proxy-local".to_string(),
+        };
+        let first = facade.proxy_drain_state(proxy()).await.unwrap();
+        let replay = facade.proxy_drain_state(proxy()).await.unwrap();
+        assert_eq!(first.cache_status, CacheStatus::Miss);
+        assert_eq!(replay.cache_status, CacheStatus::Hit);
+        assert!(!first.partial);
+        assert!(first.source_failures.is_empty());
+
+        assert_eq!(counters.broker_diagnostics_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.broker_config_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.broker_log_filter_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.proxy_drain_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 4);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn exact_read_tool_cache_isolates_visibility_classes() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+        let standard = facade.clone().with_visibility_class(VisibilityClass::Standard);
+        let sensitive = facade.with_visibility_class(VisibilityClass::Sensitive);
+        let args = || BrokerDiagnosticsArgs {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+        };
+
+        assert_eq!(
+            standard.broker_diagnostics(args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(
+            sensitive.broker_diagnostics(args()).await.unwrap().cache_status,
+            CacheStatus::Miss
+        );
+        assert_eq!(counters.broker_diagnostics_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exact_read_tool_cancellation_shuts_down_the_started_session() {
+        let factory = FakeSessionFactory {
+            hang_broker_query: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let cancellation = CancellationToken::new();
+        let control = WorkflowControl::new(Duration::from_secs(30), cancellation.clone());
+        let facade = QueryFacade::with_factory_and_control(example_config(), factory, control);
+        let task = tokio::spawn(async move {
+            facade
+                .broker_diagnostics(BrokerDiagnosticsArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                })
+                .await
+        });
+        wait_for_atomic_count(&counters.broker_diagnostics_queries, 1).await;
+        cancellation.cancel();
+
+        assert!(matches!(task.await.unwrap(), Err(ToolExecutionError::Cancelled)));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn exact_read_tool_timeout_shuts_down_the_started_session() {
+        let factory = FakeSessionFactory {
+            hang_broker_query: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let control = WorkflowControl::new(Duration::from_millis(10), CancellationToken::new());
+        let facade = QueryFacade::with_factory_and_control(example_config(), factory, control);
+        let result = facade
+            .broker_diagnostics(BrokerDiagnosticsArgs {
+                cluster: "local-dev".to_string(),
+                broker_name: "broker-a".to_string(),
+            })
+            .await;
+
+        assert!(matches!(result, Err(ToolExecutionError::TimedOut { timeout_ms: 10 })));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn exact_read_backend_failures_shutdown_every_started_session() {
+        let factory = FakeSessionFactory {
+            fail_exact_read: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        assert!(matches!(
+            facade
+                .broker_diagnostics(BrokerDiagnosticsArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::Backend(_))
+        ));
+        assert!(matches!(
+            facade
+                .broker_config_summary(BrokerConfigSummaryArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::Backend(_))
+        ));
+        assert!(matches!(
+            facade
+                .broker_log_filter_state(BrokerLogFilterStateArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                    logger: "rocketmq_broker::processor".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::Backend(_))
+        ));
+        assert!(matches!(
+            facade
+                .proxy_drain_state(ProxyDrainStateArgs {
+                    cluster: "local-dev".to_string(),
+                    proxy_name: "proxy-local".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::Backend(_))
+        ));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 4);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn exact_read_tools_require_explicit_cluster_and_strict_logger() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        assert!(matches!(
+            facade
+                .broker_diagnostics(BrokerDiagnosticsArgs {
+                    cluster: "   ".to_string(),
+                    broker_name: "broker-a".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::InvalidArguments(_))
+        ));
+        assert!(matches!(
+            facade
+                .broker_config_summary(BrokerConfigSummaryArgs {
+                    cluster: "".to_string(),
+                    broker_name: "broker-a".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::InvalidArguments(_))
+        ));
+        assert!(matches!(
+            facade
+                .broker_log_filter_state(BrokerLogFilterStateArgs {
+                    cluster: "local-dev".to_string(),
+                    broker_name: "broker-a".to_string(),
+                    logger: "rocketmq_broker::processor target".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::InvalidArguments(_))
+        ));
+        assert!(matches!(
+            facade
+                .proxy_drain_state(ProxyDrainStateArgs {
+                    cluster: "\t".to_string(),
+                    proxy_name: "proxy-local".to_string(),
+                })
+                .await,
+            Err(ToolExecutionError::InvalidArguments(_))
+        ));
+        let endpoint_cluster = "10.0.0.8:9876";
+        let error = facade
+            .broker_diagnostics(BrokerDiagnosticsArgs {
+                cluster: endpoint_cluster.to_string(),
+                broker_name: "broker-a".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ToolExecutionError::InvalidArguments(_)));
+        assert!(!error.to_string().contains(endpoint_cluster));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn proxy_alias_resolution_is_cluster_local_and_never_uses_an_unknown_alias() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config_with_secondary_proxy(), factory);
+
+        let local = facade
+            .proxy_drain_state(ProxyDrainStateArgs {
+                cluster: "local-dev".to_string(),
+                proxy_name: "proxy-local".to_string(),
+            })
+            .await
+            .unwrap();
+        let secondary = facade
+            .proxy_drain_state(ProxyDrainStateArgs {
+                cluster: "secondary".to_string(),
+                proxy_name: "proxy-local".to_string(),
+            })
+            .await
+            .unwrap();
+        let starts = counters.starts.load(Ordering::SeqCst);
+        let missing = facade
+            .proxy_drain_state(ProxyDrainStateArgs {
+                cluster: "local-dev".to_string(),
+                proxy_name: "proxy-missing".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(local.data.cluster, "local-dev");
+        assert_eq!(secondary.data.cluster, "secondary");
+        assert!(matches!(missing, ToolExecutionError::InvalidArguments(_)));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
+        assert_eq!(counters.proxy_endpoint_mismatches.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -3152,6 +3848,17 @@ mod tests {
     fn example_config_with_physical_cluster() -> McpConfig {
         let mut config = example_config();
         config.clusters[0].rocketmq_cluster_name = Some("DefaultCluster".to_string());
+        config
+    }
+
+    fn example_config_with_secondary_proxy() -> McpConfig {
+        let mut config = example_config();
+        let mut secondary = config.clusters[0].clone();
+        secondary.name = "secondary".to_string();
+        secondary.namesrv_addr = "secondary-namesrv.internal:9876".to_string();
+        secondary.default = Some(false);
+        secondary.proxies[0].endpoint = "proxy-secondary.internal:8081".to_string();
+        config.clusters.push(secondary);
         config
     }
 

@@ -44,9 +44,11 @@ use crate::tools::catalog::ToolId;
 #[cfg(feature = "change-planning")]
 use crate::tools::change_tools;
 use crate::tools::cluster_tools;
+use crate::tools::config_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
 use crate::tools::output_policy;
+use crate::tools::proxy_tools;
 use crate::tools::topic_tools;
 
 #[derive(Debug, thiserror::Error)]
@@ -489,6 +491,78 @@ where
                     success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
+            ToolId::GetBrokerDiagnostics => {
+                let args = match decode_args::<broker_tools::BrokerDiagnosticsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.broker_diagnostics(args).await.and_then(|output| {
+                    let summary = summary_broker_diagnostics(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetBrokerConfigSummary => {
+                let args = match decode_args::<config_tools::BrokerConfigSummaryArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.broker_config_summary(args).await.and_then(|output| {
+                    let summary = summary_broker_config(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetBrokerLogFilterState => {
+                let args = match decode_args::<config_tools::BrokerLogFilterStateArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.broker_log_filter_state(args).await.and_then(|output| {
+                    let summary = summary_broker_log_filter(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetProxyDrainState => {
+                let args = match decode_args::<proxy_tools::ProxyDrainStateArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.proxy_drain_state(args).await.and_then(|output| {
+                    let summary = summary_proxy_drain(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
             ToolId::DiagnoseConsumerLag => {
                 let args = match decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(arguments.clone()) {
                     Ok(args) => args,
@@ -696,6 +770,20 @@ where
     render_success(descriptor, summary, envelope, Some(resource))
 }
 
+fn success_unlinked_result<T>(
+    descriptor: ToolDescriptor,
+    request_id: &str,
+    cluster: String,
+    summary: String,
+    output: QueryResult<T>,
+) -> Result<CallToolResult, ToolExecutionError>
+where
+    T: Serialize,
+{
+    let envelope = ToolResponse::from_query(request_id, cluster, output);
+    render_success(descriptor, summary, envelope, None)
+}
+
 #[cfg(feature = "change-planning")]
 fn success_live_result<T>(
     descriptor: ToolDescriptor,
@@ -858,6 +946,41 @@ fn summary_describe_broker(output: &broker_tools::DescribeBrokerOutput) -> Strin
     )
 }
 
+fn summary_broker_diagnostics(output: &broker_tools::BrokerDiagnosticsOutput) -> String {
+    format!(
+        "Broker {} on cluster {} returned {} diagnostic rows.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_broker_config(output: &config_tools::BrokerConfigSummaryOutput) -> String {
+    format!(
+        "Broker {} on cluster {} returned {} allowlisted configuration rows.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_broker_log_filter(output: &config_tools::BrokerLogFilterStateOutput) -> String {
+    format!(
+        "Broker {} on cluster {} returned {} log-filter state rows for {}.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len(),
+        output.logger
+    )
+}
+
+fn summary_proxy_drain(output: &proxy_tools::ProxyDrainStateOutput) -> String {
+    format!(
+        "Proxy {} on cluster {} is in {:?} drain phase.",
+        output.proxy_name, output.cluster, output.phase
+    )
+}
+
 #[cfg(feature = "change-planning")]
 fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
     format!(
@@ -985,6 +1108,80 @@ mod tests {
             _args: broker_tools::DescribeBrokerArgs,
         ) -> Result<QueryResult<broker_tools::DescribeBrokerOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
+        }
+
+        async fn broker_diagnostics(
+            &self,
+            args: broker_tools::BrokerDiagnosticsArgs,
+        ) -> Result<QueryResult<broker_tools::BrokerDiagnosticsOutput>, ToolExecutionError> {
+            if self.fail {
+                return Err(ToolExecutionError::backend(
+                    "private-proxy-endpoint.example:18081 token=super-secret",
+                ));
+            }
+            Ok(QueryResult::bypass(broker_tools::BrokerDiagnosticsOutput {
+                cluster: args.cluster,
+                broker_name: args.broker_name,
+                diagnostics_schema_version: "rocketmq.admin-broker-diagnostics.v1".to_string(),
+                observed_at_millis: 1,
+                brokers: Vec::new(),
+                unavailable_brokers: 0,
+            }))
+        }
+
+        async fn broker_config_summary(
+            &self,
+            args: config_tools::BrokerConfigSummaryArgs,
+        ) -> Result<QueryResult<config_tools::BrokerConfigSummaryOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(config_tools::BrokerConfigSummaryOutput {
+                cluster: args.cluster,
+                broker_name: args.broker_name,
+                brokers: Vec::new(),
+            }))
+        }
+
+        async fn broker_log_filter_state(
+            &self,
+            args: config_tools::BrokerLogFilterStateArgs,
+        ) -> Result<QueryResult<config_tools::BrokerLogFilterStateOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(config_tools::BrokerLogFilterStateOutput {
+                cluster: args.cluster,
+                broker_name: args.broker_name,
+                logger: args.logger,
+                brokers: Vec::new(),
+            }))
+        }
+
+        async fn proxy_drain_state(
+            &self,
+            args: proxy_tools::ProxyDrainStateArgs,
+        ) -> Result<QueryResult<proxy_tools::ProxyDrainStateOutput>, ToolExecutionError> {
+            if self.fail {
+                return Err(ToolExecutionError::backend(
+                    "private-proxy-endpoint.example:18081 token=super-secret",
+                ));
+            }
+            Ok(QueryResult::bypass(proxy_tools::ProxyDrainStateOutput {
+                cluster: args.cluster,
+                proxy_name: args.proxy_name,
+                state_schema_version: "rocketmq.proxy-drain.v1".to_string(),
+                phase: proxy_tools::ProxyDrainPhase::Accepting,
+                operation_id: None,
+                admission_open: true,
+                routing_open: true,
+                readiness_published: true,
+                zero_pending: true,
+                pending: proxy_tools::ProxyDrainPending {
+                    active_connections: 0,
+                    sessions: 0,
+                    receipt_handles: 0,
+                    prepared_transactions: 0,
+                    telemetry_links: 0,
+                    remoting_channels: 0,
+                    telemetry_commands: 0,
+                    rpc_in_flight: 0,
+                },
+            }))
         }
 
         async fn diagnose_consumer_lag(
@@ -1170,6 +1367,164 @@ mod tests {
         assert_eq!(records[0].status, AuditStatus::Failure);
     }
 
+    #[tokio::test]
+    async fn broker_and_proxy_tools_dispatch_without_resource_links() {
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        );
+        let calls = [
+            (
+                ToolId::GetBrokerDiagnostics,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"}),
+            ),
+            (
+                ToolId::GetBrokerConfigSummary,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"}),
+            ),
+            (
+                ToolId::GetBrokerLogFilterState,
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "broker_name": "broker-a",
+                    "logger": "rocketmq_broker::processor"
+                }),
+            ),
+            (
+                ToolId::GetProxyDrainState,
+                serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a"}),
+            ),
+        ];
+        for (tool, arguments) in calls {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false), "{}", tool.descriptor().name);
+            assert!(result
+                .content
+                .iter()
+                .all(|content| content.as_resource_link().is_none()));
+            assert!(result.structured_content.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn broker_and_proxy_tools_reject_unknown_fields_and_enforce_scopes() {
+        let diagnose = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        );
+        let invalid_calls = [
+            (
+                ToolId::GetBrokerDiagnostics,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a", "extra": true}),
+            ),
+            (
+                ToolId::GetBrokerConfigSummary,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a", "extra": true}),
+            ),
+            (
+                ToolId::GetBrokerLogFilterState,
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "broker_name": "broker-a",
+                    "logger": "rocketmq_broker::processor",
+                    "extra": true
+                }),
+            ),
+            (
+                ToolId::GetProxyDrainState,
+                serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a", "endpoint": "secret"}),
+            ),
+        ];
+        for (tool, arguments) in invalid_calls {
+            let invalid = diagnose
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(invalid.is_error, Some(true), "{}", tool.descriptor().name);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&content_text(&invalid)).unwrap()["code"],
+                "invalid_arguments"
+            );
+        }
+
+        let read_only = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("read_only"),
+        );
+        let denied = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetBrokerDiagnostics.descriptor().name).with_arguments(
+                    serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.is_error, Some(true));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content_text(&denied)).unwrap()["code"],
+            "unauthorized_scope"
+        );
+
+        let allowed = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetBrokerConfigSummary.descriptor().name).with_arguments(
+                    serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn proxy_backend_failure_never_exposes_internal_endpoint() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: true,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetProxyDrainState.descriptor().name).with_arguments(
+                serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        let text = content_text(&result);
+        assert_eq!(result.is_error, Some(true));
+        assert!(!text.contains("private-proxy-endpoint"));
+        assert!(!text.contains("super-secret"));
+    }
+
     #[cfg(feature = "change-planning")]
     #[tokio::test]
     async fn runtime_policy_denies_change_planning_by_default() {
@@ -1312,6 +1667,7 @@ mod tests {
                 rocketmq_cluster_name: None,
                 tenant: None,
                 credentials: None,
+                proxies: Vec::new(),
             }],
         )
         .unwrap()

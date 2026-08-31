@@ -255,7 +255,6 @@ where
         {
             tracing::warn!(
                 code,
-                address = %session.remote_addr(),
                 session_id = session.session_id(),
                 "received client response without a matching pending request",
             );
