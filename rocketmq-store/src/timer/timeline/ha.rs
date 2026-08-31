@@ -127,10 +127,10 @@ impl TimelinePromotionGate {
     }
 }
 
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum TimelinePromotionError {
     #[error(transparent)]
-    Manifest(#[from] rocketmq_store_api::TimerSnapshotValidationError),
+    Manifest(#[from] rocketmq_store_api::StoreContractViolation),
     #[error("Extended promotion requires an installed snapshot")]
     SnapshotMissing,
     #[error("Extended snapshot format or activation epoch is incompatible")]

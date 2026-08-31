@@ -15,11 +15,10 @@
 //! Backend-neutral high-availability value types and acknowledgement decisions.
 
 use std::collections::BTreeSet;
-use std::error::Error as StdError;
-use std::fmt;
 use std::num::NonZeroUsize;
 
 use crate::Durability;
+use crate::StoreContractViolation;
 
 /// A positive Controller-issued master epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -33,11 +32,11 @@ impl MasterEpoch {
 }
 
 impl TryFrom<i32> for MasterEpoch {
-    type Error = HaContractError;
+    type Error = StoreContractViolation;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         if value <= 0 {
-            return Err(HaContractError::InvalidMasterEpoch(value));
+            return Err(StoreContractViolation::HaInvalidMasterEpoch(value));
         }
         Ok(Self(value))
     }
@@ -55,11 +54,11 @@ impl SyncStateSetEpoch {
 }
 
 impl TryFrom<i32> for SyncStateSetEpoch {
-    type Error = HaContractError;
+    type Error = StoreContractViolation;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         if value <= 0 {
-            return Err(HaContractError::InvalidSyncStateSetEpoch(value));
+            return Err(StoreContractViolation::HaInvalidSyncStateSetEpoch(value));
         }
         Ok(Self(value))
     }
@@ -74,10 +73,10 @@ impl ReplicaCount {
     ///
     /// # Errors
     ///
-    /// Returns [`HaContractError::InvalidReplicaCount`] when `value` is less than two.
-    pub fn try_new(value: usize) -> Result<Self, HaContractError> {
+    /// Returns [`StoreContractViolation::HaInvalidReplicaCount`] when `value` is less than two.
+    pub fn try_new(value: usize) -> Result<Self, StoreContractViolation> {
         if value < 2 {
-            return Err(HaContractError::InvalidReplicaCount(value));
+            return Err(StoreContractViolation::HaInvalidReplicaCount(value));
         }
         Ok(Self(NonZeroUsize::new(value).expect("value is proven non-zero")))
     }
@@ -104,9 +103,9 @@ impl AckPolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`HaContractError::InvalidAckPolicy`] for zero, negative values other than
+    /// Returns [`StoreContractViolation::HaInvalidAckPolicy`] for zero, negative values other than
     /// `all_in_sync_state_set`, or values that cannot be represented as `usize`.
-    pub fn try_from_legacy(value: i32, all_in_sync_state_set: i32) -> Result<Self, HaContractError> {
+    pub fn try_from_legacy(value: i32, all_in_sync_state_set: i32) -> Result<Self, StoreContractViolation> {
         if value == all_in_sync_state_set {
             return Ok(Self::AllInSyncSet);
         }
@@ -114,9 +113,9 @@ impl AckPolicy {
             return Ok(Self::LocalDurable);
         }
         if value <= 0 {
-            return Err(HaContractError::InvalidAckPolicy(value));
+            return Err(StoreContractViolation::HaInvalidAckPolicy(value));
         }
-        let count = usize::try_from(value).map_err(|_| HaContractError::InvalidAckPolicy(value))?;
+        let count = usize::try_from(value).map_err(|_| StoreContractViolation::HaInvalidAckPolicy(value))?;
         Ok(Self::ReplicaCount(ReplicaCount::try_new(count)?))
     }
 }
@@ -144,10 +143,10 @@ impl WriteLeaseToken {
     ///
     /// # Errors
     ///
-    /// Returns [`HaContractError::InvalidLeaseGeneration`] when `generation` is zero.
-    pub fn try_new(authority: WriteAuthority, generation: u64) -> Result<Self, HaContractError> {
+    /// Returns [`StoreContractViolation::HaInvalidLeaseGeneration`] when `generation` is zero.
+    pub fn try_new(authority: WriteAuthority, generation: u64) -> Result<Self, StoreContractViolation> {
         if generation == 0 {
-            return Err(HaContractError::InvalidLeaseGeneration(generation));
+            return Err(StoreContractViolation::HaInvalidLeaseGeneration(generation));
         }
         Ok(Self { authority, generation })
     }
@@ -168,10 +167,10 @@ impl WriteAuthority {
     ///
     /// # Errors
     ///
-    /// Returns [`HaContractError::InvalidBrokerId`] when `broker_id` is negative.
-    pub fn try_new(broker_id: i64, master_epoch: MasterEpoch) -> Result<Self, HaContractError> {
+    /// Returns [`StoreContractViolation::HaInvalidBrokerId`] when `broker_id` is negative.
+    pub fn try_new(broker_id: i64, master_epoch: MasterEpoch) -> Result<Self, StoreContractViolation> {
         if broker_id < 0 {
-            return Err(HaContractError::InvalidBrokerId(broker_id));
+            return Err(StoreContractViolation::HaInvalidBrokerId(broker_id));
         }
         Ok(Self {
             broker_id,
@@ -183,10 +182,11 @@ impl WriteAuthority {
     ///
     /// # Errors
     ///
-    /// Returns [`HaContractError::BrokerIdOutOfRange`] when the identifier cannot be represented
+    /// Returns [`StoreContractViolation::HaBrokerIdOutOfRange`] when the identifier cannot be represented
     /// by the canonical signed broker-id type.
-    pub fn try_from_u64(broker_id: u64, master_epoch: MasterEpoch) -> Result<Self, HaContractError> {
-        let broker_id = i64::try_from(broker_id).map_err(|_| HaContractError::BrokerIdOutOfRange(broker_id))?;
+    pub fn try_from_u64(broker_id: u64, master_epoch: MasterEpoch) -> Result<Self, StoreContractViolation> {
+        let broker_id =
+            i64::try_from(broker_id).map_err(|_| StoreContractViolation::HaBrokerIdOutOfRange(broker_id))?;
         Self::try_new(broker_id, master_epoch)
     }
 
@@ -214,12 +214,12 @@ impl ReplicaAck {
     /// # Errors
     ///
     /// Returns a typed error for a negative broker identifier or durable offset.
-    pub fn try_new(broker_id: i64, durable_offset: i64) -> Result<Self, HaContractError> {
+    pub fn try_new(broker_id: i64, durable_offset: i64) -> Result<Self, StoreContractViolation> {
         if broker_id < 0 {
-            return Err(HaContractError::InvalidBrokerId(broker_id));
+            return Err(StoreContractViolation::HaInvalidBrokerId(broker_id));
         }
         if durable_offset < 0 {
-            return Err(HaContractError::InvalidOffset(durable_offset));
+            return Err(StoreContractViolation::HaInvalidOffset(durable_offset));
         }
         Ok(Self {
             broker_id,
@@ -248,13 +248,13 @@ impl SyncStateSet {
     /// # Errors
     ///
     /// Returns a typed error when the set is empty or contains a negative broker identifier.
-    pub fn try_new(members: impl IntoIterator<Item = i64>) -> Result<Self, HaContractError> {
+    pub fn try_new(members: impl IntoIterator<Item = i64>) -> Result<Self, StoreContractViolation> {
         let members = members.into_iter().collect::<BTreeSet<_>>();
         if members.is_empty() {
-            return Err(HaContractError::EmptySyncStateSet);
+            return Err(StoreContractViolation::HaEmptySyncStateSet);
         }
         if let Some(broker_id) = members.iter().copied().find(|broker_id| *broker_id < 0) {
-            return Err(HaContractError::InvalidBrokerId(broker_id));
+            return Err(StoreContractViolation::HaInvalidBrokerId(broker_id));
         }
         Ok(Self(members))
     }
@@ -301,15 +301,15 @@ impl ReplicationObservation {
         local_durable_watermark: i64,
         replica_acks: Vec<ReplicaAck>,
         sync_state_set: SyncStateSet,
-    ) -> Result<Self, HaContractError> {
+    ) -> Result<Self, StoreContractViolation> {
         if required_offset < 0 {
-            return Err(HaContractError::InvalidOffset(required_offset));
+            return Err(StoreContractViolation::HaInvalidOffset(required_offset));
         }
         if local_durable_watermark < 0 {
-            return Err(HaContractError::InvalidOffset(local_durable_watermark));
+            return Err(StoreContractViolation::HaInvalidOffset(local_durable_watermark));
         }
         if !sync_state_set.contains(current_authority.broker_id()) {
-            return Err(HaContractError::LeaderMissingFromSyncStateSet(
+            return Err(StoreContractViolation::HaLeaderMissingFromSyncStateSet(
                 current_authority.broker_id(),
             ));
         }
@@ -438,60 +438,3 @@ pub fn decide_replication(observation: &ReplicationObservation) -> ReplicationDe
         }
     }
 }
-
-/// Invalid HA value rejected at an adapter or capability boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HaContractError {
-    /// A master epoch was not positive.
-    InvalidMasterEpoch(i32),
-    /// A sync-state-set epoch was not positive.
-    InvalidSyncStateSetEpoch(i32),
-    /// A broker identifier was negative.
-    InvalidBrokerId(i64),
-    /// An unsigned wire broker identifier exceeded the canonical representation.
-    BrokerIdOutOfRange(u64),
-    /// A replica policy did not require a remote replica.
-    InvalidReplicaCount(usize),
-    /// A legacy ACK count or sentinel was unknown.
-    InvalidAckPolicy(i32),
-    /// A physical offset was negative.
-    InvalidOffset(i64),
-    /// A Controller write-lease generation was zero.
-    InvalidLeaseGeneration(u64),
-    /// The sync-state set was empty.
-    EmptySyncStateSet,
-    /// The current leader was absent from the sync-state set.
-    LeaderMissingFromSyncStateSet(i64),
-}
-
-impl fmt::Display for HaContractError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidMasterEpoch(value) => write!(formatter, "master epoch must be positive, got {value}"),
-            Self::InvalidSyncStateSetEpoch(value) => {
-                write!(formatter, "sync-state-set epoch must be positive, got {value}")
-            }
-            Self::InvalidBrokerId(value) => write!(formatter, "broker id must be non-negative, got {value}"),
-            Self::BrokerIdOutOfRange(value) => {
-                write!(formatter, "broker id exceeds the canonical signed range, got {value}")
-            }
-            Self::InvalidReplicaCount(value) => {
-                write!(
-                    formatter,
-                    "replica ACK count must include a remote replica, got {value}"
-                )
-            }
-            Self::InvalidAckPolicy(value) => write!(formatter, "unsupported legacy ACK policy value {value}"),
-            Self::InvalidOffset(value) => write!(formatter, "HA offset must be non-negative, got {value}"),
-            Self::InvalidLeaseGeneration(value) => {
-                write!(formatter, "write-lease generation must be positive, got {value}")
-            }
-            Self::EmptySyncStateSet => formatter.write_str("sync-state set must not be empty"),
-            Self::LeaderMissingFromSyncStateSet(value) => {
-                write!(formatter, "leader broker {value} is absent from the sync-state set")
-            }
-        }
-    }
-}
-
-impl StdError for HaContractError {}

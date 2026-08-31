@@ -26,6 +26,7 @@ use rocketmq_store_api::DerivedCheckpoint;
 use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
+use rocketmq_store_api::StoreContractViolation;
 use tokio::sync::Mutex;
 
 use super::progress_persistence::PersistedTieredProgress;
@@ -162,7 +163,7 @@ impl TieredRetryEntry {
 
     pub(crate) fn record(&self) -> Result<DerivedRecordId, RocketMQError> {
         DerivedRecordId::try_new(self.source_epoch, self.physical_offset, self.length)
-            .map_err(|error| crate::error::storage_corrupted(format!("tiered retry record: {error}")))
+            .map_err(|source| tiered_contract("validate tiered retry record", source))
     }
 
     pub(crate) fn request_with_body(&self, body: Bytes) -> TieredDispatchRequest {
@@ -274,7 +275,7 @@ impl TieredProgressTracker {
             return Ok(());
         };
         let checkpoint = DerivedCheckpoint::decode(&persisted.checkpoint, DerivedEngine::Tiered)
-            .map_err(|error| crate::error::storage_corrupted(format!("tiered progress checkpoint: {error}")))?;
+            .map_err(|source| tiered_contract("validate tiered progress checkpoint", source))?;
         let cursor = checkpoint.cursor();
         if cursor.source_epoch() != self.source_epoch {
             return Err(crate::error::storage_corrupted(format!(
@@ -332,7 +333,7 @@ impl TieredProgressTracker {
         };
         match cursor
             .prepare(record)
-            .map_err(|error| RocketMQError::illegal_argument(format!("tiered cursor invariant: {error}")))?
+            .map_err(|source| tiered_contract("validate tiered cursor", source))?
         {
             CursorAdvanceDisposition::AlreadyCommitted => Ok(RecordDisposition::AlreadyCommitted),
             CursorAdvanceDisposition::Advance(_) => Ok(RecordDisposition::Deliver),
@@ -348,7 +349,7 @@ impl TieredProgressTracker {
             .unwrap_or_else(|| DerivedCursor::restore(record.source_epoch(), record.physical_offset()));
         match current
             .prepare(record)
-            .map_err(|error| RocketMQError::illegal_argument(format!("tiered cursor invariant: {error}")))?
+            .map_err(|source| tiered_contract("validate tiered cursor", source))?
         {
             CursorAdvanceDisposition::AlreadyCommitted => {
                 if candidate.retries.remove(&record).is_none() {
@@ -380,7 +381,7 @@ impl TieredProgressTracker {
             .unwrap_or_else(|| DerivedCursor::restore(record.source_epoch(), record.physical_offset()));
         let advance = match current
             .prepare(record)
-            .map_err(|error| RocketMQError::illegal_argument(format!("tiered cursor invariant: {error}")))?
+            .map_err(|source| tiered_contract("validate tiered cursor", source))?
         {
             CursorAdvanceDisposition::AlreadyCommitted => {
                 if !candidate.retries.contains_key(&record) {
@@ -563,6 +564,10 @@ impl TieredProgressTracker {
     }
 }
 
+fn tiered_contract(operation: &'static str, source: StoreContractViolation) -> RocketMQError {
+    RocketMQError::internal(operation, source)
+}
+
 fn retry_source_bytes(retries: &BTreeMap<DerivedRecordId, TieredRetryEntry>) -> u64 {
     retries
         .keys()
@@ -581,4 +586,23 @@ fn oldest_retry_age(retries: &BTreeMap<DerivedRecordId, TieredRetryEntry>, now_m
 
 fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[test]
+    fn derived_checkpoint_contract_remains_a_typed_source() {
+        let error = DerivedCheckpoint::decode(&[], DerivedEngine::Tiered)
+            .map_err(|source| tiered_contract("validate tiered progress checkpoint", source))
+            .expect_err("an empty checkpoint must fail");
+
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<StoreContractViolation>())
+            .is_some());
+    }
 }

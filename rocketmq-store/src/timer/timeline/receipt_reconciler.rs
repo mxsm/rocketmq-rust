@@ -344,7 +344,7 @@ pub(crate) enum TimelineCompletionError {
     #[error("Timeline store failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("completion checkpoint decode failed: {0}")]
-    Checkpoint(#[from] rocketmq_store_api::DerivedCheckpointDecodeError),
+    Checkpoint(#[from] rocketmq_store_api::StoreContractViolation),
     #[error("completion replay budget must be non-zero")]
     InvalidBudget,
     #[error("completion cursor overflow")]

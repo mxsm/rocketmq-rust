@@ -14,8 +14,7 @@
 
 //! Versioned progress contracts for rebuildable stores derived from the CommitLog.
 
-use std::error::Error as StdError;
-use std::fmt;
+use crate::StoreContractViolation;
 
 /// Current on-disk version of [`DerivedCheckpoint`].
 pub const DERIVED_CHECKPOINT_FORMAT_VERSION: u16 = 1;
@@ -83,13 +82,13 @@ impl DerivedRecordId {
     ///
     /// # Errors
     ///
-    /// Returns [`DerivedRecordIdError`] when `length` is zero or the range overflows.
-    pub const fn try_new(source_epoch: u64, physical_offset: u64, length: u32) -> Result<Self, DerivedRecordIdError> {
+    /// Returns [`StoreContractViolation`] when `length` is zero or the range overflows.
+    pub const fn try_new(source_epoch: u64, physical_offset: u64, length: u32) -> Result<Self, StoreContractViolation> {
         if length == 0 {
-            return Err(DerivedRecordIdError::EmptyRecord);
+            return Err(StoreContractViolation::DerivedRecordEmpty);
         }
         if physical_offset.checked_add(length as u64).is_none() {
-            return Err(DerivedRecordIdError::RangeOverflow);
+            return Err(StoreContractViolation::DerivedRecordRangeOverflow);
         }
         Ok(Self {
             source_epoch,
@@ -118,26 +117,6 @@ impl DerivedRecordId {
         self.physical_offset + self.length as u64
     }
 }
-
-/// Invalid CommitLog identity supplied to a derived engine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DerivedRecordIdError {
-    /// Represents the empty record case.
-    EmptyRecord,
-    /// Represents the range overflow case.
-    RangeOverflow,
-}
-
-impl fmt::Display for DerivedRecordIdError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::EmptyRecord => "derived record length must be non-zero",
-            Self::RangeOverflow => "derived record physical range overflows",
-        })
-    }
-}
-
-impl StdError for DerivedRecordIdError {}
 
 /// Exclusive CommitLog position durably completed by one derived engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -177,11 +156,11 @@ impl DerivedCursor {
     ///
     /// # Errors
     ///
-    /// Returns [`CursorAdvanceError`] for a different source epoch, a physical gap, or a record
+    /// Returns [`StoreContractViolation`] for a different source epoch, a physical gap, or a record
     /// that only partially overlaps the committed prefix.
-    pub const fn prepare(self, record: DerivedRecordId) -> Result<CursorAdvanceDisposition, CursorAdvanceError> {
+    pub const fn prepare(self, record: DerivedRecordId) -> Result<CursorAdvanceDisposition, StoreContractViolation> {
         if record.source_epoch != self.source_epoch {
-            return Err(CursorAdvanceError::SourceEpochMismatch {
+            return Err(StoreContractViolation::DerivedCursorSourceEpochMismatch {
                 expected: self.source_epoch,
                 actual: record.source_epoch,
             });
@@ -192,14 +171,14 @@ impl DerivedCursor {
             return Ok(CursorAdvanceDisposition::AlreadyCommitted);
         }
         if record.physical_offset < self.next_offset {
-            return Err(CursorAdvanceError::PartialOverlap {
+            return Err(StoreContractViolation::DerivedCursorPartialOverlap {
                 committed: self.next_offset,
                 record_start: record.physical_offset,
                 record_end,
             });
         }
         if record.physical_offset > self.next_offset {
-            return Err(CursorAdvanceError::Gap {
+            return Err(StoreContractViolation::DerivedCursorGap {
                 expected: self.next_offset,
                 actual: record.physical_offset,
             });
@@ -246,60 +225,6 @@ impl CursorAdvance {
         self.record
     }
 }
-
-/// Violation of continuous per-engine cursor progression.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CursorAdvanceError {
-    /// Represents the source epoch mismatch case.
-    SourceEpochMismatch {
-        /// The struct field value.
-        expected: u64,
-        /// The struct field value.
-        actual: u64,
-    },
-    /// Represents the gap case.
-    Gap {
-        /// The struct field value.
-        expected: u64,
-        /// The struct field value.
-        actual: u64,
-    },
-    /// Represents the partial overlap case.
-    PartialOverlap {
-        /// The struct field value.
-        committed: u64,
-        /// The struct field value.
-        record_start: u64,
-        /// The struct field value.
-        record_end: u64,
-    },
-}
-
-impl fmt::Display for CursorAdvanceError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SourceEpochMismatch { expected, actual } => {
-                write!(formatter, "source epoch mismatch: expected {expected}, got {actual}")
-            }
-            Self::Gap { expected, actual } => {
-                write!(
-                    formatter,
-                    "derived cursor gap: expected offset {expected}, got {actual}"
-                )
-            }
-            Self::PartialOverlap {
-                committed,
-                record_start,
-                record_end,
-            } => write!(
-                formatter,
-                "derived record {record_start}..{record_end} partially overlaps committed offset {committed}"
-            ),
-        }
-    }
-}
-
-impl StdError for CursorAdvanceError {}
 
 /// Bootstrap representation for migrating an owner that previously stored only an offset.
 ///
@@ -376,31 +301,33 @@ impl DerivedCheckpoint {
     ///
     /// # Errors
     ///
-    /// Returns [`DerivedCheckpointDecodeError`] for a malformed, corrupted, unsupported, or
+    /// Returns [`StoreContractViolation`] for a malformed, corrupted, unsupported, or
     /// cross-engine checkpoint. Callers must fail readiness rather than guessing a cursor.
-    pub fn decode(encoded: &[u8], expected_engine: DerivedEngine) -> Result<Self, DerivedCheckpointDecodeError> {
+    pub fn decode(encoded: &[u8], expected_engine: DerivedEngine) -> Result<Self, StoreContractViolation> {
         if encoded.len() != DERIVED_CHECKPOINT_ENCODED_LEN {
-            return Err(DerivedCheckpointDecodeError::InvalidLength {
+            return Err(StoreContractViolation::DerivedCheckpointInvalidLength {
                 expected: DERIVED_CHECKPOINT_ENCODED_LEN,
                 actual: encoded.len(),
             });
         }
         if encoded[..8] != CHECKPOINT_MAGIC {
-            return Err(DerivedCheckpointDecodeError::InvalidMagic);
+            return Err(StoreContractViolation::DerivedCheckpointInvalidMagic);
         }
 
         let version = u16::from_be_bytes([encoded[8], encoded[9]]);
         if version != DERIVED_CHECKPOINT_FORMAT_VERSION {
-            return Err(DerivedCheckpointDecodeError::UnsupportedVersion(version));
+            return Err(StoreContractViolation::DerivedCheckpointUnsupportedVersion(version));
         }
         if encoded[11] != 0 {
-            return Err(DerivedCheckpointDecodeError::InvalidReservedByte(encoded[11]));
+            return Err(StoreContractViolation::DerivedCheckpointInvalidReservedByte(
+                encoded[11],
+            ));
         }
 
-        let engine =
-            DerivedEngine::from_code(encoded[10]).ok_or(DerivedCheckpointDecodeError::UnknownEngine(encoded[10]))?;
+        let engine = DerivedEngine::from_code(encoded[10])
+            .ok_or(StoreContractViolation::DerivedCheckpointUnknownEngine(encoded[10]))?;
         if engine != expected_engine {
-            return Err(DerivedCheckpointDecodeError::EngineMismatch {
+            return Err(StoreContractViolation::DerivedCheckpointEngineMismatch {
                 expected: expected_engine,
                 actual: engine,
             });
@@ -414,7 +341,7 @@ impl DerivedCheckpoint {
         ]);
         let actual_checksum = crc32(&encoded[..CHECKSUM_OFFSET]);
         if actual_checksum != expected_checksum {
-            return Err(DerivedCheckpointDecodeError::ChecksumMismatch);
+            return Err(StoreContractViolation::DerivedCheckpointChecksumMismatch);
         }
 
         let source_epoch = u64::from_be_bytes([
@@ -440,65 +367,6 @@ impl DerivedCheckpoint {
         Ok(Self::new(engine, DerivedCursor::restore(source_epoch, next_offset)))
     }
 }
-
-/// Failure while validating durable derived-progress metadata.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DerivedCheckpointDecodeError {
-    /// Represents the invalid length case.
-    InvalidLength {
-        /// The struct field value.
-        expected: usize,
-        /// The struct field value.
-        actual: usize,
-    },
-    /// Represents the invalid magic case.
-    InvalidMagic,
-    /// Represents the unsupported version case.
-    UnsupportedVersion(u16),
-    /// Represents the unknown engine case.
-    UnknownEngine(u8),
-    /// Represents the engine mismatch case.
-    EngineMismatch {
-        /// The struct field value.
-        expected: DerivedEngine,
-        /// The struct field value.
-        actual: DerivedEngine,
-    },
-    /// Represents the invalid reserved byte case.
-    InvalidReservedByte(u8),
-    /// Represents the checksum mismatch case.
-    ChecksumMismatch,
-}
-
-impl fmt::Display for DerivedCheckpointDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidLength { expected, actual } => {
-                write!(
-                    formatter,
-                    "invalid checkpoint length: expected {expected}, got {actual}"
-                )
-            }
-            Self::InvalidMagic => formatter.write_str("invalid derived checkpoint magic"),
-            Self::UnsupportedVersion(version) => {
-                write!(formatter, "unsupported derived checkpoint version {version}")
-            }
-            Self::UnknownEngine(engine) => write!(formatter, "unknown derived engine code {engine}"),
-            Self::EngineMismatch { expected, actual } => write!(
-                formatter,
-                "derived checkpoint owner mismatch: expected {}, got {}",
-                expected.as_str(),
-                actual.as_str()
-            ),
-            Self::InvalidReservedByte(byte) => {
-                write!(formatter, "invalid derived checkpoint reserved byte {byte}")
-            }
-            Self::ChecksumMismatch => formatter.write_str("derived checkpoint checksum mismatch"),
-        }
-    }
-}
-
-impl StdError for DerivedCheckpointDecodeError {}
 
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = u32::MAX;

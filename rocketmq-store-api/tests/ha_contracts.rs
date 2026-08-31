@@ -17,13 +17,13 @@ use rocketmq_store_api::AckPolicy;
 use rocketmq_store_api::AppendReceipt;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
-use rocketmq_store_api::HaContractError;
 use rocketmq_store_api::HaRejectReason;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::ReplicaAck;
 use rocketmq_store_api::ReplicaCount;
 use rocketmq_store_api::ReplicationDecision;
 use rocketmq_store_api::ReplicationObservation;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::SyncStateSet;
 use rocketmq_store_api::SyncStateSetEpoch;
 use rocketmq_store_api::WriteAuthority;
@@ -57,17 +57,17 @@ fn observation(
 fn epochs_and_authority_reject_invalid_values() {
     for epoch in [i32::MIN, -1, 0] {
         assert_eq!(
-            Err(HaContractError::InvalidMasterEpoch(epoch)),
+            Err(StoreContractViolation::HaInvalidMasterEpoch(epoch)),
             MasterEpoch::try_from(epoch)
         );
         assert_eq!(
-            Err(HaContractError::InvalidSyncStateSetEpoch(epoch)),
+            Err(StoreContractViolation::HaInvalidSyncStateSetEpoch(epoch)),
             SyncStateSetEpoch::try_from(epoch)
         );
     }
 
     assert_eq!(
-        Err(HaContractError::InvalidBrokerId(-1)),
+        Err(StoreContractViolation::HaInvalidBrokerId(-1)),
         WriteAuthority::try_new(-1, MasterEpoch::try_from(1).expect("positive epoch"))
     );
 }
@@ -75,14 +75,17 @@ fn epochs_and_authority_reject_invalid_values() {
 #[test]
 fn ack_policy_rejects_unknown_or_local_only_replica_counts() {
     assert_eq!(
-        Err(HaContractError::InvalidAckPolicy(0)),
+        Err(StoreContractViolation::HaInvalidAckPolicy(0)),
         AckPolicy::try_from_legacy(0, -1)
     );
     assert_eq!(
-        Err(HaContractError::InvalidAckPolicy(-2)),
+        Err(StoreContractViolation::HaInvalidAckPolicy(-2)),
         AckPolicy::try_from_legacy(-2, -1)
     );
-    assert_eq!(Err(HaContractError::InvalidReplicaCount(1)), ReplicaCount::try_new(1));
+    assert_eq!(
+        Err(StoreContractViolation::HaInvalidReplicaCount(1)),
+        ReplicaCount::try_new(1)
+    );
     assert_eq!(Ok(AckPolicy::AllInSyncSet), AckPolicy::try_from_legacy(-1, -1));
     assert_eq!(Ok(AckPolicy::LocalDurable), AckPolicy::try_from_legacy(1, -1));
 }
@@ -90,12 +93,12 @@ fn ack_policy_rejects_unknown_or_local_only_replica_counts() {
 #[test]
 fn sync_state_set_is_non_empty_and_requires_the_current_leader() {
     assert_eq!(
-        Err(HaContractError::EmptySyncStateSet),
+        Err(StoreContractViolation::HaEmptySyncStateSet),
         SyncStateSet::try_new(std::iter::empty())
     );
     let current = authority(1, 7);
     assert_eq!(
-        Err(HaContractError::LeaderMissingFromSyncStateSet(1)),
+        Err(StoreContractViolation::HaLeaderMissingFromSyncStateSet(1)),
         ReplicationObservation::try_new(
             current,
             current,

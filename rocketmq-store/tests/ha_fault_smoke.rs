@@ -17,7 +17,6 @@
 use rocketmq_store_api::decide_replication;
 use rocketmq_store_api::AckPolicy;
 use rocketmq_store_api::AppendReceipt;
-use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::HaRejectReason;
@@ -26,6 +25,7 @@ use rocketmq_store_api::ReplicaAck;
 use rocketmq_store_api::ReplicaCount;
 use rocketmq_store_api::ReplicationDecision;
 use rocketmq_store_api::ReplicationObservation;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::SyncStateSet;
 use rocketmq_store_api::WriteAuthority;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
@@ -137,7 +137,7 @@ fn local_fsync_failure_cannot_be_reported_as_replicated_durability() {
     assert_eq!(
         AppendReceipt::try_new(AppendStatus::PutOk, 0..128, 128, 127, Durability::Replicated)
             .expect_err("local fsync failure cannot produce a replicated receipt"),
-        AppendReceiptError::ReplicatedDurabilityRequiresDecision
+        StoreContractViolation::AppendReceiptReplicatedDurabilityRequiresDecision
     );
 }
 

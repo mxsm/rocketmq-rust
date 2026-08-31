@@ -22,6 +22,7 @@ use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::DerivedRecordId;
+use rocketmq_store_api::StoreContractViolation;
 use rocketmq_tieredstore::dispatcher::DefaultTieredDispatcher;
 use rocketmq_tieredstore::dispatcher::TieredDispatchRequest;
 use rocketmq_tieredstore::dispatcher::TieredDispatcher;
@@ -428,8 +429,12 @@ where
         let length = u32::try_from(request.msg_size)
             .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog length must be positive"))?;
         DerivedRecordId::try_new(self.source_epoch, physical_offset, length)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+            .map_err(|source| tiered_contract("validate tiered dispatch record", source))
     }
+}
+
+fn tiered_contract(operation: &'static str, source: StoreContractViolation) -> RocketMQError {
+    RocketMQError::internal(operation, source)
 }
 
 impl<P> CommitLogDispatcher for TieredCommitLogDispatcher<P>
@@ -565,6 +570,8 @@ pub fn to_tiered_dispatch_request(dispatch_request: &DispatchRequest, body: Byte
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
@@ -607,6 +614,39 @@ mod tests {
         assert_eq!(tiered_request.uniq_key.as_deref(), Some("uniqA"));
         assert_eq!(tiered_request.offset_id.as_deref(), Some("offsetA"));
         assert_eq!(tiered_request.body, Some(Bytes::from_static(b"test")));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_derived_record_preserves_contract_violation_source() -> Result<(), RocketMQError> {
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("tieredstore-derived-record-test");
+        let tiered_store = TieredStore::new(
+            TieredStoreConfig {
+                storage_level: TieredStorageLevel::Force,
+                backend_provider: "memory".to_owned(),
+                store_path_root_dir: temp_dir.path().join("tieredstore"),
+                ..TieredStoreConfig::default()
+            },
+            runtime.root_group().clone(),
+        )?;
+        let adapter = TieredCommitLogDispatcher::new(tiered_store.dispatcher(), Arc::new(|_| None));
+
+        let error = adapter
+            .derived_record(&DispatchRequest {
+                commit_log_offset: 1,
+                msg_size: 0,
+                ..DispatchRequest::default()
+            })
+            .expect_err("an empty derived record must fail");
+
+        assert_eq!(
+            Some(&StoreContractViolation::DerivedRecordEmpty),
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<StoreContractViolation>())
+        );
+        Ok(())
     }
 
     #[tokio::test]

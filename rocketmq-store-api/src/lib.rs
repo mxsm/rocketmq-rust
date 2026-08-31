@@ -14,11 +14,12 @@
 
 #![deny(missing_docs)]
 
-//! Storage capability contracts.
+//! Storage capabilities and their contract-violation model.
 
 mod capability;
 pub mod checkpoint;
 mod checkpoint_artifact;
+mod contract;
 mod error;
 mod ha_contract;
 mod progress;
@@ -42,21 +43,19 @@ pub use checkpoint::CheckpointOffsets;
 pub use checkpoint::CheckpointRequest;
 pub use checkpoint::CheckpointRestoreVerification;
 pub use checkpoint::CheckpointStorageIdentity;
-pub use checkpoint::CheckpointValidationError;
 pub use checkpoint::CHECKPOINT_SCHEMA_VERSION;
 pub use checkpoint_artifact::file_uri_to_path;
 pub use checkpoint_artifact::hash_checkpoint_directory;
 pub use checkpoint_artifact::path_to_file_uri;
-pub use checkpoint_artifact::CheckpointArtifactError;
 pub use checkpoint_artifact::CheckpointDirectoryDigest;
 pub use checkpoint_artifact::RELEASE_CHECKPOINT_MANIFEST_FILE;
+pub use contract::StoreContractViolation;
 pub use error::StoreComponent;
 pub use error::StoreError;
 pub use error::StoreErrorKind;
 pub use error::StoreOperation;
 pub use ha_contract::decide_replication;
 pub use ha_contract::AckPolicy;
-pub use ha_contract::HaContractError;
 pub use ha_contract::HaRejectReason;
 pub use ha_contract::MasterEpoch;
 pub use ha_contract::ReplicaAck;
@@ -70,18 +69,14 @@ pub use ha_contract::WriteAuthority;
 pub use ha_contract::WriteLeaseToken;
 pub use progress::CursorAdvance;
 pub use progress::CursorAdvanceDisposition;
-pub use progress::CursorAdvanceError;
 pub use progress::DerivedCheckpoint;
-pub use progress::DerivedCheckpointDecodeError;
 pub use progress::DerivedCursor;
 pub use progress::DerivedEngine;
 pub use progress::DerivedRecordId;
-pub use progress::DerivedRecordIdError;
 pub use progress::LegacyDerivedCursorV0;
 pub use progress::DERIVED_CHECKPOINT_ENCODED_LEN;
 pub use progress::DERIVED_CHECKPOINT_FORMAT_VERSION;
 pub use timer::PersistedTimerRoute;
-pub use timer::TimerContractError;
 pub use timer::TimerEngineEpoch;
 pub use timer::TimerEngineId;
 pub use timer::TimerGeneration;
@@ -97,12 +92,10 @@ pub use timer::EXTENDED_TIMELINE_FORMAT_VERSION;
 pub use timer::JAVA_COMPAT_TIMER_FORMAT_VERSION;
 pub use timer_snapshot::TimerSnapshotFile;
 pub use timer_snapshot::TimerSnapshotManifest;
-pub use timer_snapshot::TimerSnapshotValidationError;
 pub use timer_snapshot::TimerTimelineIndexKind;
 pub use timer_snapshot::TIMER_SNAPSHOT_SCHEMA_VERSION;
 pub use wal::WalPort;
 
-use std::error::Error as StdError;
 use std::fmt;
 use std::ops::Range;
 
@@ -180,90 +173,43 @@ pub struct AppendReceipt {
     durability: Durability,
 }
 
-/// Invariant violation rejected while constructing an [`AppendReceipt`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AppendReceiptError {
-    /// Represents the empty range case.
-    EmptyRange,
-    /// Represents the reversed range case.
-    ReversedRange,
-    /// Represents the rejected status with range case.
-    RejectedStatusWithRange,
-    /// Represents the accepted status without range case.
-    AcceptedStatusWithoutRange,
-    /// Represents the appended watermark behind range case.
-    AppendedWatermarkBehindRange,
-    /// Represents the durable watermark behind range case.
-    DurableWatermarkBehindRange,
-    /// Represents the durable watermark ahead of appended case.
-    DurableWatermarkAheadOfAppended,
-    /// Represents the memory durability already covered case.
-    MemoryDurabilityAlreadyCovered,
-    /// Represents a replicated claim without a canonical acknowledgement decision.
-    ReplicatedDurabilityRequiresDecision,
-    /// Represents an acknowledgement decision that does not cover the appended range.
-    ReplicationDecisionBehindRange,
-}
-
-impl fmt::Display for AppendReceiptError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::EmptyRange => "appended range is empty",
-            Self::ReversedRange => "appended range is reversed",
-            Self::RejectedStatusWithRange => "rejected append status cannot carry an appended range",
-            Self::AcceptedStatusWithoutRange => "accepted append status requires an appended range",
-            Self::AppendedWatermarkBehindRange => "appended watermark does not cover the appended range",
-            Self::DurableWatermarkBehindRange => "durable watermark does not cover the claimed durability",
-            Self::DurableWatermarkAheadOfAppended => "durable watermark exceeds appended progress",
-            Self::MemoryDurabilityAlreadyCovered => "memory durability under-reports reached local durability",
-            Self::ReplicatedDurabilityRequiresDecision => {
-                "replicated durability requires a canonical replication acknowledgement"
-            }
-            Self::ReplicationDecisionBehindRange => "replication acknowledgement does not cover the appended range",
-        };
-        formatter.write_str(message)
-    }
-}
-
-impl StdError for AppendReceiptError {}
-
 impl AppendReceipt {
     /// Creates a receipt after validating range, status, watermark, and durability invariants.
     ///
     /// # Errors
     ///
-    /// Returns [`AppendReceiptError`] when any receipt field contradicts another field.
+    /// Returns [`StoreContractViolation`] when any receipt field contradicts another field.
     pub fn try_new(
         status: AppendStatus,
         appended_range: Range<i64>,
         appended_watermark: i64,
         durable_watermark: i64,
         durability: Durability,
-    ) -> Result<Self, AppendReceiptError> {
+    ) -> Result<Self, StoreContractViolation> {
         if appended_range.start == appended_range.end {
-            return Err(AppendReceiptError::EmptyRange);
+            return Err(StoreContractViolation::AppendReceiptEmptyRange);
         }
         if appended_range.start > appended_range.end {
-            return Err(AppendReceiptError::ReversedRange);
+            return Err(StoreContractViolation::AppendReceiptReversedRange);
         }
         if !status.is_accepted() {
-            return Err(AppendReceiptError::RejectedStatusWithRange);
+            return Err(StoreContractViolation::AppendReceiptRejectedStatusWithRange);
         }
         if appended_watermark < appended_range.end {
-            return Err(AppendReceiptError::AppendedWatermarkBehindRange);
+            return Err(StoreContractViolation::AppendReceiptAppendedWatermarkBehindRange);
         }
         if durable_watermark > appended_watermark {
-            return Err(AppendReceiptError::DurableWatermarkAheadOfAppended);
+            return Err(StoreContractViolation::AppendReceiptDurableWatermarkAheadOfAppended);
         }
         if durability == Durability::Replicated {
-            return Err(AppendReceiptError::ReplicatedDurabilityRequiresDecision);
+            return Err(StoreContractViolation::AppendReceiptReplicatedDurabilityRequiresDecision);
         }
         match durability {
             Durability::Memory if durable_watermark >= appended_range.end => {
-                return Err(AppendReceiptError::MemoryDurabilityAlreadyCovered);
+                return Err(StoreContractViolation::AppendReceiptMemoryDurabilityAlreadyCovered);
             }
             Durability::Local | Durability::Replicated if durable_watermark < appended_range.end => {
-                return Err(AppendReceiptError::DurableWatermarkBehindRange);
+                return Err(StoreContractViolation::AppendReceiptDurableWatermarkBehindRange);
             }
             Durability::Memory | Durability::Local | Durability::Replicated => {}
         }
@@ -280,7 +226,7 @@ impl AppendReceipt {
     ///
     /// # Errors
     ///
-    /// Returns [`AppendReceiptError`] when receipt fields contradict each other or the supplied
+    /// Returns [`StoreContractViolation`] when receipt fields contradict each other or the supplied
     /// acknowledgement does not cover the complete appended range.
     pub fn try_new_with_replication(
         status: AppendStatus,
@@ -288,9 +234,9 @@ impl AppendReceipt {
         appended_watermark: i64,
         durable_watermark: i64,
         acknowledgement: ReplicationAcknowledgement,
-    ) -> Result<Self, AppendReceiptError> {
+    ) -> Result<Self, StoreContractViolation> {
         if acknowledgement.acknowledged_offset() < appended_range.end {
-            return Err(AppendReceiptError::ReplicationDecisionBehindRange);
+            return Err(StoreContractViolation::AppendReceiptReplicationDecisionBehindRange);
         }
         let mut receipt = Self::try_new(
             status,
@@ -307,17 +253,17 @@ impl AppendReceipt {
     ///
     /// # Errors
     ///
-    /// Returns [`AppendReceiptError`] for an accepted status or reversed progress watermarks.
+    /// Returns [`StoreContractViolation`] for an accepted status or reversed progress watermarks.
     pub const fn try_rejected(
         status: AppendStatus,
         appended_watermark: i64,
         durable_watermark: i64,
-    ) -> Result<Self, AppendReceiptError> {
+    ) -> Result<Self, StoreContractViolation> {
         if status.is_accepted() {
-            return Err(AppendReceiptError::AcceptedStatusWithoutRange);
+            return Err(StoreContractViolation::AppendReceiptAcceptedStatusWithoutRange);
         }
         if durable_watermark > appended_watermark {
-            return Err(AppendReceiptError::DurableWatermarkAheadOfAppended);
+            return Err(StoreContractViolation::AppendReceiptDurableWatermarkAheadOfAppended);
         }
         Ok(Self {
             status,
