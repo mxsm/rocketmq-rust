@@ -80,6 +80,11 @@ use crate::core::config_state::TopicConfigStateRequest;
 use crate::core::config_state::TopicConfigStateResult;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerQueryAdmin;
+use crate::core::consumer_observation::ConsumerObservationQueryAdmin;
+use crate::core::consumer_observation::QueryConsumerGroupDetailsRequest;
+use crate::core::consumer_observation::QueryConsumerGroupDetailsResult;
+use crate::core::consumer_observation::QueryConsumerProgressRequest;
+use crate::core::consumer_observation::QueryConsumerProgressResult;
 use crate::core::message::MessageMetadataQueryAdmin;
 use crate::core::message::MessageMetadataRequest;
 use crate::core::proxy::ProxyDrainPending;
@@ -1213,6 +1218,28 @@ impl TopicObservationQueryAdmin for ReadAdminSession {
         Box::pin(async move {
             self.ensure_open()?;
             crate::topic_observation::query_topic_config(&self.inner, request).await
+        })
+    }
+}
+
+impl ConsumerObservationQueryAdmin for ReadAdminSession {
+    fn query_consumer_group_details<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerGroupDetailsRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerGroupDetailsResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::consumer_observation::query_consumer_group_details(&self.inner, request).await
+        })
+    }
+
+    fn query_consumer_progress<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerProgressRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryConsumerProgressResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::consumer_observation::query_consumer_progress(&self.inner, request).await
         })
     }
 }

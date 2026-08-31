@@ -33,6 +33,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapter::admin_session::SessionConsumerLag;
+use crate::adapter::admin_session::SessionConsumerProgress;
 use crate::adapter::admin_session::SessionTopicRoute;
 use crate::infrastructure::cache::CacheMetricsSnapshot;
 use crate::model::contract::observed_at;
@@ -44,6 +45,7 @@ use crate::model::contract::SourceFailure;
 use crate::model::contract::DEFAULT_PAGE_LIMIT;
 use crate::model::contract::MAX_PAGE_LIMIT;
 use crate::model::contract::SCHEMA_VERSION;
+use crate::tools::consumer_tools::ConsumerProgressQueueRow;
 use crate::tools::consumer_tools::QueueLag;
 use crate::tools::executor::ToolExecutionError;
 use crate::tools::topic_tools::TopicRouteBroker;
@@ -160,6 +162,15 @@ impl RetainedSize for QueueLag {
     }
 }
 
+impl RetainedSize for ConsumerProgressQueueRow {
+    fn retained_heap_size(&self) -> usize {
+        self.topic
+            .retained_heap_size()
+            .saturating_add(self.broker_name.retained_heap_size())
+            .saturating_add(self.last_observed_at.retained_heap_size())
+    }
+}
+
 impl RetainedSize for SessionTopicRoute {
     fn retained_heap_size(&self) -> usize {
         self.brokers
@@ -169,6 +180,12 @@ impl RetainedSize for SessionTopicRoute {
 }
 
 impl RetainedSize for SessionConsumerLag {
+    fn retained_heap_size(&self) -> usize {
+        self.queues.retained_heap_size()
+    }
+}
+
+impl RetainedSize for SessionConsumerProgress {
     fn retained_heap_size(&self) -> usize {
         self.queues.retained_heap_size()
     }
@@ -219,6 +236,7 @@ pub(crate) enum SnapshotKind {
     TopicRoute,
     TopicStats,
     ConsumerLag,
+    ConsumerProgress,
     ConsumerConnections,
     ProducerConnections,
 }
@@ -231,6 +249,7 @@ impl SnapshotKind {
             Self::TopicRoute => "topic_route",
             Self::TopicStats => "topic_stats",
             Self::ConsumerLag => "consumer_lag",
+            Self::ConsumerProgress => "consumer_progress",
             Self::ConsumerConnections => "consumer_connections",
             Self::ProducerConnections => "producer_connections",
         }

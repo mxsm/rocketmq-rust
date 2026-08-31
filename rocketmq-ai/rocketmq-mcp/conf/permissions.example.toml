@@ -16,6 +16,8 @@ allow_tools = [
   "rocketmq_get_consumer_group_config_state",
   "rocketmq_get_topic_stats",
   "rocketmq_get_topic_config",
+  "rocketmq_get_consumer_group_details",
+  "rocketmq_get_consumer_progress",
 ]
 deny_tools = ["*"]
 

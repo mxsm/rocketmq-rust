@@ -61,6 +61,9 @@ use crate::tools::config_tools::ConsumerGroupConfigStateRow;
 use crate::tools::config_tools::TopicConfigStateOutput;
 use crate::tools::config_tools::TopicConfigStateRow;
 use crate::tools::consumer_tools::ConsumerGroupSummary;
+use crate::tools::consumer_tools::ConsumerProgressQueueRow;
+use crate::tools::consumer_tools::ConsumerProgressState;
+use crate::tools::consumer_tools::GetConsumerGroupDetailsOutput;
 use crate::tools::consumer_tools::QueueLag;
 use crate::tools::executor::ToolExecutionError;
 use crate::tools::proxy_tools::ProxyDrainStateOutput;
@@ -68,6 +71,7 @@ use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
 use crate::tools::topic_tools::TopicStatsQueueRow;
 
+mod consumer_observation;
 mod topic_observation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +94,19 @@ pub(crate) struct SessionConsumerLag {
     pub total_lag: i64,
     pub consume_tps: f64,
     pub inflight_total: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SessionConsumerProgress {
+    pub state: ConsumerProgressState,
+    pub topic_count: usize,
+    pub queue_count: usize,
+    pub total_lag: u64,
+    pub max_queue_lag: u64,
+    pub total_inflight: u64,
+    pub consume_tps: f64,
+    pub queues: Vec<ConsumerProgressQueueRow>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +225,28 @@ pub(crate) trait AdminSession: Send {
         topic: &str,
         consumer_group: &str,
     ) -> impl Future<Output = Result<QueryPayload<SessionConsumerLag>, ToolExecutionError>> + Send;
+
+    fn consumer_group_details(
+        &mut self,
+        _consumer_group: &str,
+    ) -> impl Future<Output = Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "consumer group details are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn consumer_progress(
+        &mut self,
+        _consumer_group: &str,
+    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError>> + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "consumer progress is unavailable".to_string(),
+            ))
+        }
+    }
 
     fn probe_broker_runtime_target(
         &mut self,
@@ -492,6 +531,20 @@ impl AdminSession for AdminCoreSession {
             return session.topic_config(topic).await;
         }
         self.query_topic_config_observation(topic).await
+    }
+
+    async fn consumer_group_details(
+        &mut self,
+        consumer_group: &str,
+    ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+        self.query_consumer_group_details_observation(consumer_group).await
+    }
+
+    async fn consumer_progress(
+        &mut self,
+        consumer_group: &str,
+    ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+        self.query_consumer_progress_observation(consumer_group).await
     }
 
     async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {

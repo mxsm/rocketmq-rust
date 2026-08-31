@@ -5638,5 +5638,664 @@ expression: contracts
       "type": "object"
     },
     "title": "RocketMQ Topic configuration"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ consumer group details"
+    },
+    "description": "Get fixed address-free configuration and connection observations for one consumer group.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "consumer_group": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "consumer_group"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_consumer_group_details",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ConsumerConnectionState": {
+          "enum": [
+            "online",
+            "offline"
+          ],
+          "type": "string"
+        },
+        "ConsumerConsumeFromWhere": {
+          "enum": [
+            "last_offset",
+            "last_offset_and_min_first",
+            "min_offset",
+            "max_offset",
+            "first_offset",
+            "timestamp",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ConsumerConsumeType": {
+          "enum": [
+            "pull",
+            "push",
+            "pop",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ConsumerGroupConfigPresence": {
+          "enum": [
+            "present",
+            "absent"
+          ],
+          "type": "string"
+        },
+        "ConsumerGroupDetailsBrokerRow": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "config_state": {
+              "$ref": "#/$defs/ConsumerGroupConfigPresence"
+            },
+            "config_version": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "connection_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "connection_state": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumerConnectionState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "consume_broadcast_enable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "consume_enable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "consume_from_min_enable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "consume_from_where": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumerConsumeFromWhere"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "consume_message_orderly": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "consume_timeout_minutes": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "consume_type": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumerConsumeType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "message_model": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumerMessageModel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notify_consumer_ids_changed_enable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "retry_max_times": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "retry_queue_nums": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "broker_name",
+            "config_state",
+            "connection_count"
+          ],
+          "type": "object"
+        },
+        "ConsumerMessageModel": {
+          "enum": [
+            "broadcasting",
+            "clustering",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "GetConsumerGroupDetailsOutput": {
+          "properties": {
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/ConsumerGroupDetailsBrokerRow"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "consumer_group": {
+              "type": "string"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "total_connection_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cluster",
+            "consumer_group",
+            "total_connection_count",
+            "brokers",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetConsumerGroupDetailsOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ consumer group details"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ consumer progress"
+    },
+    "description": "Get a bounded snapshot page of deterministic per-queue progress and complete aggregate totals.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "consumer_group": {
+          "type": "string"
+        },
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint32",
+          "maximum": 200,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cluster",
+        "consumer_group"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_consumer_progress",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ConsumerProgressQueueRow": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "broker_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "consumer_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "inflight": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lag": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "last_observed_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pull_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "queue_id": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "broker_name",
+            "queue_id",
+            "broker_offset",
+            "consumer_offset",
+            "pull_offset",
+            "lag",
+            "inflight"
+          ],
+          "type": "object"
+        },
+        "ConsumerProgressState": {
+          "enum": [
+            "no_consumption",
+            "observed"
+          ],
+          "type": "string"
+        },
+        "GetConsumerProgressOutput": {
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "consume_tps": {
+              "format": "double",
+              "type": "number"
+            },
+            "consumer_group": {
+              "type": "string"
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "has_more": {
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ConsumerProgressQueueRow"
+              },
+              "type": "array"
+            },
+            "max_queue_lag": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "queue_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "$ref": "#/$defs/ConsumerProgressState"
+            },
+            "topic_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_inflight": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_lag": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "consumer_group",
+            "state",
+            "topic_count",
+            "queue_count",
+            "total_lag",
+            "max_queue_lag",
+            "total_inflight",
+            "consume_tps",
+            "truncated",
+            "items",
+            "count",
+            "total_count",
+            "has_more",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetConsumerProgressOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ consumer progress"
   }
 ]

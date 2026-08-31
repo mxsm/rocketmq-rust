@@ -28,8 +28,16 @@ pub use crate::admin::BrokerReadFailure;
 pub use crate::admin::ConsumeStatsReadResult;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::ConsumerAdmin;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::ConsumerConnectionRead;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::ConsumerGroupConfigRead;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::ConsumerProgressRead;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminConsumerObservationReadExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminMessageReadExt;
 #[cfg(feature = "admin-mutation")]

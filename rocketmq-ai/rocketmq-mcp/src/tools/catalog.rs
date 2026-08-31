@@ -52,6 +52,8 @@ pub enum ToolId {
     GetConsumerGroupConfigState,
     GetTopicStats,
     GetTopicConfig,
+    GetConsumerGroupDetails,
+    GetConsumerProgress,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
     #[cfg(feature = "change-planning")]
@@ -85,6 +87,8 @@ impl ToolId {
         Self::GetConsumerGroupConfigState,
         Self::GetTopicStats,
         Self::GetTopicConfig,
+        Self::GetConsumerGroupDetails,
+        Self::GetConsumerProgress,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
         #[cfg(feature = "change-planning")]
@@ -239,6 +243,20 @@ impl ToolId {
                 "Get fixed address-free Topic configuration observations and semantic differences across Brokers.",
                 RiskLevel::ReadOnly,
             ),
+            Self::GetConsumerGroupDetails => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_consumer_group_details",
+                "RocketMQ consumer group details",
+                "Get fixed address-free configuration and connection observations for one consumer group.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetConsumerProgress => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_consumer_progress",
+                "RocketMQ consumer progress",
+                "Get a bounded snapshot page of deterministic per-queue progress and complete aggregate totals.",
+                RiskLevel::ReadOnly,
+            ),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => ToolDescriptor::read_only(
                 self,
@@ -343,6 +361,14 @@ impl ToolId {
             Self::GetTopicConfig => {
                 descriptor.build::<config_tools::GetTopicConfigArgs, config_tools::GetTopicConfigOutput>()
             }
+            Self::GetConsumerGroupDetails => descriptor.build::<
+                consumer_tools::GetConsumerGroupDetailsArgs,
+                consumer_tools::GetConsumerGroupDetailsOutput,
+            >(),
+            Self::GetConsumerProgress => descriptor.build::<
+                consumer_tools::GetConsumerProgressArgs,
+                consumer_tools::GetConsumerProgressOutput,
+            >(),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => descriptor.build::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(),
             #[cfg(feature = "change-planning")]
@@ -492,9 +518,9 @@ mod tests {
             ]
         );
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 21);
         #[cfg(feature = "change-planning")]
-        assert_eq!(names.len(), 24);
+        assert_eq!(names.len(), 26);
     }
 
     #[test]
@@ -507,6 +533,8 @@ mod tests {
             ToolId::GetConsumerGroupConfigState,
             ToolId::GetTopicStats,
             ToolId::GetTopicConfig,
+            ToolId::GetConsumerGroupDetails,
+            ToolId::GetConsumerProgress,
         ];
         for tool_id in expected {
             let descriptor = tool_id.descriptor();

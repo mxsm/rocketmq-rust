@@ -717,6 +717,42 @@ where
                     success_unlinked_result(descriptor, request_id, cluster, summary, output)
                 })
             }
+            ToolId::GetConsumerGroupDetails => {
+                let args = match decode_args::<consumer_tools::GetConsumerGroupDetailsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.consumer_group_details(args).await.and_then(|output| {
+                    let summary = summary_consumer_group_details(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetConsumerProgress => {
+                let args = match decode_args::<consumer_tools::GetConsumerProgressArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.consumer_progress(args).await.and_then(|output| {
+                    let summary = summary_consumer_progress(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
             #[cfg(feature = "change-planning")]
             ToolId::PlanCreateTopic => {
                 let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
@@ -1174,6 +1210,23 @@ fn summary_topic_config(output: &config_tools::GetTopicConfigOutput) -> String {
     )
 }
 
+fn summary_consumer_group_details(output: &consumer_tools::GetConsumerGroupDetailsOutput) -> String {
+    format!(
+        "Consumer group {} on cluster {} returned {} Broker observations and {} total connections.",
+        output.consumer_group,
+        output.cluster,
+        output.brokers.len(),
+        output.total_connection_count
+    )
+}
+
+fn summary_consumer_progress(output: &consumer_tools::GetConsumerProgressOutput) -> String {
+    format!(
+        "Consumer group {} on cluster {} returned {} of {} queue progress rows with total lag {}.",
+        output.consumer_group, output.cluster, output.page.count, output.queue_count, output.total_lag
+    )
+}
+
 #[cfg(feature = "change-planning")]
 fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
     format!(
@@ -1574,6 +1627,83 @@ mod tests {
             }))
         }
 
+        async fn consumer_group_details(
+            &self,
+            args: consumer_tools::GetConsumerGroupDetailsArgs,
+        ) -> Result<QueryResult<consumer_tools::GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+            let broker_name = if args.consumer_group == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            Ok(QueryResult::bypass(consumer_tools::GetConsumerGroupDetailsOutput {
+                cluster: args.cluster,
+                consumer_group: args.consumer_group,
+                total_connection_count: 0,
+                brokers: vec![consumer_tools::ConsumerGroupDetailsBrokerRow {
+                    broker_name,
+                    config_state: consumer_tools::ConsumerGroupConfigPresence::Present,
+                    config_version: Some(1),
+                    consume_enable: Some(true),
+                    consume_from_min_enable: Some(false),
+                    consume_broadcast_enable: Some(false),
+                    consume_message_orderly: Some(false),
+                    retry_queue_nums: Some(1),
+                    retry_max_times: Some(1),
+                    notify_consumer_ids_changed_enable: Some(true),
+                    consume_timeout_minutes: Some(1),
+                    connection_state: Some(consumer_tools::ConsumerConnectionState::Offline),
+                    connection_count: 0,
+                    consume_type: None,
+                    message_model: None,
+                    consume_from_where: None,
+                }],
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn consumer_progress(
+            &self,
+            args: consumer_tools::GetConsumerProgressArgs,
+        ) -> Result<QueryResult<consumer_tools::GetConsumerProgressOutput>, ToolExecutionError> {
+            let broker_name = if args.consumer_group == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            let items = vec![consumer_tools::ConsumerProgressQueueRow {
+                topic: "orders".to_string(),
+                broker_name,
+                queue_id: 0,
+                broker_offset: 1,
+                consumer_offset: 1,
+                pull_offset: 1,
+                lag: 0,
+                inflight: 0,
+                last_observed_at: None,
+            }];
+            Ok(QueryResult::bypass(consumer_tools::GetConsumerProgressOutput {
+                cluster: args.cluster,
+                consumer_group: args.consumer_group,
+                state: consumer_tools::ConsumerProgressState::Observed,
+                topic_count: 1,
+                queue_count: 1,
+                total_lag: 0,
+                max_queue_lag: 0,
+                total_inflight: 0,
+                consume_tps: 0.0,
+                truncated: false,
+                page: crate::model::contract::Page {
+                    count: items.len(),
+                    total_count: items.len(),
+                    items,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
         async fn diagnose_consumer_lag(
             &self,
             _args: diagnosis_tools::DiagnoseConsumerLagArgs,
@@ -1928,6 +2058,14 @@ mod tests {
                 ToolId::GetTopicConfig,
                 serde_json::json!({"cluster":"local-dev","topic":"orders"}),
             ),
+            (
+                ToolId::GetConsumerGroupDetails,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+            ),
+            (
+                ToolId::GetConsumerProgress,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a","limit":1}),
+            ),
         ];
         for (tool, arguments) in calls {
             let result = executor
@@ -1995,6 +2133,14 @@ mod tests {
             (
                 ToolId::GetTopicConfig,
                 serde_json::json!({"cluster":"local-dev","topic":"orders"}),
+            ),
+            (
+                ToolId::GetConsumerGroupDetails,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+            ),
+            (
+                ToolId::GetConsumerProgress,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a","limit":1}),
             ),
         ];
         for (tool, arguments) in calls {
@@ -2083,6 +2229,14 @@ mod tests {
             (
                 ToolId::GetTopicConfig,
                 serde_json::json!({"cluster":"local-dev","topic":"oversized"}),
+            ),
+            (
+                ToolId::GetConsumerGroupDetails,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"oversized"}),
+            ),
+            (
+                ToolId::GetConsumerProgress,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"oversized"}),
             ),
         ];
         for (tool, arguments) in calls {

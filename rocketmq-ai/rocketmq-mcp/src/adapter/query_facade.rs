@@ -91,6 +91,7 @@ use crate::tools::topic_tools::ListTopicsOutput;
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 use crate::tools::topic_tools::QueryTopicRouteOutput;
 
+mod consumer_observation;
 mod topic_observation;
 
 #[derive(Debug, Clone)]
@@ -227,6 +228,32 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         args: QueryConsumerLagArgs,
     ) -> impl Future<Output = Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError>> + Send;
+
+    fn consumer_group_details(
+        &self,
+        _args: crate::tools::consumer_tools::GetConsumerGroupDetailsArgs,
+    ) -> impl Future<
+        Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolExecutionError>,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "consumer group details are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn consumer_progress(
+        &self,
+        _args: crate::tools::consumer_tools::GetConsumerProgressArgs,
+    ) -> impl Future<
+        Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolExecutionError>,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "consumer progress is unavailable".to_string(),
+            ))
+        }
+    }
 
     fn describe_broker(
         &self,
@@ -1504,6 +1531,20 @@ where
         args: QueryConsumerLagArgs,
     ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
         QueryFacade::query_consumer_lag(self, args).await
+    }
+
+    async fn consumer_group_details(
+        &self,
+        args: crate::tools::consumer_tools::GetConsumerGroupDetailsArgs,
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+        QueryFacade::consumer_group_details(self, args).await
+    }
+
+    async fn consumer_progress(
+        &self,
+        args: crate::tools::consumer_tools::GetConsumerProgressArgs,
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolExecutionError> {
+        QueryFacade::consumer_progress(self, args).await
     }
 
     async fn describe_broker(
