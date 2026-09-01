@@ -1133,9 +1133,8 @@ where
 {
     type Request = MessageReadRequest;
     type Output = Option<MessageReadResult>;
-    type Error = StoreError;
 
-    async fn read(&self, request: Self::Request) -> Result<Self::Output, Self::Error> {
+    async fn read(&self, request: Self::Request) -> Result<Self::Output, StoreError> {
         let result = match request {
             MessageReadRequest::Get {
                 group,

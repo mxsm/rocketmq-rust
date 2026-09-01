@@ -33,26 +33,23 @@ use rocketmq_store_api::StoreOperation;
 struct ContractStore;
 
 impl StoreLifecycle for ContractStore {
-    type Error = StoreError;
-
-    fn load(&mut self) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+    fn load(&mut self) -> impl Future<Output = Result<bool, StoreError>> + Send {
         ready(Ok(true))
     }
 
-    fn start(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn start(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send {
         ready(Ok(()))
     }
 
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send {
         ready(Ok(()))
     }
 }
 
 impl MessageAppender<Bytes> for ContractStore {
     type Receipt = usize;
-    type Error = StoreError;
 
-    fn append_message(&mut self, message: Bytes) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send {
+    fn append_message(&mut self, message: Bytes) -> impl Future<Output = Result<Self::Receipt, StoreError>> + Send {
         ready(Ok(message.len()))
     }
 }
@@ -60,9 +57,8 @@ impl MessageAppender<Bytes> for ContractStore {
 impl MessageReader for ContractStore {
     type Request = MessageQueue;
     type Output = Option<Bytes>;
-    type Error = StoreError;
 
-    fn read(&self, _request: Self::Request) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send {
+    fn read(&self, _request: Self::Request) -> impl Future<Output = Result<Self::Output, StoreError>> + Send {
         ready(Ok(None))
     }
 }
@@ -70,9 +66,8 @@ impl MessageReader for ContractStore {
 impl OffsetIndex for ContractStore {
     type Query = MessageQueue;
     type Output = (i64, i64);
-    type Error = StoreError;
 
-    fn query_offset(&self, _query: &Self::Query) -> Result<Self::Output, Self::Error> {
+    fn query_offset(&self, _query: &Self::Query) -> Result<Self::Output, StoreError> {
         Ok((0, 1))
     }
 }
@@ -88,7 +83,6 @@ impl StoreHealth for ContractStore {
 impl ReplicationControl for ContractStore {
     type Command = i64;
     type State = i64;
-    type Error = StoreError;
 
     fn replication_state(&self) -> Self::State {
         0
@@ -97,7 +91,7 @@ impl ReplicationControl for ContractStore {
     fn apply_replication(
         &mut self,
         command: Self::Command,
-    ) -> impl Future<Output = Result<Self::State, Self::Error>> + Send {
+    ) -> impl Future<Output = Result<Self::State, StoreError>> + Send {
         ready(Ok(command))
     }
 }
@@ -105,12 +99,11 @@ impl ReplicationControl for ContractStore {
 impl DerivedRecordSink for ContractStore {
     type Record = Bytes;
     type Progress = usize;
-    type Error = StoreError;
 
     fn append_derived(
         &mut self,
         record: Self::Record,
-    ) -> impl Future<Output = Result<Self::Progress, Self::Error>> + Send {
+    ) -> impl Future<Output = Result<Self::Progress, StoreError>> + Send {
         ready(Ok(record.len()))
     }
 }
@@ -118,9 +111,8 @@ impl DerivedRecordSink for ContractStore {
 impl AdminStore for ContractStore {
     type Request = ();
     type Response = ();
-    type Error = StoreError;
 
-    fn execute_admin(&mut self, (): Self::Request) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
+    fn execute_admin(&mut self, (): Self::Request) -> impl Future<Output = Result<Self::Response, StoreError>> + Send {
         ready(Ok(()))
     }
 }
@@ -140,13 +132,13 @@ where
 
 fn assert_static_append_future<T>(store: &mut T) -> impl Future<Output = Result<usize, StoreError>> + Send + '_
 where
-    T: MessageAppender<Bytes, Receipt = usize, Error = StoreError>,
+    T: MessageAppender<Bytes, Receipt = usize>,
 {
     store.append_message(Bytes::from_static(b"message"))
 }
 
 #[test]
-fn capabilities_are_associated_type_contracts_with_static_append_future() {
+fn capabilities_use_store_error_with_static_append_future() {
     assert_capabilities::<ContractStore>();
     let mut store = ContractStore;
     let _future = assert_static_append_future(&mut store);

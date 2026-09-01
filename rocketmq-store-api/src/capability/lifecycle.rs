@@ -12,32 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
 use std::future::Future;
+
+use crate::StoreError;
 
 /// Storage lifecycle capability.
 pub trait StoreLifecycle: Send + Sync {
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
-
     /// Loads existing state.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when state cannot be loaded safely.
-    fn load(&mut self) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Load`] when state
+    /// cannot be loaded safely.
+    fn load(&mut self) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     /// Starts the store within its existing lifecycle owner.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when startup cannot establish a usable store.
-    fn start(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Start`] when
+    /// startup cannot establish a usable store.
+    fn start(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// Stops the store and completes its owned shutdown sequence.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when final progress or shutdown fails.
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Shutdown`] when
+    /// final progress or shutdown fails.
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
 }

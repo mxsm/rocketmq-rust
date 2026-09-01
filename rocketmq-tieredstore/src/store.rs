@@ -16,6 +16,9 @@ use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -207,24 +210,35 @@ impl<P> rocketmq_store_api::StoreLifecycle for TieredStore<P>
 where
     P: TieredStoreProvider,
 {
-    type Error = RocketMQError;
-
-    async fn load(&mut self) -> Result<bool, Self::Error> {
-        TieredLifecycle::load(self).await?;
+    async fn load(&mut self) -> Result<bool, StoreError> {
+        TieredLifecycle::load(self)
+            .await
+            .map_err(|source| tiered_lifecycle_error(StoreOperation::Load, source))?;
         Ok(true)
     }
 
-    async fn start(&mut self) -> Result<(), Self::Error> {
-        TieredLifecycle::start(self).await
+    async fn start(&mut self) -> Result<(), StoreError> {
+        TieredLifecycle::start(self)
+            .await
+            .map_err(|source| tiered_lifecycle_error(StoreOperation::Start, source))
     }
 
-    async fn shutdown(&mut self) -> Result<(), Self::Error> {
-        TieredLifecycle::shutdown(self).await
+    async fn shutdown(&mut self) -> Result<(), StoreError> {
+        TieredLifecycle::shutdown(self)
+            .await
+            .map_err(|source| tiered_lifecycle_error(StoreOperation::Shutdown, source))
     }
+}
+
+fn tiered_lifecycle_error(operation: StoreOperation, source: RocketMQError) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation)
+        .in_component(StoreComponent::TieredStore)
+        .with_source(source)
 }
 
 #[cfg(test)]
 mod store_api_tests {
+    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store_api::StoreLifecycle;
 
@@ -249,5 +263,29 @@ mod store_api_tests {
         StoreLifecycle::shutdown(&mut store)
             .await
             .expect("shutdown tiered store");
+    }
+
+    #[test]
+    fn tiered_lifecycle_mapping_retains_each_operation_and_typed_source() {
+        for operation in [StoreOperation::Load, StoreOperation::Start, StoreOperation::Shutdown] {
+            let error = tiered_lifecycle_error(
+                operation,
+                RocketMQError::internal("tiered-test", std::io::Error::other("private remote response")),
+            );
+
+            assert_eq!(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, error.descriptor());
+            assert_eq!(operation, error.operation());
+            assert_eq!(StoreComponent::TieredStore, error.component());
+            assert!(std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<RocketMQError>())
+                .is_some());
+            assert!(error
+                .public_view()
+                .expect("valid public view")
+                .fields()
+                .next()
+                .is_none());
+            assert!(!format!("{error:?}").contains("private remote response"));
+        }
     }
 }

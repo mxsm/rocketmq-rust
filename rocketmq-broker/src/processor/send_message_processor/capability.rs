@@ -363,9 +363,8 @@ fn append_store_unavailable() -> StoreError {
 
 impl MessageAppender<MessageExtBrokerInner> for SendMessageStoreCapability {
     type Receipt = StoreAppendReceipt;
-    type Error = StoreError;
 
-    async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, Self::Error> {
+    async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, StoreError> {
         self.provider()
             .map_err(|_| append_store_unavailable())?
             .append_message(message)
@@ -375,9 +374,8 @@ impl MessageAppender<MessageExtBrokerInner> for SendMessageStoreCapability {
 
 impl MessageAppender<MessageExtBatch> for SendMessageStoreCapability {
     type Receipt = StoreAppendReceipt;
-    type Error = StoreError;
 
-    async fn append_message(&mut self, message: MessageExtBatch) -> Result<Self::Receipt, Self::Error> {
+    async fn append_message(&mut self, message: MessageExtBatch) -> Result<Self::Receipt, StoreError> {
         self.provider()
             .map_err(|_| append_store_unavailable())?
             .append_batch(message)

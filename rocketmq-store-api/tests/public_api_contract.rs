@@ -27,6 +27,10 @@ use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreateRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
@@ -54,6 +58,79 @@ fn storage_api_is_consumed_only_through_root_exports() {
     assert!(!source.contains(concat!("StoreError", "Kind")));
     assert!(!error_source.contains(concat!("StoreError", "Kind")));
     assert!(!error_source.contains("impl DomainError for StoreError"));
+}
+
+#[test]
+fn operational_capabilities_expose_one_error_identity_and_exact_checkpoint_outcomes() {
+    let capability_sources = [
+        include_str!("../src/capability/admin.rs"),
+        include_str!("../src/capability/appender.rs"),
+        include_str!("../src/capability/derived.rs"),
+        include_str!("../src/capability/lifecycle.rs"),
+        include_str!("../src/capability/offset.rs"),
+        include_str!("../src/capability/reader.rs"),
+        include_str!("../src/capability/release_checkpoint.rs"),
+        include_str!("../src/capability/replication.rs"),
+    ];
+    assert!(capability_sources.iter().all(|source| !source.contains("type Error:")));
+
+    let create_rejections = [
+        ReleaseCheckpointCreateRejection::AuthorizationExpired,
+        ReleaseCheckpointCreateRejection::CapabilityNotGranted,
+        ReleaseCheckpointCreateRejection::AlreadyExists,
+        ReleaseCheckpointCreateRejection::CapacityExceeded {
+            actual_bytes: 2,
+            maximum_bytes: 1,
+        },
+    ];
+    assert_eq!(
+        ["authorization", "capability", "exists", "capacity"],
+        create_rejections.map(create_rejection_name)
+    );
+
+    let restore_rejections = [
+        ReleaseCheckpointRestoreRejection::AuthorizationExpired,
+        ReleaseCheckpointRestoreRejection::CapabilityNotGranted,
+    ];
+    assert_eq!(
+        ["authorization", "capability"],
+        restore_rejections.map(restore_rejection_name)
+    );
+    let _create_classifier: fn(ReleaseCheckpointCreateOutcome) -> &'static str = create_outcome_name;
+    let _restore_classifier: fn(ReleaseCheckpointRestoreOutcome) -> &'static str = restore_outcome_name;
+}
+
+fn create_outcome_name(outcome: ReleaseCheckpointCreateOutcome) -> &'static str {
+    match outcome {
+        ReleaseCheckpointCreateOutcome::Created(_) => "created",
+        ReleaseCheckpointCreateOutcome::Rejected(rejection) => create_rejection_name(rejection),
+    }
+}
+
+fn create_rejection_name(rejection: ReleaseCheckpointCreateRejection) -> &'static str {
+    match rejection {
+        ReleaseCheckpointCreateRejection::AuthorizationExpired => "authorization",
+        ReleaseCheckpointCreateRejection::CapabilityNotGranted => "capability",
+        ReleaseCheckpointCreateRejection::AlreadyExists => "exists",
+        ReleaseCheckpointCreateRejection::CapacityExceeded {
+            actual_bytes: _,
+            maximum_bytes: _,
+        } => "capacity",
+    }
+}
+
+fn restore_outcome_name(outcome: ReleaseCheckpointRestoreOutcome) -> &'static str {
+    match outcome {
+        ReleaseCheckpointRestoreOutcome::Verified(_) => "verified",
+        ReleaseCheckpointRestoreOutcome::Rejected(rejection) => restore_rejection_name(rejection),
+    }
+}
+
+fn restore_rejection_name(rejection: ReleaseCheckpointRestoreRejection) -> &'static str {
+    match rejection {
+        ReleaseCheckpointRestoreRejection::AuthorizationExpired => "authorization",
+        ReleaseCheckpointRestoreRejection::CapabilityNotGranted => "capability",
+    }
 }
 
 #[test]

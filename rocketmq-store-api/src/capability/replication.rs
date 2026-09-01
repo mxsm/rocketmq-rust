@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
 use std::future::Future;
+
+use crate::StoreError;
 
 /// Replication control capability with implementation-owned command and state values.
 pub trait ReplicationControl: Send + Sync {
@@ -21,8 +22,6 @@ pub trait ReplicationControl: Send + Sync {
     type Command: Send;
     /// Value type used for state.
     type State: Send;
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
 
     /// Returns current replication state.
     fn replication_state(&self) -> Self::State;
@@ -31,9 +30,10 @@ pub trait ReplicationControl: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the command violates store invariants.
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Replicate`] when
+    /// the replication operation fails.
     fn apply_replication(
         &mut self,
         command: Self::Command,
-    ) -> impl Future<Output = Result<Self::State, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::State, StoreError>> + Send;
 }

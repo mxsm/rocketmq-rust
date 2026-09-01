@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
 use std::future::Future;
+
+use crate::StoreError;
 
 /// Message read capability with implementation-owned request and output values.
 ///
@@ -32,13 +33,12 @@ pub trait MessageReader: Send + Sync {
     type Request: Send;
     /// Value type used for output.
     type Output: Send;
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
 
     /// Reads a bounded message window.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the requested data cannot be read safely.
-    fn read(&self, request: Self::Request) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Read`] when the
+    /// requested data cannot be read safely.
+    fn read(&self, request: Self::Request) -> impl Future<Output = Result<Self::Output, StoreError>> + Send;
 }

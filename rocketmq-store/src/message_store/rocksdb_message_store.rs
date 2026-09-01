@@ -551,16 +551,15 @@ fn message_store_adapter_error(operation: StoreOperation, error: RocksDbMessageS
         RocksDbMessageStoreError::Config(message) => {
             StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
                 .in_component(StoreComponent::Configuration)
-                .with_detail(message)
+                .with_detail(message.clone())
+                .with_source(RocksDbMessageStoreError::Config(message))
         }
         RocksDbMessageStoreError::Backend { source } => {
             StoreError::new(rocksdb_failure_descriptor(operation), operation)
                 .in_component(StoreComponent::RocksDb)
                 .with_source(source)
         }
-        RocksDbMessageStoreError::Local { source } => StoreError::new(rocksdb_failure_descriptor(operation), operation)
-            .in_component(StoreComponent::Store)
-            .with_source(source),
+        RocksDbMessageStoreError::Local { source } => source,
     }
 }
 
@@ -1396,18 +1395,30 @@ mod adapter_tests {
         assert_eq!(config.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
         assert_eq!(config.operation(), StoreOperation::Start);
         assert_eq!(config.component(), StoreComponent::Configuration);
+        assert!(std::error::Error::source(&config)
+            .and_then(|source| source.downcast_ref::<RocksDbMessageStoreError>())
+            .is_some());
+        assert!(config
+            .public_view()
+            .expect("valid public view")
+            .fields()
+            .next()
+            .is_none());
         assert!(!config.to_string().contains("private configuration detail"));
+        assert!(!format!("{config:?}").contains("private configuration detail"));
 
         let local_source = StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
-            .in_component(StoreComponent::CommitLog);
+            .in_component(StoreComponent::CommitLog)
+            .with_source(std::io::Error::other("private Local source"));
         let local = message_store_adapter_error(
             StoreOperation::Read,
             RocksDbMessageStoreError::Local { source: local_source },
         );
         assert_eq!(local.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
-        assert_eq!(local.component(), StoreComponent::Store);
+        assert_eq!(local.operation(), StoreOperation::Read);
+        assert_eq!(local.component(), StoreComponent::CommitLog);
         assert!(std::error::Error::source(&local)
-            .and_then(|source| source.downcast_ref::<StoreError>())
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
             .is_some());
     }
 }

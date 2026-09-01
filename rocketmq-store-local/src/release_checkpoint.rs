@@ -46,9 +46,15 @@ use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
 use rocketmq_store_api::path_to_file_uri;
 use rocketmq_store_api::CheckpointDirectoryDigest;
+use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreateRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::RELEASE_CHECKPOINT_MANIFEST_FILE;
 use sha2::Digest;
 use sha2::Sha256;
@@ -158,17 +164,15 @@ impl<B> LocalReleaseCheckpointService<B> {
     }
 }
 
-impl<B> ReleaseCheckpointStore for LocalReleaseCheckpointService<B>
+impl<B> LocalReleaseCheckpointService<B>
 where
     B: LocalReleaseCheckpointBarrier,
 {
-    type Error = LocalReleaseCheckpointError;
-
-    async fn create_release_checkpoint(
+    async fn create_release_checkpoint_inner(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<StoreReleaseCheckpointManifest, Self::Error> {
+    ) -> Result<StoreReleaseCheckpointManifest, LocalReleaseCheckpointError> {
         validate_authorization(authorization)?;
         request.validate()?;
         let deadline = authorization_deadline(authorization)?;
@@ -216,11 +220,11 @@ where
         Ok(manifest)
     }
 
-    async fn restore_verify_release_checkpoint(
+    async fn restore_verify_release_checkpoint_inner(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreVerification, Self::Error> {
+    ) -> Result<ReleaseCheckpointRestoreVerification, LocalReleaseCheckpointError> {
         validate_authorization(authorization)?;
         manifest.validate()?;
         if manifest.backend != ReleaseCheckpointBackend::Local {
@@ -271,6 +275,146 @@ where
         };
         verification.validate()?;
         Ok(verification)
+    }
+}
+
+impl<B> ReleaseCheckpointStore for LocalReleaseCheckpointService<B>
+where
+    B: LocalReleaseCheckpointBarrier,
+{
+    async fn create_release_checkpoint(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: StoreReleaseCheckpointRequest,
+    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+        match self.create_release_checkpoint_inner(authorization, request).await {
+            Ok(manifest) => Ok(ReleaseCheckpointCreateOutcome::Created(manifest)),
+            Err(LocalReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                ReleaseCheckpointCreateRejection::AuthorizationExpired,
+            )),
+            Err(LocalReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                ReleaseCheckpointCreateRejection::CapabilityNotGranted,
+            )),
+            Err(LocalReleaseCheckpointError::CheckpointAlreadyExists(_)) => Ok(
+                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
+            ),
+            Err(LocalReleaseCheckpointError::CheckpointTooLarge { actual, maximum }) => Ok(
+                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::CapacityExceeded {
+                    actual_bytes: actual,
+                    maximum_bytes: maximum,
+                }),
+            ),
+            Err(error) => Err(local_checkpoint_error(StoreOperation::Flush, error)),
+        }
+    }
+
+    async fn restore_verify_release_checkpoint(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        manifest: &StoreReleaseCheckpointManifest,
+    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+        match self
+            .restore_verify_release_checkpoint_inner(authorization, manifest)
+            .await
+        {
+            Ok(verification) => Ok(ReleaseCheckpointRestoreOutcome::Verified(verification)),
+            Err(LocalReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
+                ReleaseCheckpointRestoreRejection::AuthorizationExpired,
+            )),
+            Err(LocalReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
+                ReleaseCheckpointRestoreRejection::CapabilityNotGranted,
+            )),
+            Err(error) => Err(local_checkpoint_error(StoreOperation::Read, error)),
+        }
+    }
+}
+
+fn local_checkpoint_error(operation: StoreOperation, error: LocalReleaseCheckpointError) -> StoreError {
+    match error {
+        LocalReleaseCheckpointError::Artifact(source) => source,
+        LocalReleaseCheckpointError::Barrier { source } => {
+            checkpoint_boxed_source_error(&rocketmq_error::STORAGE_WRITE_FAILED, operation, source)
+        }
+        LocalReleaseCheckpointError::RestoreVerification { source } => {
+            checkpoint_boxed_source_error(&rocketmq_error::STORAGE_READ_FAILED, operation, source)
+        }
+        LocalReleaseCheckpointError::Runtime(source) => {
+            StoreError::new(runtime_error_descriptor(&source), operation).with_source(source)
+        }
+        LocalReleaseCheckpointError::Validation(source) => {
+            StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
+                .in_component(StoreComponent::Configuration)
+                .with_source(source)
+        }
+        error => {
+            let descriptor = match &error {
+                LocalReleaseCheckpointError::InvalidConfiguration(_)
+                | LocalReleaseCheckpointError::StorageIdentityMismatch
+                | LocalReleaseCheckpointError::WrongBackend
+                | LocalReleaseCheckpointError::OverlappingRoots
+                | LocalReleaseCheckpointError::ReservedManifestInSource
+                | LocalReleaseCheckpointError::EmptyCheckpoint
+                | LocalReleaseCheckpointError::SymbolicLink(_)
+                | LocalReleaseCheckpointError::UnsupportedFileType(_)
+                | LocalReleaseCheckpointError::PathEscaped(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
+                LocalReleaseCheckpointError::BarrierOffsetsChanged { .. }
+                | LocalReleaseCheckpointError::RestoreOffsetsChanged { .. }
+                | LocalReleaseCheckpointError::ArtifactChecksumMismatch => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+                LocalReleaseCheckpointError::Serialize(_) => &rocketmq_error::STORAGE_WRITE_FAILED,
+                LocalReleaseCheckpointError::Clock(_) | LocalReleaseCheckpointError::ClockOverflow => {
+                    &rocketmq_error::STORAGE_INTERNAL_FAILURE
+                }
+                LocalReleaseCheckpointError::Io { .. } => &rocketmq_error::STORAGE_IO_FAILED,
+                LocalReleaseCheckpointError::AuthorizationExpired
+                | LocalReleaseCheckpointError::UnauthorizedCapability
+                | LocalReleaseCheckpointError::CheckpointAlreadyExists(_)
+                | LocalReleaseCheckpointError::CheckpointTooLarge { .. }
+                | LocalReleaseCheckpointError::Barrier { .. }
+                | LocalReleaseCheckpointError::RestoreVerification { .. }
+                | LocalReleaseCheckpointError::Artifact(_)
+                | LocalReleaseCheckpointError::Runtime(_)
+                | LocalReleaseCheckpointError::Validation(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            };
+            let component = if matches!(&error, LocalReleaseCheckpointError::InvalidConfiguration(_)) {
+                StoreComponent::Configuration
+            } else {
+                StoreComponent::Store
+            };
+            StoreError::new(descriptor, operation)
+                .in_component(component)
+                .with_source(error)
+        }
+    }
+}
+
+fn checkpoint_boxed_source_error(
+    descriptor: &'static rocketmq_error::ErrorDescriptor,
+    operation: StoreOperation,
+    source: Box<dyn std::error::Error + Send + Sync>,
+) -> StoreError {
+    match source.downcast::<StoreError>() {
+        Ok(source) => *source,
+        Err(source) => StoreError::new(descriptor, operation).with_boxed_source(source),
+    }
+}
+
+fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::ErrorDescriptor {
+    match source {
+        RuntimeError::InvalidConfig(_) | RuntimeError::Configuration(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
+        RuntimeError::BuildRuntime(_) | RuntimeError::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
+        RuntimeError::NoCurrentRuntime | RuntimeError::TaskGroupClosing { .. } => {
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+        }
+        RuntimeError::InsideTokioRuntime(_) | RuntimeError::UnsupportedBlockingKind { .. } => {
+            &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
+        }
+        RuntimeError::BlockingQueueTimeout { .. } | RuntimeError::BlockingTaskTimeoutStillRunning { .. } => {
+            &rocketmq_error::STORAGE_OPERATION_TIMED_OUT
+        }
+        RuntimeError::BlockingQueueFull { .. } => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        RuntimeError::BlockingJoin { .. }
+        | RuntimeError::ScheduledTaskExists { .. }
+        | RuntimeError::LifecycleOperation { .. } => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
     }
 }
 
@@ -582,4 +726,68 @@ pub enum LocalReleaseCheckpointError {
         #[source]
         source: io::Error,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("private checkpoint cause: {0}")]
+    struct CheckpointCause(&'static str);
+
+    fn nested_store_error() -> StoreError {
+        StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+            .in_component(StoreComponent::CommitLog)
+            .with_detail("private-local-checkpoint-path")
+            .with_source(CheckpointCause("private-local-source"))
+    }
+
+    #[test]
+    fn contained_checkpoint_store_error_is_forwarded_without_remapping_or_redaction_loss() {
+        for backend_error in [
+            LocalReleaseCheckpointError::Artifact(nested_store_error()),
+            LocalReleaseCheckpointError::Barrier {
+                source: Box::new(nested_store_error()),
+            },
+        ] {
+            let error = local_checkpoint_error(StoreOperation::Flush, backend_error);
+
+            assert_eq!(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, error.descriptor());
+            assert_eq!(StoreOperation::Append, error.operation());
+            assert_eq!(StoreComponent::CommitLog, error.component());
+            assert!(std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<CheckpointCause>())
+                .is_some());
+            assert!(error
+                .public_view()
+                .expect("valid public view")
+                .fields()
+                .next()
+                .is_none());
+            assert!(!error.to_string().contains("private-local"));
+            assert!(!format!("{error:?}").contains("private-local"));
+        }
+    }
+
+    #[test]
+    fn local_checkpoint_leaf_mapping_keeps_operation_component_and_typed_source() {
+        let error = local_checkpoint_error(
+            StoreOperation::Read,
+            LocalReleaseCheckpointError::InvalidConfiguration("private-root".to_string()),
+        );
+
+        assert_eq!(&rocketmq_error::STORAGE_REQUEST_INVALID, error.descriptor());
+        assert_eq!(StoreOperation::Read, error.operation());
+        assert_eq!(StoreComponent::Configuration, error.component());
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<LocalReleaseCheckpointError>())
+            .is_some());
+        assert!(error
+            .public_view()
+            .expect("valid public view")
+            .fields()
+            .next()
+            .is_none());
+    }
 }

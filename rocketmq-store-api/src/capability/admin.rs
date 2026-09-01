@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
 use std::future::Future;
+
+use crate::StoreError;
 
 /// Administrative storage capability with implementation-owned values.
 pub trait AdminStore: Send {
@@ -21,16 +22,15 @@ pub trait AdminStore: Send {
     type Request: Send;
     /// Value type used for response.
     type Response: Send;
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
 
     /// Executes one bounded administrative operation.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the operation is rejected or fails.
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Admin`] when the
+    /// administrative operation fails.
     fn execute_admin(
         &mut self,
         request: Self::Request,
-    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::Response, StoreError>> + Send;
 }
