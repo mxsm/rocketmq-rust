@@ -46,6 +46,9 @@ use crate::guard::audit::AuditStatus;
 use crate::guard::context::RequestContext;
 use crate::guard::policy::PolicyEngine;
 use crate::guard::rate_limit::RateLimiter;
+use crate::resources::uri::ResourceAuthorization;
+use crate::resources::uri::ResourceKind;
+use crate::tools::catalog::ToolId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,24 +98,6 @@ pub enum GuardError {
 
     #[error("change planning disabled: {0}")]
     ChangePlanningDisabled(String),
-}
-
-impl GuardError {
-    pub(crate) fn code(&self) -> &'static str {
-        match self {
-            Self::InvalidArgument(_) => "invalid_arguments",
-            Self::PermissionDenied(_) => "permission_denied",
-            Self::UnauthorizedScope(_) => "unauthorized_scope",
-            Self::TenantMismatch(_) => "tenant_mismatch",
-            Self::ClusterNotAllowed(_) => "cluster_not_allowed",
-            Self::RateLimited(_) => "rate_limited",
-            Self::ChangePlanningDisabled(_) => "change_planning_disabled",
-        }
-    }
-
-    pub(crate) fn retryable(&self) -> bool {
-        matches!(self, Self::RateLimited(_))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -304,28 +289,100 @@ impl Guard {
             .map_err(|_| GuardError::RateLimited(format!("cluster `{cluster}` has reached its concurrency limit")))
     }
 
-    pub fn authorize_resource(&self, context: &RequestContext, cluster: &str) -> Result<(), GuardError> {
+    pub fn authorize_resource(
+        &self,
+        context: &RequestContext,
+        cluster: &str,
+        kind: &ResourceKind,
+    ) -> Result<(), GuardError> {
+        match kind.authorization() {
+            ResourceAuthorization::Tool(tool) => {
+                let descriptor = tool.descriptor();
+                self.policy
+                    .authorize_tool(&context.principal, descriptor.name, None, descriptor.risk_level)?;
+            }
+            ResourceAuthorization::Capabilities => {
+                if !ToolId::ALL.iter().copied().any(|tool| {
+                    let descriptor = tool.descriptor();
+                    self.policy
+                        .authorize_tool(&context.principal, descriptor.name, None, descriptor.risk_level)
+                        .is_ok()
+                }) {
+                    return Err(GuardError::PermissionDenied(
+                        "principal has no visible tools".to_string(),
+                    ));
+                }
+            }
+            ResourceAuthorization::SystemDiagnostics => {
+                return Err(GuardError::InvalidArgument(
+                    "system resources are not cluster scoped".to_string(),
+                ));
+            }
+        }
+        if !self.allowed_clusters.iter().any(|configured| configured == cluster) {
+            return Err(GuardError::ClusterNotAllowed(format!(
+                "cluster `{cluster}` is not configured"
+            )));
+        }
         self.validate_tenant(context, cluster)?;
-        self.policy.authorize_resource(&context.principal, cluster)
+        match kind.authorization() {
+            ResourceAuthorization::Tool(tool) => {
+                let descriptor = tool.descriptor();
+                self.policy.authorize_tool(
+                    &context.principal,
+                    descriptor.name,
+                    Some(cluster),
+                    descriptor.risk_level,
+                )
+            }
+            ResourceAuthorization::Capabilities => {
+                if ToolId::ALL.iter().copied().any(|tool| {
+                    let descriptor = tool.descriptor();
+                    self.policy
+                        .authorize_tool(
+                            &context.principal,
+                            descriptor.name,
+                            Some(cluster),
+                            descriptor.risk_level,
+                        )
+                        .is_ok()
+                }) {
+                    Ok(())
+                } else {
+                    Err(GuardError::PermissionDenied(
+                        "principal has no visible tools for the requested cluster".to_string(),
+                    ))
+                }
+            }
+            ResourceAuthorization::SystemDiagnostics => Err(GuardError::InvalidArgument(
+                "system resources are not cluster scoped".to_string(),
+            )),
+        }
     }
 
     pub fn begin_resource_read(
         &self,
         context: &RequestContext,
         cluster: &str,
-        resource_uri: &str,
+        kind: &ResourceKind,
     ) -> Result<GuardedResourceRead, GuardError> {
+        let risk_level = match kind.authorization() {
+            ResourceAuthorization::Tool(tool) => tool.descriptor().risk_level,
+            ResourceAuthorization::Capabilities => RiskLevel::ReadOnly,
+            ResourceAuthorization::SystemDiagnostics => RiskLevel::Diagnose,
+        };
         let mut guarded = GuardedResourceRead {
             guard: self.clone(),
             request_id: self.allocate_request_id(),
             principal: context.principal.clone(),
             client: context.client.clone(),
             cluster: Some(cluster.to_string()),
-            resource_uri: resource_uri.to_string(),
+            resource_operation: kind.audit_operation(),
+            risk_level,
             started_at: Instant::now(),
             _cluster_permit: None,
         };
-        if let Err(error) = self.authorize_resource(context, cluster) {
+        if let Err(error) = self.authorize_resource(context, cluster, kind) {
             guarded.record_failure(error.to_string());
             return Err(error);
         }
@@ -351,7 +408,7 @@ impl Guard {
     pub fn begin_system_resource_read(
         &self,
         context: &RequestContext,
-        resource_uri: &str,
+        kind: &ResourceKind,
     ) -> Result<GuardedResourceRead, GuardError> {
         let guarded = GuardedResourceRead {
             guard: self.clone(),
@@ -359,7 +416,8 @@ impl Guard {
             principal: context.principal.clone(),
             client: context.client.clone(),
             cluster: None,
-            resource_uri: resource_uri.to_string(),
+            resource_operation: kind.audit_operation(),
+            risk_level: RiskLevel::Diagnose,
             started_at: Instant::now(),
             _cluster_permit: None,
         };
@@ -383,12 +441,57 @@ impl Guard {
         self.policy.allows_tool(&context.principal, tool_name, risk)
     }
 
+    pub fn allows_tool_on_cluster(&self, context: &RequestContext, tool: ToolId, cluster: &str) -> bool {
+        if !self.allowed_clusters.iter().any(|configured| configured == cluster)
+            || self.validate_tenant(context, cluster).is_err()
+        {
+            return false;
+        }
+        let descriptor = tool.descriptor();
+        self.policy
+            .authorize_tool(
+                &context.principal,
+                descriptor.name,
+                Some(cluster),
+                descriptor.risk_level,
+            )
+            .is_ok()
+    }
+
+    pub fn allows_resource(&self, context: &RequestContext, cluster: &str, kind: &ResourceKind) -> bool {
+        self.authorize_resource(context, cluster, kind).is_ok()
+    }
+
     pub fn allows_resources(&self, context: &RequestContext) -> bool {
         self.policy.allows_resources(&context.principal)
     }
 
     pub fn allows_system_resources(&self, context: &RequestContext) -> bool {
         self.policy.allows_system_resources(&context.principal)
+    }
+
+    pub(crate) fn record_resource_rejection(
+        &self,
+        context: &RequestContext,
+        operation: &'static str,
+        reason: &'static str,
+    ) {
+        if !self.audit_config.enabled {
+            return;
+        }
+        let record = AuditRecord::new(
+            self.allocate_request_id(),
+            context.principal.id.clone(),
+            context.client.clone(),
+            None,
+            operation.to_string(),
+            hash_arguments(&JsonObject::new()),
+            RiskLevel::ReadOnly,
+            AuditStatus::Failure,
+            0,
+            Some(reason.to_string()),
+        );
+        self.audit_log.record(&self.audit_config, record);
     }
 
     #[cfg(feature = "streamable-http")]
@@ -736,6 +839,71 @@ mod tests {
         assert!(!read_only.allows_system_resources(&read_only.local_request_context()));
     }
 
+    #[test]
+    fn scoped_resource_authorization_uses_exact_backing_tool_role_and_cluster() {
+        let read_only = test_guard("read_only", false, 60);
+        let context = read_only.local_request_context();
+        for kind in [
+            ResourceKind::BrokerConfigSummary("broker-a".to_string()),
+            ResourceKind::TopicStats("orders".to_string()),
+            ResourceKind::TopicConfig("orders".to_string()),
+            ResourceKind::ConsumerProgress("group-a".to_string()),
+        ] {
+            assert!(read_only.authorize_resource(&context, "local-dev", &kind).is_ok());
+        }
+        let diagnostics = ResourceKind::BrokerDiagnostics("broker-a".to_string());
+        assert!(matches!(
+            read_only.authorize_resource(&context, "local-dev", &diagnostics),
+            Err(GuardError::UnauthorizedScope(_) | GuardError::PermissionDenied(_))
+        ));
+        assert!(read_only
+            .authorize_resource(
+                &context,
+                "missing-cluster",
+                &ResourceKind::TopicConfig("orders".to_string())
+            )
+            .is_err());
+
+        let mut cluster_limited = context.clone();
+        cluster_limited.principal.allowed_clusters = Some(["other-cluster".to_string()].into_iter().collect());
+        assert!(matches!(
+            read_only.authorize_resource(
+                &cluster_limited,
+                "local-dev",
+                &ResourceKind::TopicConfig("orders".to_string())
+            ),
+            Err(GuardError::ClusterNotAllowed(_))
+        ));
+
+        let custom = test_guard("custom", false, 60);
+        assert!(custom
+            .authorize_resource(
+                &custom.local_request_context(),
+                "local-dev",
+                &ResourceKind::TopicConfig("orders".to_string()),
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn diagnostic_resource_denial_is_audited_with_diagnose_risk() {
+        let guard = test_guard("read_only", false, 60);
+        let uri = "rocketmq://clusters/local-dev/brokers/broker-a/diagnostics";
+        assert!(guard
+            .begin_resource_read(
+                &guard.local_request_context(),
+                "local-dev",
+                &ResourceKind::BrokerDiagnostics("broker-a".to_string()),
+            )
+            .is_err());
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, "resource:broker_diagnostics");
+        assert!(!records[0].tool.contains(uri));
+        assert_eq!(records[0].risk_level, RiskLevel::Diagnose);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
     fn test_guard(profile: &str, allow_change_planning: bool, rate_limit_per_minute: u32) -> Guard {
         test_guard_with_concurrency(profile, allow_change_planning, rate_limit_per_minute, 8)
     }
@@ -825,7 +993,8 @@ pub struct GuardedResourceRead {
     principal: crate::guard::context::Principal,
     client: Option<String>,
     cluster: Option<String>,
-    resource_uri: String,
+    resource_operation: String,
+    risk_level: RiskLevel,
     started_at: Instant,
     _cluster_permit: Option<OwnedSemaphorePermit>,
 }
@@ -873,9 +1042,9 @@ impl GuardedResourceRead {
             self.principal.id.clone(),
             self.client.clone(),
             self.cluster.clone(),
-            self.resource_uri.clone(),
+            self.resource_operation.clone(),
             hash_arguments(&JsonObject::new()),
-            RiskLevel::ReadOnly,
+            self.risk_level,
             status,
             self.started_at.elapsed().as_millis(),
             error,

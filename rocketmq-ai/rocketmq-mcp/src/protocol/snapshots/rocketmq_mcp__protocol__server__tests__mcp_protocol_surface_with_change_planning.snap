@@ -47,6 +47,67 @@ expression: surface
       "description": "Check RocketMQ broker health from read-only broker, cluster, and topic evidence.",
       "name": "broker_health_check",
       "title": "Broker Health Check"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Configured logical RocketMQ cluster name.",
+          "name": "cluster",
+          "required": true
+        },
+        {
+          "description": "Logical broker name.",
+          "name": "broker_name",
+          "required": true
+        }
+      ],
+      "description": "Diagnose one logical RocketMQ broker from typed read-only and diagnostic evidence.",
+      "name": "diagnose_broker_health",
+      "title": "Diagnose Broker Health"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Configured logical RocketMQ cluster name.",
+          "name": "cluster",
+          "required": true
+        },
+        {
+          "description": "RocketMQ topic name.",
+          "name": "topic",
+          "required": true
+        },
+        {
+          "description": "RocketMQ consumer group name.",
+          "name": "consumer_group",
+          "required": true
+        },
+        {
+          "description": "Optional message identifier for body-free metadata lookup.",
+          "name": "message_id",
+          "required": false
+        }
+      ],
+      "description": "Diagnose RocketMQ message delivery using body-free typed query evidence.",
+      "name": "diagnose_message_delivery",
+      "title": "Diagnose Message Delivery"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Configured logical RocketMQ cluster name.",
+          "name": "cluster",
+          "required": true
+        },
+        {
+          "description": "RocketMQ consumer group name.",
+          "name": "consumer_group",
+          "required": true
+        }
+      ],
+      "description": "Analyze consumer connectivity and progress through typed read-only RocketMQ evidence.",
+      "name": "analyze_consumer_connections",
+      "title": "Analyze Consumer Connections"
     }
   ],
   "resource_templates": [
@@ -119,6 +180,41 @@ expression: surface
       "name": "rocketmq_consumer_lag_page",
       "title": "RocketMQ consumer lag page",
       "uriTemplate": "rocketmq://clusters/{cluster}/consumer-groups/{group}/lag{?topic,limit,cursor}"
+    },
+    {
+      "description": "Read diagnostics for one logical RocketMQ broker.",
+      "mimeType": "application/json",
+      "name": "rocketmq_broker_diagnostics",
+      "title": "RocketMQ broker diagnostics",
+      "uriTemplate": "rocketmq://clusters/{cluster}/brokers/{broker}/diagnostics"
+    },
+    {
+      "description": "Read the allowlisted configuration summary for one logical RocketMQ broker.",
+      "mimeType": "application/json",
+      "name": "rocketmq_broker_config_summary",
+      "title": "RocketMQ broker configuration summary",
+      "uriTemplate": "rocketmq://clusters/{cluster}/brokers/{broker}/config-summary"
+    },
+    {
+      "description": "Read a bounded page from one stable topic-statistics snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topic_stats",
+      "title": "RocketMQ topic statistics",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics/{topic}/stats{?limit,cursor}"
+    },
+    {
+      "description": "Read address-free configuration observations for one RocketMQ topic.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topic_config",
+      "title": "RocketMQ topic configuration",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics/{topic}/config"
+    },
+    {
+      "description": "Read a bounded page from one stable consumer-progress snapshot.",
+      "mimeType": "application/json",
+      "name": "rocketmq_consumer_progress",
+      "title": "RocketMQ consumer progress",
+      "uriTemplate": "rocketmq://clusters/{cluster}/consumer-groups/{group}/progress{?limit,cursor}"
     }
   ],
   "resources": [

@@ -52,7 +52,7 @@ The server targets MCP protocol version `2025-11-25`. Clients requesting another
 
 Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
 
-Read-only Tool calls also return a ResourceLink for the corresponding live Resource. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh. Each verified request selects one of two closed query visibility classes: read-only HTTP principals and local read-only stdio profiles use `standard`, while principals or local profiles with diagnosis or planning access use `sensitive`. Requests share query state within a class, but ordinary cache entries, snapshots, singleflight work, and continuation cursors never cross classes.
+Resource-backed Tool calls return a ResourceLink only when the selected target has one canonical, safely representable Resource URI. A target accepted by the existing Tool contract but not representable as a Resource keeps the Tool's normal success/error and data semantics; only the ResourceLink is omitted, while genuinely sensitive target values remain sanitized. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh. Each verified request selects one of two closed query visibility classes: read-only HTTP principals and local read-only stdio profiles use `standard`, while principals or local profiles with diagnosis or planning access use `sensitive`. Requests share query state within a class, but ordinary cache entries, snapshots, singleflight work, and continuation cursors never cross classes.
 Both surfaces pass through the same authorization, audit, redaction, row-bound, byte-bound, and stable-error pipeline. Arrays are bounded to 1,000 rows, structured output to 1 MiB, and truncation is reported with `partial = true` and the stable `output_rows_truncated` warning.
 
 ## Build
@@ -286,6 +286,8 @@ For HTTP-capable clients, use the Streamable HTTPS URL `https://127.0.0.1:8089/m
 
 ## Tools
 
+The default feature set exposes 24 Tools:
+
 - `rocketmq_get_cluster_overview`: summarize one configured cluster.
 - `rocketmq_list_topics`: list a filtered, cursor-paginated topic page.
 - `rocketmq_describe_topic`: describe a topic with bounded queue data.
@@ -293,11 +295,27 @@ For HTTP-capable clients, use the Streamable HTTPS URL `https://127.0.0.1:8089/m
 - `rocketmq_list_consumer_groups`: list a filtered, cursor-paginated consumer-group page.
 - `rocketmq_get_consumer_lag`: get bounded consumer progress and lag rows.
 - `rocketmq_describe_broker`: describe broker state.
+- `rocketmq_get_broker_diagnostics`: get bounded broker readiness, store, recovery, and security diagnostics.
+- `rocketmq_get_broker_config_summary`: get a fixed allowlisted broker configuration summary.
+- `rocketmq_get_broker_log_filter_state`: get temporary state for an allowlisted broker logger.
+- `rocketmq_get_proxy_drain_state`: get bounded drain progress for a configured logical Proxy.
 - `rocketmq_diagnose_consumer_lag`: aggregate read-only evidence and return a diagnosis report.
+- `rocketmq_list_consumer_connections`: list bounded pseudonymous consumer connections.
+- `rocketmq_list_producer_connections`: list bounded pseudonymous producer connections.
+- `rocketmq_get_message_metadata`: get fixed body-free message metadata.
+- `rocketmq_get_topic_config_state`: get bounded Topic configuration version observations.
+- `rocketmq_get_consumer_group_config_state`: get bounded Consumer Group configuration version observations.
+- `rocketmq_get_topic_stats`: get bounded per-queue Topic statistics and aggregate totals.
+- `rocketmq_get_topic_config`: get fixed address-free Topic configuration observations.
+- `rocketmq_get_consumer_group_details`: get fixed address-free group configuration and connection observations.
+- `rocketmq_get_consumer_progress`: get bounded per-queue progress and complete aggregate totals.
+- `rocketmq_get_ha_status`: get bounded HA and optional Controller synchronization observations.
+- `rocketmq_get_controller_metadata`: get bounded metadata for configured logical Controllers.
+- `rocketmq_get_nameserver_config_summary`: get fixed allowlisted NameServer configuration summaries.
 
 Consumer-lag diagnoses use versioned Evidence Snapshots and a server-side rule policy. The Tool accepts only cluster, topic, and consumer group; historical `time_range` and caller-controlled thresholds are intentionally unavailable until a historical metrics source exists.
 
-Feature-gated planning Tools, available only with `change-planning`, never mutate the cluster:
+The all-features surface has 29 Tools. Its five additional `change-planning` Tools never mutate the cluster:
 
 - `rocketmq_plan_create_topic`
 - `rocketmq_plan_update_topic_config`
@@ -312,23 +330,35 @@ Feature-gated planning Tools, available only with `change-planning`, never mutat
 - `rocketmq://clusters/{cluster}/topics`
 - `rocketmq://clusters/{cluster}/topics/{topic}`
 - `rocketmq://clusters/{cluster}/topics/{topic}/route`
+- `rocketmq://clusters/{cluster}/topics/{topic}/stats{?limit,cursor}`
+- `rocketmq://clusters/{cluster}/topics/{topic}/config`
 - `rocketmq://clusters/{cluster}/brokers`
 - `rocketmq://clusters/{cluster}/brokers/{broker}`
+- `rocketmq://clusters/{cluster}/brokers/{broker}/diagnostics`
+- `rocketmq://clusters/{cluster}/brokers/{broker}/config-summary`
 - `rocketmq://clusters/{cluster}/consumer-groups`
 - `rocketmq://clusters/{cluster}/consumer-groups/{group}`
 - `rocketmq://clusters/{cluster}/consumer-groups/{group}/lag?topic={topic}`
+- `rocketmq://clusters/{cluster}/consumer-groups/{group}/progress{?limit,cursor}`
 - `rocketmq://system/runtime/v1` (requires `rocketmq:diagnose`)
 - `rocketmq://system/observability/v1` (requires `rocketmq:diagnose`)
 
 The capability Resource identifies MCP `2025-11-25`, business schema `rocketmq-mcp.v2`, per-Tool schema digests, a total Tool-surface digest, the caller-visible Resource surface, and `mutation_supported = false`. System Resources expose only bounded, sanitized MCP-process runtime and observability state.
 
-`resources/list` returns authorized cluster and system Resources in cursor-paginated pages. `resources/templates/list` publishes the five parameterized cluster forms. Unsupported or incomplete forms return Resource Not Found instead of a placeholder payload.
-Cluster and RocketMQ entity names are UTF-8 percent-encoded as URI path or query components, including retry topics and groups that contain `%RETRY%`.
+`resources/list` returns authorized cluster and system Resources in cursor-paginated pages. `resources/templates/list` publishes 15 stable templates, filtered by the caller's backing Tool access on at least one configured cluster whose logical name is safely representable. Resource, template, and Prompt discovery ignore configured cluster names outside that closed logical-alias contract; this does not narrow the existing Tool parameter contract for those configured clusters. Unsupported, incomplete, invalidly encoded, or unauthorized forms fail closed.
+Cluster and broker path values are bounded logical aliases. Topic and consumer-group values use the closed RocketMQ ASCII name contract with strict UTF-8 percent decoding, including retry topics and groups that contain `%RETRY%`. Among the five Resource templates added for broker diagnostics/configuration, topic statistics/configuration, and consumer progress, only topic statistics and consumer progress accept `limit` and `cursor`. Existing inventory, topic, route, consumer-group, and lag page templates retain their documented pagination parameters. Unknown, duplicate, empty, noncanonical, or invalid query values are rejected.
 
 ## Prompts
 
 - `diagnose_consumer_lag`: guided consumer lag investigation.
 - `broker_health_check`: guided broker health review.
+- `diagnose_broker_health`: typed read-only and diagnostic broker investigation.
+- `diagnose_message_delivery`: body-free delivery investigation with optional message metadata.
+- `analyze_consumer_connections`: typed read-only consumer connectivity and progress analysis.
+
+Prompt discovery and rendering recheck the caller's Tool, tenant, cluster, scope, and profile authorization. Prompt
+arguments use closed kinds and reject unknown, missing, null, non-string, blank, unsafe, or overlong values. Prompts
+provide guidance only: they neither execute Tools nor create cache, session, or mutation work.
 
 ## Troubleshooting
 

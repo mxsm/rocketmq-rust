@@ -162,10 +162,12 @@ impl ServerHandler for RocketmqMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         let access = self.access_context(&context)?;
-        resources::registry::list_resources_for(
+        let auth_claims = access.canonical_auth_claims();
+        self.app.resources().list_resources(
             self.app.config(),
             request.as_ref(),
-            |cluster| self.app.guard().authorize_resource(&access, cluster).is_ok(),
+            &auth_claims,
+            |cluster, kind| self.app.guard().allows_resource(&access, cluster, kind),
             self.app.guard().allows_system_resources(&access),
         )
     }
@@ -175,10 +177,14 @@ impl ServerHandler for RocketmqMcpServer {
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        if !self.app.guard().allows_resources(&self.access_context(&context)?) {
-            return Ok(ListResourceTemplatesResult::with_all_items(Vec::new()));
-        }
-        resources::registry::list_resource_templates(request.as_ref())
+        let access = self.access_context(&context)?;
+        let auth_claims = access.canonical_auth_claims();
+        self.app.resources().list_resource_templates(
+            self.app.config(),
+            request.as_ref(),
+            &auth_claims,
+            |cluster, kind| self.app.guard().allows_resource(&access, cluster, kind),
+        )
     }
 
     async fn read_resource(
@@ -205,15 +211,19 @@ impl ServerHandler for RocketmqMcpServer {
             let resource = match crate::resources::uri::RocketmqResourceUri::parse(&request.uri) {
                 Some(resource) => resource,
                 None => {
+                    self.app
+                        .guard()
+                        .record_resource_rejection(&access, "resource:unavailable", "invalid_resource_uri");
                     record_resource_error("invalid_resource_uri", McpErrorKind::InvalidRequest);
                     record_resource_operation("invalid_resource_uri", McpOperationOutcome::Failure, started_at);
-                    return Err(ErrorData::invalid_params("invalid RocketMQ resource URI", None));
+                    return Err(resource_unavailable(&request_id_string(&context.id)));
                 }
             };
             let operation = resource.kind.metric_operation();
+            let canonical_uri = resource.as_string();
             let guarded_resource = match resource.cluster() {
-                Some(cluster) => self.app.guard().begin_resource_read(&access, cluster, &request.uri),
-                None => self.app.guard().begin_system_resource_read(&access, &request.uri),
+                Some(cluster) => self.app.guard().begin_resource_read(&access, cluster, &resource.kind),
+                None => self.app.guard().begin_system_resource_read(&access, &resource.kind),
             };
             let guarded_resource = match guarded_resource {
                 Ok(guarded_resource) => guarded_resource,
@@ -232,13 +242,9 @@ impl ServerHandler for RocketmqMcpServer {
                     let descriptors = crate::tools::catalog::ToolId::ALL
                         .iter()
                         .map(|tool| tool.descriptor())
-                        .filter(|descriptor| {
-                            self.app
-                                .guard()
-                                .allows_tool(&access, descriptor.name, descriptor.risk_level)
-                        });
+                        .filter(|descriptor| self.app.guard().allows_tool_on_cluster(&access, descriptor.id, cluster));
                     resources::capability::read_result(
-                        &request.uri,
+                        &canonical_uri,
                         resources::capability::manifest_for(
                             cluster,
                             descriptors,
@@ -247,18 +253,26 @@ impl ServerHandler for RocketmqMcpServer {
                     )
                 }
                 crate::resources::uri::ResourceKind::SystemRuntimeV1 => {
-                    resources::system::read_result(&request.uri, "runtime", self.app.runtime_diagnostics_view())
+                    resources::system::read_result(&canonical_uri, "runtime", self.app.runtime_diagnostics_view())
                 }
-                crate::resources::uri::ResourceKind::SystemObservabilityV1 => {
-                    resources::system::read_result(&request.uri, "observability", self.app.observability_status_view())
-                }
+                crate::resources::uri::ResourceKind::SystemObservabilityV1 => resources::system::read_result(
+                    &canonical_uri,
+                    "observability",
+                    self.app.observability_status_view(),
+                ),
                 _ => {
                     let query = self.request_query(&access, context.ct);
-                    resources::reader::read_resource(&query, &request.uri).await
+                    resources::reader::read_resource(&query, &canonical_uri).await
                 }
             };
             self.app.trace_cache_metrics();
-            let result = guarded_resource.finish_result(result);
+            let result = guarded_resource.finish_result(result).map_err(|error| {
+                if error.code == rmcp::model::ErrorCode::RESOURCE_NOT_FOUND {
+                    resource_unavailable(&request_id_string(&context.id))
+                } else {
+                    error
+                }
+            });
             let outcome = if let Err(error) = &result {
                 record_resource_error(operation, resource_error_metric_kind(error));
                 McpOperationOutcome::Failure
@@ -279,10 +293,11 @@ impl ServerHandler for RocketmqMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
-        if !self.app.guard().allows_resources(&self.access_context(&context)?) {
-            return Ok(ListPromptsResult::with_all_items(Vec::new()));
-        }
-        prompts::registry::list_prompts().map_err(|error| ErrorData::internal_error(error.to_string(), None))
+        let access = self.access_context(&context)?;
+        prompts::registry::list_prompts_for(self.app.config(), |tool, cluster| {
+            self.app.guard().allows_tool_on_cluster(&access, tool, cluster)
+        })
+        .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
 
     async fn get_prompt(
@@ -290,10 +305,11 @@ impl ServerHandler for RocketmqMcpServer {
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
-        if !self.app.guard().allows_resources(&self.access_context(&context)?) {
-            return Err(ErrorData::invalid_params("prompt access is denied", None));
-        }
-        prompts::renderer::get_prompt(request).map(Into::into)
+        let access = self.access_context(&context)?;
+        prompts::renderer::get_prompt_for(request, self.app.config(), |tool, cluster| {
+            self.app.guard().allows_tool_on_cluster(&access, tool, cluster)
+        })
+        .map(Into::into)
     }
 
     async fn list_tools(
@@ -368,20 +384,16 @@ fn request_id_string(request_id: &rmcp::model::RequestId) -> String {
 }
 
 fn resource_guard_error(error: GuardError, correlation_id: &str) -> ErrorData {
-    let message = match &error {
-        GuardError::InvalidArgument(_) => "invalid resource request",
-        GuardError::RateLimited(_) => "resource access is rate limited",
-        GuardError::ChangePlanningDisabled(_) => "resource capability is disabled",
-        GuardError::PermissionDenied(_)
-        | GuardError::UnauthorizedScope(_)
-        | GuardError::TenantMismatch(_)
-        | GuardError::ClusterNotAllowed(_) => "resource access denied",
-    };
+    let _ = error;
+    resource_unavailable(correlation_id)
+}
+
+fn resource_unavailable(correlation_id: &str) -> ErrorData {
     ErrorData::invalid_params(
-        message,
+        "resource is unavailable",
         Some(json!({
-            "code": error.code(),
-            "retryable": error.retryable(),
+            "code": "resource_unavailable",
+            "retryable": false,
             "correlation_id": correlation_id,
         })),
     )
@@ -494,7 +506,7 @@ mod tests {
         );
         let data = error.data.as_ref().unwrap();
 
-        assert_eq!(data["code"], "tenant_mismatch");
+        assert_eq!(data["code"], "resource_unavailable");
         assert_eq!(data["retryable"], false);
         assert_eq!(data["correlation_id"], "request-7");
         assert!(!error.message.contains("secret tenant details"));
@@ -865,6 +877,674 @@ mod tests {
 
     #[cfg(all(feature = "streamable-http", feature = "stdio"))]
     #[tokio::test]
+    async fn broker_resources_enforce_backing_risk_and_share_tool_cache() {
+        let (_owner, denied_server, denied_counters) = test_server("read_only", None);
+        let (denied_running, denied_client) = connected_test_server(denied_server).await;
+        let denied_peer = denied_running.peer().clone();
+        let templates = denied_running
+            .service()
+            .list_resource_templates(None, local_context(&denied_peer, 1))
+            .await
+            .unwrap()
+            .resource_templates
+            .into_iter()
+            .map(|template| template.name.to_string())
+            .collect::<BTreeSet<_>>();
+        assert!(!templates.contains("rocketmq_broker_diagnostics"));
+        assert!(templates.contains("rocketmq_broker_config_summary"));
+        let denied = denied_running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/brokers/broker-a/diagnostics"),
+                local_context(&denied_peer, 2),
+            )
+            .await;
+        assert!(denied.is_err());
+        assert_eq!(denied_counters.starts.load(Ordering::SeqCst), 0);
+        drop(denied_running);
+        drop(denied_client);
+
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let diagnostics_uri = "rocketmq://clusters/local-dev/brokers/broker-a/diagnostics";
+        let config_uri = "rocketmq://clusters/local-dev/brokers/broker-a/config-summary";
+
+        let diagnostics = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_broker_diagnostics",
+                        json!({"cluster":"local-dev","broker_name":"broker-a"}),
+                    ),
+                    local_context(&peer, 3),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(diagnostics.is_error, Some(false));
+        running
+            .service()
+            .read_resource(ReadResourceRequestParams::new(diagnostics_uri), local_context(&peer, 4))
+            .await
+            .unwrap();
+        assert_eq!(counters.broker_diagnostics_queries.load(Ordering::SeqCst), 1);
+
+        running
+            .service()
+            .read_resource(ReadResourceRequestParams::new(config_uri), local_context(&peer, 5))
+            .await
+            .unwrap();
+        let config = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_broker_config_summary",
+                        json!({"cluster":"local-dev","broker_name":"broker-a"}),
+                    ),
+                    local_context(&peer, 6),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(config.is_error, Some(false));
+        assert_eq!(counters.broker_config_summary_queries.load(Ordering::SeqCst), 1);
+
+        let records = running.service().app().guard().audit_log().records();
+        assert_eq!(
+            records
+                .iter()
+                .find(|record| record.tool == "resource:broker_diagnostics")
+                .unwrap()
+                .risk_level,
+            crate::guard::RiskLevel::Diagnose
+        );
+        assert_eq!(
+            records
+                .iter()
+                .find(|record| record.tool == "resource:broker_config_summary")
+                .unwrap()
+                .risk_level,
+            crate::guard::RiskLevel::ReadOnly
+        );
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn topic_resources_share_tool_cache_and_cross_surface_cursor() {
+        let (_owner, server, counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let stats = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_topic_stats",
+                        json!({"cluster":"local-dev","topic":"orders","limit":1}),
+                    ),
+                    local_context(&peer, 1),
+                )
+                .await
+                .unwrap(),
+        );
+        let cursor = stats.structured_content.as_ref().unwrap()["data"]["next_cursor"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let continuation_uri = format!("rocketmq://clusters/local-dev/topics/orders/stats?limit=1&cursor={cursor}");
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new(continuation_uri),
+                local_context(&peer, 2),
+            )
+            .await
+            .unwrap();
+        assert_eq!(counters.topic_stats_queries.load(Ordering::SeqCst), 1);
+
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics/orders/config"),
+                local_context(&peer, 3),
+            )
+            .await
+            .unwrap();
+        let config = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_topic_config",
+                        json!({"cluster":"local-dev","topic":"orders"}),
+                    ),
+                    local_context(&peer, 4),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(config.is_error, Some(false));
+        assert_eq!(counters.topic_config_queries.load(Ordering::SeqCst), 1);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn consumer_progress_cursor_replays_from_resource_to_tool_without_rpc() {
+        let (_owner, server, counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let response = running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new(
+                    "rocketmq://clusters/local-dev/consumer-groups/orders-service/progress?limit=1",
+                ),
+                local_context(&peer, 1),
+            )
+            .await
+            .unwrap();
+        let cursor = complete_resource_payload(response)["consumer_progress"]["next_cursor"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let continuation = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_consumer_progress",
+                        json!({
+                            "cluster":"local-dev",
+                            "consumer_group":"orders-service",
+                            "limit":1,
+                            "cursor":cursor,
+                        }),
+                    ),
+                    local_context(&peer, 2),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(continuation.is_error, Some(false));
+        assert_eq!(counters.consumer_progress_queries.load(Ordering::SeqCst), 1);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn disabled_cache_reloads_first_pages_but_keeps_cross_surface_cursors() {
+        let (_owner, server, counters) = test_server_with_config("read_only", None, |config| {
+            config.cache.enabled = false;
+        });
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let stats = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_topic_stats",
+                        json!({"cluster":"local-dev","topic":"orders","limit":1}),
+                    ),
+                    local_context(&peer, 1),
+                )
+                .await
+                .unwrap(),
+        );
+        let cursor = stats.structured_content.as_ref().unwrap()["data"]["next_cursor"]
+            .as_str()
+            .unwrap();
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics/orders/stats?limit=1"),
+                local_context(&peer, 2),
+            )
+            .await
+            .unwrap();
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new(format!(
+                    "rocketmq://clusters/local-dev/topics/orders/stats?limit=1&cursor={cursor}"
+                )),
+                local_context(&peer, 3),
+            )
+            .await
+            .unwrap();
+        assert_eq!(counters.topic_stats_queries.load(Ordering::SeqCst), 2);
+
+        let progress = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    tool_request(
+                        "rocketmq_get_consumer_progress",
+                        json!({"cluster":"local-dev","consumer_group":"orders-service","limit":1}),
+                    ),
+                    local_context(&peer, 4),
+                )
+                .await
+                .unwrap(),
+        );
+        let cursor = progress.structured_content.as_ref().unwrap()["data"]["next_cursor"]
+            .as_str()
+            .unwrap();
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new(
+                    "rocketmq://clusters/local-dev/consumer-groups/orders-service/progress?limit=1",
+                ),
+                local_context(&peer, 5),
+            )
+            .await
+            .unwrap();
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new(format!(
+                    "rocketmq://clusters/local-dev/consumer-groups/orders-service/progress?limit=1&cursor={cursor}"
+                )),
+                local_context(&peer, 6),
+            )
+            .await
+            .unwrap();
+        assert_eq!(counters.consumer_progress_queries.load(Ordering::SeqCst), 2);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn prompt_handlers_filter_and_reauthorize_without_starting_sessions() {
+        let (_owner, server, counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let names = running
+            .service()
+            .list_prompts(None, local_context(&peer, 1))
+            .await
+            .unwrap()
+            .prompts
+            .into_iter()
+            .map(|prompt| prompt.name.to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "broker_health_check".to_string(),
+                "diagnose_message_delivery".to_string(),
+                "analyze_consumer_connections".to_string(),
+            ])
+        );
+
+        let allowed = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_message_delivery",
+                    json!({"cluster":"local-dev","topic":"orders","consumer_group":"group-a"}),
+                ),
+                local_context(&peer, 2),
+            )
+            .await;
+        assert!(matches!(allowed, Ok(GetPromptResponse::Complete(_))));
+        let unauthorized = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_broker_health",
+                    json!({"cluster":"local-dev","broker_name":"broker-a"}),
+                ),
+                local_context(&peer, 3),
+            )
+            .await
+            .unwrap_err();
+        let unknown = running
+            .service()
+            .get_prompt(prompt_request("private-prompt", json!({})), local_context(&peer, 4))
+            .await
+            .unwrap_err();
+        assert_eq!(unauthorized.message, unknown.message);
+        assert_eq!(unauthorized.data, unknown.data);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        assert_eq!(
+            running
+                .service()
+                .list_prompts(None, local_context(&peer, 5))
+                .await
+                .unwrap()
+                .prompts
+                .len(),
+            5
+        );
+        let broker = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_broker_health",
+                    json!({"cluster":"local-dev","broker_name":"broker-a"}),
+                ),
+                local_context(&peer, 6),
+            )
+            .await;
+        assert!(matches!(broker, Ok(GetPromptResponse::Complete(_))));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn unauthorized_resource_variants_share_one_oracle_safe_envelope() {
+        let (_owner, server, counters) = test_server_with_config("diagnose", None, |config| {
+            config.clusters[0].tenant = Some("test-tenant".to_string());
+        });
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let uris = [
+            "rocketmq://clusters/local-dev/topics/orders/config",
+            "rocketmq://clusters/local-dev/topics/missing/config",
+            "rocketmq://clusters/unconfigured/topics/orders/config",
+            "rocketmq://clusters/local-dev/unknown",
+            "rocketmq://clusters/local-dev/topics/token%3Dsecret/config",
+            "rocketmq://clusters/127.0.0.1/topics/orders/config",
+        ];
+        let mut errors = Vec::new();
+        for uri in uris {
+            let error = running
+                .service()
+                .read_resource(
+                    ReadResourceRequestParams::new(uri),
+                    oauth_context(&peer, 70, "no-resource-scope", ["diagnose"], []),
+                )
+                .await
+                .unwrap_err();
+            errors.push(error);
+        }
+        let baseline = &errors[0];
+        for error in &errors[1..] {
+            assert_eq!(error.code, baseline.code);
+            assert_eq!(error.message, baseline.message);
+            assert_eq!(error.data, baseline.data);
+        }
+
+        let tenant_error = running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics/orders/config"),
+                oauth_read_context(&peer, 70, "wrong-tenant", ["local-dev"]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(tenant_error.code, baseline.code);
+        assert_eq!(tenant_error.message, baseline.message);
+        assert_eq!(tenant_error.data, baseline.data);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.topic_config_queries.load(Ordering::SeqCst), 0);
+
+        let audit = running.service().app().guard().audit_log().records();
+        let audit_text = format!("{audit:?}");
+        for secret in ["rocketmq://", "token=secret", "token%3Dsecret", "127.0.0.1"] {
+            assert!(!audit_text.contains(secret), "audit retained {secret}");
+        }
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn unauthorized_prompt_argument_matrix_is_indistinguishable_and_session_free() {
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let invalid = [
+            json!({}),
+            json!({"cluster":"local-dev","topic":"orders","consumer_group":"group","unknown":"x"}),
+            json!({"cluster":null,"topic":"orders","consumer_group":"group"}),
+            json!({"cluster":7,"topic":"orders","consumer_group":"group"}),
+            json!({"cluster":"local-dev","topic":"","consumer_group":"group"}),
+            json!({"cluster":"local-dev","topic":"x".repeat(crate::model::identifier::TOPIC_MAX_BYTES + 1),"consumer_group":"group"}),
+            json!({"cluster":"local-dev","topic":"orders\nreset","consumer_group":"group"}),
+            json!({"cluster":"local-dev","topic":"orders%7B%7B","consumer_group":"group"}),
+        ];
+        let context = || oauth_context(&peer, 71, "no-prompt-scope", ["diagnose"], []);
+        let baseline = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_message_delivery",
+                    json!({"cluster":"local-dev","topic":"orders","consumer_group":"group"}),
+                ),
+                context(),
+            )
+            .await
+            .unwrap_err();
+        for arguments in invalid {
+            for name in ["diagnose_message_delivery", "private-prompt"] {
+                let error = running
+                    .service()
+                    .get_prompt(prompt_request(name, arguments.clone()), context())
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, baseline.code, "name={name}, arguments={arguments}");
+                assert_eq!(error.message, baseline.message, "name={name}, arguments={arguments}");
+                assert_eq!(error.data, baseline.data, "name={name}, arguments={arguments}");
+            }
+        }
+        let check_level = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "broker_health_check",
+                    json!({"cluster":"local-dev","check_level":"unbounded"}),
+                ),
+                context(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(check_level.code, baseline.code);
+        assert_eq!(check_level.message, baseline.message);
+        assert_eq!(check_level.data, baseline.data);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn tenant_and_principal_cluster_limits_apply_to_discovery_read_and_prompt_get() {
+        let (_owner, server, counters) = test_server_with_config("read_only", None, |config| {
+            config.clusters[0].tenant = Some("tenant-a".to_string());
+        });
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let mismatch = oauth_read_context(&peer, 1, "tenant-b", ["local-dev"]);
+        assert!(running
+            .service()
+            .list_resource_templates(None, mismatch)
+            .await
+            .unwrap()
+            .resource_templates
+            .is_empty());
+        assert!(running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics/orders/config"),
+                oauth_read_context(&peer, 2, "tenant-b", ["local-dev"]),
+            )
+            .await
+            .is_err());
+        let prompt = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_message_delivery",
+                    json!({"cluster":"local-dev","topic":"orders","consumer_group":"group-a"}),
+                ),
+                oauth_read_context(&peer, 3, "tenant-b", ["local-dev"]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(prompt.data.unwrap()["code"], "prompt_unavailable");
+
+        let cluster_limited = running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics/orders/config"),
+                oauth_read_context(&peer, 4, "tenant-a", ["other-cluster"]),
+            )
+            .await;
+        assert!(cluster_limited.is_err());
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+
+        let allowed = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_message_delivery",
+                    json!({"cluster":"local-dev","topic":"orders","consumer_group":"group-a"}),
+                ),
+                oauth_read_context(&peer, 5, "tenant-a", ["local-dev"]),
+            )
+            .await;
+        assert!(matches!(allowed, Ok(GetPromptResponse::Complete(_))));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn unsafe_only_configured_cluster_publishes_no_cluster_discovery_surface() {
+        let (_owner, server, counters) = test_server_with_config("diagnose", None, |config| {
+            config.clusters[0].name = "token=secret".to_string();
+        });
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        let resources = running
+            .service()
+            .list_resources(None, local_context(&peer, 1))
+            .await
+            .unwrap();
+        assert_eq!(resources.resources.len(), 2);
+        assert!(resources
+            .resources
+            .iter()
+            .all(|resource| resource.uri.starts_with("rocketmq://system/")));
+        assert!(running
+            .service()
+            .list_resource_templates(None, local_context(&peer, 2))
+            .await
+            .unwrap()
+            .resource_templates
+            .is_empty());
+        assert!(running
+            .service()
+            .list_prompts(None, local_context(&peer, 3))
+            .await
+            .unwrap()
+            .prompts
+            .is_empty());
+        let prompt = running
+            .service()
+            .get_prompt(
+                prompt_request(
+                    "diagnose_message_delivery",
+                    json!({"cluster":"token=secret","topic":"orders","consumer_group":"group"}),
+                ),
+                local_context(&peer, 4),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(prompt.data.as_ref().unwrap()["code"], "prompt_unavailable");
+
+        let encoded_sensitive = running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/token%3Dsecret/topics"),
+                local_context(&peer, 5),
+            )
+            .await
+            .unwrap_err();
+        let unconfigured = running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics"),
+                local_context(&peer, 5),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(encoded_sensitive.code, unconfigured.code);
+        assert_eq!(encoded_sensitive.message, unconfigured.message);
+        assert_eq!(encoded_sensitive.data, unconfigured.data);
+        let wire =
+            serde_json::to_string(&(resources, prompt, running.service().app.guard().audit_log().records())).unwrap();
+        assert!(!wire.contains("token=secret"));
+        assert!(!wire.contains("token%3Dsecret"));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn mixed_configured_clusters_publish_only_the_safe_cluster_surface() {
+        let (_owner, server, counters) = test_server_with_config("diagnose", None, |config| {
+            let mut unsafe_cluster = config.clusters[0].clone();
+            unsafe_cluster.name = "%74oken%3Dsecret".to_string();
+            config.clusters.push(unsafe_cluster);
+        });
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        let resources = running
+            .service()
+            .list_resources(None, local_context(&peer, 1))
+            .await
+            .unwrap();
+        let templates = running
+            .service()
+            .list_resource_templates(None, local_context(&peer, 2))
+            .await
+            .unwrap();
+        let prompts = running
+            .service()
+            .list_prompts(None, local_context(&peer, 3))
+            .await
+            .unwrap();
+        assert_eq!(resources.resources.len(), 7);
+        assert_eq!(templates.resource_templates.len(), 15);
+        assert_eq!(prompts.prompts.len(), 5);
+        assert!(resources.resources.iter().all(|resource| {
+            resource.uri.starts_with("rocketmq://clusters/local-dev/") || resource.uri.starts_with("rocketmq://system/")
+        }));
+        let wire = serde_json::to_string(&(resources, templates, prompts)).unwrap();
+        assert!(!wire.contains("token=secret"));
+        assert!(!wire.contains("%74oken%3Dsecret"));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
     async fn diagnose_handler_discovers_all_infrastructure_tools() {
         let (_owner, server, _counters) = test_server("diagnose", None);
         let (running, client) = connected_test_server(server).await;
@@ -993,12 +1673,28 @@ mod tests {
         RocketmqMcpServer,
         Arc<ProtocolTestCounters>,
     ) {
+        test_server_with_config(profile, gate, |_| {})
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn test_server_with_config(
+        profile: &str,
+        gate: Option<Arc<ProtocolTestGate>>,
+        configure: impl FnOnce(&mut McpConfig),
+    ) -> (
+        rocketmq_runtime::RuntimeOwner,
+        RocketmqMcpServer,
+        Arc<ProtocolTestCounters>,
+    ) {
         let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
             "mcp-real-handler-test",
         ))
         .unwrap();
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.security.profile = profile.to_string();
+        config.audit.sink = "memory".to_string();
+        config.audit.path.clear();
+        configure(&mut config);
         let factory = ProtocolTestSessionFactory::new(gate);
         let counters = factory.counters.clone();
         let app = McpApp::new(
@@ -1054,6 +1750,30 @@ mod tests {
     }
 
     #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn oauth_read_context(
+        peer: &rmcp::service::Peer<RoleServer>,
+        id: i64,
+        tenant: &str,
+        allowed_clusters: impl IntoIterator<Item = &'static str>,
+    ) -> RequestContext<RoleServer> {
+        let request = axum::http::Request::builder().uri("/mcp").body(()).unwrap();
+        let (mut parts, _) = request.into_parts();
+        parts.extensions.insert(AccessContext {
+            principal: Principal {
+                id: format!("oauth-{id}"),
+                tenant: Some(tenant.to_string()),
+                roles: BTreeSet::from(["read_only".to_string()]),
+                scopes: BTreeSet::from(["rocketmq:read".to_string()]),
+                allowed_clusters: Some(allowed_clusters.into_iter().map(str::to_string).collect()),
+            },
+            client: Some("oauth-test".to_string()),
+        });
+        let mut context = RequestContext::new(NumberOrString::Number(id), peer.clone());
+        context.extensions.insert(parts);
+        context
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
     fn local_context(peer: &rmcp::service::Peer<RoleServer>, id: i64) -> RequestContext<RoleServer> {
         RequestContext::new(NumberOrString::Number(id), peer.clone())
     }
@@ -1072,6 +1792,28 @@ mod tests {
     }
 
     #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn tool_request(name: &'static str, arguments: serde_json::Value) -> CallToolRequestParams {
+        CallToolRequestParams::new(name).with_arguments(arguments.as_object().unwrap().clone())
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn prompt_request(name: &'static str, arguments: serde_json::Value) -> GetPromptRequestParams {
+        GetPromptRequestParams::new(name).with_arguments(arguments.as_object().unwrap().clone())
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    fn complete_resource_payload(response: ReadResourceResponse) -> serde_json::Value {
+        let result = match response {
+            ReadResourceResponse::Complete(result) => result,
+            response => panic!("expected a completed resource response, got {response:?}"),
+        };
+        match &result.contents[0] {
+            rmcp::model::ResourceContents::TextResourceContents { text, .. } => serde_json::from_str(text).unwrap(),
+            contents => panic!("expected text resource contents, got {contents:?}"),
+        }
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
     fn complete_tool_response(response: CallToolResponse) -> rmcp::model::CallToolResult {
         match response {
             CallToolResponse::Complete(result) => result,
@@ -1086,14 +1828,18 @@ mod tests {
             .into_iter()
             .map(|tool| serde_json::to_value(tool).expect("tool descriptor serializes"))
             .collect::<Vec<_>>();
-        let resources = resources::registry::list_resources(&McpConfig::load(example_config_path()).unwrap(), None)
+        let config = McpConfig::load(example_config_path()).unwrap();
+        let registry = resources::registry::ResourceRegistry::new().unwrap();
+        let resources = registry
+            .list_resources(&config, None, b"snapshot", |_, _| true, true)
             .unwrap()
             .resources
             .into_iter()
             .map(|resource| serde_json::to_value(resource).expect("resource descriptor serializes"))
             .collect::<Vec<_>>();
         let resource_templates = serde_json::to_value(
-            resources::registry::list_resource_templates(None)
+            registry
+                .list_resource_templates(&config, None, b"snapshot", |_, _| true)
                 .unwrap()
                 .resource_templates,
         )
@@ -1110,8 +1856,8 @@ mod tests {
         #[cfg(feature = "change-planning")]
         assert_eq!(tools.len(), 29);
         assert_eq!(resources.len(), 7);
-        assert_eq!(resource_templates.as_array().unwrap().len(), 10);
-        assert_eq!(prompts.len(), 2);
+        assert_eq!(resource_templates.as_array().unwrap().len(), 15);
+        assert_eq!(prompts.len(), 5);
 
         let surface = json!({
             "tools": tools,

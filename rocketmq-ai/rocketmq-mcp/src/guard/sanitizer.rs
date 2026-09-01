@@ -48,13 +48,18 @@ static NETWORK_ADDRESS: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub fn process_call_tool_result(mut result: CallToolResult, request_id: &str, sanitize_output: bool) -> CallToolResult {
-    if sanitize_output {
-        for content in &mut result.content {
-            if let ContentBlock::Text(text) = content {
+    result.content.retain_mut(|content| match content {
+        ContentBlock::Text(text) => {
+            if sanitize_output {
                 text.text = sanitize_text(&text.text);
             }
+            true
         }
-
+        ContentBlock::ResourceLink(resource) => sanitize_resource_link(resource, sanitize_output),
+        ContentBlock::Image(_) | ContentBlock::Audio(_) | ContentBlock::Resource(_) => true,
+        _ => false,
+    });
+    if sanitize_output {
         if let Some(structured_content) = result.structured_content.as_mut() {
             sanitize_value(structured_content);
         }
@@ -78,6 +83,21 @@ pub fn process_call_tool_result(mut result: CallToolResult, request_id: &str, sa
     }
 
     result
+}
+
+fn sanitize_resource_link(resource: &mut rmcp::model::Resource, sanitize_output: bool) -> bool {
+    let Some(uri) = crate::resources::uri::RocketmqResourceUri::parse(&resource.uri)
+        .filter(crate::resources::uri::RocketmqResourceUri::is_safe)
+    else {
+        return false;
+    };
+    resource.uri = uri.as_string();
+    if sanitize_output {
+        resource.name = sanitize_text(&resource.name);
+        resource.title = resource.title.take().map(|value| sanitize_text(&value));
+        resource.description = resource.description.take().map(|value| sanitize_text(&value));
+    }
+    true
 }
 
 pub fn process_read_resource_result(
@@ -264,5 +284,31 @@ mod tests {
         assert!(text.len() <= policy.max_bytes);
         assert!(pretty_size > policy.max_bytes);
         assert!(!text.contains("\n  "));
+    }
+
+    #[test]
+    fn resource_links_are_canonicalized_or_removed_and_text_fields_are_sanitized() {
+        let valid = rmcp::model::Resource::new(
+            "rocketmq://clusters/local-dev/topics/%25RETRY%25orders/config",
+            "token=secret",
+        )
+        .with_description("source=127.0.0.1:9876");
+        let unsafe_link =
+            rmcp::model::Resource::new("rocketmq://clusters/local-dev/topics/token%3Dsecret/config", "unsafe");
+        let result = CallToolResult::success(vec![
+            ContentBlock::resource_link(valid),
+            ContentBlock::resource_link(unsafe_link),
+        ]);
+
+        let result = process_call_tool_result(result, "request", true);
+
+        assert_eq!(result.content.len(), 1);
+        let link = result.content[0].as_resource_link().unwrap();
+        assert_eq!(
+            link.uri,
+            "rocketmq://clusters/local-dev/topics/%25RETRY%25orders/config"
+        );
+        assert!(!link.name.contains("secret"));
+        assert!(!link.description.as_deref().unwrap().contains("127.0.0.1"));
     }
 }

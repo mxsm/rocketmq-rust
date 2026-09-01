@@ -607,6 +607,10 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         consumer_group: &str,
     ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_progress(consumer_group).await;
+        }
         self.query_consumer_progress_observation(consumer_group).await
     }
 
@@ -751,6 +755,10 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         broker_name: &str,
     ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.broker_diagnostics(broker_name).await;
+        }
         let request =
             QueryBrokerDiagnosticsTargetRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), broker_name)
                 .map_err(map_logical_admin_error)?;
@@ -775,6 +783,10 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         broker_name: &str,
     ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.broker_config_summary(broker_name).await;
+        }
         let request =
             QueryBrokerAllowlistedConfigTargetRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), broker_name)
                 .map_err(map_logical_admin_error)?;
@@ -1161,6 +1173,11 @@ mod protocol_test_support {
         pub(crate) shutdowns: AtomicUsize,
         pub(crate) broker_queries: AtomicUsize,
         pub(crate) topic_inventory_queries: AtomicUsize,
+        pub(crate) broker_diagnostics_queries: AtomicUsize,
+        pub(crate) broker_config_summary_queries: AtomicUsize,
+        pub(crate) topic_stats_queries: AtomicUsize,
+        pub(crate) topic_config_queries: AtomicUsize,
+        pub(crate) consumer_progress_queries: AtomicUsize,
     }
 
     #[derive(Debug)]
@@ -1246,6 +1263,41 @@ mod protocol_test_support {
             })
         }
 
+        async fn topic_stats(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolExecutionError> {
+            self.counters.topic_stats_queries.fetch_add(1, Ordering::SeqCst);
+            Ok(QueryPayload::complete(SessionTopicStats {
+                total_message_count: 60,
+                queue_count: 3,
+                queues: (0..3)
+                    .map(|queue_id| TopicStatsQueueRow {
+                        broker_name: "broker-a".to_string(),
+                        queue_id,
+                        min_offset: i64::from(queue_id) * 10,
+                        max_offset: i64::from(queue_id) * 10 + 20,
+                        message_count: 20,
+                        last_update_at: Some("1970-01-01T00:00:01.000Z".to_string()),
+                    })
+                    .collect(),
+                truncated: false,
+            }))
+        }
+
+        async fn topic_config(
+            &mut self,
+            topic: &str,
+        ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+            self.counters.topic_config_queries.fetch_add(1, Ordering::SeqCst);
+            Ok(QueryPayload::complete(
+                crate::tools::config_tools::GetTopicConfigOutput {
+                    cluster: "local-dev".to_string(),
+                    topic: topic.to_string(),
+                    brokers: Vec::new(),
+                    inconsistent_fields: Vec::new(),
+                    generated_at: "1970-01-01T00:00:01.000Z".to_string(),
+                },
+            ))
+        }
+
         async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
             Ok(QueryPayload::complete(Vec::new()))
         }
@@ -1263,11 +1315,70 @@ mod protocol_test_support {
             }))
         }
 
+        async fn consumer_progress(
+            &mut self,
+            _consumer_group: &str,
+        ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+            self.counters.consumer_progress_queries.fetch_add(1, Ordering::SeqCst);
+            Ok(QueryPayload::complete(SessionConsumerProgress {
+                state: ConsumerProgressState::Observed,
+                topic_count: 1,
+                queue_count: 3,
+                total_lag: 3,
+                max_queue_lag: 1,
+                total_inflight: 0,
+                consume_tps: 1.0,
+                queues: (0..3)
+                    .map(|queue_id| ConsumerProgressQueueRow {
+                        topic: "orders".to_string(),
+                        broker_name: "broker-a".to_string(),
+                        queue_id,
+                        broker_offset: i64::from(queue_id) + 2,
+                        consumer_offset: i64::from(queue_id) + 1,
+                        pull_offset: i64::from(queue_id) + 1,
+                        lag: 1,
+                        inflight: 0,
+                        last_observed_at: Some("1970-01-01T00:00:01.000Z".to_string()),
+                    })
+                    .collect(),
+                truncated: false,
+            }))
+        }
+
         async fn probe_broker_runtime_target(
             &mut self,
             _broker_name: &str,
         ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
             Ok(BrokerRuntimeTargetStatus::NotFound)
+        }
+
+        async fn broker_diagnostics(
+            &mut self,
+            broker_name: &str,
+        ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+            self.counters.broker_diagnostics_queries.fetch_add(1, Ordering::SeqCst);
+            Ok(QueryPayload::complete(BrokerDiagnosticsOutput {
+                cluster: "local-dev".to_string(),
+                broker_name: broker_name.to_string(),
+                diagnostics_schema_version: "rocketmq-mcp.broker-diagnostics.v1".to_string(),
+                observed_at_millis: 0,
+                brokers: Vec::new(),
+                unavailable_brokers: 0,
+            }))
+        }
+
+        async fn broker_config_summary(
+            &mut self,
+            broker_name: &str,
+        ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+            self.counters
+                .broker_config_summary_queries
+                .fetch_add(1, Ordering::SeqCst);
+            Ok(QueryPayload::complete(BrokerConfigSummaryOutput {
+                cluster: "local-dev".to_string(),
+                broker_name: broker_name.to_string(),
+                brokers: Vec::new(),
+            }))
         }
 
         async fn shutdown(self) -> Result<(), ToolExecutionError> {

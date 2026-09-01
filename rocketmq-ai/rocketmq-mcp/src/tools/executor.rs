@@ -510,7 +510,11 @@ where
                 self.adapter.broker_diagnostics(args).await.and_then(|output| {
                     let summary = summary_broker_diagnostics(&output);
                     let cluster = output.cluster.clone();
-                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::BrokerDiagnostics(output.broker_name.clone()),
+                    );
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetBrokerConfigSummary => {
@@ -528,7 +532,11 @@ where
                 self.adapter.broker_config_summary(args).await.and_then(|output| {
                     let summary = summary_broker_config(&output);
                     let cluster = output.cluster.clone();
-                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::BrokerConfigSummary(output.broker_name.clone()),
+                    );
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetBrokerLogFilterState => {
@@ -694,10 +702,14 @@ where
                         )));
                     }
                 };
+                let page = args.page.clone();
                 self.adapter.topic_stats(args).await.and_then(|output| {
                     let summary = summary_topic_stats(&output);
                     let cluster = output.cluster.clone();
-                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::TopicStats(output.topic.clone()))
+                            .with_page(page);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetTopicConfig => {
@@ -715,7 +727,9 @@ where
                 self.adapter.topic_config(args).await.and_then(|output| {
                     let summary = summary_topic_config(&output);
                     let cluster = output.cluster.clone();
-                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::TopicConfig(output.topic.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetConsumerGroupDetails => {
@@ -748,10 +762,16 @@ where
                         )));
                     }
                 };
+                let page = args.page.clone();
                 self.adapter.consumer_progress(args).await.and_then(|output| {
                     let summary = summary_consumer_progress(&output);
                     let cluster = output.cluster.clone();
-                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::ConsumerProgress(output.consumer_group.clone()),
+                    )
+                    .with_page(page);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetHaStatus => {
@@ -1026,14 +1046,30 @@ where
 
 fn render_success<T>(
     descriptor: ToolDescriptor,
-    summary: String,
+    mut summary: String,
     envelope: ToolResponse<T>,
     resource: Option<RocketmqResourceUri>,
 ) -> Result<CallToolResult, ToolExecutionError>
 where
     T: Serialize,
 {
-    let structured = serde_json::to_value(envelope).map_err(ToolExecutionError::internal)?;
+    let resource_can_link = resource.as_ref().is_none_or(RocketmqResourceUri::is_safe);
+    let sensitive_values = resource
+        .as_ref()
+        .map(|resource| {
+            resource
+                .sensitive_values()
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut structured = serde_json::to_value(envelope).map_err(ToolExecutionError::internal)?;
+    if !sensitive_values.is_empty() {
+        summary = redact_sensitive_summary(summary, &sensitive_values);
+        redact_exact_string_fields(&mut structured, &sensitive_values);
+    }
     let structured = output_policy::apply(structured)?;
     let definition = descriptor.id.definition();
     let output_schema = definition
@@ -1043,12 +1079,69 @@ where
     validate_schema(output_schema.as_ref(), &structured, "output").map_err(ToolExecutionError::internal)?;
     let json_text = serde_json::to_string(&structured).map_err(ToolExecutionError::internal)?;
     let mut content = vec![ContentBlock::text(summary), ContentBlock::text(json_text)];
-    if let Some(resource) = resource {
+    if let Some(resource) = resource.filter(|_| resource_can_link) {
         content.push(resource_link(resource));
     }
     let mut result = CallToolResult::success(content);
     result.structured_content = Some(structured);
     Ok(result)
+}
+
+fn redact_exact_string_fields(value: &mut Value, sensitive_values: &[String]) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                redact_exact_string_fields(value, sensitive_values);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_exact_string_fields(value, sensitive_values);
+            }
+        }
+        Value::String(value) if sensitive_values.iter().any(|sensitive| value == sensitive) => {
+            *value = "[REDACTED]".to_string();
+        }
+        Value::String(_) => {}
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn redact_sensitive_summary(mut summary: String, sensitive_values: &[String]) -> String {
+    summary = crate::guard::sanitizer::sanitize_text(&summary);
+    for sensitive in sensitive_values {
+        summary = replace_delimited_value(&summary, sensitive, "[REDACTED]");
+    }
+    summary
+}
+
+fn replace_delimited_value(value: &str, target: &str, replacement: &str) -> String {
+    let matches = value
+        .match_indices(target)
+        .filter_map(|(start, _)| {
+            let end = start + target.len();
+            (is_summary_boundary(value[..start].chars().next_back())
+                && is_summary_boundary(value[end..].chars().next()))
+            .then_some((start, end))
+        })
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return value.to_string();
+    }
+
+    let mut redacted = String::with_capacity(value.len());
+    let mut copied = 0;
+    for (start, end) in matches {
+        redacted.push_str(&value[copied..start]);
+        redacted.push_str(replacement);
+        copied = end;
+    }
+    redacted.push_str(&value[copied..]);
+    redacted
+}
+
+fn is_summary_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| character.is_whitespace() || ",.;()[]{}".contains(character))
 }
 
 fn resource_link(uri: RocketmqResourceUri) -> ContentBlock {
@@ -2039,7 +2132,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_and_proxy_tools_dispatch_without_resource_links() {
+    async fn broker_tools_dispatch_with_resource_links_while_proxy_tools_remain_unlinked() {
         let executor = ToolExecutor::new(
             FakeAdapter {
                 fail: false,
@@ -2051,10 +2144,12 @@ mod tests {
             (
                 ToolId::GetBrokerDiagnostics,
                 serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"}),
+                Some("rocketmq://clusters/local-dev/brokers/broker-a/diagnostics"),
             ),
             (
                 ToolId::GetBrokerConfigSummary,
                 serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"}),
+                Some("rocketmq://clusters/local-dev/brokers/broker-a/config-summary"),
             ),
             (
                 ToolId::GetBrokerLogFilterState,
@@ -2063,13 +2158,15 @@ mod tests {
                     "broker_name": "broker-a",
                     "logger": "rocketmq_broker::processor"
                 }),
+                None,
             ),
             (
                 ToolId::GetProxyDrainState,
                 serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a"}),
+                None,
             ),
         ];
-        for (tool, arguments) in calls {
+        for (tool, arguments, expected_uri) in calls {
             let result = executor
                 .call(
                     CallToolRequestParams::new(tool.descriptor().name)
@@ -2078,10 +2175,14 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(result.is_error, Some(false), "{}", tool.descriptor().name);
-            assert!(result
-                .content
-                .iter()
-                .all(|content| content.as_resource_link().is_none()));
+            assert_eq!(
+                result
+                    .content
+                    .iter()
+                    .find_map(ContentBlock::as_resource_link)
+                    .map(|link| link.uri.as_str()),
+                expected_uri
+            );
             assert!(result.structured_content.is_some());
         }
     }
@@ -2268,7 +2369,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_read_tools_dispatch_without_resource_links_and_reject_unknown_fields() {
+    async fn new_read_tools_expose_only_scoped_resource_links_and_reject_unknown_fields() {
         let executor = ToolExecutor::new(
             FakeAdapter {
                 fail: false,
@@ -2280,41 +2381,50 @@ mod tests {
             (
                 ToolId::ListConsumerConnections,
                 serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+                None,
             ),
             (
                 ToolId::ListProducerConnections,
                 serde_json::json!({"cluster":"local-dev","topic":"orders","producer_group":"producer-a"}),
+                None,
             ),
             (
                 ToolId::GetMessageMetadata,
                 serde_json::json!({"cluster":"local-dev","message_id":"raw-message-a"}),
+                None,
             ),
             (
                 ToolId::GetTopicConfigState,
                 serde_json::json!({"cluster":"local-dev","topic":"orders","broker_names":["broker-a"]}),
+                None,
             ),
             (
                 ToolId::GetConsumerGroupConfigState,
                 serde_json::json!({"cluster":"local-dev","group":"group-a","broker_names":["broker-a"]}),
+                None,
             ),
             (
                 ToolId::GetTopicStats,
                 serde_json::json!({"cluster":"local-dev","topic":"orders","limit":1}),
+                Some("rocketmq://clusters/local-dev/topics/orders/stats?limit=1"),
             ),
             (
                 ToolId::GetTopicConfig,
                 serde_json::json!({"cluster":"local-dev","topic":"orders"}),
+                Some("rocketmq://clusters/local-dev/topics/orders/config"),
             ),
             (
                 ToolId::GetConsumerGroupDetails,
                 serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+                None,
             ),
             (
                 ToolId::GetConsumerProgress,
                 serde_json::json!({"cluster":"local-dev","consumer_group":"group-a","limit":1}),
+                Some("rocketmq://clusters/local-dev/consumer-groups/group-a/progress?limit=1"),
             ),
         ];
-        for (tool, arguments) in calls {
+        for (tool, arguments, expected_uri) in calls {
             let result = executor
                 .call(
                     CallToolRequestParams::new(tool.descriptor().name)
@@ -2323,7 +2433,14 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(result.is_error, Some(false), "{}", tool.descriptor().name);
-            assert!(result.content.iter().all(|item| item.as_resource_link().is_none()));
+            assert_eq!(
+                result
+                    .content
+                    .iter()
+                    .find_map(ContentBlock::as_resource_link)
+                    .map(|link| link.uri.as_str()),
+                expected_uri
+            );
 
             let mut invalid_arguments = arguments.as_object().unwrap().clone();
             invalid_arguments.insert("unexpected".to_string(), serde_json::Value::Bool(true));
@@ -2336,6 +2453,111 @@ mod tests {
                 serde_json::from_str::<serde_json::Value>(&content_text(&invalid)).unwrap()["code"],
                 "invalid_arguments"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrepresentable_resource_targets_only_omit_links_without_rewriting_tool_data() {
+        let guard = test_guard("read_only");
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        );
+        let safe = executor
+            .call(
+                CallToolRequestParams::new("rocketmq_get_topic_config").with_arguments(
+                    serde_json::json!({"cluster":"local-dev","topic":"orders"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(safe.is_error, Some(false));
+        assert_eq!(
+            safe.content
+                .iter()
+                .find_map(ContentBlock::as_resource_link)
+                .map(|link| link.uri.as_str()),
+            Some("rocketmq://clusters/local-dev/topics/orders/config")
+        );
+
+        let unrepresentable_topics = [
+            ".".to_string(),
+            ":".to_string(),
+            "x".repeat(crate::model::identifier::TOPIC_MAX_BYTES + 1),
+        ];
+        for topic in unrepresentable_topics {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new("rocketmq_get_topic_config").with_arguments(
+                        serde_json::json!({"cluster":"local-dev","topic":&topic})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false));
+            assert!(result.content.iter().all(|block| block.as_resource_link().is_none()));
+            let structured = result.structured_content.as_ref().unwrap();
+            assert_eq!(structured["schema_version"], "rocketmq-mcp.v2");
+            assert!(chrono::DateTime::parse_from_rfc3339(structured["observed_at"].as_str().unwrap()).is_ok());
+            assert_eq!(structured["cluster"], "local-dev");
+            assert_eq!(structured["data"]["topic"], topic);
+            assert_eq!(structured["data"]["generated_at"], "transient-test-time");
+            assert_eq!(structured["data"]["brokers"][0]["broker_name"], "broker-a");
+            assert_eq!(
+                result.content[0].as_text().unwrap().text,
+                format!(
+                    "Topic {topic} on cluster local-dev returned 1 Broker configurations with 0 semantic differences."
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sensitive_unrepresentable_targets_are_cleaned_without_touching_unrelated_fields() {
+        let guard = test_guard("read_only");
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        );
+        for topic in ["127.0.0.1", "127.0.0.1:9876", "token=secret", "%74oken%3Dsecret"] {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new("rocketmq_get_topic_config").with_arguments(
+                        serde_json::json!({"cluster":"local-dev","topic":topic})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false));
+            assert!(result.content.iter().all(|block| block.as_resource_link().is_none()));
+            let structured = result.structured_content.as_ref().unwrap();
+            assert_eq!(structured["schema_version"], "rocketmq-mcp.v2");
+            assert!(chrono::DateTime::parse_from_rfc3339(structured["observed_at"].as_str().unwrap()).is_ok());
+            assert_eq!(structured["cluster"], "local-dev");
+            assert_eq!(structured["data"]["topic"], "[REDACTED]");
+            assert_eq!(structured["data"]["generated_at"], "transient-test-time");
+            assert_eq!(structured["data"]["brokers"][0]["broker_name"], "broker-a");
+            let wire = serde_json::to_string(&result).unwrap();
+            assert!(!wire.contains(topic), "sensitive target escaped: {topic}");
+        }
+        let audit = serde_json::to_string(&guard.audit_log().records()).unwrap();
+        for unsafe_value in ["127.0.0.1", "token=secret", "%74oken%3Dsecret"] {
+            assert!(!audit.contains(unsafe_value));
         }
     }
 

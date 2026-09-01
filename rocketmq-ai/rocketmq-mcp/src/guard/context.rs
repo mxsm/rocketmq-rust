@@ -90,6 +90,62 @@ impl RequestContext {
     pub(crate) fn visibility_class(&self) -> VisibilityClass {
         self.principal.visibility_class()
     }
+
+    pub(crate) fn canonical_auth_claims(&self) -> Vec<u8> {
+        let mut claims = b"rocketmq-mcp.discovery-auth.v1".to_vec();
+        push_tlv(&mut claims, 0x01, self.principal.id.as_bytes());
+        push_optional_tlv(&mut claims, 0x02, self.principal.tenant.as_deref());
+        push_collection_tlv(&mut claims, 0x03, &self.principal.roles);
+        push_collection_tlv(&mut claims, 0x04, &self.principal.scopes);
+        push_optional_collection_tlv(&mut claims, 0x05, self.principal.allowed_clusters.as_ref());
+        push_tlv(&mut claims, 0x06, self.visibility_class().as_str().as_bytes());
+        claims
+    }
+}
+
+fn push_tlv(output: &mut Vec<u8>, tag: u8, value: &[u8]) {
+    output.push(tag);
+    output.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    output.extend_from_slice(value);
+}
+
+fn push_optional_tlv(output: &mut Vec<u8>, tag: u8, value: Option<&str>) {
+    let mut encoded = Vec::new();
+    match value {
+        Some(value) => {
+            encoded.push(1);
+            encoded.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            encoded.extend_from_slice(value.as_bytes());
+        }
+        None => encoded.push(0),
+    }
+    push_tlv(output, tag, &encoded);
+}
+
+fn push_collection_tlv(output: &mut Vec<u8>, tag: u8, values: &BTreeSet<String>) {
+    let mut encoded = Vec::new();
+    encoded.extend_from_slice(&(values.len() as u64).to_be_bytes());
+    for value in values {
+        encoded.extend_from_slice(&(value.len() as u64).to_be_bytes());
+        encoded.extend_from_slice(value.as_bytes());
+    }
+    push_tlv(output, tag, &encoded);
+}
+
+fn push_optional_collection_tlv(output: &mut Vec<u8>, tag: u8, values: Option<&BTreeSet<String>>) {
+    let mut encoded = Vec::new();
+    match values {
+        Some(values) => {
+            encoded.push(1);
+            encoded.extend_from_slice(&(values.len() as u64).to_be_bytes());
+            for value in values {
+                encoded.extend_from_slice(&(value.len() as u64).to_be_bytes());
+                encoded.extend_from_slice(value.as_bytes());
+            }
+        }
+        None => encoded.push(0),
+    }
+    push_tlv(output, tag, &encoded);
 }
 
 #[cfg(test)]
@@ -139,5 +195,36 @@ mod tests {
     fn visibility_names_are_stable_and_non_sensitive() {
         assert_eq!(VisibilityClass::Standard.as_str(), "standard");
         assert_eq!(VisibilityClass::Sensitive.as_str(), "sensitive");
+    }
+
+    #[test]
+    fn discovery_auth_claims_are_canonical_and_collision_resistant_by_construction() {
+        fn context(tenant: Option<&str>, roles: &[&str], scopes: &[&str], clusters: Option<&[&str]>) -> RequestContext {
+            RequestContext {
+                principal: Principal {
+                    id: "principal".to_string(),
+                    tenant: tenant.map(ToString::to_string),
+                    roles: roles.iter().map(|value| (*value).to_string()).collect(),
+                    scopes: scopes.iter().map(|value| (*value).to_string()).collect(),
+                    allowed_clusters: clusters.map(|values| values.iter().map(|value| (*value).to_string()).collect()),
+                },
+                client: None,
+            }
+        }
+
+        let baseline = context(None, &["a", "bc"], &["rocketmq:read"], None);
+        let cases = [
+            context(None, &["ab", "c"], &["rocketmq:read"], None),
+            context(None, &["rocketmq:read"], &["a", "bc"], None),
+            context(Some(""), &["a", "bc"], &["rocketmq:read"], None),
+            context(None, &["a", "bc"], &["rocketmq:read"], Some(&[])),
+            context(None, &["a", "bc"], &["rocketmq:diagnose"], None),
+        ];
+        for candidate in cases {
+            assert_ne!(baseline.canonical_auth_claims(), candidate.canonical_auth_claims());
+        }
+
+        let sorted = context(None, &["bc", "a"], &["rocketmq:read"], None);
+        assert_eq!(baseline.canonical_auth_claims(), sorted.canonical_auth_claims());
     }
 }

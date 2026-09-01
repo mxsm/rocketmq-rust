@@ -72,6 +72,7 @@ Confirm each control in the deployed configuration before exposing the endpoint:
 | Row and byte bounds | Arrays are capped at 1,000 rows and structured output at 1 MiB. Row truncation reports `partial = true` and `output_rows_truncated`; oversized output returns `output_too_large`. HTTP request bodies are also capped at 1 MiB. | Boundary probes that verify the stable warning/error without retaining sensitive payloads. |
 | Audit | Keep `audit.enabled = true`; choose `file` or `tracing` for durable operations evidence and size the count and byte queues deliberately. Records are redacted, bounded, and drained FIFO during shutdown. | Sink-health, accepted/written/drop, pending-record, and flush evidence. |
 | Cache and visibility | Every verified request maps to the closed `standard` or `sensitive` visibility class. Read-only HTTP principals and local read-only stdio profiles use `standard`; diagnosis/planning principals and local diagnose/operator profiles use `sensitive`. Cache keys include only the stable class name, schema version, query kind, resolved cluster, and normalized parameters. Ordinary entries, snapshots, cursors, and singleflight work are shared within a class and isolated across classes. Principal, tenant, role, scope, client, and bearer-token values are not retained in query state. Failures are not cached; TTLs and capacity are reviewed for the workload. | Allowed Tool and live Resource probes for both classes; same-class hit/coalescing evidence; cross-class miss and cursor-context rejection without a backend reload; query-state review with identity and credential values omitted. |
+| ResourceLink compatibility | A Resource-backed Tool adds a link only for a canonical, safely representable target. Existing Tool-compatible targets outside the Resource identifier contract retain their Tool success/error and data behavior and omit only the link; genuinely sensitive target values remain sanitized. Discovery ignores configured cluster names that cannot be represented as closed logical aliases. | Probe a safe target, benign unrepresentable `.`, `:`, and overlength targets, IP/socket targets, raw and encoded assignments, plus unsafe-only and mixed safe/unsafe cluster configurations. Retain link counts, unchanged non-target fields, sanitized output/audit, discovery counts, and cursor continuity. |
 | Mutation boundary | Keep the RocketMQ user least-privileged and retain the `read-client-adapter` dependency boundary. No Apply path, mutation feature, or mutation admin API is part of the MCP binary. | Read-only boundary check and dependency review. |
 
 ## Validation stages
@@ -118,14 +119,24 @@ check discovery and execution in this order:
 
 1. `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` show only the caller-authorized
    surface.
-2. The eight default read-only/diagnosis tools return the `rocketmq-mcp.v2` envelope or a stable sanitized error.
+2. The 24 default read-only/diagnosis tools listed in the implementation baseline return the `rocketmq-mcp.v2`
+   envelope or a stable sanitized error. The all-features catalog contains those 24 plus five non-mutating plans.
 3. The five planning tools appear only when compiled and policy-enabled; every result has `mutates_cluster = false`.
    There is no Apply request to test.
-4. Read the five cluster roots, parameterized topic/route/group/lag/broker forms, and the two system resources only
-   when the principal has the required authorization. Verify unknown, incomplete, unauthorized, and unsupported
-   forms fail closed.
+4. Read the five cluster roots, all ten parameterized forms (including broker diagnostics/configuration, Topic
+   statistics/configuration, and Consumer Group progress), and the two system resources only when the principal has
+   the required authorization. Verify unknown, incomplete, unauthorized, noncanonical, and unsupported forms fail
+   closed without revealing target existence.
 5. Verify the cache status and freshness fields, bounded rows/bytes, redaction, correlation IDs, and corresponding
    audit records.
+6. For every Resource-backed Tool family, verify a canonical safe target returns the exact ResourceLink. Verify Tool-
+   compatible but Resource-unrepresentable `.`, `:`, and non-sensitive overlength targets keep the same Tool result,
+   evidence, schema version, and RFC 3339 time while returning no link. Verify IP/socket and raw/percent-encoded
+   assignment targets return no link and expose no sensitive value in content, structured data, errors, or audit.
+7. With only unsafe configured cluster names, verify cluster Resource/template/Prompt discovery is empty while
+   authorized system Resources remain available. With mixed safe/unsafe names, verify only safe cluster roots are
+   listed, all otherwise-authorized templates and Prompts remain available through the safe cluster, cursors/counts
+   match the safe-only configuration, and direct unauthorized/invalid reads keep the same oracle-safe envelope.
 
 The checked-in external-cluster integration test covers the first eight tools and a parameterized resource when
 run with all four `ROCKETMQ_MCP_E2E_*` variables. The exact command in the evidence table uses Cargo's default
@@ -161,26 +172,27 @@ cluster mutation.
 
 ## Evidence record
 
-The following command-level evidence was captured for revision `a69f712b0e5acc82469aee0d1a7bc57ba9e62c8c` on
-2026-08-31 from a Windows local checkout. The working directory is relative to the repository root. The local
+The following command-level evidence was captured on 2026-09-01 from the uncommitted Issue #9955 worktree based on
+`3b7cad90d53b2bf134dbf7289056fd19c978b372`. The working directory is relative to the repository root. The local
 environment had no reachable RocketMQ test cluster and no `ROCKETMQ_MCP_E2E_*` variables.
 
 | Exact command | Working directory | Feature set | Status | Environment | Limitation |
 | --- | --- | --- | --- | --- | --- |
 | `cargo fmt --all -- --check` | `rocketmq-ai/rocketmq-mcp` | Cargo defaults | **failed (exit 1)** | Windows local checkout | Reported `文件名或扩展名太长。 (os error 206)` and printed usage before formatting. |
-| `cargo fmt -p rocketmq-mcp -- --check` | `rocketmq-ai/rocketmq-mcp` | Package `rocketmq-mcp` only | **passed (exit 0)** | Clean `main` checkout and current documentation worktree on Windows | This narrower check does not replace the failed mandatory all-package formatter command; it only isolates the package's own formatting scope. |
-| `cargo check --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0)** | Windows local checkout | Five existing `dead_code` warnings came from path dependency `rocketmq-transport`; no cluster connection was attempted. |
+| `cargo fmt -p rocketmq-mcp -- --check` | `rocketmq-ai/rocketmq-mcp` | Package `rocketmq-mcp` only | **passed (exit 0)** | Issue #9955 worktree on Windows | This narrower check does not replace the failed mandatory all-package formatter command; it validates every Rust file in the MCP package. |
+| `cargo check --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0)** | Windows local checkout | No cluster connection was attempted. |
+| `cargo check --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0)** | Windows local checkout | Validates the 29-Tool feature combination without a live cluster. |
 | `python scripts/check_read_only_boundary.py` | `rocketmq-ai/rocketmq-mcp` | Metadata/dependency closure | **passed (exit 0)** | Windows local checkout | Printed `MCP read-only dependency boundary passed`; this is not live-cluster evidence. |
-| `cargo test --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0): 117 passed, 0 failed, 1 ignored** | Windows local checkout | The ignored test is the external-cluster test requiring four `ROCKETMQ_MCP_E2E_*` variables; doc-tests reported 0. |
-| `cargo test --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0): 141 passed, 0 failed, 1 ignored** | Windows local checkout | The same external-cluster test remained ignored; doc-tests reported 0. |
-| `cargo clippy --locked --all-targets --features streamable-http -- -D warnings` | `rocketmq-ai/rocketmq-mcp` | `streamable-http` plus defaults | **passed (exit 0)** | Windows local checkout | Five existing path-dependency `dead_code` warnings were emitted; no MCP Clippy warning failed the command. |
-| `cargo doc --locked --no-deps` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0)** | Windows local checkout | Generated docs with the same five path-dependency warnings; this does not exercise a cluster. |
+| `cargo test --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0): 268 passed, 0 failed, 1 ignored** | Windows local checkout; `RUST_MIN_STACK` and `INSTA_UPDATE` unset | 259 library + 5 binary + 1 compatibility + 3 non-E2E integration tests passed; doc-tests reported 0. |
+| `cargo test --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0): 313 passed, 0 failed, 1 ignored** | Windows local checkout; `RUST_MIN_STACK` and `INSTA_UPDATE` unset | 304 library + 5 binary + 1 compatibility + 3 non-E2E integration tests passed; doc-tests reported 0. |
+| `cargo clippy --locked --all-targets --features streamable-http -- -D warnings` | `rocketmq-ai/rocketmq-mcp` | `streamable-http` plus defaults | **passed (exit 0)** | Windows local checkout | No warning was accepted. |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0)** | Windows local checkout | No warning was accepted. |
+| `cargo doc --locked --no-deps` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0)** | Windows local checkout | Generated docs successfully; this does not exercise a cluster. |
 | `git diff --check` | repository root | Not applicable | **passed (exit 0)** | Windows local checkout | Whitespace check only; it does not qualify a deployment. |
 | `cargo test --locked --test integration external_cluster_exercises_mvp_tools_and_resources -- --ignored` | `rocketmq-ai/rocketmq-mcp` | **Default features only**: `read-only`, `diagnose`, `stdio` | **not run** | Required external variables and a reachable cluster were absent | This exact command is not an all-features run; it remains a separate live-cluster qualification gate. |
 
-The mandatory all-package formatter failure is reproducible on the clean `main` checkout at this revision with the
-same `文件名或扩展名太长。 (os error 206)` result. The package-scoped formatter passes, but it is diagnostic evidence
-only and does not change the failed mandatory gate.
+The mandatory all-package formatter failed in this worktree with `文件名或扩展名太长。 (os error 206)`. The
+package-scoped formatter passes, but it does not change the failed mandatory gate.
 
 The complete baseline, including test-suite breakdown and snapshot links, is in
 [implementation-baseline.md](implementation-baseline.md). These local results do not imply that OAuth, TLS,

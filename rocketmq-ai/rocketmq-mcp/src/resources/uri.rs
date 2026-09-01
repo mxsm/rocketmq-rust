@@ -19,6 +19,8 @@ use percent_encoding::CONTROLS;
 
 use crate::model::contract::PageRequest;
 use crate::model::contract::MAX_PAGE_LIMIT;
+use crate::model::identifier;
+use crate::tools::catalog::ToolId;
 
 pub const JSON_MIME_TYPE: &str = "application/json";
 const CLUSTER_URI_PREFIX: &str = "rocketmq://clusters/";
@@ -34,7 +36,8 @@ const RESOURCE_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'=')
     .add(b'>')
     .add(b'?')
-    .add(b'`');
+    .add(b'`')
+    .add(b'|');
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceKind {
@@ -47,9 +50,21 @@ pub enum ResourceKind {
     TopicRoute(String),
     Brokers,
     Broker(String),
+    BrokerDiagnostics(String),
+    BrokerConfigSummary(String),
     ConsumerGroups,
     ConsumerGroup(String),
     ConsumerLag { group: String, topic: String },
+    TopicStats(String),
+    TopicConfig(String),
+    ConsumerProgress(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceAuthorization {
+    Capabilities,
+    SystemDiagnostics,
+    Tool(ToolId),
 }
 
 impl ResourceKind {
@@ -73,9 +88,44 @@ impl ResourceKind {
             Self::TopicRoute(_) => "topic_route",
             Self::Brokers => "broker_list",
             Self::Broker(_) => "broker_describe",
+            Self::BrokerDiagnostics(_) => "broker_diagnostics",
+            Self::BrokerConfigSummary(_) => "broker_config_summary",
             Self::ConsumerGroups => "consumer_group_list",
             Self::ConsumerGroup(_) => "consumer_group_describe",
             Self::ConsumerLag { .. } => "consumer_lag",
+            Self::TopicStats(_) => "topic_stats",
+            Self::TopicConfig(_) => "topic_config",
+            Self::ConsumerProgress(_) => "consumer_progress",
+        }
+    }
+
+    pub(crate) fn audit_operation(&self) -> String {
+        format!("resource:{}", self.metric_operation())
+    }
+
+    pub const fn authorization(&self) -> ResourceAuthorization {
+        match self {
+            Self::Capabilities => ResourceAuthorization::Capabilities,
+            Self::SystemRuntimeV1 | Self::SystemObservabilityV1 => ResourceAuthorization::SystemDiagnostics,
+            Self::Overview | Self::Brokers => ResourceAuthorization::Tool(ToolId::GetClusterOverview),
+            Self::Topics => ResourceAuthorization::Tool(ToolId::ListTopics),
+            Self::Topic(_) => ResourceAuthorization::Tool(ToolId::DescribeTopic),
+            Self::TopicRoute(_) => ResourceAuthorization::Tool(ToolId::GetTopicRoute),
+            Self::Broker(_) => ResourceAuthorization::Tool(ToolId::DescribeBroker),
+            Self::BrokerDiagnostics(_) => ResourceAuthorization::Tool(ToolId::GetBrokerDiagnostics),
+            Self::BrokerConfigSummary(_) => ResourceAuthorization::Tool(ToolId::GetBrokerConfigSummary),
+            Self::ConsumerGroups | Self::ConsumerGroup(_) => ResourceAuthorization::Tool(ToolId::ListConsumerGroups),
+            Self::ConsumerLag { .. } => ResourceAuthorization::Tool(ToolId::GetConsumerLag),
+            Self::TopicStats(_) => ResourceAuthorization::Tool(ToolId::GetTopicStats),
+            Self::TopicConfig(_) => ResourceAuthorization::Tool(ToolId::GetTopicConfig),
+            Self::ConsumerProgress(_) => ResourceAuthorization::Tool(ToolId::GetConsumerProgress),
+        }
+    }
+
+    pub const fn backing_tool(&self) -> Option<ToolId> {
+        match self.authorization() {
+            ResourceAuthorization::Tool(tool) => Some(tool),
+            ResourceAuthorization::Capabilities | ResourceAuthorization::SystemDiagnostics => None,
         }
     }
 
@@ -90,9 +140,14 @@ impl ResourceKind {
             Self::TopicRoute(topic) => format!("topics/{}/route", encode_segment(topic)),
             Self::Brokers => "brokers".to_string(),
             Self::Broker(broker) => format!("brokers/{}", encode_segment(broker)),
+            Self::BrokerDiagnostics(broker) => format!("brokers/{}/diagnostics", encode_segment(broker)),
+            Self::BrokerConfigSummary(broker) => format!("brokers/{}/config-summary", encode_segment(broker)),
             Self::ConsumerGroups => "consumer-groups".to_string(),
             Self::ConsumerGroup(group) => format!("consumer-groups/{}", encode_segment(group)),
             Self::ConsumerLag { group, .. } => format!("consumer-groups/{}/lag", encode_segment(group)),
+            Self::TopicStats(topic) => format!("topics/{}/stats", encode_segment(topic)),
+            Self::TopicConfig(topic) => format!("topics/{}/config", encode_segment(topic)),
+            Self::ConsumerProgress(group) => format!("consumer-groups/{}/progress", encode_segment(group)),
         }
     }
 
@@ -107,9 +162,14 @@ impl ResourceKind {
             Self::TopicRoute(_) => "RocketMQ topic route",
             Self::Brokers => "RocketMQ brokers",
             Self::Broker(_) => "RocketMQ broker",
+            Self::BrokerDiagnostics(_) => "RocketMQ broker diagnostics",
+            Self::BrokerConfigSummary(_) => "RocketMQ broker configuration summary",
             Self::ConsumerGroups => "RocketMQ consumer groups",
             Self::ConsumerGroup(_) => "RocketMQ consumer group",
             Self::ConsumerLag { .. } => "RocketMQ consumer lag",
+            Self::TopicStats(_) => "RocketMQ topic statistics",
+            Self::TopicConfig(_) => "RocketMQ topic configuration",
+            Self::ConsumerProgress(_) => "RocketMQ consumer progress",
         }
     }
 
@@ -124,9 +184,16 @@ impl ResourceKind {
             Self::TopicRoute(_) => "Read-only routing information for one RocketMQ topic.",
             Self::Brokers => "Read-only broker inventory for one configured RocketMQ cluster.",
             Self::Broker(_) => "Read-only details for one RocketMQ broker.",
+            Self::BrokerDiagnostics(_) => "Read-only diagnostics for one logical RocketMQ broker.",
+            Self::BrokerConfigSummary(_) => {
+                "Read-only allowlisted configuration summary for one logical RocketMQ broker."
+            }
             Self::ConsumerGroups => "Read-only consumer group inventory for one configured RocketMQ cluster.",
             Self::ConsumerGroup(_) => "Read-only details for one RocketMQ consumer group.",
             Self::ConsumerLag { .. } => "Read-only lag details for one RocketMQ consumer group and topic.",
+            Self::TopicStats(_) => "Read-only bounded statistics for one RocketMQ topic.",
+            Self::TopicConfig(_) => "Read-only configuration observations for one RocketMQ topic.",
+            Self::ConsumerProgress(_) => "Read-only bounded progress for one RocketMQ consumer group.",
         }
     }
 }
@@ -153,6 +220,11 @@ impl RocketmqResourceUri {
         }
     }
 
+    pub fn try_new(cluster: impl Into<String>, kind: ResourceKind) -> Option<Self> {
+        let resource = Self::new(cluster, kind);
+        resource.is_safe().then_some(resource)
+    }
+
     pub fn system(kind: ResourceKind) -> Option<Self> {
         matches!(
             kind,
@@ -177,6 +249,11 @@ impl RocketmqResourceUri {
         &self.query
     }
 
+    pub fn with_page(mut self, page: PageRequest) -> Self {
+        self.query.page = page;
+        self
+    }
+
     pub fn parse(uri: &str) -> Option<Self> {
         if let Some(path) = uri.strip_prefix(SYSTEM_URI_PREFIX) {
             let kind = match path {
@@ -192,7 +269,7 @@ impl RocketmqResourceUri {
         if cluster.is_empty() || cluster.contains(['?', '#']) || resource.contains('#') {
             return None;
         }
-        let cluster = decode_segment(cluster)?;
+        let cluster = decode_logical_alias(cluster)?;
         let (path, query) = match resource.split_once('?') {
             Some((path, query)) if !query.is_empty() => (path, Some(query)),
             Some(_) => return None,
@@ -211,23 +288,40 @@ impl RocketmqResourceUri {
                 resource_query(&parameters, &["filter", "limit", "cursor"])?,
             ),
             ["topics", topic] => (
-                ResourceKind::Topic(decode_segment(topic)?),
+                ResourceKind::Topic(decode_topic(topic)?),
                 resource_query(&parameters, &["limit", "cursor"])?,
             ),
             ["topics", topic, "route"] => (
-                ResourceKind::TopicRoute(decode_segment(topic)?),
+                ResourceKind::TopicRoute(decode_topic(topic)?),
                 resource_query(&parameters, &["limit", "cursor"])?,
             ),
+            ["topics", topic, "stats"] => (
+                ResourceKind::TopicStats(decode_topic(topic)?),
+                resource_query(&parameters, &["limit", "cursor"])?,
+            ),
+            ["topics", topic, "config"] if parameters.is_empty() => (
+                ResourceKind::TopicConfig(decode_topic(topic)?),
+                ResourceQuery::default(),
+            ),
             ["brokers"] if parameters.is_empty() => (ResourceKind::Brokers, ResourceQuery::default()),
-            ["brokers", broker] if parameters.is_empty() => {
-                (ResourceKind::Broker(decode_segment(broker)?), ResourceQuery::default())
-            }
+            ["brokers", broker] if parameters.is_empty() => (
+                ResourceKind::Broker(decode_logical_alias(broker)?),
+                ResourceQuery::default(),
+            ),
+            ["brokers", broker, "diagnostics"] if parameters.is_empty() => (
+                ResourceKind::BrokerDiagnostics(decode_logical_alias(broker)?),
+                ResourceQuery::default(),
+            ),
+            ["brokers", broker, "config-summary"] if parameters.is_empty() => (
+                ResourceKind::BrokerConfigSummary(decode_logical_alias(broker)?),
+                ResourceQuery::default(),
+            ),
             ["consumer-groups"] => (
                 ResourceKind::ConsumerGroups,
                 resource_query(&parameters, &["filter", "limit", "cursor"])?,
             ),
             ["consumer-groups", group] if parameters.is_empty() => (
-                ResourceKind::ConsumerGroup(decode_segment(group)?),
+                ResourceKind::ConsumerGroup(decode_consumer_group(group)?),
                 ResourceQuery::default(),
             ),
             ["consumer-groups", group, "lag"] => {
@@ -240,19 +334,24 @@ impl RocketmqResourceUri {
                 let topic = parameters.get("topic").filter(|topic| !topic.is_empty())?.clone();
                 (
                     ResourceKind::ConsumerLag {
-                        group: decode_segment(group)?,
-                        topic,
+                        group: decode_consumer_group(group)?,
+                        topic: validate_topic(topic)?,
                     },
                     resource_query(&parameters, &["topic", "limit", "cursor"])?,
                 )
             }
+            ["consumer-groups", group, "progress"] => (
+                ResourceKind::ConsumerProgress(decode_consumer_group(group)?),
+                resource_query(&parameters, &["limit", "cursor"])?,
+            ),
             _ => return None,
         };
-        Some(Self {
+        let parsed = Self {
             cluster: Some(cluster),
             kind,
             query,
-        })
+        };
+        (parsed.is_safe() && parsed.as_string() == uri).then_some(parsed)
     }
 
     pub fn as_string(&self) -> String {
@@ -272,6 +371,109 @@ impl RocketmqResourceUri {
             None => format!("system_{path}"),
         }
     }
+
+    pub(crate) fn is_safe(&self) -> bool {
+        let cluster_safe = self.cluster.as_deref().is_none_or(identifier::is_logical_alias);
+        let kind_safe = match &self.kind {
+            ResourceKind::Topic(topic)
+            | ResourceKind::TopicRoute(topic)
+            | ResourceKind::TopicStats(topic)
+            | ResourceKind::TopicConfig(topic) => identifier::is_topic(topic),
+            ResourceKind::ConsumerGroup(group) | ResourceKind::ConsumerProgress(group) => {
+                identifier::is_consumer_group(group)
+            }
+            ResourceKind::ConsumerLag { group, topic } => {
+                identifier::is_consumer_group(group) && identifier::is_topic(topic)
+            }
+            ResourceKind::Broker(broker)
+            | ResourceKind::BrokerDiagnostics(broker)
+            | ResourceKind::BrokerConfigSummary(broker) => identifier::is_logical_alias(broker),
+            ResourceKind::Capabilities
+            | ResourceKind::SystemRuntimeV1
+            | ResourceKind::SystemObservabilityV1
+            | ResourceKind::Overview
+            | ResourceKind::Topics
+            | ResourceKind::Brokers
+            | ResourceKind::ConsumerGroups => true,
+        };
+        let cursor_safe = self.query.page.cursor.as_deref().is_none_or(is_safe_cursor);
+        let filter_safe = self.query.filter.as_deref().is_none_or(identifier::is_resource_filter);
+        cluster_safe && kind_safe && filter_safe && cursor_safe
+    }
+
+    pub(crate) fn sensitive_values(&self) -> Vec<&str> {
+        let mut values = Vec::new();
+        if let Some(cluster) = self
+            .cluster
+            .as_deref()
+            .filter(|value| identifier::is_sensitive_resource_value(value))
+        {
+            values.push(cluster);
+        }
+        match &self.kind {
+            ResourceKind::Topic(topic)
+            | ResourceKind::TopicRoute(topic)
+            | ResourceKind::TopicStats(topic)
+            | ResourceKind::TopicConfig(topic) => {
+                if identifier::is_sensitive_resource_value(topic) {
+                    values.push(topic);
+                }
+            }
+            ResourceKind::ConsumerGroup(group) | ResourceKind::ConsumerProgress(group) => {
+                if identifier::is_sensitive_resource_value(group) {
+                    values.push(group);
+                }
+            }
+            ResourceKind::ConsumerLag { group, topic } => {
+                if identifier::is_sensitive_resource_value(group) {
+                    values.push(group);
+                }
+                if identifier::is_sensitive_resource_value(topic) {
+                    values.push(topic);
+                }
+            }
+            ResourceKind::Broker(broker)
+            | ResourceKind::BrokerDiagnostics(broker)
+            | ResourceKind::BrokerConfigSummary(broker) => {
+                if identifier::is_sensitive_resource_value(broker) {
+                    values.push(broker);
+                }
+            }
+            ResourceKind::Capabilities
+            | ResourceKind::SystemRuntimeV1
+            | ResourceKind::SystemObservabilityV1
+            | ResourceKind::Overview
+            | ResourceKind::Topics
+            | ResourceKind::Brokers
+            | ResourceKind::ConsumerGroups => {}
+        }
+        if let Some(filter) = self
+            .query
+            .filter
+            .as_deref()
+            .filter(|value| identifier::is_sensitive_resource_value(value))
+        {
+            values.push(filter);
+        }
+        if let Some(cursor) = self
+            .query
+            .page
+            .cursor
+            .as_deref()
+            .filter(|cursor| identifier::is_sensitive_resource_value(cursor))
+        {
+            values.push(cursor);
+        }
+        values
+    }
+}
+
+fn is_safe_cursor(cursor: &str) -> bool {
+    !cursor.is_empty()
+        && cursor.len() <= 1024
+        && cursor
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn parse_query(query: Option<&str>) -> Option<std::collections::BTreeMap<String, String>> {
@@ -284,7 +486,11 @@ fn parse_query(query: Option<&str>) -> Option<std::collections::BTreeMap<String,
         if key.is_empty() || value.is_empty() || parameters.contains_key(key) {
             return None;
         }
-        parameters.insert(key.to_string(), decode_segment(value)?);
+        let value = decode_segment(value)?;
+        if value.eq_ignore_ascii_case("null") || value.len() > 1024 || value.chars().any(char::is_control) {
+            return None;
+        }
+        parameters.insert(key.to_string(), value);
     }
     Some(parameters)
 }
@@ -345,6 +551,27 @@ fn decode_segment(segment: &str) -> Option<String> {
         .decode_utf8()
         .ok()
         .map(|value| value.into_owned())
+}
+
+fn decode_logical_alias(segment: &str) -> Option<String> {
+    validate_logical_alias(decode_segment(segment)?)
+}
+
+fn validate_logical_alias(value: String) -> Option<String> {
+    identifier::is_logical_alias(&value).then_some(value)
+}
+
+fn decode_topic(segment: &str) -> Option<String> {
+    validate_topic(decode_segment(segment)?)
+}
+
+fn validate_topic(value: String) -> Option<String> {
+    identifier::is_topic(&value).then_some(value)
+}
+
+fn decode_consumer_group(segment: &str) -> Option<String> {
+    let value = decode_segment(segment)?;
+    identifier::is_consumer_group(&value).then_some(value)
 }
 
 fn has_valid_percent_encoding(segment: &str) -> bool {
@@ -419,10 +646,10 @@ mod tests {
     #[test]
     fn resource_uri_percent_encoding_round_trips_rocketmq_names() {
         let uri = RocketmqResourceUri::new(
-            "local/dev",
+            "local-dev",
             ResourceKind::ConsumerLag {
-                group: "%RETRY%order/service".to_string(),
-                topic: "orders?priority=high".to_string(),
+                group: "%RETRY%order_service".to_string(),
+                topic: "orders_priority".to_string(),
             },
         );
 
@@ -431,8 +658,7 @@ mod tests {
 
         assert_eq!(
             encoded,
-            "rocketmq://clusters/local%2Fdev/consumer-groups/%25RETRY%25order%2Fservice/lag?topic=orders%3Fpriority%\
-             3Dhigh"
+            "rocketmq://clusters/local-dev/consumer-groups/%25RETRY%25order_service/lag?topic=orders_priority"
         );
         assert_eq!(decoded, uri);
     }
@@ -457,5 +683,123 @@ mod tests {
             "rocketmq://clusters/local-dev/consumer-groups/group/lag?topic=orders&topic=payments"
         )
         .is_none());
+    }
+
+    #[test]
+    fn new_resource_forms_round_trip_exactly() {
+        let cases = [
+            "rocketmq://clusters/local-dev/brokers/broker-a/diagnostics",
+            "rocketmq://clusters/local-dev/brokers/broker-a/config-summary",
+            "rocketmq://clusters/local-dev/topics/order_priority/stats?limit=2&cursor=rmq-s2-ab.cd",
+            "rocketmq://clusters/local-dev/topics/order_priority/config",
+            "rocketmq://clusters/local-dev/consumer-groups/%25RETRY%25orders/progress?limit=2&cursor=rmq-s2-ab.cd",
+        ];
+        for uri in cases {
+            assert_eq!(RocketmqResourceUri::parse(uri).unwrap().as_string(), uri);
+        }
+    }
+
+    #[test]
+    fn new_resource_queries_are_closed_and_strict() {
+        for uri in [
+            "rocketmq://clusters/local-dev/brokers/broker-a/diagnostics?limit=1",
+            "rocketmq://clusters/local-dev/brokers/broker-a/config-summary?cursor=x",
+            "rocketmq://clusters/local-dev/topics/orders/config?limit=1",
+            "rocketmq://clusters/local-dev/topics/orders/stats?unknown=x",
+            "rocketmq://clusters/local-dev/topics/orders/stats?limit=1&limit=2",
+            "rocketmq://clusters/local-dev/topics/orders/stats?limit=null",
+            "rocketmq://clusters/local-dev/topics/orders/stats?cursor=null",
+            "rocketmq://clusters/local-dev/topics/orders/stats?cursor=%6Eull",
+            "rocketmq://clusters/local-dev/consumer-groups/group/progress?limit=0",
+            "rocketmq://clusters/local-dev/consumer-groups/group/progress?cursor=bad%0Avalue",
+            "rocketmq://clusters/127.0.0.1/topics/orders/stats",
+            "rocketmq://clusters/local-dev/brokers/127.0.0.1/diagnostics",
+            "rocketmq://clusters/local-dev/topics/%FF/stats",
+        ] {
+            assert!(RocketmqResourceUri::parse(uri).is_none(), "uri={uri}");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_noncanonical_resource_identities() {
+        for uri in [
+            "rocketmq://clusters/local-dev/topics/.",
+            "rocketmq://clusters/local-dev/topics/..",
+            "rocketmq://clusters/local-dev/topics/%6Frders/stats",
+            "rocketmq://clusters/local-dev/topics/orders|priority/stats",
+            "rocketmq://clusters/local-dev/topics/orders%7cpriority/stats",
+            "rocketmq://clusters/local-dev/topics/orders%2Fpriority/stats",
+            "rocketmq://clusters/local-dev/topics/orders%2fpriority/stats",
+            "rocketmq://clusters/local-dev/topics/orders/stats?limit=01",
+            "rocketmq://clusters/local-dev/topics/orders/stats?cursor=next&limit=2",
+            "rocketmq://clusters/local-dev/topics/orders/stats?limit=2&cursor=%6Eext",
+            "rocketmq://clusters/local-dev/topics/orders/stats?limit=2&cursor=next&cursor=other",
+            "rocketmq://clusters/local-dev/topics/token%3Dsecret/stats",
+            "rocketmq://clusters/local-dev/topics/127%2E0%2E0%2E1/stats",
+            "rocketmq://clusters/local-dev/topics?filter=token%3Dsecret",
+            "rocketmq://clusters/local-dev/topics?filter=127.0.0.1",
+            "rocketmq://clusters/local-dev/topics?filter=token%253Dsecret",
+            "rocketmq://clusters/local-dev/consumer-groups/%25RETRY%25orders/progress?cursor=next&limit=2",
+        ] {
+            assert!(RocketmqResourceUri::parse(uri).is_none(), "uri={uri}");
+        }
+
+        for uri in [
+            "rocketmq://clusters/local-dev/topics/orders/stats?limit=2&cursor=next",
+            "rocketmq://clusters/local-dev/topics/orders%7Cpriority/stats",
+            "rocketmq://clusters/local-dev/consumer-groups/%25RETRY%25orders/progress?limit=2&cursor=next",
+        ] {
+            let parsed = RocketmqResourceUri::parse(uri).unwrap();
+            assert_eq!(parsed.as_string(), uri);
+            assert!(parsed.is_safe());
+        }
+    }
+
+    #[test]
+    fn every_resource_kind_has_one_closed_authorization_mapping() {
+        let mappings = [
+            (ResourceKind::Overview, Some(ToolId::GetClusterOverview)),
+            (ResourceKind::Topics, Some(ToolId::ListTopics)),
+            (ResourceKind::Topic("t".to_string()), Some(ToolId::DescribeTopic)),
+            (ResourceKind::TopicRoute("t".to_string()), Some(ToolId::GetTopicRoute)),
+            (ResourceKind::Brokers, Some(ToolId::GetClusterOverview)),
+            (ResourceKind::Broker("b".to_string()), Some(ToolId::DescribeBroker)),
+            (
+                ResourceKind::BrokerDiagnostics("b".to_string()),
+                Some(ToolId::GetBrokerDiagnostics),
+            ),
+            (
+                ResourceKind::BrokerConfigSummary("b".to_string()),
+                Some(ToolId::GetBrokerConfigSummary),
+            ),
+            (ResourceKind::ConsumerGroups, Some(ToolId::ListConsumerGroups)),
+            (
+                ResourceKind::ConsumerGroup("g".to_string()),
+                Some(ToolId::ListConsumerGroups),
+            ),
+            (
+                ResourceKind::ConsumerLag {
+                    group: "g".to_string(),
+                    topic: "t".to_string(),
+                },
+                Some(ToolId::GetConsumerLag),
+            ),
+            (ResourceKind::TopicStats("t".to_string()), Some(ToolId::GetTopicStats)),
+            (ResourceKind::TopicConfig("t".to_string()), Some(ToolId::GetTopicConfig)),
+            (
+                ResourceKind::ConsumerProgress("g".to_string()),
+                Some(ToolId::GetConsumerProgress),
+            ),
+        ];
+        for (kind, tool) in mappings {
+            assert_eq!(kind.backing_tool(), tool);
+        }
+        for kind in [
+            ResourceKind::Capabilities,
+            ResourceKind::SystemRuntimeV1,
+            ResourceKind::SystemObservabilityV1,
+        ] {
+            assert!(kind.backing_tool().is_none());
+        }
     }
 }
