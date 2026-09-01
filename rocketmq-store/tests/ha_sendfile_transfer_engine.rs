@@ -15,6 +15,7 @@
 #![cfg(unix)]
 
 use std::collections::VecDeque;
+use std::error::Error as _;
 use std::fs::File;
 use std::io;
 use std::io::IoSlice;
@@ -34,6 +35,8 @@ use rocketmq_store::SegmentLease;
 use rocketmq_store::SendfileOperation;
 use rocketmq_store::SendfileTransferEngine;
 use rocketmq_store::SendfileWriteTarget;
+use rocketmq_store::StoreComponent;
+use rocketmq_store::StoreOperation;
 use rocketmq_store::TransferBatch;
 use rocketmq_store::TransferCacheState;
 use rocketmq_store::TransferEngineKind;
@@ -46,6 +49,7 @@ use tokio::io::AsyncWrite;
 fn segment_lease_from_file_range_exposes_only_position_and_len() {
     let file = Arc::new(temp_file_with_bytes(b"0123456789abcdef"));
     let lease = SegmentLease::try_from_file_range(4096, 4096, 5, 7, file.clone(), TransferCacheState::Hot)
+        .expect("metadata read succeeds")
         .expect("checked file range");
 
     let range = lease.as_file_range().expect("file range");
@@ -70,6 +74,7 @@ async fn sendfile_transfer_engine_writes_header_then_sendfile_ranges() {
         frame_header: header.clone(),
         segments: vec![
             SegmentLease::try_from_file_range(4096, 4096, 3, 10, file, TransferCacheState::Hot)
+                .expect("metadata read succeeds")
                 .expect("checked file range"),
         ],
         total_body_len: 10,
@@ -79,7 +84,11 @@ async fn sendfile_transfer_engine_writes_header_then_sendfile_ranges() {
     };
     let mut engine = SendfileTransferEngine::with_operation(RecordingWriter::default(), RecordingSendfile::new(4));
 
-    let stats = engine.send_batch(&batch).await.expect("sendfile transfer");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("sendfile transfer")
+        .expect("valid sendfile batch");
 
     let (writer, operation) = engine.into_parts();
     assert_eq!(writer.written, header);
@@ -115,7 +124,11 @@ async fn sendfile_transfer_engine_falls_back_to_vectored_for_byte_segments() {
     let mut engine =
         SendfileTransferEngine::with_operation(RecordingWriter::default(), RecordingSendfile::new(usize::MAX));
 
-    let stats = engine.send_batch(&batch).await.expect("fallback transfer");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("fallback transfer")
+        .expect("valid fallback batch");
 
     let (writer, operation) = engine.into_parts();
     let mut expected = header.to_vec();
@@ -149,13 +162,15 @@ async fn sendfile_transfer_engine_records_syscall_proxy_against_vectored_baselin
     let vectored_stats = vectored_engine
         .send_batch(&vectored_batch)
         .await
-        .expect("vectored baseline transfer");
+        .expect("vectored baseline transfer")
+        .expect("valid vectored batch");
 
     let file = Arc::new(temp_file_with_bytes(&body));
     let sendfile_batch = TransferBatch {
         frame_header: header,
         segments: vec![
             SegmentLease::try_from_file_range(16384, 16384, 0, body.len(), file, TransferCacheState::Hot)
+                .expect("metadata read succeeds")
                 .expect("checked file range"),
         ],
         total_body_len: body.len(),
@@ -169,7 +184,8 @@ async fn sendfile_transfer_engine_records_syscall_proxy_against_vectored_baselin
     let sendfile_stats = sendfile_engine
         .send_batch(&sendfile_batch)
         .await
-        .expect("sendfile transfer");
+        .expect("sendfile transfer")
+        .expect("valid sendfile batch");
 
     assert_eq!(vectored_stats.bytes_written, sendfile_stats.bytes_written);
     assert_eq!(vectored_stats.write_call_count, 1);
@@ -188,6 +204,7 @@ async fn sendfile_transfer_engine_retries_interrupted_and_would_block_without_ad
         frame_header: header.clone(),
         segments: vec![
             SegmentLease::try_from_file_range(32768, 32768, 0, 6, file, TransferCacheState::Hot)
+                .expect("metadata read succeeds")
                 .expect("checked file range"),
         ],
         total_body_len: 6,
@@ -205,7 +222,11 @@ async fn sendfile_transfer_engine_retries_interrupted_and_would_block_without_ad
         ]),
     );
 
-    let stats = engine.send_batch(&batch).await.expect("sendfile transfer retries");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("sendfile transfer retries")
+        .expect("valid sendfile batch");
 
     let (writer, operation) = engine.into_parts();
     assert_eq!(writer.written, header);
@@ -233,6 +254,7 @@ async fn sendfile_transfer_engine_reports_write_zero_when_connection_closes() {
         frame_header: header,
         segments: vec![
             SegmentLease::try_from_file_range(65536, 65536, 0, 6, file, TransferCacheState::Hot)
+                .expect("metadata read succeeds")
                 .expect("checked file range"),
         ],
         total_body_len: 6,
@@ -250,7 +272,15 @@ async fn sendfile_transfer_engine_reports_write_zero_when_connection_closes() {
         .await
         .expect_err("zero-byte sendfile should report connection close");
 
-    assert_eq!(error.code().as_str(), "storage.io.failed");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+    assert_eq!(error.operation(), StoreOperation::Replicate);
+    assert_eq!(error.component(), StoreComponent::HighAvailability);
+    let transfer_source = error.source().expect("transfer failure remains the typed source");
+    let io_source = transfer_source
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .expect("transfer failure retains its causal I/O error");
+    assert_eq!(io_source.kind(), io::ErrorKind::WriteZero);
 }
 
 fn temp_file_with_bytes(bytes: &[u8]) -> File {

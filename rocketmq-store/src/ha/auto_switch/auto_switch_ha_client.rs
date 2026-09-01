@@ -175,6 +175,8 @@ mod tests {
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = crate::message_store::local_file_message_store::LocalFileMessageStore::new(
             Arc::new(message_store_config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             Arc::new(broker_config),
             topic_table,
             None,

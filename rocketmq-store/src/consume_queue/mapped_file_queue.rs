@@ -21,6 +21,7 @@ use arc_swap::ArcSwap;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all::offset_to_file_name;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_local::flush::queue::commit_mapped_file_queue;
 use rocketmq_store_local::flush::queue::try_flush_mapped_file_queue;
 use rocketmq_store_local::flush::queue::SegmentCommitProgress;
@@ -88,8 +89,6 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
-use crate::store_error::StoreError;
-
 enum MappedFileGenerationState {
     Legacy(MappedFileQueueGeneration<DefaultMappedFile>),
     Managed {
@@ -617,7 +616,7 @@ where
             create_offset,
             mapped_file_size,
         ) {
-            Ok(mapped_file) => Some(mapped_file),
+            Ok(mapped_file) => mapped_file,
             Err(error) => {
                 error!(
                     queue = store_path,
@@ -775,11 +774,14 @@ fn submit_managed_retirements(
 ) -> i32 {
     let mut submitted = 0i32;
     for owner in candidates {
-        if let Err(error) = runtime.submit_retirement(generation, &owner, reason, managed_retirement_nonce()) {
-            error!(%error, "managed mapped-file retirement submission failed closed");
-            break;
+        match runtime.submit_retirement(generation, &owner, reason, managed_retirement_nonce()) {
+            Ok(Some(_)) => submitted = submitted.saturating_add(1),
+            Ok(None) => break,
+            Err(error) => {
+                error!(%error, "managed mapped-file retirement submission failed closed");
+                break;
+            }
         }
-        submitted = submitted.saturating_add(1);
     }
     submitted
 }

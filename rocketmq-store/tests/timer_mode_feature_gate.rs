@@ -51,6 +51,8 @@ async fn extended_modes_fail_before_startup_without_the_feature() {
         };
         let mut store = LocalFileMessageStore::new(
             Arc::new(config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::new()),
             None,

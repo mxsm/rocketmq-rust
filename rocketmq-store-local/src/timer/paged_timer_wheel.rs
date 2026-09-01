@@ -24,6 +24,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::Mutex;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use crate::timer::metrics::TimerStorageMetrics;
@@ -62,14 +65,16 @@ struct PagedTimerWheelState {
 }
 
 impl PagedTimerWheel {
-    pub(crate) fn new(
+    pub(crate) fn new_checked(
         directory: impl AsRef<Path>,
         slots_total: usize,
         page_size: usize,
         metrics: Arc<TimerStorageMetrics>,
-    ) -> Result<Self, PagedTimerWheelError> {
+    ) -> Result<Self, PagedTimerWheelFailure> {
         if page_size <= PAGE_HEADER_SIZE || !(page_size - PAGE_HEADER_SIZE).is_multiple_of(Slot::SIZE as usize) {
-            return Err(PagedTimerWheelError::InvalidPageSize(page_size));
+            return Err(PagedTimerWheelFailure::Violation(
+                PagedTimerWheelViolation::InvalidPageSize(page_size),
+            ));
         }
         let slots_per_page = (page_size - PAGE_HEADER_SIZE) / Slot::SIZE as usize;
         let page_count = slots_total.div_ceil(slots_per_page);
@@ -91,7 +96,7 @@ impl PagedTimerWheel {
         })
     }
 
-    pub(crate) fn load(&self, committed_generation: u64) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn load_checked(&self, committed_generation: u64) -> Result<(), PagedTimerWheelFailure> {
         std::fs::create_dir_all(&self.directory)?;
         if !self.directory.join(FORMAT_MARKER).exists() {
             self.initialize_files()?;
@@ -125,12 +130,14 @@ impl PagedTimerWheel {
         Ok(())
     }
 
-    pub(crate) fn import_legacy_slots(&self, slots: &[Slot]) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn import_legacy_slots_checked(&self, slots: &[Slot]) -> Result<(), PagedTimerWheelFailure> {
         if slots.len() != self.slots_total {
-            return Err(PagedTimerWheelError::InvalidSlotCount {
-                actual: slots.len(),
-                expected: self.slots_total,
-            });
+            return Err(PagedTimerWheelFailure::Violation(
+                PagedTimerWheelViolation::InvalidSlotCount {
+                    actual: slots.len(),
+                    expected: self.slots_total,
+                },
+            ));
         }
         let mut state = self.state.lock();
         state.slots.copy_from_slice(slots);
@@ -144,7 +151,7 @@ impl PagedTimerWheel {
         Ok(())
     }
 
-    pub(crate) fn reset_for_repair(&self, committed_generation: u64) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn reset_for_repair_checked(&self, committed_generation: u64) -> Result<(), PagedTimerWheelFailure> {
         std::fs::create_dir_all(&self.directory)?;
         if !self.directory.join(FORMAT_MARKER).exists() {
             self.initialize_files()?;
@@ -171,13 +178,12 @@ impl PagedTimerWheel {
         self.state.lock().slots.get(index).copied()
     }
 
-    pub(crate) fn put_slot(&self, index: usize, slot: Slot) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn put_slot_checked(&self, index: usize, slot: Slot) -> Result<(), PagedTimerWheelFailure> {
         let page_id = index / self.slots_per_page;
         let mut state = self.state.lock();
-        let current = state
-            .slots
-            .get_mut(index)
-            .ok_or(PagedTimerWheelError::SlotOutOfRange(index))?;
+        let current = state.slots.get_mut(index).ok_or(PagedTimerWheelFailure::Violation(
+            PagedTimerWheelViolation::SlotOutOfRange(index),
+        ))?;
         if *current == slot {
             return Ok(());
         }
@@ -210,7 +216,7 @@ impl PagedTimerWheel {
         self.metrics.set_dirty_pages(state.dirty_pages.len() as u64);
     }
 
-    pub(crate) fn flush_dirty(&self) -> Result<u64, PagedTimerWheelError> {
+    pub(crate) fn flush_dirty_checked(&self) -> Result<u64, PagedTimerWheelFailure> {
         let (generation, pages) = {
             let state = self.state.lock();
             if state.dirty_pages.is_empty() {
@@ -262,10 +268,10 @@ impl PagedTimerWheel {
         Ok(generation)
     }
 
-    pub(crate) fn commit_generation(&self, generation: u64) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn commit_generation_checked(&self, generation: u64) -> Result<(), PagedTimerWheelFailure> {
         let mut state = self.state.lock();
         if generation > state.max_generation {
-            return Err(PagedTimerWheelError::GenerationNotWritten(generation));
+            return Err(PagedTimerWheelFailure::GenerationNotWritten(generation));
         }
         state.committed_generation = state.committed_generation.max(generation);
         Ok(())
@@ -292,7 +298,7 @@ impl PagedTimerWheel {
         self.state.lock().slots.clone()
     }
 
-    fn initialize_files(&self) -> Result<(), PagedTimerWheelError> {
+    fn initialize_files(&self) -> Result<(), PagedTimerWheelFailure> {
         let file_len = (self.page_count * self.page_size) as u64;
         let path_a = self.directory.join(PAGES_A);
         let path_b = self.directory.join(PAGES_B);
@@ -334,13 +340,13 @@ impl PagedTimerWheel {
         file: &mut std::fs::File,
         expected_page_id: usize,
         expected_generation: u64,
-    ) -> Result<DecodedPage, PagedTimerWheelError> {
+    ) -> Result<DecodedPage, PagedTimerWheelFailure> {
         file.seek(SeekFrom::Start((expected_page_id * self.page_size) as u64))?;
         let mut bytes = vec![0u8; self.page_size];
         file.read_exact(&mut bytes)?;
         if bytes.iter().all(|byte| *byte == 0) {
             if expected_generation != 0 {
-                return Err(PagedTimerWheelError::InvalidPage(expected_page_id));
+                return Err(PagedTimerWheelFailure::InvalidPage(expected_page_id));
             }
             return Ok(DecodedPage {
                 generation: 0,
@@ -349,14 +355,14 @@ impl PagedTimerWheel {
             });
         }
         if read_u32(&bytes, 0) != PAGE_MAGIC || read_u16(&bytes, 4) != PAGE_VERSION {
-            return Err(PagedTimerWheelError::InvalidPage(expected_page_id));
+            return Err(PagedTimerWheelFailure::InvalidPage(expected_page_id));
         }
         if read_u16(&bytes, 6) as usize != PAGE_HEADER_SIZE || read_u32(&bytes, 8) as usize != expected_page_id {
-            return Err(PagedTimerWheelError::InvalidPage(expected_page_id));
+            return Err(PagedTimerWheelFailure::InvalidPage(expected_page_id));
         }
         let generation = read_u64(&bytes, 16);
         if generation != expected_generation {
-            return Err(PagedTimerWheelError::UnexpectedPageGeneration {
+            return Err(PagedTimerWheelFailure::UnexpectedPageGeneration {
                 page_id: expected_page_id,
                 actual: generation,
                 expected: expected_generation,
@@ -364,12 +370,12 @@ impl PagedTimerWheel {
         }
         let payload_len = read_u32(&bytes, 12) as usize;
         if payload_len > self.page_size - PAGE_HEADER_SIZE || !payload_len.is_multiple_of(Slot::SIZE as usize) {
-            return Err(PagedTimerWheelError::InvalidPage(expected_page_id));
+            return Err(PagedTimerWheelFailure::InvalidPage(expected_page_id));
         }
         let stored_checksum = read_u32(&bytes, 28);
         bytes[28..32].fill(0);
         if crc32c(&bytes) != stored_checksum {
-            return Err(PagedTimerWheelError::PageChecksumMismatch(expected_page_id));
+            return Err(PagedTimerWheelFailure::PageChecksumMismatch(expected_page_id));
         }
         let mut slots = Vec::with_capacity(payload_len / Slot::SIZE as usize);
         for chunk in bytes[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + payload_len].chunks_exact(Slot::SIZE as usize) {
@@ -386,7 +392,7 @@ impl PagedTimerWheel {
         &self,
         generation: u64,
         page_ids: impl ExactSizeIterator<Item = usize>,
-    ) -> Result<(), PagedTimerWheelError> {
+    ) -> Result<(), PagedTimerWheelFailure> {
         let page_count = page_ids.len();
         let record_size = GENERATION_HEADER_SIZE + page_count * 4 + GENERATION_TRAILER_SIZE;
         let mut bytes = vec![0u8; record_size];
@@ -398,7 +404,7 @@ impl PagedTimerWheel {
         bytes[20..24].copy_from_slice(&(page_count as u32).to_be_bytes());
         for (index, page_id) in page_ids.enumerate() {
             let start = GENERATION_HEADER_SIZE + index * 4;
-            let page_id = u32::try_from(page_id).map_err(|_| PagedTimerWheelError::InvalidGenerationPage(page_id))?;
+            let page_id = u32::try_from(page_id).map_err(|_| PagedTimerWheelFailure::InvalidGenerationPage(page_id))?;
             bytes[start..start + 4].copy_from_slice(&page_id.to_be_bytes());
         }
         let checksum = crc32c(&bytes[..record_size - GENERATION_TRAILER_SIZE]);
@@ -415,7 +421,7 @@ impl PagedTimerWheel {
         Ok(())
     }
 
-    fn load_expected_generations(&self, committed_generation: u64) -> Result<Vec<u64>, PagedTimerWheelError> {
+    fn load_expected_generations(&self, committed_generation: u64) -> Result<Vec<u64>, PagedTimerWheelFailure> {
         let path = self.directory.join(GENERATION_JOURNAL);
         let mut journal = OpenOptions::new().read(true).write(true).open(path)?;
         let mut bytes = Vec::new();
@@ -459,7 +465,7 @@ impl PagedTimerWheel {
                 let page_id = read_u32(record, GENERATION_HEADER_SIZE + index * 4) as usize;
                 let page_generation = expected
                     .get_mut(page_id)
-                    .ok_or(PagedTimerWheelError::InvalidGenerationPage(page_id))?;
+                    .ok_or(PagedTimerWheelFailure::InvalidGenerationPage(page_id))?;
                 *page_generation = generation;
             }
             last_generation = generation;
@@ -467,7 +473,7 @@ impl PagedTimerWheel {
             committed_end = cursor;
         }
         if !load_all && last_generation != committed_generation {
-            return Err(PagedTimerWheelError::MissingGeneration {
+            return Err(PagedTimerWheelFailure::MissingGeneration {
                 actual: last_generation,
                 expected: committed_generation,
             });
@@ -504,6 +510,55 @@ impl PagedTimerWheel {
     }
 }
 
+impl PagedTimerWheel {
+    /// Creates an empty paged timer wheel.
+    pub fn new(
+        directory: impl AsRef<Path>,
+        slots_total: usize,
+        page_size: usize,
+        metrics: Arc<TimerStorageMetrics>,
+    ) -> Result<Option<Self>, StoreError> {
+        PagedTimerWheelFailure::into_public(
+            Self::new_checked(directory, slots_total, page_size, metrics),
+            StoreOperation::Start,
+        )
+    }
+
+    /// Loads the committed wheel generation.
+    pub fn load(&self, committed_generation: u64) -> Result<(), StoreError> {
+        self.load_checked(committed_generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    /// Imports one complete legacy slot image.
+    pub fn import_legacy_slots(&self, slots: &[Slot]) -> Result<Option<()>, StoreError> {
+        PagedTimerWheelFailure::into_public(self.import_legacy_slots_checked(slots), StoreOperation::Load)
+    }
+
+    /// Resets the wheel files to a known repair generation.
+    pub fn reset_for_repair(&self, committed_generation: u64) -> Result<(), StoreError> {
+        self.reset_for_repair_checked(committed_generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Updates one wheel slot.
+    pub fn put_slot(&self, index: usize, slot: Slot) -> Result<Option<()>, StoreError> {
+        PagedTimerWheelFailure::into_public(self.put_slot_checked(index, slot), StoreOperation::Append)
+    }
+
+    /// Flushes every dirty wheel page.
+    pub fn flush_dirty(&self) -> Result<u64, StoreError> {
+        self.flush_dirty_checked()
+            .map_err(|error| error.into_store_error(StoreOperation::Flush))
+    }
+
+    /// Commits one previously written wheel generation.
+    pub fn commit_generation(&self, generation: u64) -> Result<(), StoreError> {
+        self.commit_generation_checked(generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Flush))
+    }
+}
+
 struct FrozenPage {
     page_id: usize,
     version: u64,
@@ -517,15 +572,11 @@ struct DecodedPage {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum PagedTimerWheelError {
+pub(crate) enum PagedTimerWheelFailure {
     #[error("timer wheel I/O failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("timer wheel page size {0} is invalid")]
-    InvalidPageSize(usize),
-    #[error("timer wheel slot count is {actual}, expected {expected}")]
-    InvalidSlotCount { actual: usize, expected: usize },
-    #[error("timer wheel slot {0} is out of range")]
-    SlotOutOfRange(usize),
+    #[error("{0}")]
+    Violation(PagedTimerWheelViolation),
     #[error("timer wheel page {0} is invalid")]
     InvalidPage(usize),
     #[error("timer wheel page {0} checksum does not match")]
@@ -538,6 +589,43 @@ pub(crate) enum PagedTimerWheelError {
     MissingGeneration { actual: u64, expected: u64 },
     #[error("timer wheel generation {0} has not been written")]
     GenerationNotWritten(u64),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum PagedTimerWheelViolation {
+    #[error("timer wheel page size {0} is invalid")]
+    InvalidPageSize(usize),
+    #[error("timer wheel slot count is {actual}, expected {expected}")]
+    InvalidSlotCount { actual: usize, expected: usize },
+    #[error("timer wheel slot {0} is out of range")]
+    SlotOutOfRange(usize),
+}
+
+impl PagedTimerWheelFailure {
+    fn into_public<T>(result: Result<T, Self>, operation: StoreOperation) -> Result<Option<T>, StoreError> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(Self::Violation(_)) => Ok(None),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
+    fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        match self {
+            error @ Self::Io(_) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+            error @ (Self::InvalidPage(_)
+            | Self::PageChecksumMismatch(_)
+            | Self::UnexpectedPageGeneration { .. }
+            | Self::InvalidGenerationPage(_)
+            | Self::MissingGeneration { .. }
+            | Self::GenerationNotWritten(_)) => StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+            Self::Violation(_) => unreachable!("timer-wheel violations remain on the contract channel"),
+        }
+    }
 }
 
 fn empty_slot() -> Slot {
@@ -592,7 +680,9 @@ mod tests {
     fn one_slot_flush_writes_one_page_and_recovers_by_generation() {
         let directory = tempdir().unwrap();
         let metrics = Arc::new(TimerStorageMetrics::default());
-        let wheel = PagedTimerWheel::new(directory.path(), 32, 288, Arc::clone(&metrics)).unwrap();
+        let wheel = PagedTimerWheel::new(directory.path(), 32, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
         wheel.load(0).unwrap();
         let baseline = metrics.snapshot().physical_write_bytes;
         wheel
@@ -602,7 +692,9 @@ mod tests {
         wheel.commit_generation(generation).unwrap();
         assert_eq!(metrics.snapshot().physical_write_bytes - baseline, 320);
 
-        let reloaded = PagedTimerWheel::new(directory.path(), 32, 288, metrics).unwrap();
+        let reloaded = PagedTimerWheel::new(directory.path(), 32, 288, metrics)
+            .unwrap()
+            .unwrap();
         reloaded.load(generation).unwrap();
         assert_eq!(reloaded.get_slot(9).unwrap().time_ms, 1_000);
     }
@@ -611,14 +703,18 @@ mod tests {
     fn uncommitted_generation_is_not_loaded() {
         let directory = tempdir().unwrap();
         let metrics = Arc::new(TimerStorageMetrics::default());
-        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics)).unwrap();
+        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
         wheel.load(0).unwrap();
         wheel
             .put_slot(2, Slot::new_with_num_magic(2_000, 40, 40, 1, 1))
             .unwrap();
         assert_eq!(wheel.flush_dirty().unwrap(), 1);
 
-        let reloaded = PagedTimerWheel::new(directory.path(), 16, 288, metrics).unwrap();
+        let reloaded = PagedTimerWheel::new(directory.path(), 16, 288, metrics)
+            .unwrap()
+            .unwrap();
         reloaded.load(0).unwrap();
         assert_eq!(reloaded.get_slot(2).unwrap(), empty_slot());
     }
@@ -627,7 +723,9 @@ mod tests {
     fn corrupt_committed_copy_rejects_mixed_generation_state() {
         let directory = tempdir().unwrap();
         let metrics = Arc::new(TimerStorageMetrics::default());
-        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics)).unwrap();
+        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
         wheel.load(0).unwrap();
         wheel
             .put_slot(1, Slot::new_with_num_magic(1_000, 40, 40, 1, 1))
@@ -641,10 +739,12 @@ mod tests {
             .write_all(&[0; 32])
             .unwrap();
 
-        let reloaded = PagedTimerWheel::new(directory.path(), 16, 288, metrics).unwrap();
+        let reloaded = PagedTimerWheel::new(directory.path(), 16, 288, metrics)
+            .unwrap()
+            .unwrap();
         assert!(matches!(
-            reloaded.load(generation),
-            Err(PagedTimerWheelError::InvalidPage(0))
+            reloaded.load_checked(generation),
+            Err(PagedTimerWheelFailure::InvalidPage(0))
         ));
     }
 }

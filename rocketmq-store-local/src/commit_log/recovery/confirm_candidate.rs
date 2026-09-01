@@ -14,7 +14,7 @@
 
 /// Checked-arithmetic failure while deriving an abnormal-recovery confirm candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AbnormalRecoveryConfirmCandidateViolation {
+pub(crate) enum AbnormalRecoveryConfirmCandidateViolation {
     /// The decoded CommitLog offset was negative.
     #[error("commitlog offset {offset} is negative")]
     NegativeCommitLogOffset {
@@ -43,7 +43,7 @@ pub enum AbnormalRecoveryConfirmCandidateViolation {
 ///
 /// Returns [`AbnormalRecoveryConfirmCandidateViolation`] when the decoded offset is negative, the raw
 /// input-frame size cannot be represented by `i64`, or their sum overflows `i64`.
-pub fn abnormal_confirm_candidate_end(
+fn abnormal_confirm_candidate_end_checked(
     commit_log_offset: i64,
     input_size: usize,
 ) -> Result<i64, AbnormalRecoveryConfirmCandidateViolation> {
@@ -60,4 +60,12 @@ pub fn abnormal_confirm_candidate_end(
             size: input_size,
         },
     )
+}
+
+/// Returns the absolute end offset used by abnormal-recovery confirm gating.
+///
+/// Returns `None` when the decoded offset is negative, the raw input-frame size cannot be
+/// represented by `i64`, or their sum overflows `i64`.
+pub fn abnormal_confirm_candidate_end(commit_log_offset: i64, input_size: usize) -> Option<i64> {
+    abnormal_confirm_candidate_end_checked(commit_log_offset, input_size).ok()
 }

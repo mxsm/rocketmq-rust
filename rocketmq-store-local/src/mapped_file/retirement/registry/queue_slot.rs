@@ -32,6 +32,7 @@ use super::DurableRetirementToken;
 use super::PreparedQueueHandoff;
 use super::PublishedFileRegistration;
 use super::QueueIdentity;
+use super::RegistryFault;
 use super::RegistryViolation;
 use super::RetirementHandoffCapability;
 use super::RetirementIntentBinding;
@@ -464,13 +465,13 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
     pub(in crate::mapped_file::retirement) fn register_reconciled_members(
         &self,
         registry: &RetirementRegistry<T>,
-    ) -> Result<(), RegistryViolation> {
+    ) -> Result<(), RegistryFault> {
         let files = self.slot.files.load_full();
         let bindings = self.slot.managed_members.lock();
         let mut registrations = Vec::new();
         registrations
             .try_reserve_exact(files.len())
-            .map_err(|_| RegistryViolation::RegistrationAllocationFailed)?;
+            .map_err(RegistryFault::Allocation)?;
         for owner in files.iter() {
             let binding = bindings
                 .get(&owner_identity(owner))
@@ -486,7 +487,7 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
             )?);
         }
         drop(bindings);
-        registry.register_published_batch(registrations)
+        registry.register_published_batch(registrations).map_err(Into::into)
     }
 
     pub(in crate::mapped_file::retirement) fn handoff_retirement(
@@ -594,9 +595,9 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
         }
         let owner_identity = owner_identity(&owner);
         let mut managed_members = self.slot.managed_members.lock();
-        if let Some(incumbent) = managed_members.get(&owner_identity) {
+        if let Some(binding) = managed_members.get(&owner_identity) {
             return Err(RegistryViolation::OwnerAlreadyRegistered {
-                incumbent: incumbent.incarnation,
+                incumbent: binding.incarnation,
             });
         }
         managed_members.insert(

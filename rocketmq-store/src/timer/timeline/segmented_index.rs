@@ -132,7 +132,9 @@ impl SegmentedCommitCoordinator {
             .copied()
             .map(entry_to_native)
             .collect::<Result<Vec<_>, _>>()?;
-        let receipt = self.native.append_batch(&native_records)?;
+        let Some(receipt) = self.native.append_batch(&native_records)? else {
+            return Err(SegmentedCommitError::InvalidNativeBatch);
+        };
         if crash_point == SegmentedCommitCrashPoint::AfterNativeFsyncBeforeOverlay {
             return Err(SegmentedCommitError::InjectedCrash(crash_point));
         }
@@ -196,13 +198,16 @@ impl SegmentedCommitCoordinator {
         let mut orphan_records = 0usize;
         let mut continuation = None;
         'pages: loop {
-            let page = self.native.scan_due(
+            let Some(page) = self.native.scan_due(
                 None,
                 i64::MAX,
                 max_records.max(1),
                 max_records.max(1).saturating_mul(TimelineSegmentRecord::encoded_size()),
                 continuation,
-            )?;
+            )?
+            else {
+                break;
+            };
             for record in &page.records {
                 if self.overlay.materialized_marker(record.source_cq_offset)?.is_none() {
                     orphan_records = orphan_records.saturating_add(1);
@@ -327,7 +332,7 @@ impl TimerIndex for SegmentedTimelineIndex {
             .spawn_io("timer.segmented.scan_due", move || {
                 let from_key = from.as_ref().map(index_cursor_key);
                 let native_cursor = from.as_ref().and_then(index_cursor_native);
-                let page = native
+                let Some(page) = native
                     .scan_due(
                         from_key,
                         due_exclusive_ms,
@@ -337,7 +342,10 @@ impl TimerIndex for SegmentedTimelineIndex {
                             .saturating_mul(TimelineSegmentRecord::encoded_size()),
                         native_cursor,
                     )
-                    .map_err(local_error)?;
+                    .map_err(local_error)?
+                else {
+                    return Ok(TimerIndexPage::default());
+                };
                 let keys = page
                     .records
                     .iter()
@@ -444,7 +452,12 @@ impl TimerIndex for SegmentedTimelineIndex {
 
     async fn pin_snapshot(&self, gc_fence: TimerTimelineCursor) -> Result<TimerSnapshotPin, TimerEngineError> {
         let generation = self.native.manifest().generation.saturating_add(1).max(1);
-        let native = self.native.pin_snapshot(generation).map_err(local_error)?;
+        // The local contract rejects only generation zero, while this owner normalizes it above.
+        let native = self
+            .native
+            .pin_snapshot(generation)
+            .map_err(local_error)?
+            .expect("snapshot generation is normalized to non-zero");
         let rocks = self
             .timeline
             .pin_snapshot_generation(
@@ -476,7 +489,7 @@ impl TimerIndex for SegmentedTimelineIndex {
         let state = Arc::clone(&self.state);
         self.storage_io
             .spawn_io("timer.segmented.gc", move || {
-                let page = native
+                let Some(page) = native
                     .scan_due(
                         None,
                         fence.due_time_ms(),
@@ -486,7 +499,10 @@ impl TimerIndex for SegmentedTimelineIndex {
                             .saturating_mul(TimelineSegmentRecord::encoded_size()),
                         None,
                     )
-                    .map_err(local_error)?;
+                    .map_err(local_error)?
+                else {
+                    return Ok(0);
+                };
                 let keys = page
                     .records
                     .iter()
@@ -653,7 +669,7 @@ fn storage_error(error: rocketmq_error::RocketMQError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
-fn local_error(error: crate::store_error::StoreError) -> TimerEngineError {
+fn local_error(error: rocketmq_store_api::StoreError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
@@ -665,11 +681,13 @@ fn commit_error(error: SegmentedCommitError) -> TimerEngineError {
 #[derive(Debug, Error)]
 pub(crate) enum SegmentedCommitError {
     #[error(transparent)]
-    Store(#[from] crate::store_error::StoreError),
+    Store(#[from] rocketmq_store_api::StoreError),
     #[error(transparent)]
     Rocks(#[from] rocketmq_error::RocketMQError),
     #[error("segmented commit batch is empty")]
     EmptyBatch,
+    #[error("segmented commit produced an invalid native Timeline batch")]
+    InvalidNativeBatch,
     #[error("injected segmented commit crash at {0:?}")]
     InjectedCrash(SegmentedCommitCrashPoint),
 }
@@ -689,11 +707,13 @@ mod tests {
     }
 
     #[test]
-    fn local_error_preserves_segmented_timeline_error_as_source() {
-        assert_storage_source::<crate::store_error::StoreError>(local_error(crate::store_error::StoreError::new(
-            &rocketmq_error::STORAGE_WRITE_FAILED,
-            crate::store_error::StoreOperation::Append,
-        )));
+    fn local_error_preserves_store_error_as_source() {
+        let error = rocketmq_store_api::StoreError::new(
+            &rocketmq_error::STORAGE_REQUEST_INVALID,
+            rocketmq_store_api::StoreOperation::AppendDerived,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::Store);
+        assert_storage_source::<rocketmq_store_api::StoreError>(local_error(error));
     }
 
     #[test]

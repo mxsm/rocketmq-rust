@@ -45,6 +45,7 @@ use tracing::warn;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::HAServiceFailure;
 use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
 use crate::store_error::StoreError;
 
@@ -841,7 +842,8 @@ impl ReaderTask {
                 self.dispatch_pos,
                 self.enable_controller_mode,
                 slave_phy_offset,
-            )?;
+            )
+            .ok_or(HAClientError::Wire)?;
             let Some(frame) = frame else {
                 self.compact();
                 return Ok(true);
@@ -1056,7 +1058,9 @@ pub enum HAClientError {
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
-    Wire(#[from] rocketmq_store_local::ha::wire::HaWireViolation),
+    HAConnection(#[from] HAServiceFailure),
+    #[error("invalid HA wire frame")]
+    Wire,
     #[error("Connection error: {0}")]
     Connection(String),
     #[error("Service error: {0}")]
@@ -1103,6 +1107,8 @@ mod tests {
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = LocalFileMessageStore::new(
             Arc::new(message_store_config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             Arc::new(broker_config),
             topic_table,
             None,
@@ -1475,9 +1481,7 @@ mod tests {
             .dispatch_read()
             .await
             .expect_err("offset mismatch should stop dispatch");
-        let message = error.to_string();
-        assert!(message.contains("master pushed offset != slave max"));
-        assert!(message.contains("slave: 4"));
-        assert!(message.contains("master: 8"));
+        assert!(matches!(error, HAClientError::Wire));
+        assert!(std::error::Error::source(&error).is_none());
     }
 }

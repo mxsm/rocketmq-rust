@@ -120,7 +120,7 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
             Some(FormalDueContinuation::Rocks(_)) => return Err(TimelineDueScannerError::CursorBackendMismatch),
             None => None,
         };
-        let page = self.timeline.scan_due(
+        let Some(page) = self.timeline.scan_due(
             Some(TimelineSegmentKey {
                 due_time_ms: start_due_ms.max(0),
                 lane: 0,
@@ -131,7 +131,14 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
             max_messages,
             max_bytes.max(max_messages.saturating_mul(TimelineSegmentRecord::encoded_size())),
             continuation,
-        )?;
+        )?
+        else {
+            return Ok(FormalDuePage {
+                entries: Vec::new(),
+                continuation: None,
+                retained_bytes: 0,
+            });
+        };
         let retained_bytes = page.records.len().saturating_mul(TimelineSegmentRecord::encoded_size());
         Ok(FormalDuePage {
             entries: page.records.into_iter().map(native_entry).collect(),
@@ -520,7 +527,7 @@ pub(crate) enum TimelineDueScannerError {
     #[error("Timeline continuation belongs to a different index backend")]
     CursorBackendMismatch,
     #[error("native Timeline failure: {0}")]
-    Native(#[from] crate::store_error::StoreError),
+    Store(#[from] rocketmq_store_api::StoreError),
 }
 
 fn native_entry(record: TimelineSegmentRecord) -> TimelineIndexEntry {
@@ -703,8 +710,11 @@ mod tests {
     fn segmented_due_index_uses_the_same_state_and_ready_overlay() {
         let dir = tempdir().expect("tempdir");
         let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open overlay"));
-        let native =
-            Arc::new(SegmentedTimeline::open(dir.path(), SegmentedTimelineConfig::default()).expect("open native"));
+        let native = Arc::new(
+            SegmentedTimeline::open(dir.path(), SegmentedTimelineConfig::default())
+                .expect("open native")
+                .expect("valid native configuration"),
+        );
         let mut entry = formal_entry(8_000, 9);
         entry.record.payload = TimerPayloadStoreLocator::try_new(0, entry.key.lane, 1, 0, 10, 11).expect("locator");
         native
@@ -723,7 +733,8 @@ mod tests {
                 owner_engine: entry.record.owner_engine,
                 shadow_only: false,
             }])
-            .expect("native entry");
+            .expect("native entry")
+            .expect("valid native entry");
         let mut state_batch = RocksDbWriteBatch::with_capacity(1);
         RocksDbTimelineStateIndex::append_state(
             &mut state_batch,

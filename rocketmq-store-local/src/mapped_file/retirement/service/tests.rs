@@ -30,7 +30,7 @@ use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::registry::reaper::commit_logical_namespace_outcome;
 use crate::mapped_file::retirement::registry::reaper::LogicalNamespaceProgress;
 use crate::mapped_file::retirement::registry::reaper::NamespacePending;
-use crate::mapped_file::retirement::registry::reaper::ReaperDriveError;
+use crate::mapped_file::retirement::registry::reaper::ReaperDriveFailure;
 use crate::mapped_file::retirement::registry::reaper::TombstoneNamespaceProgress;
 use crate::mapped_file::retirement::registry::LogicalRemovedCapability;
 use crate::mapped_file::retirement::registry::ManagedMappedFileQueueGeneration;
@@ -150,7 +150,7 @@ impl NamespaceDriver<ModelLedgerIo, TestOwner> for ImmediateAbsence {
         writer: &mut ManagedLedgerWriter<ModelLedgerIo>,
         capability: LogicalRemovedCapability<TestOwner>,
         observation_time_ns: u64,
-    ) -> Result<LogicalNamespaceProgress<TestOwner>, ReaperDriveError> {
+    ) -> Result<LogicalNamespaceProgress<TestOwner>, ReaperDriveFailure> {
         let authorization = authorize_namespace_transition(capability, NamespaceTransition::DirectUnlink)?;
         let (capability, request) = authorization.into_parts_for_test();
         let proof = NamespaceAbsenceProof::verified_for_test(&request, None);
@@ -170,7 +170,7 @@ impl NamespaceDriver<ModelLedgerIo, TestOwner> for ImmediateAbsence {
         _writer: &mut ManagedLedgerWriter<ModelLedgerIo>,
         _capability: TombstonedCapability<TestOwner>,
         _observation_time_ns: u64,
-    ) -> Result<TombstoneNamespaceProgress<TestOwner>, ReaperDriveError> {
+    ) -> Result<TombstoneNamespaceProgress<TestOwner>, ReaperDriveFailure> {
         unreachable!("the direct-unlink fixture never creates a tombstone")
     }
 }
@@ -279,7 +279,7 @@ impl NamespaceDriver<ModelLedgerIo, TestOwner> for RetryableNamespace {
         _writer: &mut ManagedLedgerWriter<ModelLedgerIo>,
         capability: LogicalRemovedCapability<TestOwner>,
         _observation_time_ns: u64,
-    ) -> Result<LogicalNamespaceProgress<TestOwner>, ReaperDriveError> {
+    ) -> Result<LogicalNamespaceProgress<TestOwner>, ReaperDriveFailure> {
         Ok(LogicalNamespaceProgress::Pending {
             capability,
             status: NamespacePending::Unsupported {
@@ -294,7 +294,7 @@ impl NamespaceDriver<ModelLedgerIo, TestOwner> for RetryableNamespace {
         _writer: &mut ManagedLedgerWriter<ModelLedgerIo>,
         _capability: TombstonedCapability<TestOwner>,
         _observation_time_ns: u64,
-    ) -> Result<TombstoneNamespaceProgress<TestOwner>, ReaperDriveError> {
+    ) -> Result<TombstoneNamespaceProgress<TestOwner>, ReaperDriveFailure> {
         unreachable!("the retryable fixture never creates a tombstone")
     }
 }

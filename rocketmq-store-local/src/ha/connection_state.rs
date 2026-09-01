@@ -189,12 +189,7 @@ impl From<HAConnectionState> for i32 {
 }
 
 impl HAConnectionState {
-    /// Decodes the wire representation into a typed state.
-    #[allow(
-        dead_code,
-        reason = "wire-format decoding helper exercised by the in-crate state-machine tests"
-    )]
-    pub(crate) fn from_wire_value(value: i32) -> Result<Self, HAConnectionStateViolation> {
+    pub(crate) fn try_from_value_checked(value: i32) -> Result<Self, HAConnectionStateViolation> {
         match value {
             0 => Ok(HAConnectionState::Ready),
             1 => Ok(HAConnectionState::Handshake),
@@ -204,11 +199,16 @@ impl HAConnectionState {
             _ => Err(HAConnectionStateViolation::InvalidValue(value)),
         }
     }
+
+    /// Converts one persisted HA state value.
+    pub fn try_from_value(value: i32) -> Option<Self> {
+        Self::try_from_value_checked(value).ok()
+    }
 }
 
 /// Error type for HAConnectionState operations
 #[derive(Debug, thiserror::Error)]
-pub enum HAConnectionStateViolation {
+pub(crate) enum HAConnectionStateViolation {
     #[error("Invalid state transition from {from:?} to {to:?}")]
     InvalidTransition {
         from: HAConnectionState,
@@ -217,9 +217,6 @@ pub enum HAConnectionStateViolation {
 
     #[error("Invalid state value: {0}")]
     InvalidValue(i32),
-
-    #[error("Cannot perform operation in state {state:?}: {reason}")]
-    OperationNotAllowed { state: HAConnectionState, reason: String },
 }
 
 /// State machine for managing HA connection state transitions
@@ -265,7 +262,10 @@ impl HAConnectionStateMachine {
     }
 
     /// Attempt to transition to a new state
-    pub fn transition_to(&mut self, new_state: HAConnectionState) -> Result<(), HAConnectionStateViolation> {
+    pub(crate) fn transition_to_checked(
+        &mut self,
+        new_state: HAConnectionState,
+    ) -> Result<(), HAConnectionStateViolation> {
         if !self.current_state.can_transition_to(new_state) {
             return Err(HAConnectionStateViolation::InvalidTransition {
                 from: self.current_state,
@@ -278,6 +278,11 @@ impl HAConnectionStateMachine {
         self.transition_count += 1;
 
         Ok(())
+    }
+
+    /// Attempts one validated HA state transition.
+    pub fn transition_to(&mut self, new_state: HAConnectionState) -> bool {
+        self.transition_to_checked(new_state).is_ok()
     }
 
     /// Force transition to a new state (bypasses validation)
@@ -405,10 +410,10 @@ mod tests {
         let numeric: i32 = state.into();
         assert_eq!(numeric, 2);
 
-        let converted = HAConnectionState::from_wire_value(2).unwrap();
+        let converted = HAConnectionState::try_from_value_checked(2).unwrap();
         assert_eq!(converted, HAConnectionState::Transfer);
 
-        assert!(HAConnectionState::from_wire_value(99).is_err());
+        assert!(HAConnectionState::try_from_value_checked(99).is_err());
     }
 
     #[test]
@@ -418,13 +423,13 @@ mod tests {
         assert_eq!(sm.transition_count(), 0);
 
         // Valid transition
-        sm.transition_to(HAConnectionState::Handshake).unwrap();
+        sm.transition_to_checked(HAConnectionState::Handshake).unwrap();
         assert_eq!(sm.current_state(), HAConnectionState::Handshake);
         assert_eq!(sm.previous_state(), Some(HAConnectionState::Ready));
         assert_eq!(sm.transition_count(), 1);
 
         // Invalid transition
-        let result = sm.transition_to(HAConnectionState::Suspend);
+        let result = sm.transition_to_checked(HAConnectionState::Suspend);
         assert!(result.is_err());
         assert_eq!(sm.current_state(), HAConnectionState::Handshake); // Should remain unchanged
 

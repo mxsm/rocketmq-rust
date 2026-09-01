@@ -29,24 +29,23 @@ use super::platform::NamespaceTransitionOutcome;
 use super::platform::VerifiedNamespaceRoot;
 use super::registry::ManagedMappedFileQueueGeneration;
 use super::registry::RecoveredRetirementWork;
-use super::registry::RegistryViolation;
+use super::registry::RegistryFault;
 use super::registry::RetirementRegistry;
 use super::service::ManagedLifecycleRuntime;
-use super::state::reconciliation::ManagedSegmentClaimViolation;
+use super::state::reconciliation::ManagedSegmentClaimFault;
 use super::state::reconciliation::ReconciledLifecycleSession;
 use super::writer::open_managed_lifecycle_writer;
 use super::writer::ManagedLedgerWriter;
-use super::writer::ManagedLedgerWriterError;
+use super::writer::ManagedLedgerWriterFailure;
 use crate::mapped_file::queue_io::load_reconciled_mapped_file_queue;
 use crate::mapped_file::DefaultMappedFile;
 
 #[derive(Debug, Error)]
-enum ManagedLifecycleActivationSource {
-    // NamespaceTransitionOutcome is expected disposition data, not a causal source.
+pub(in crate::mapped_file::retirement) enum ManagedLifecycleActivationFailure {
     #[error(transparent)]
-    Registry(#[from] RegistryViolation),
+    Registry(#[from] RegistryFault),
     #[error(transparent)]
-    SegmentClaim(#[from] ManagedSegmentClaimViolation),
+    SegmentClaim(#[from] ManagedSegmentClaimFault),
     #[error("managed queue construction failed: {0}")]
     QueueLoad(#[source] std::io::Error),
     #[error("managed queue directory was staged more than once: {0}")]
@@ -56,8 +55,8 @@ enum ManagedLifecycleActivationSource {
     #[error(transparent)]
     Preflight(#[from] ActivationPreflightViolation),
     #[error(transparent)]
-    Writer(#[from] ManagedLedgerWriterError),
-    #[error("namespace verification failed: {0:?}")]
+    Writer(#[from] ManagedLedgerWriterFailure),
+    #[error("managed namespace transition was not authorized: {0:?}")]
     Namespace(NamespaceTransitionOutcome),
 }
 
@@ -81,54 +80,50 @@ impl ManagedQueueDescriptor {
     }
 }
 
-/// Private activation-orchestration leaf retained as the typed StoreError source.
-#[derive(Debug, Error)]
-#[error("managed lifecycle activation failed: {source}")]
-pub(crate) struct ManagedLifecycleActivationError {
-    #[source]
-    source: ManagedLifecycleActivationSource,
-}
-
-impl From<NamespaceTransitionOutcome> for ManagedLifecycleActivationSource {
-    fn from(outcome: NamespaceTransitionOutcome) -> Self {
-        Self::Namespace(outcome)
-    }
-}
-
-impl ManagedLifecycleActivationError {
-    fn new(source: impl Into<ManagedLifecycleActivationSource>) -> Self {
-        Self { source: source.into() }
-    }
-
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Descriptor selection follows the reviewed activation mapping: queue-load
-    /// and segment-claim failures are backend unavailability, registry and
-    /// staging invariants are corrupted state, and writer or namespace
-    /// failures are write failures. The complete leaf is preserved as the
-    /// typed source.
-    fn into_store_error(self) -> StoreError {
-        let descriptor = match &self.source {
-            ManagedLifecycleActivationSource::QueueLoad(_) | ManagedLifecycleActivationSource::SegmentClaim(_) => {
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
-            }
-            ManagedLifecycleActivationSource::Registry(_)
-            | ManagedLifecycleActivationSource::DuplicateQueue(_)
-            | ManagedLifecycleActivationSource::InvalidQueueInventory(_)
-            | ManagedLifecycleActivationSource::Preflight(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-            ManagedLifecycleActivationSource::Writer(_) | ManagedLifecycleActivationSource::Namespace(_) => {
-                &rocketmq_error::STORAGE_WRITE_FAILED
-            }
-        };
+fn activation_store_error(error: ManagedLifecycleActivationFailure) -> Option<StoreError> {
+    let descriptor = match &error {
+        ManagedLifecycleActivationFailure::Registry(_) | ManagedLifecycleActivationFailure::DuplicateQueue(_) => {
+            &rocketmq_error::STORAGE_STATE_CORRUPTED
+        }
+        ManagedLifecycleActivationFailure::SegmentClaim(_) | ManagedLifecycleActivationFailure::QueueLoad(_) => {
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+        }
+        ManagedLifecycleActivationFailure::Writer(source) if source.is_pre_io_contract() => return None,
+        ManagedLifecycleActivationFailure::Namespace(source)
+            if !matches!(
+                source,
+                NamespaceTransitionOutcome::Retryable(_) | NamespaceTransitionOutcome::Failed(_)
+            ) =>
+        {
+            return None;
+        }
+        ManagedLifecycleActivationFailure::Writer(_) | ManagedLifecycleActivationFailure::Namespace(_) => {
+            &rocketmq_error::STORAGE_WRITE_FAILED
+        }
+        ManagedLifecycleActivationFailure::InvalidQueueInventory(_)
+        | ManagedLifecycleActivationFailure::Preflight(
+            ActivationPreflightViolation::MissingStoreRoot | ActivationPreflightViolation::StoreRootMismatch,
+        ) => return None,
+        ManagedLifecycleActivationFailure::Preflight(
+            ActivationPreflightViolation::StagingFailed | ActivationPreflightViolation::UnclaimedSegments { .. },
+        ) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+    };
+    Some(
         StoreError::new(descriptor, StoreOperation::Load)
             .in_component(StoreComponent::MappedFile)
-            .with_source(self)
-    }
+            .with_detail("managed lifecycle activation failed")
+            .with_source(error),
+    )
 }
 
-/// Builds the promoted activation StoreError from one typed source.
-fn activation_store_error(source: impl Into<ManagedLifecycleActivationSource>) -> StoreError {
-    ManagedLifecycleActivationError::new(source).into_store_error()
+fn project_activation<T>(result: Result<T, ManagedLifecycleActivationFailure>) -> Result<Option<T>, StoreError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => match activation_store_error(error) {
+            Some(error) => Err(error),
+            None => Ok(None),
+        },
+    }
 }
 
 /// Reconciled managed state whose queue generations are being staged off to the side.
@@ -160,11 +155,10 @@ impl std::fmt::Debug for PreparedManagedLifecycleActivation {
 
 /// Rebuilds the registry before any managed queue generation is published.
 #[doc(hidden)]
-pub fn prepare_managed_lifecycle_activation(
+fn prepare_managed_lifecycle_activation_checked(
     session: ReconciledLifecycleSession,
-) -> Result<PreparedManagedLifecycleActivation, StoreError> {
-    let (registry, recovered_work) =
-        RetirementRegistry::from_reconciled_state(session.state()).map_err(activation_store_error)?;
+) -> Result<PreparedManagedLifecycleActivation, RegistryFault> {
+    let (registry, recovered_work) = RetirementRegistry::from_reconciled_state(session.state())?;
     Ok(PreparedManagedLifecycleActivation {
         session,
         registry,
@@ -172,6 +166,18 @@ pub fn prepare_managed_lifecycle_activation(
         claimed_directories: BTreeSet::new(),
         store_root: None,
         staging_failed: false,
+    })
+}
+
+#[doc(hidden)]
+pub fn prepare_managed_lifecycle_activation(
+    session: ReconciledLifecycleSession,
+) -> Result<PreparedManagedLifecycleActivation, StoreError> {
+    prepare_managed_lifecycle_activation_checked(session).map_err(|source| {
+        StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Load)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail("managed lifecycle activation failed")
+            .with_source(ManagedLifecycleActivationFailure::Registry(source))
     })
 }
 
@@ -184,9 +190,8 @@ impl PreparedManagedLifecycleActivation {
 
     /// Returns the complete replay-authorized queue inventory without claiming any handles.
     #[doc(hidden)]
-    pub fn queue_descriptors(&self) -> Result<Vec<ManagedQueueDescriptor>, StoreError> {
-        collect_queue_descriptors(self.session.active_segment_bindings())
-            .map_err(ManagedLifecycleActivationError::into_store_error)
+    pub fn queue_descriptors(&self) -> Result<Option<Vec<ManagedQueueDescriptor>>, StoreError> {
+        project_activation(collect_queue_descriptors(self.session.active_segment_bindings()))
     }
 
     /// Number of active segment handles not yet transferred into a staged queue generation.
@@ -206,24 +211,26 @@ impl PreparedManagedLifecycleActivation {
     /// Any failure after segment handles are claimed permanently fails this activation candidate;
     /// callers must drop it and replay again instead of retrying from a partial in-memory view.
     #[doc(hidden)]
-    pub fn stage_queue(
+    fn stage_queue_checked(
         &mut self,
         store_root: &Path,
         directory: &str,
         configured_file_size: u64,
-    ) -> Result<ManagedMappedFileQueueGeneration<DefaultMappedFile>, StoreError> {
+    ) -> Result<ManagedMappedFileQueueGeneration<DefaultMappedFile>, ManagedLifecycleActivationFailure> {
         if self.staging_failed {
-            return Err(activation_store_error(ActivationPreflightViolation::StagingFailed));
+            return Err(ManagedLifecycleActivationFailure::Preflight(
+                ActivationPreflightViolation::StagingFailed,
+            ));
         }
         if self.claimed_directories.contains(directory) {
-            return Err(activation_store_error(
-                ManagedLifecycleActivationSource::DuplicateQueue(directory.to_owned()),
-            ));
+            return Err(ManagedLifecycleActivationFailure::DuplicateQueue(directory.to_owned()));
         }
         match &self.store_root {
             Some(bound) if bound != store_root => {
                 self.staging_failed = true;
-                return Err(activation_store_error(ActivationPreflightViolation::StoreRootMismatch));
+                return Err(ManagedLifecycleActivationFailure::Preflight(
+                    ActivationPreflightViolation::StoreRootMismatch,
+                ));
             }
             Some(_) => {}
             None => self.store_root = Some(store_root.to_path_buf()),
@@ -236,12 +243,12 @@ impl PreparedManagedLifecycleActivation {
             Ok(segments) => segments,
             Err(source) => {
                 self.staging_failed = true;
-                return Err(activation_store_error(source));
+                return Err(ManagedLifecycleActivationFailure::SegmentClaim(source));
             }
         };
         let namespace_root = VerifiedNamespaceRoot::from_reconciled_session(&self.session).map_err(|source| {
             self.staging_failed = true;
-            activation_store_error(ManagedLifecycleActivationSource::Namespace(source))
+            ManagedLifecycleActivationFailure::Namespace(source)
         })?;
         for segment in &mut segments {
             let writable = namespace_root
@@ -252,7 +259,7 @@ impl PreparedManagedLifecycleActivation {
                 )
                 .map_err(|source| {
                     self.staging_failed = true;
-                    activation_store_error(ManagedLifecycleActivationSource::Namespace(source))
+                    ManagedLifecycleActivationFailure::Namespace(source)
                 })?;
             segment.replace_retained_file(writable);
         }
@@ -260,17 +267,25 @@ impl PreparedManagedLifecycleActivation {
             Ok(generation) => generation,
             Err(source) => {
                 self.staging_failed = true;
-                return Err(activation_store_error(ManagedLifecycleActivationSource::QueueLoad(
-                    source,
-                )));
+                return Err(ManagedLifecycleActivationFailure::QueueLoad(source));
             }
         };
         if let Err(source) = generation.register_reconciled_members(&self.registry) {
             self.staging_failed = true;
-            return Err(activation_store_error(source));
+            return Err(ManagedLifecycleActivationFailure::Registry(source));
         }
         self.claimed_directories.insert(directory.to_owned());
         Ok(generation)
+    }
+
+    #[doc(hidden)]
+    pub fn stage_queue(
+        &mut self,
+        store_root: &Path,
+        directory: &str,
+        configured_file_size: u64,
+    ) -> Result<Option<ManagedMappedFileQueueGeneration<DefaultMappedFile>>, StoreError> {
+        project_activation(self.stage_queue_checked(store_root, directory, configured_file_size))
     }
 
     /// Activates a completely staged managed lifecycle generation.
@@ -279,22 +294,24 @@ impl PreparedManagedLifecycleActivation {
     /// retained exclusive root lease, complete replay/reconciliation, queue staging, and verified
     /// writer/namespace capabilities; no cryptographic signing protocol is required.
     #[doc(hidden)]
-    pub fn activate(self) -> Result<ManagedLifecycleRuntime, StoreError> {
+    fn activate_checked(self) -> Result<ManagedLifecycleRuntime, ManagedLifecycleActivationFailure> {
         validate_activation_preflight(
             self.session.unclaimed_active_count(),
             self.staging_failed,
             self.store_root.is_some(),
         )
-        .map_err(activation_store_error)?;
+        .map_err(ManagedLifecycleActivationFailure::Preflight)?;
 
         let Some(store_root) = self.store_root else {
-            return Err(activation_store_error(ActivationPreflightViolation::MissingStoreRoot));
+            return Err(ManagedLifecycleActivationFailure::Preflight(
+                ActivationPreflightViolation::MissingStoreRoot,
+            ));
         };
 
         let writer = open_managed_lifecycle_writer(self.session.retained_root(), self.session.writer_frontier())
-            .map_err(activation_store_error)?;
-        let namespace_root =
-            VerifiedNamespaceRoot::from_reconciled_session(&self.session).map_err(activation_store_error)?;
+            .map_err(ManagedLifecycleActivationFailure::Writer)?;
+        let namespace_root = VerifiedNamespaceRoot::from_reconciled_session(&self.session)
+            .map_err(ManagedLifecycleActivationFailure::Namespace)?;
         Ok(ActiveManagedLifecycle {
             session: self.session,
             store_root,
@@ -305,6 +322,11 @@ impl PreparedManagedLifecycleActivation {
         }
         .into_runtime())
     }
+
+    #[doc(hidden)]
+    pub fn activate(self) -> Result<Option<ManagedLifecycleRuntime>, StoreError> {
+        project_activation(self.activate_checked())
+    }
 }
 
 #[allow(
@@ -313,27 +335,23 @@ impl PreparedManagedLifecycleActivation {
 )]
 fn collect_queue_descriptors<'a>(
     bindings: impl IntoIterator<Item = (&'a str, u64)>,
-) -> Result<Vec<ManagedQueueDescriptor>, ManagedLifecycleActivationError> {
+) -> Result<Vec<ManagedQueueDescriptor>, ManagedLifecycleActivationFailure> {
     let mut queues = BTreeMap::<Box<str>, u64>::new();
     for (path, expected_file_length) in bindings {
         let Some((directory, _file_name)) = path.rsplit_once('/') else {
-            return Err(ManagedLifecycleActivationError::new(
-                ManagedLifecycleActivationSource::InvalidQueueInventory(format!(
-                    "active segment {path:?} has no parent directory"
-                )),
-            ));
+            return Err(ManagedLifecycleActivationFailure::InvalidQueueInventory(format!(
+                "active segment {path:?} has no parent directory"
+            )));
         };
         match queues.entry(directory.into()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 entry.insert(expected_file_length);
             }
             std::collections::btree_map::Entry::Occupied(entry) if *entry.get() != expected_file_length => {
-                return Err(ManagedLifecycleActivationError::new(
-                    ManagedLifecycleActivationSource::InvalidQueueInventory(format!(
-                        "queue {directory:?} contains lengths {} and {expected_file_length}",
-                        entry.get()
-                    )),
-                ));
+                return Err(ManagedLifecycleActivationFailure::InvalidQueueInventory(format!(
+                    "queue {directory:?} contains lengths {} and {expected_file_length}",
+                    entry.get()
+                )));
             }
             std::collections::btree_map::Entry::Occupied(_) => {}
         }
@@ -368,7 +386,7 @@ impl std::fmt::Debug for ActiveManagedLifecycle {
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-enum ActivationPreflightViolation {
+pub(crate) enum ActivationPreflightViolation {
     #[error("a previous queue-staging attempt failed")]
     StagingFailed,
     #[error("no Store root path was bound while staging managed queues")]
@@ -400,6 +418,8 @@ fn validate_activation_preflight(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
@@ -473,8 +493,45 @@ mod tests {
         .expect_err("one queue cannot mix mapped-file lengths");
 
         assert!(matches!(
-            error.source,
-            ManagedLifecycleActivationSource::InvalidQueueInventory(_)
+            error,
+            ManagedLifecycleActivationFailure::InvalidQueueInventory(_)
         ));
+        assert!(activation_store_error(error).is_none());
+    }
+
+    #[test]
+    fn allocation_faults_keep_the_owner_descriptor_and_typed_reservation_source() {
+        let mut registry_probe = Vec::<u8>::new();
+        let registry_source = registry_probe
+            .try_reserve(usize::MAX)
+            .expect_err("impossible reservation produces typed evidence");
+        let registry = activation_store_error(ManagedLifecycleActivationFailure::Registry(RegistryFault::Allocation(
+            registry_source,
+        )))
+        .expect("registry owner is operational");
+        assert_eq!(registry.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+        assert!(source_chain_contains::<std::collections::TryReserveError>(&registry));
+
+        let mut claim_probe = Vec::<u8>::new();
+        let claim_source = claim_probe
+            .try_reserve(usize::MAX)
+            .expect_err("impossible reservation produces typed evidence");
+        let claim = activation_store_error(ManagedLifecycleActivationFailure::SegmentClaim(
+            ManagedSegmentClaimFault::Allocation(claim_source),
+        ))
+        .expect("segment-claim owner is operational");
+        assert_eq!(claim.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert!(source_chain_contains::<std::collections::TryReserveError>(&claim));
+    }
+
+    fn source_chain_contains<T: Error + 'static>(error: &(dyn Error + 'static)) -> bool {
+        let mut source = Some(error);
+        while let Some(current) = source {
+            if current.downcast_ref::<T>().is_some() {
+                return true;
+            }
+            source = current.source();
+        }
+        false
     }
 }

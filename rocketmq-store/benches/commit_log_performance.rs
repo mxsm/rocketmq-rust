@@ -189,6 +189,8 @@ fn new_bench_store_with_mapped_file_size(
 
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid benchmark policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,

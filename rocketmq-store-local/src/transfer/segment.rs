@@ -19,7 +19,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
-
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 
@@ -163,36 +163,29 @@ pub type FileRange = FileRangeLease;
 
 /// Failure to construct or split a checked file-range capability.
 #[derive(Debug)]
-pub(crate) enum FileRangeError {
+pub(crate) enum FileRangeFailure {
+    Violation(FileRangeViolation),
+    Metadata(io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FileRangeViolation {
     LengthOverflow { len: usize },
     EndOverflow { position: u64, len: usize },
     OutOfBounds { position: u64, len: usize, file_len: u64 },
     InvalidSplit { at: usize, len: usize },
-    Metadata(io::Error),
 }
 
-impl FileRangeError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Metadata faults keep their typed I/O source; range violations are
-    /// invalid requests.
-    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
-        let descriptor = match &self {
-            Self::Metadata(_) => &rocketmq_error::STORAGE_IO_FAILED,
-            _ => &rocketmq_error::STORAGE_REQUEST_INVALID,
-        };
-        let component = if matches!(operation, StoreOperation::Replicate) {
-            rocketmq_store_api::StoreComponent::HighAvailability
-        } else {
-            rocketmq_store_api::StoreComponent::CommitLog
-        };
-        StoreError::new(descriptor, operation)
-            .in_component(component)
-            .with_source(self)
+impl fmt::Display for FileRangeFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Violation(error) => error.fmt(formatter),
+            Self::Metadata(error) => write!(formatter, "failed to inspect file owner: {error}"),
+        }
     }
 }
 
-impl fmt::Display for FileRangeError {
+impl fmt::Display for FileRangeViolation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LengthOverflow { len } => write!(formatter, "file range length does not fit u64: {len}"),
@@ -210,16 +203,34 @@ impl fmt::Display for FileRangeError {
             Self::InvalidSplit { at, len } => {
                 write!(formatter, "file range split exceeds range: at={at}, len={len}")
             }
-            Self::Metadata(error) => write!(formatter, "failed to inspect file owner: {error}"),
         }
     }
 }
 
-impl std::error::Error for FileRangeError {
+impl std::error::Error for FileRangeFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Metadata(error) => Some(error),
-            _ => None,
+            Self::Violation(_) => None,
+        }
+    }
+}
+
+impl FileRangeFailure {
+    fn into_public<T>(result: Result<T, Self>) -> Result<Option<T>, StoreError> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(Self::Violation(_)) => Ok(None),
+            Err(error @ Self::Metadata(_)) => Err(error.into_store_error()),
+        }
+    }
+
+    fn into_store_error(self) -> StoreError {
+        match self {
+            error @ Self::Metadata(_) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Read)
+                .in_component(StoreComponent::CommitLog)
+                .with_source(error),
+            Self::Violation(_) => unreachable!("file-range violations do not cross the public contract projection"),
         }
     }
 }
@@ -269,19 +280,25 @@ impl SegmentLease {
         len: usize,
         file: Arc<File>,
         cache_state: TransferCacheState,
-    ) -> Result<Self, StoreError> {
-        Self::try_from_file_range_typed(global_offset, file_offset, position_in_file, len, file, cache_state)
-            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+    ) -> Result<Option<Self>, StoreError> {
+        FileRangeFailure::into_public(Self::try_from_file_range_checked(
+            global_offset,
+            file_offset,
+            position_in_file,
+            len,
+            file,
+            cache_state,
+        ))
     }
 
-    fn try_from_file_range_typed(
+    fn try_from_file_range_checked(
         global_offset: i64,
         file_offset: u64,
         position_in_file: u64,
         len: usize,
         file: Arc<File>,
         cache_state: TransferCacheState,
-    ) -> Result<Self, FileRangeError> {
+    ) -> Result<Self, FileRangeFailure> {
         let owner = Arc::new(FileOwner::from_shared_compatibility(
             file,
             Arc::new(MappedFileMetrics::new()),
@@ -309,7 +326,7 @@ impl SegmentLease {
         owner: Arc<FileOwner>,
         operation: MappedFileLease,
         cache_state: TransferCacheState,
-    ) -> Result<Self, FileRangeError> {
+    ) -> Result<Self, FileRangeFailure> {
         let lease = FileRangeLease::try_new(
             owner,
             position_in_file,
@@ -356,7 +373,7 @@ impl SegmentLease {
             });
         }
         if let Some(range) = mapped_range.as_ref() {
-            if let Ok(lease) = range.clone().try_into_file_range() {
+            if let Ok(Some(lease)) = range.clone().try_into_file_range() {
                 return Some(Self {
                     segment: CommitLogSegment {
                         global_offset,
@@ -469,13 +486,13 @@ impl CommitLogSegment {
 }
 
 impl CheckedFileRange {
-    fn try_new(position: u64, len: usize, file_len: u64) -> Result<Self, FileRangeError> {
-        let range_len = u64::try_from(len).map_err(|_| FileRangeError::LengthOverflow { len })?;
+    fn try_new(position: u64, len: usize, file_len: u64) -> Result<Self, FileRangeViolation> {
+        let range_len = u64::try_from(len).map_err(|_| FileRangeViolation::LengthOverflow { len })?;
         let end = position
             .checked_add(range_len)
-            .ok_or(FileRangeError::EndOverflow { position, len })?;
+            .ok_or(FileRangeViolation::EndOverflow { position, len })?;
         if end > file_len {
-            return Err(FileRangeError::OutOfBounds {
+            return Err(FileRangeViolation::OutOfBounds {
                 position,
                 len,
                 file_len,
@@ -502,13 +519,13 @@ impl FileRangeLease {
         position: u64,
         len: usize,
         operation: FileRangeOperationLease,
-    ) -> Result<Self, FileRangeError> {
+    ) -> Result<Self, FileRangeFailure> {
         let file_len = match owner.len() {
             Ok(file_len) => file_len,
             Err(error) => {
                 drop(owner);
                 drop(operation);
-                return Err(FileRangeError::Metadata(error));
+                return Err(FileRangeFailure::Metadata(error));
             }
         };
         let range = match CheckedFileRange::try_new(position, len, file_len) {
@@ -516,7 +533,7 @@ impl FileRangeLease {
             Err(error) => {
                 drop(owner);
                 drop(operation);
-                return Err(error);
+                return Err(FileRangeFailure::Violation(error));
             }
         };
         Ok(Self {
@@ -533,7 +550,7 @@ impl FileRangeLease {
         position: u64,
         len: usize,
         operation: MappedFileLease,
-    ) -> Result<Self, FileRangeError> {
+    ) -> Result<Self, FileRangeFailure> {
         Self::try_new(
             owner,
             position,
@@ -589,19 +606,22 @@ impl FileRangeLease {
     ///
     /// Both returned ranges share the same physical owner and admission. The operation admission
     /// is released once after the final derived range drops.
-    #[allow(dead_code, reason = "exercised by the in-crate transfer scenarios")]
-    pub(crate) fn split_at(mut self, at: usize) -> Result<(Self, Self), FileRangeError> {
+    pub fn split_at(self, at: usize) -> Option<(Self, Self)> {
+        self.split_at_checked(at).ok()
+    }
+
+    fn split_at_checked(mut self, at: usize) -> Result<(Self, Self), FileRangeViolation> {
         let len = self.len();
         if at > len {
-            return Err(FileRangeError::InvalidSplit { at, len });
+            return Err(FileRangeViolation::InvalidSplit { at, len });
         }
-        let relative = u64::try_from(at).map_err(|_| FileRangeError::LengthOverflow { len: at })?;
+        let relative = u64::try_from(at).map_err(|_| FileRangeViolation::LengthOverflow { len: at })?;
         let middle = self
             .range
             .bounds
             .start
             .checked_add(relative)
-            .ok_or(FileRangeError::EndOverflow {
+            .ok_or(FileRangeViolation::EndOverflow {
                 position: self.range.bounds.start,
                 len: at,
             })?;
@@ -666,16 +686,16 @@ impl MappedReadRange<NativeReadOnlyMappedMemory> {
     ///
     /// The returned capability retains this range's generation and read admission, so native
     /// transfer cannot outlive the mapped-file lifecycle protection.
-    pub(crate) fn try_into_file_range(self) -> Result<FileRangeLease, FileRangeError> {
+    pub fn try_into_file_range(self) -> Result<Option<FileRangeLease>, StoreError> {
         let owner = self.file_owner();
         let position = self.file_offset();
         let len = self.len();
-        FileRangeLease::try_new(
+        FileRangeFailure::into_public(FileRangeLease::try_new(
             owner,
             position,
             len,
             FileRangeOperationLease::MappedRead { _range: self },
-        )
+        ))
     }
 }
 
@@ -819,13 +839,23 @@ mod tests {
         let file = Arc::new(file);
 
         assert!(matches!(
-            SegmentLease::try_from_file_range_typed(0, 0, 3, 2, Arc::clone(&file), TransferCacheState::Cold),
-            Err(FileRangeError::OutOfBounds { .. })
+            SegmentLease::try_from_file_range_checked(0, 0, 3, 2, Arc::clone(&file), TransferCacheState::Cold,),
+            Err(FileRangeFailure::Violation(FileRangeViolation::OutOfBounds { .. }))
         ));
         assert!(matches!(
-            SegmentLease::try_from_file_range_typed(0, 0, u64::MAX, 2, file, TransferCacheState::Cold),
-            Err(FileRangeError::EndOverflow { .. })
+            SegmentLease::try_from_file_range_checked(0, 0, u64::MAX, 2, file, TransferCacheState::Cold,),
+            Err(FileRangeFailure::Violation(FileRangeViolation::EndOverflow { .. }))
         ));
+    }
+
+    #[test]
+    fn deterministic_file_range_violation_is_absent_from_the_public_projection() {
+        let file = Arc::new(tempfile::tempfile().expect("temporary file"));
+        file.set_len(5).expect("size temporary file");
+
+        let range = SegmentLease::try_from_file_range(0, 0, 4, 2, file, TransferCacheState::Cold)
+            .expect("metadata read succeeds");
+        assert!(range.is_none());
     }
 
     #[cfg(unix)]
@@ -868,6 +898,7 @@ mod tests {
         let file = tempfile::tempfile().expect("temporary file");
         file.set_len(1).expect("size temporary file");
         let segment = SegmentLease::try_from_file_range(0, 0, 0, 1, Arc::new(file), TransferCacheState::Cold)
+            .expect("metadata read succeeds")
             .expect("standalone checked range");
         let range = segment.as_file_range().expect("file range");
         let unmanaged_called = std::cell::Cell::new(false);

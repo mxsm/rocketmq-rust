@@ -15,6 +15,9 @@
 use std::io::IoSlice;
 
 use bytes::Bytes;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
@@ -24,9 +27,7 @@ use crate::ha::transfer_engine::write_zero_error;
 use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferStats;
 use crate::transfer::batch::TransferBatch;
-use crate::transfer::error::TransferError;
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
+use crate::transfer::error::TransferFailure;
 
 pub struct VectoredTransferEngine<W> {
     writer: W,
@@ -46,20 +47,26 @@ impl<W> VectoredTransferEngine<W>
 where
     W: AsyncWrite + Unpin,
 {
-    /// Sends one framed batch, reporting failures through the storage facade.
+    /// Sends one batch through the vectored-write engine.
+    ///
+    /// Returns `Ok(None)` when the batch is rejected by the transfer contract before I/O.
     ///
     /// # Errors
     ///
-    /// Returns `STORAGE_IO_FAILED` for replication write failures and
-    /// `STORAGE_REQUEST_INVALID` for malformed batches.
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
-        self.send_batch_typed(batch)
+    /// Returns a storage error when an operational HA write fails.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<Option<TransferStats>, StoreError> {
+        self.send_batch_checked(batch)
             .await
-            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+            .map_err(|error| error.into_store_error(StoreOperation::Replicate, StoreComponent::HighAvailability))
     }
 
-    pub(crate) async fn send_batch_typed(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
-        let chunks = transfer_chunks(batch)?;
+    pub(crate) async fn send_batch_checked(
+        &mut self,
+        batch: &TransferBatch,
+    ) -> Result<Option<TransferStats>, TransferFailure> {
+        let Some(chunks) = transfer_chunks(batch)? else {
+            return Ok(None);
+        };
         let total_len = chunks.iter().map(Bytes::len).sum::<usize>();
         let mut bytes_written = 0;
         let mut write_call_count = 0;
@@ -76,7 +83,7 @@ where
                 Err(_) if bytes_written == 0 && batch.body_bytes().is_some() => {
                     return self.send_with_bytes_fallback(batch).await;
                 }
-                Err(error) => return Err(TransferError::Io(error)),
+                Err(error) => return Err(TransferFailure::Io(error)),
             };
             write_call_count += 1;
             bytes_written += written;
@@ -88,7 +95,7 @@ where
 
         self.writer.flush().await?;
 
-        Ok(TransferStats {
+        Ok(Some(TransferStats {
             engine: TransferEngineKind::Vectored,
             bytes_written,
             body_bytes: batch.total_body_len,
@@ -98,25 +105,32 @@ where
             sendfile_bytes: 0,
             fallback_bytes: 0,
             partial_write_count,
-        })
+        }))
     }
 
-    async fn send_with_bytes_fallback(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
+    async fn send_with_bytes_fallback(
+        &mut self,
+        batch: &TransferBatch,
+    ) -> Result<Option<TransferStats>, TransferFailure> {
         let mut fallback = BytesTransferEngine::new(&mut self.writer);
-        let mut stats = fallback.send_batch_typed(batch).await?;
+        let Some(mut stats) = fallback.send_batch_checked(batch).await? else {
+            return Ok(None);
+        };
         stats.fallback_bytes = stats.body_bytes;
-        Ok(stats)
+        Ok(Some(stats))
     }
 }
 
-fn transfer_chunks(batch: &TransferBatch) -> Result<Vec<Bytes>, TransferError> {
-    let body_chunks = batch_body_chunks(batch)?;
+fn transfer_chunks(batch: &TransferBatch) -> Result<Option<Vec<Bytes>>, TransferFailure> {
+    let Some(body_chunks) = batch_body_chunks(batch)? else {
+        return Ok(None);
+    };
     let mut chunks = Vec::with_capacity(1 + body_chunks.len());
     if !batch.frame_header.is_empty() {
         chunks.push(batch.frame_header.clone());
     }
     chunks.extend(body_chunks.into_iter().filter(|chunk| !chunk.is_empty()));
-    Ok(chunks)
+    Ok(Some(chunks))
 }
 
 fn io_slices(chunks: &[Bytes], chunk_index: usize, chunk_offset: usize) -> Vec<IoSlice<'_>> {

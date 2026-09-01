@@ -474,6 +474,7 @@ fn typed_last_drop_completes_retryable_cleanup_lazily_exactly_once() {
     let lease = resource
         .reference_resource
         .try_acquire(MappedFileOperation::Read)
+        .into_result()
         .expect("typed read lease");
 
     resource.shutdown(u64::MAX);
@@ -495,6 +496,7 @@ fn cleanup_panic_releases_claim_for_lazy_retry() {
     let lease = resource
         .reference_resource
         .try_acquire(MappedFileOperation::Read)
+        .into_result()
         .expect("typed read lease");
 
     resource.shutdown(u64::MAX);

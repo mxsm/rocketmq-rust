@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use fs2::FileExt;
 use rocketmq_store_local::mapped_file::bootstrap_managed_lifecycle_under_exclusive_lock;
-use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only;
-use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_under_exclusive_lock;
+use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only_for_store;
+use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_under_exclusive_lock_for_store;
 use rocketmq_store_local::mapped_file::LockedManagedLifecycleInspection;
 use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
@@ -107,9 +107,7 @@ impl StoreRootLease {
         operation: StoreOperation,
     ) -> Result<ManagedLifecycleReadOutcome, StoreError> {
         self.validate_root_binding(operation)?;
-        // The read-only inspection reports its own catalog identity with the reviewed Load
-        // operation; this method only threads the caller operation into root validation.
-        inspect_managed_lifecycle_read_only(&self.root)
+        inspect_managed_lifecycle_read_only_for_store(&self.root)
     }
 
     pub(super) fn bootstrap_managed_lifecycle(&self, operation: StoreOperation) -> Result<(), StoreError> {
@@ -298,7 +296,7 @@ impl StoreRootLease {
     pub(super) fn validate_legacy(&self, operation: StoreOperation) -> Result<(), StoreError> {
         self.validate_root_binding(operation)?;
 
-        match inspect_managed_lifecycle_read_only(&self.root) {
+        match inspect_managed_lifecycle_read_only_for_store(&self.root) {
             Ok(ManagedLifecycleReadOutcome::LegacyAbsent) => Ok(()),
             Ok(ManagedLifecycleReadOutcome::ManagedNeedsReconciliation) => Err(managed_lifecycle_fence(
                 operation,
@@ -333,7 +331,7 @@ impl StoreRootLease {
         // exclusive lock, and revalidated both configured-path bindings immediately above. The
         // opaque Arc passed to store-local owns those handles and therefore keeps every invariant
         // alive until the returned session and all capabilities derived from it are dropped.
-        unsafe { inspect_managed_lifecycle_under_exclusive_lock(&self.root, exclusive_lease) }
+        unsafe { inspect_managed_lifecycle_under_exclusive_lock_for_store(&self.root, exclusive_lease) }
     }
 
     pub(super) fn abort_marker_present(&self, operation: StoreOperation) -> Result<bool, StoreError> {

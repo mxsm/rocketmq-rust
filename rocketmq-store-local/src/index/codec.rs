@@ -156,7 +156,7 @@ impl IndexEntry {
 
 /// Cause of an invalid or overflowing index-file layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexLayoutViolation {
+pub(crate) enum IndexLayoutViolation {
     ZeroHashSlots,
     ZeroIndexEntries,
     HashSlotSectionOverflow,
@@ -165,7 +165,7 @@ pub enum IndexLayoutViolation {
 }
 
 /// Calculates the complete file size using checked arithmetic.
-pub fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> Result<usize, IndexLayoutViolation> {
+fn index_file_total_size_checked(hash_slot_num: usize, index_num: usize) -> Result<usize, IndexLayoutViolation> {
     if hash_slot_num == 0 {
         return Err(IndexLayoutViolation::ZeroHashSlots);
     }
@@ -184,6 +184,11 @@ pub fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> Result<u
         .checked_add(hash_slots_size)
         .and_then(|size| size.checked_add(indexes_size))
         .ok_or(IndexLayoutViolation::TotalSizeOverflow)
+}
+
+/// Calculates the complete file size without exposing Store Local contract types.
+pub fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> Option<usize> {
+    index_file_total_size_checked(hash_slot_num, index_num).ok()
 }
 
 /// Calculates the absolute byte position of one hash slot.

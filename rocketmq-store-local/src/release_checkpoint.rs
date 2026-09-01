@@ -172,7 +172,7 @@ where
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<StoreReleaseCheckpointManifest, LocalReleaseCheckpointError> {
+    ) -> Result<StoreReleaseCheckpointManifest, LocalReleaseCheckpointFailure> {
         validate_authorization(authorization)?;
         request.validate()?;
         let deadline = authorization_deadline(authorization)?;
@@ -180,14 +180,14 @@ where
             .barrier
             .begin_release_checkpoint(&request, deadline)
             .await
-            .map_err(|source| LocalReleaseCheckpointError::Barrier {
+            .map_err(|source| LocalReleaseCheckpointFailure::Barrier {
                 source: Box::new(source),
             })?;
         if snapshot.storage_identity() != &request.storage_identity {
-            return Err(LocalReleaseCheckpointError::StorageIdentityMismatch);
+            return Err(LocalReleaseCheckpointFailure::StorageIdentityMismatch);
         }
         if snapshot.offsets() != request.offsets {
-            return Err(LocalReleaseCheckpointError::BarrierOffsetsChanged {
+            return Err(LocalReleaseCheckpointFailure::BarrierOffsetsChanged {
                 expected: request.offsets,
                 actual: snapshot.offsets(),
             });
@@ -214,7 +214,7 @@ where
                 )
             })
             .await
-            .map_err(LocalReleaseCheckpointError::Runtime)??;
+            .map_err(LocalReleaseCheckpointFailure::Runtime)??;
         drop(snapshot);
         manifest.validate()?;
         Ok(manifest)
@@ -224,11 +224,11 @@ where
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreVerification, LocalReleaseCheckpointError> {
+    ) -> Result<ReleaseCheckpointRestoreVerification, LocalReleaseCheckpointFailure> {
         validate_authorization(authorization)?;
         manifest.validate()?;
         if manifest.backend != ReleaseCheckpointBackend::Local {
-            return Err(LocalReleaseCheckpointError::WrongBackend);
+            return Err(LocalReleaseCheckpointFailure::WrongBackend);
         }
         let deadline = authorization_deadline(authorization)?;
         let checkpoint_path = file_uri_to_path(&manifest.artifact.uri)?;
@@ -244,20 +244,20 @@ where
                 hash_checkpoint_directory(&checkpoint_path_for_hash, max_checkpoint_bytes)
             })
             .await
-            .map_err(LocalReleaseCheckpointError::Runtime)??;
+            .map_err(LocalReleaseCheckpointFailure::Runtime)??;
         if digest.sha256 != expected_sha256 || digest.length_bytes != expected_length {
-            return Err(LocalReleaseCheckpointError::ArtifactChecksumMismatch);
+            return Err(LocalReleaseCheckpointFailure::ArtifactChecksumMismatch);
         }
 
         let restored_offsets = self
             .barrier
             .verify_release_checkpoint_restore(&checkpoint_path, manifest, deadline)
             .await
-            .map_err(|source| LocalReleaseCheckpointError::RestoreVerification {
+            .map_err(|source| LocalReleaseCheckpointFailure::RestoreVerification {
                 source: Box::new(source),
             })?;
         if restored_offsets != manifest.offsets {
-            return Err(LocalReleaseCheckpointError::RestoreOffsetsChanged {
+            return Err(LocalReleaseCheckpointFailure::RestoreOffsetsChanged {
                 expected: manifest.offsets,
                 actual: restored_offsets,
             });
@@ -289,16 +289,16 @@ where
     ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
         match self.create_release_checkpoint_inner(authorization, request).await {
             Ok(manifest) => Ok(ReleaseCheckpointCreateOutcome::Created(manifest)),
-            Err(LocalReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+            Err(LocalReleaseCheckpointFailure::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
                 ReleaseCheckpointCreateRejection::AuthorizationExpired,
             )),
-            Err(LocalReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+            Err(LocalReleaseCheckpointFailure::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
                 ReleaseCheckpointCreateRejection::CapabilityNotGranted,
             )),
-            Err(LocalReleaseCheckpointError::CheckpointAlreadyExists(_)) => Ok(
+            Err(LocalReleaseCheckpointFailure::CheckpointAlreadyExists(_)) => Ok(
                 ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
             ),
-            Err(LocalReleaseCheckpointError::CheckpointTooLarge { actual, maximum }) => Ok(
+            Err(LocalReleaseCheckpointFailure::CheckpointTooLarge { actual, maximum }) => Ok(
                 ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::CapacityExceeded {
                     actual_bytes: actual,
                     maximum_bytes: maximum,
@@ -318,64 +318,64 @@ where
             .await
         {
             Ok(verification) => Ok(ReleaseCheckpointRestoreOutcome::Verified(verification)),
-            Err(LocalReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
+            Err(LocalReleaseCheckpointFailure::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
                 ReleaseCheckpointRestoreRejection::AuthorizationExpired,
             )),
-            Err(LocalReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
-                ReleaseCheckpointRestoreRejection::CapabilityNotGranted,
-            )),
+            Err(LocalReleaseCheckpointFailure::UnauthorizedCapability) => Ok(
+                ReleaseCheckpointRestoreOutcome::Rejected(ReleaseCheckpointRestoreRejection::CapabilityNotGranted),
+            ),
             Err(error) => Err(local_checkpoint_error(StoreOperation::Read, error)),
         }
     }
 }
 
-fn local_checkpoint_error(operation: StoreOperation, error: LocalReleaseCheckpointError) -> StoreError {
+fn local_checkpoint_error(operation: StoreOperation, error: LocalReleaseCheckpointFailure) -> StoreError {
     match error {
-        LocalReleaseCheckpointError::Artifact(source) => source,
-        LocalReleaseCheckpointError::Barrier { source } => {
+        LocalReleaseCheckpointFailure::Artifact(source) => source,
+        LocalReleaseCheckpointFailure::Barrier { source } => {
             checkpoint_boxed_source_error(&rocketmq_error::STORAGE_WRITE_FAILED, operation, source)
         }
-        LocalReleaseCheckpointError::RestoreVerification { source } => {
+        LocalReleaseCheckpointFailure::RestoreVerification { source } => {
             checkpoint_boxed_source_error(&rocketmq_error::STORAGE_READ_FAILED, operation, source)
         }
-        LocalReleaseCheckpointError::Runtime(source) => {
+        LocalReleaseCheckpointFailure::Runtime(source) => {
             StoreError::new(runtime_error_descriptor(&source), operation).with_source(source)
         }
-        LocalReleaseCheckpointError::Validation(source) => {
+        LocalReleaseCheckpointFailure::Validation(source) => {
             StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
                 .in_component(StoreComponent::Configuration)
                 .with_source(source)
         }
         error => {
             let descriptor = match &error {
-                LocalReleaseCheckpointError::InvalidConfiguration(_)
-                | LocalReleaseCheckpointError::StorageIdentityMismatch
-                | LocalReleaseCheckpointError::WrongBackend
-                | LocalReleaseCheckpointError::OverlappingRoots
-                | LocalReleaseCheckpointError::ReservedManifestInSource
-                | LocalReleaseCheckpointError::EmptyCheckpoint
-                | LocalReleaseCheckpointError::SymbolicLink(_)
-                | LocalReleaseCheckpointError::UnsupportedFileType(_)
-                | LocalReleaseCheckpointError::PathEscaped(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
-                LocalReleaseCheckpointError::BarrierOffsetsChanged { .. }
-                | LocalReleaseCheckpointError::RestoreOffsetsChanged { .. }
-                | LocalReleaseCheckpointError::ArtifactChecksumMismatch => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-                LocalReleaseCheckpointError::Serialize(_) => &rocketmq_error::STORAGE_WRITE_FAILED,
-                LocalReleaseCheckpointError::Clock(_) | LocalReleaseCheckpointError::ClockOverflow => {
+                LocalReleaseCheckpointFailure::InvalidConfiguration(_)
+                | LocalReleaseCheckpointFailure::StorageIdentityMismatch
+                | LocalReleaseCheckpointFailure::WrongBackend
+                | LocalReleaseCheckpointFailure::OverlappingRoots
+                | LocalReleaseCheckpointFailure::ReservedManifestInSource
+                | LocalReleaseCheckpointFailure::EmptyCheckpoint
+                | LocalReleaseCheckpointFailure::SymbolicLink(_)
+                | LocalReleaseCheckpointFailure::UnsupportedFileType(_)
+                | LocalReleaseCheckpointFailure::PathEscaped(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
+                LocalReleaseCheckpointFailure::BarrierOffsetsChanged { .. }
+                | LocalReleaseCheckpointFailure::RestoreOffsetsChanged { .. }
+                | LocalReleaseCheckpointFailure::ArtifactChecksumMismatch => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+                LocalReleaseCheckpointFailure::Serialize(_) => &rocketmq_error::STORAGE_WRITE_FAILED,
+                LocalReleaseCheckpointFailure::Clock(_) | LocalReleaseCheckpointFailure::ClockOverflow => {
                     &rocketmq_error::STORAGE_INTERNAL_FAILURE
                 }
-                LocalReleaseCheckpointError::Io { .. } => &rocketmq_error::STORAGE_IO_FAILED,
-                LocalReleaseCheckpointError::AuthorizationExpired
-                | LocalReleaseCheckpointError::UnauthorizedCapability
-                | LocalReleaseCheckpointError::CheckpointAlreadyExists(_)
-                | LocalReleaseCheckpointError::CheckpointTooLarge { .. }
-                | LocalReleaseCheckpointError::Barrier { .. }
-                | LocalReleaseCheckpointError::RestoreVerification { .. }
-                | LocalReleaseCheckpointError::Artifact(_)
-                | LocalReleaseCheckpointError::Runtime(_)
-                | LocalReleaseCheckpointError::Validation(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                LocalReleaseCheckpointFailure::Io { .. } => &rocketmq_error::STORAGE_IO_FAILED,
+                LocalReleaseCheckpointFailure::AuthorizationExpired
+                | LocalReleaseCheckpointFailure::UnauthorizedCapability
+                | LocalReleaseCheckpointFailure::CheckpointAlreadyExists(_)
+                | LocalReleaseCheckpointFailure::CheckpointTooLarge { .. }
+                | LocalReleaseCheckpointFailure::Barrier { .. }
+                | LocalReleaseCheckpointFailure::RestoreVerification { .. }
+                | LocalReleaseCheckpointFailure::Artifact(_)
+                | LocalReleaseCheckpointFailure::Runtime(_)
+                | LocalReleaseCheckpointFailure::Validation(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
             };
-            let component = if matches!(&error, LocalReleaseCheckpointError::InvalidConfiguration(_)) {
+            let component = if matches!(&error, LocalReleaseCheckpointFailure::InvalidConfiguration(_)) {
                 StoreComponent::Configuration
             } else {
                 StoreComponent::Store
@@ -425,9 +425,9 @@ fn create_atomic_checkpoint(
     created_at_unix_millis: u64,
     fencing_token: u64,
     max_checkpoint_bytes: u64,
-) -> Result<StoreReleaseCheckpointManifest, LocalReleaseCheckpointError> {
+) -> Result<StoreReleaseCheckpointManifest, LocalReleaseCheckpointFailure> {
     if max_checkpoint_bytes == 0 {
-        return Err(LocalReleaseCheckpointError::InvalidConfiguration(
+        return Err(LocalReleaseCheckpointFailure::InvalidConfiguration(
             "max_checkpoint_bytes must be greater than zero".to_string(),
         ));
     }
@@ -440,13 +440,13 @@ fn create_atomic_checkpoint(
         .canonicalize()
         .map_err(|source| io_error("canonicalize checkpoint root", checkpoint_root, source))?;
     if checkpoint_root.starts_with(&source_root) || source_root.starts_with(&checkpoint_root) {
-        return Err(LocalReleaseCheckpointError::OverlappingRoots);
+        return Err(LocalReleaseCheckpointFailure::OverlappingRoots);
     }
 
     let final_path = checkpoint_root.join(&request.checkpoint_id);
     let partial_path = checkpoint_root.join(format!(".{}.partial-{fencing_token}", request.checkpoint_id));
     if final_path.exists() || partial_path.exists() {
-        return Err(LocalReleaseCheckpointError::CheckpointAlreadyExists(
+        return Err(LocalReleaseCheckpointFailure::CheckpointAlreadyExists(
             request.checkpoint_id,
         ));
     }
@@ -481,7 +481,7 @@ fn create_atomic_checkpoint(
     };
     manifest.validate()?;
     let manifest_path = partial_path.join(RELEASE_CHECKPOINT_MANIFEST_FILE);
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(LocalReleaseCheckpointError::Serialize)?;
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(LocalReleaseCheckpointFailure::Serialize)?;
     write_synced_file(&manifest_path, &manifest_bytes)?;
     sync_directory(&partial_path)?;
     fs::rename(&partial_path, &final_path).map_err(|source| io_error("publish checkpoint", &final_path, source))?;
@@ -493,7 +493,7 @@ fn copy_checkpoint_payload(
     source_root: &Path,
     destination_root: &Path,
     max_checkpoint_bytes: u64,
-) -> Result<CheckpointDirectoryDigest, LocalReleaseCheckpointError> {
+) -> Result<CheckpointDirectoryDigest, LocalReleaseCheckpointFailure> {
     let files = collect_regular_files(source_root)?;
     let mut hasher = Sha256::new();
     let mut length_bytes = 0_u64;
@@ -501,7 +501,7 @@ fn copy_checkpoint_payload(
 
     for (relative, source) in files {
         if relative == Path::new(RELEASE_CHECKPOINT_MANIFEST_FILE) {
-            return Err(LocalReleaseCheckpointError::ReservedManifestInSource);
+            return Err(LocalReleaseCheckpointFailure::ReservedManifestInSource);
         }
         hash_relative_path(&mut hasher, &relative);
         let destination = destination_root.join(&relative);
@@ -523,12 +523,12 @@ fn copy_checkpoint_payload(
             length_bytes =
                 length_bytes
                     .checked_add(read as u64)
-                    .ok_or(LocalReleaseCheckpointError::CheckpointTooLarge {
+                    .ok_or(LocalReleaseCheckpointFailure::CheckpointTooLarge {
                         actual: u64::MAX,
                         maximum: max_checkpoint_bytes,
                     })?;
             if length_bytes > max_checkpoint_bytes {
-                return Err(LocalReleaseCheckpointError::CheckpointTooLarge {
+                return Err(LocalReleaseCheckpointFailure::CheckpointTooLarge {
                     actual: length_bytes,
                     maximum: max_checkpoint_bytes,
                 });
@@ -548,7 +548,7 @@ fn copy_checkpoint_payload(
     }
 
     if length_bytes == 0 {
-        return Err(LocalReleaseCheckpointError::EmptyCheckpoint);
+        return Err(LocalReleaseCheckpointFailure::EmptyCheckpoint);
     }
     Ok(CheckpointDirectoryDigest {
         length_bytes,
@@ -556,7 +556,7 @@ fn copy_checkpoint_payload(
     })
 }
 
-fn collect_regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, LocalReleaseCheckpointError> {
+fn collect_regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, LocalReleaseCheckpointFailure> {
     let mut pending = vec![root.to_path_buf()];
     let mut files = Vec::new();
     while let Some(directory) = pending.pop() {
@@ -568,18 +568,18 @@ fn collect_regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, LocalRe
             let metadata =
                 fs::symlink_metadata(&path).map_err(|source| io_error("inspect checkpoint entry", &path, source))?;
             if metadata.file_type().is_symlink() {
-                return Err(LocalReleaseCheckpointError::SymbolicLink(path));
+                return Err(LocalReleaseCheckpointFailure::SymbolicLink(path));
             }
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
                 let relative = path
                     .strip_prefix(root)
-                    .map_err(|_| LocalReleaseCheckpointError::PathEscaped(path.clone()))?
+                    .map_err(|_| LocalReleaseCheckpointFailure::PathEscaped(path.clone()))?
                     .to_path_buf();
                 files.push((relative, path));
             } else {
-                return Err(LocalReleaseCheckpointError::UnsupportedFileType(path));
+                return Err(LocalReleaseCheckpointFailure::UnsupportedFileType(path));
             }
         }
     }
@@ -600,7 +600,7 @@ fn portable_relative_path(path: &Path) -> String {
         .join("/")
 }
 
-fn write_synced_file(path: &Path, bytes: &[u8]) -> Result<(), LocalReleaseCheckpointError> {
+fn write_synced_file(path: &Path, bytes: &[u8]) -> Result<(), LocalReleaseCheckpointFailure> {
     let mut file = File::create(path).map_err(|source| io_error("create checkpoint manifest", path, source))?;
     file.write_all(bytes)
         .map_err(|source| io_error("write checkpoint manifest", path, source))?;
@@ -609,20 +609,20 @@ fn write_synced_file(path: &Path, bytes: &[u8]) -> Result<(), LocalReleaseCheckp
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), LocalReleaseCheckpointError> {
+fn sync_directory(path: &Path) -> Result<(), LocalReleaseCheckpointFailure> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| io_error("sync checkpoint directory", path, source))
 }
 
 #[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), LocalReleaseCheckpointError> {
+fn sync_directory(_path: &Path) -> Result<(), LocalReleaseCheckpointFailure> {
     Ok(())
 }
 
-fn validate_authorization(authorization: &MaintenanceAuthorizationGrant) -> Result<(), LocalReleaseCheckpointError> {
+fn validate_authorization(authorization: &MaintenanceAuthorizationGrant) -> Result<(), LocalReleaseCheckpointFailure> {
     if authorization.capability() != MaintenanceCapability::ReleaseCheckpoint {
-        return Err(LocalReleaseCheckpointError::UnauthorizedCapability);
+        return Err(LocalReleaseCheckpointFailure::UnauthorizedCapability);
     }
     let _ = authorization_deadline(authorization)?;
     Ok(())
@@ -630,26 +630,26 @@ fn validate_authorization(authorization: &MaintenanceAuthorizationGrant) -> Resu
 
 fn authorization_deadline(
     authorization: &MaintenanceAuthorizationGrant,
-) -> Result<ShutdownDeadline, LocalReleaseCheckpointError> {
+) -> Result<ShutdownDeadline, LocalReleaseCheckpointFailure> {
     let now = unix_millis()?;
     let remaining = authorization
         .deadline_unix_millis()
         .checked_sub(now)
         .filter(|remaining| *remaining > 0)
-        .ok_or(LocalReleaseCheckpointError::AuthorizationExpired)?;
+        .ok_or(LocalReleaseCheckpointFailure::AuthorizationExpired)?;
     Ok(ShutdownDeadline::after(Duration::from_millis(remaining)))
 }
 
-fn unix_millis() -> Result<u64, LocalReleaseCheckpointError> {
+fn unix_millis() -> Result<u64, LocalReleaseCheckpointFailure> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(LocalReleaseCheckpointError::Clock)?
+        .map_err(LocalReleaseCheckpointFailure::Clock)?
         .as_millis();
-    u64::try_from(millis).map_err(|_| LocalReleaseCheckpointError::ClockOverflow)
+    u64::try_from(millis).map_err(|_| LocalReleaseCheckpointFailure::ClockOverflow)
 }
 
-fn io_error(operation: &'static str, path: &Path, source: io::Error) -> LocalReleaseCheckpointError {
-    LocalReleaseCheckpointError::Io {
+fn io_error(operation: &'static str, path: &Path, source: io::Error) -> LocalReleaseCheckpointFailure {
+    LocalReleaseCheckpointFailure::Io {
         operation,
         path: path.to_path_buf(),
         source,
@@ -658,7 +658,7 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> LocalRel
 
 /// Local release-checkpoint failure.
 #[derive(Debug, Error)]
-pub(crate) enum LocalReleaseCheckpointError {
+pub(crate) enum LocalReleaseCheckpointFailure {
     #[error("release checkpoint authorization has expired")]
     AuthorizationExpired,
     #[error("authorization does not grant release_checkpoint")]
@@ -746,8 +746,8 @@ mod tests {
     #[test]
     fn contained_checkpoint_store_error_is_forwarded_without_remapping_or_redaction_loss() {
         for backend_error in [
-            LocalReleaseCheckpointError::Artifact(nested_store_error()),
-            LocalReleaseCheckpointError::Barrier {
+            LocalReleaseCheckpointFailure::Artifact(nested_store_error()),
+            LocalReleaseCheckpointFailure::Barrier {
                 source: Box::new(nested_store_error()),
             },
         ] {
@@ -774,14 +774,14 @@ mod tests {
     fn local_checkpoint_leaf_mapping_keeps_operation_component_and_typed_source() {
         let error = local_checkpoint_error(
             StoreOperation::Read,
-            LocalReleaseCheckpointError::InvalidConfiguration("private-root".to_string()),
+            LocalReleaseCheckpointFailure::InvalidConfiguration("private-root".to_string()),
         );
 
         assert_eq!(&rocketmq_error::STORAGE_REQUEST_INVALID, error.descriptor());
         assert_eq!(StoreOperation::Read, error.operation());
         assert_eq!(StoreComponent::Configuration, error.component());
         assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<LocalReleaseCheckpointError>())
+            .and_then(|source| source.downcast_ref::<LocalReleaseCheckpointFailure>())
             .is_some());
         assert!(error
             .public_view()

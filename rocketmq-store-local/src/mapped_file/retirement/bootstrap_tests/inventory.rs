@@ -22,18 +22,19 @@ use crate::mapped_file::retirement::bootstrap::inventory::preflight_bootstrap_na
 #[cfg(not(windows))]
 use crate::mapped_file::retirement::bootstrap::inventory::scan_bootstrap_inventory;
 #[cfg(not(windows))]
-use crate::mapped_file::retirement::bootstrap::inventory::BootstrapInventoryError;
 use crate::mapped_file::retirement::bootstrap::inventory::BootstrapInventoryLimits;
 #[cfg(target_os = "linux")]
 use crate::mapped_file::retirement::sidecar::IncarnationPhase;
 #[cfg(target_os = "linux")]
 use crate::mapped_file::retirement::sidecar::SnapshotEntry;
+#[cfg(target_os = "linux")]
 use crate::mapped_file::retirement::sidecar::StoreMeta;
 
 #[cfg(target_os = "linux")]
 use super::bootstrap_managed_lifecycle_under_exclusive_lock;
+#[cfg(target_os = "linux")]
 use super::support::store_uuid;
-
+#[cfg(target_os = "linux")]
 fn meta() -> StoreMeta {
     StoreMeta {
         store_uuid: store_uuid(),
@@ -108,10 +109,7 @@ fn inventory_rejects_hardlinks_and_zero_length_segments() {
         BootstrapInventoryLimits::default(),
     )
     .expect_err("external hardlink aliases are unsafe");
-    assert!(
-        matches!(error, BootstrapInventoryError::UnsafeNamespace(_)),
-        "unexpected failure: {error}"
-    );
+    assert_eq!(error.category_for_test(), "unsafe-namespace");
 
     let empty = tempfile::tempdir().expect("empty root");
     fs::create_dir(empty.path().join("commitlog")).expect("commitlog directory");
@@ -122,10 +120,7 @@ fn inventory_rejects_hardlinks_and_zero_length_segments() {
         BootstrapInventoryLimits::default(),
     )
     .expect_err("zero-length segments are not active incarnations");
-    assert!(
-        matches!(error, BootstrapInventoryError::InvalidSegment(_)),
-        "unexpected failure: {error}"
-    );
+    assert_eq!(error.category_for_test(), "invalid-segment");
 
     let linked = tempfile::tempdir().expect("symlink root");
     fs::create_dir(linked.path().join("commitlog")).expect("commitlog directory");
@@ -136,10 +131,7 @@ fn inventory_rejects_hardlinks_and_zero_length_segments() {
         BootstrapInventoryLimits::default(),
     )
     .expect_err("a symlink can hide additional numeric segments");
-    assert!(
-        matches!(error, BootstrapInventoryError::UnsafeNamespace(_)),
-        "unexpected failure: {error}"
-    );
+    assert_eq!(error.category_for_test(), "unsafe-namespace");
 }
 
 #[cfg(target_os = "linux")]
@@ -156,10 +148,7 @@ fn unsupported_numeric_store_files_are_rejected_before_bootstrap_artifacts_exist
     )
     .expect_err("numeric files outside mapped-file queues are not lifecycle incarnations");
 
-    assert!(
-        matches!(error, BootstrapInventoryError::InvalidSegment(_)),
-        "unexpected failure: {error}"
-    );
+    assert_eq!(error.category_for_test(), "invalid-segment");
     assert!(!root.path().join(".rocketmq-lifecycle").exists());
 }
 
@@ -175,7 +164,7 @@ fn public_bootstrap_entry_runs_namespace_preflight_before_any_write() {
     let error = unsafe { bootstrap_managed_lifecycle_under_exclusive_lock(&root_file) }
         .expect_err("unsupported numeric files must block bootstrap before mutation");
 
-    assert_eq!(error.code().as_str(), "storage.read.failed");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
     assert!(!root.path().join(".rocketmq-lifecycle").exists());
 }
 
@@ -192,7 +181,7 @@ fn mixed_queue_lengths_are_rejected_before_bootstrap_artifacts_exist() {
     let error = unsafe { bootstrap_managed_lifecycle_under_exclusive_lock(&root_file) }
         .expect_err("mixed queue lengths must block bootstrap before mutation");
 
-    assert_eq!(error.code().as_str(), "storage.read.failed");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
     assert!(!root.path().join(".rocketmq-lifecycle").exists());
 }
 
@@ -204,8 +193,5 @@ fn bootstrap_inventory_is_unsupported_without_a_qualified_writer_platform() {
 
     let error = scan_bootstrap_inventory(&root_file, &meta(), BootstrapInventoryLimits::default())
         .expect_err("unsupported platforms cannot mint bootstrap inventory evidence");
-    assert!(
-        matches!(error, BootstrapInventoryError::UnsupportedPlatform),
-        "unexpected failure: {error}"
-    );
+    assert_eq!(error.category_for_test(), "unsupported-platform");
 }

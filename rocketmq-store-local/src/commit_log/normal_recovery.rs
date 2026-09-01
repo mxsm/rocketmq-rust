@@ -16,7 +16,6 @@
 
 use super::recovery::NormalRecoveryAction;
 use super::recovery::NormalRecoveryEvent;
-use super::recovery::NormalRecoveryOffsetViolation;
 use super::recovery::NormalRecoveryState;
 
 /// One adapter-produced record consumed by normal segment recovery.
@@ -71,7 +70,7 @@ pub enum NormalRecoverySegmentOutcome<E> {
     /// The record adapter failed with its original error.
     AdapterFailed(E),
     /// The offset state machine rejected an event.
-    StateFailed(NormalRecoveryOffsetViolation),
+    StateFailed,
 }
 
 impl NormalRecoveryState {
@@ -96,8 +95,8 @@ impl NormalRecoveryState {
         let started_action = match self.apply(NormalRecoveryEvent::SegmentStarted {
             base_offset: segment_base,
         }) {
-            Ok(action) => action,
-            Err(error) => return NormalRecoverySegmentOutcome::StateFailed(error),
+            Some(action) => action,
+            None => return NormalRecoverySegmentOutcome::StateFailed,
         };
         on_segment_started();
         match started_action {
@@ -124,8 +123,8 @@ impl NormalRecoveryState {
                         relative_start,
                         size,
                     }) {
-                        Ok(action) => action,
-                        Err(error) => return NormalRecoverySegmentOutcome::StateFailed(error),
+                        Some(action) => action,
+                        None => return NormalRecoverySegmentOutcome::StateFailed,
                     };
                     match action {
                         NormalRecoveryAction::ContinueRecord => {
@@ -142,14 +141,14 @@ impl NormalRecoveryState {
                 NormalRecoveryRecord::Blank { mut record } => {
                     observe(NormalRecoveryObservation::Blank, &mut record);
                     match self.apply(NormalRecoveryEvent::Blank) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => {}
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => {
+                        Some(NormalRecoveryAction::ContinueRecord) => {}
+                        Some(NormalRecoveryAction::ContinueNextSegment) => {
                             return NormalRecoverySegmentOutcome::ContinueNextSegment;
                         }
-                        Ok(NormalRecoveryAction::StopRecovery) => {
+                        Some(NormalRecoveryAction::StopRecovery) => {
                             return NormalRecoverySegmentOutcome::StopRecovery;
                         }
-                        Err(error) => return NormalRecoverySegmentOutcome::StateFailed(error),
+                        None => return NormalRecoverySegmentOutcome::StateFailed,
                     }
                 }
                 NormalRecoveryRecord::Invalid {
@@ -158,25 +157,25 @@ impl NormalRecoveryState {
                 } => {
                     observe(NormalRecoveryObservation::Invalid { relative_start }, &mut record);
                     match self.apply(NormalRecoveryEvent::InvalidRecord) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => {}
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => {
+                        Some(NormalRecoveryAction::ContinueRecord) => {}
+                        Some(NormalRecoveryAction::ContinueNextSegment) => {
                             return NormalRecoverySegmentOutcome::ContinueNextSegment;
                         }
-                        Ok(NormalRecoveryAction::StopRecovery) => {
+                        Some(NormalRecoveryAction::StopRecovery) => {
                             return NormalRecoverySegmentOutcome::StopRecovery;
                         }
-                        Err(error) => return NormalRecoverySegmentOutcome::StateFailed(error),
+                        None => return NormalRecoverySegmentOutcome::StateFailed,
                     }
                 }
                 NormalRecoveryRecord::SourceEnded => match self.apply(NormalRecoveryEvent::SourceEnded) {
-                    Ok(NormalRecoveryAction::ContinueRecord) => {}
-                    Ok(NormalRecoveryAction::ContinueNextSegment) => {
+                    Some(NormalRecoveryAction::ContinueRecord) => {}
+                    Some(NormalRecoveryAction::ContinueNextSegment) => {
                         return NormalRecoverySegmentOutcome::ContinueNextSegment;
                     }
-                    Ok(NormalRecoveryAction::StopRecovery) => {
+                    Some(NormalRecoveryAction::StopRecovery) => {
                         return NormalRecoverySegmentOutcome::StopRecovery;
                     }
-                    Err(error) => return NormalRecoverySegmentOutcome::StateFailed(error),
+                    None => return NormalRecoverySegmentOutcome::StateFailed,
                 },
             }
         }

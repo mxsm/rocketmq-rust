@@ -25,7 +25,6 @@ use crate::mapped_file::kernel::ReferenceResource;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
 use crate::mapped_file::MappedFileAdmissionState;
-use crate::mapped_file::MappedFileError;
 use crate::mapped_file::MappedMemory;
 use crate::mapped_file::MappedWriteLease;
 use crate::mapped_file::NativeMappedMemory;
@@ -155,7 +154,10 @@ fn active_writable_generation_never_exposes_a_cross_call_mapped_slice() {
 #[test]
 fn seal_waits_for_admitted_writer_then_rejects_new_writes() {
     let (_directory, mapped_file) = eager_file(16);
-    let mut write = mapped_file.reserve_write(4).expect("write admitted before seal");
+    let mut write = mapped_file
+        .reserve_write(4)
+        .expect("write admitted before seal")
+        .expect("valid reservation");
     write.buffer_mut().copy_from_slice(b"data");
     let (sealed_tx, sealed_rx) = mpsc::sync_channel(1);
 
@@ -178,21 +180,11 @@ fn seal_waits_for_admitted_writer_then_rejects_new_writes() {
             MappedFileAdmissionState::SealedReadable
         );
         assert!(matches!(sealed_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-        assert_eq!(write.commit(4, None).expect("admitted writer completes"), 4);
+        assert_eq!(write.commit(4, None).expect("admitted writer completes"), Some(4));
         assert!(sealed_rx.recv().expect("seal worker completes").expect("seal succeeds"));
     });
 
-    let write_error = match mapped_file.reserve_write(1) {
-        Ok(_) => panic!("sealed or closing lifecycle rejects writers"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        std::error::Error::source(&write_error).and_then(|source| source.downcast_ref::<MappedFileError>()),
-        Some(MappedFileError::Unavailable {
-            state: MappedFileAdmissionState::SealedReadable,
-            ..
-        })
-    ));
+    assert!(matches!(mapped_file.reserve_write(1), Ok(None)));
     let read = mapped_file
         .try_mapped_read_lease(0, 4)
         .expect("read admission")
@@ -290,13 +282,7 @@ fn close_winning_lazy_publication_drops_candidate_and_never_late_publishes() {
     assert_eq!(mapped_file.lifecycle_snapshot().active_leases, 1);
     control.release_initializer.wait();
 
-    assert!(matches!(
-        worker.join().expect("lazy initializer thread"),
-        Err(MappedFileError::Unavailable {
-            state: MappedFileAdmissionState::Closing,
-            ..
-        })
-    ));
+    assert!(matches!(worker.join().expect("lazy initializer thread"), Ok(None)));
     assert!(!mapped_file.is_mapped());
     assert_eq!(control.candidate_drops.load(Ordering::SeqCst), 1);
     let metrics = mapped_file.get_metrics().expect("mapped-file metrics");

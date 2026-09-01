@@ -159,9 +159,6 @@ fn unsupported_platform_is_rejected_before_any_artifact_is_created() {
     let error = prepare_initial_bootstrap_foundation(root_file, &store_meta())
         .expect_err("this platform is not Wave-B writer-qualified");
 
-    assert!(matches!(
-        error,
-        super::InitialBootstrapFoundationError::UnsupportedPlatform(_)
-    ));
+    assert_eq!(error.category_for_test(), "unsupported-platform");
     assert!(!root.path().join(".rocketmq-lifecycle").exists());
 }

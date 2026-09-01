@@ -21,18 +21,18 @@ impl<O> RetirementRegistry<O> {
     /// Reconstructs every durable retirement only after namespace reconciliation succeeded.
     pub(in crate::mapped_file::retirement) fn from_reconciled_state(
         reconciled: &ReconciledLedgerState,
-    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryViolation> {
+    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryFault> {
         Self::rebuild(reconciled.recovered())
     }
 
     #[cfg(test)]
     pub(super) fn from_recovered_state(
         recovered: &RecoveredLedgerState,
-    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryViolation> {
+    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryFault> {
         Self::rebuild(recovered)
     }
 
-    fn rebuild(recovered: &RecoveredLedgerState) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryViolation> {
+    fn rebuild(recovered: &RecoveredLedgerState) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryFault> {
         let registry = Self::new(recovered.store_uuid(), recovered.ticket_high_water());
         let mut rebuilt = RegistryState {
             ticket_high_water: recovered.ticket_high_water(),
@@ -46,12 +46,12 @@ impl<O> RetirementRegistry<O> {
         };
         let mut work = Vec::new();
         work.try_reserve_exact(recovered.retirement_count())
-            .map_err(|_| RegistryViolation::RecoveryAllocationFailed)?;
+            .map_err(RegistryFault::Allocation)?;
 
         let replay_frontier = DurableStagePosition::replayed(recovered.last_sequence())?;
         for (entry, observed_replacement_key) in recovered.retirement_entries() {
             if entry.incarnation.store_uuid() != recovered.store_uuid() {
-                return Err(RegistryViolation::StoreUuidMismatch);
+                return Err(RegistryViolation::StoreUuidMismatch.into());
             }
             let operation = RetirementOperation::new(
                 entry.incarnation,

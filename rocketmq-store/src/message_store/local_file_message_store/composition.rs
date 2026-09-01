@@ -149,6 +149,7 @@ impl LocalFileMessageStore {
 
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -157,6 +158,7 @@ impl LocalFileMessageStore {
     ) -> Self {
         Self::try_new(
             message_store_config,
+            micro_batch_policy,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -168,6 +170,7 @@ impl LocalFileMessageStore {
 
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -176,6 +179,7 @@ impl LocalFileMessageStore {
     ) -> Result<Self, StoreError> {
         Self::try_new_with_telemetry(
             message_store_config,
+            micro_batch_policy,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -187,6 +191,7 @@ impl LocalFileMessageStore {
 
     pub fn try_new_with_telemetry(
         message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -328,6 +333,7 @@ impl LocalFileMessageStore {
         let mut commit_log = CommitLog::try_new(
             runtime_scope.clone(),
             message_store_config.clone(),
+            micro_batch_policy,
             Arc::clone(&store_runtime_state),
             broker_config.clone(),
             store_context,

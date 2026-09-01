@@ -20,6 +20,12 @@ use std::os::fd::AsRawFd;
 use std::os::fd::RawFd;
 
 #[cfg(unix)]
+use rocketmq_store_api::StoreComponent;
+#[cfg(unix)]
+use rocketmq_store_api::StoreError;
+#[cfg(unix)]
+use rocketmq_store_api::StoreOperation;
+#[cfg(unix)]
 use tokio::io::AsyncWrite;
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt;
@@ -38,13 +44,10 @@ use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferStats;
 #[cfg(unix)]
 use crate::transfer::batch::TransferBatch;
-use crate::transfer::error::TransferError;
 #[cfg(unix)]
+use crate::transfer::error::TransferFailure;
 #[cfg(unix)]
 use crate::transfer::segment::FileRange;
-#[cfg(unix)]
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
 
 #[cfg(unix)]
 /// Legacy injectable sendfile seam for explicitly standalone/unmanaged file ranges.
@@ -144,24 +147,30 @@ where
     W: AsyncWrite + SendfileWriteTarget + Unpin,
     O: SendfileOperation,
 {
-    /// Sends one framed batch, reporting failures through the storage facade.
+    /// Sends one batch through the sendfile engine or its vectored fallback.
+    ///
+    /// Returns `Ok(None)` when the batch is rejected by the transfer contract before I/O.
     ///
     /// # Errors
     ///
-    /// Returns `STORAGE_IO_FAILED` for replication write failures and
-    /// `STORAGE_REQUEST_INVALID` for malformed batches.
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
-        self.send_batch_typed(batch)
+    /// Returns a storage error when an operational HA write fails.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<Option<TransferStats>, StoreError> {
+        self.send_batch_checked(batch)
             .await
-            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+            .map_err(|error| error.into_store_error(StoreOperation::Replicate, StoreComponent::HighAvailability))
     }
 
-    pub(crate) async fn send_batch_typed(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
+    pub(crate) async fn send_batch_checked(
+        &mut self,
+        batch: &TransferBatch,
+    ) -> Result<Option<TransferStats>, TransferFailure> {
         let Some(file_ranges) = batch_file_ranges(batch) else {
             let mut fallback = VectoredTransferEngine::new(&mut self.writer);
-            let mut stats = fallback.send_batch_typed(batch).await?;
+            let Some(mut stats) = fallback.send_batch_checked(batch).await? else {
+                return Ok(None);
+            };
             stats.fallback_bytes = stats.body_bytes;
-            return Ok(stats);
+            return Ok(Some(stats));
         };
 
         let expected_header_calls = usize::from(!batch.frame_header.is_empty());
@@ -186,7 +195,7 @@ where
                         tokio::task::yield_now().await;
                         continue;
                     }
-                    Err(error) => return Err(TransferError::Io(error)),
+                    Err(error) => return Err(TransferFailure::Io(error)),
                 };
 
                 sendfile_call_count += 1;
@@ -202,7 +211,7 @@ where
 
         self.writer.flush().await?;
 
-        Ok(TransferStats {
+        Ok(Some(TransferStats {
             engine: TransferEngineKind::Sendfile,
             bytes_written,
             body_bytes: batch.total_body_len,
@@ -212,7 +221,7 @@ where
             sendfile_bytes,
             fallback_bytes: 0,
             partial_write_count,
-        })
+        }))
     }
 }
 

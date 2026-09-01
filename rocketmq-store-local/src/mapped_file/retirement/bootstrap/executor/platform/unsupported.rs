@@ -14,7 +14,7 @@
 
 use std::fs::File;
 
-use super::InitialBootstrapFoundationError;
+use super::InitialBootstrapFoundationFailure;
 use super::PreparedInitialBootstrapFoundation;
 use crate::mapped_file::retirement::bootstrap::types::ImmutableArtifactProgress;
 use crate::mapped_file::retirement::bootstrap::types::ImmutableArtifactStep;
@@ -30,7 +30,7 @@ impl InitialArtifactStore {
     pub(super) fn inspect_snapshot(
         &self,
         _planned: &PlannedSnapshot,
-    ) -> Result<ImmutableArtifactProgress, InitialBootstrapFoundationError> {
+    ) -> Result<ImmutableArtifactProgress, InitialBootstrapFoundationFailure> {
         Err(unsupported())
     }
 
@@ -38,14 +38,14 @@ impl InitialArtifactStore {
         &mut self,
         _planned: &PlannedSnapshot,
         _step: ImmutableArtifactStep,
-    ) -> Result<(), InitialBootstrapFoundationError> {
+    ) -> Result<(), InitialBootstrapFoundationFailure> {
         Err(unsupported())
     }
 
     pub(super) fn inspect_initial_marker(
         &self,
         _planned: &PlannedInitialMarker,
-    ) -> Result<InitialMarkerProgress, InitialBootstrapFoundationError> {
+    ) -> Result<InitialMarkerProgress, InitialBootstrapFoundationFailure> {
         Err(unsupported())
     }
 
@@ -53,7 +53,7 @@ impl InitialArtifactStore {
         &mut self,
         _planned: &PlannedInitialMarker,
         _step: InitialMarkerStep,
-    ) -> Result<(), InitialBootstrapFoundationError> {
+    ) -> Result<(), InitialBootstrapFoundationFailure> {
         Err(unsupported())
     }
 }
@@ -61,12 +61,12 @@ impl InitialArtifactStore {
 pub(super) fn prepare(
     _store_root: File,
     _expected_meta: &StoreMeta,
-) -> Result<PreparedInitialBootstrapFoundation, InitialBootstrapFoundationError> {
+) -> Result<PreparedInitialBootstrapFoundation, InitialBootstrapFoundationFailure> {
     Err(unsupported())
 }
 
-fn unsupported() -> InitialBootstrapFoundationError {
-    InitialBootstrapFoundationError::unsupported(
+fn unsupported() -> InitialBootstrapFoundationFailure {
+    InitialBootstrapFoundationFailure::unsupported(
         "this target lacks a qualified handle-relative initial-bootstrap writer",
     )
 }

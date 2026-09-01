@@ -28,7 +28,6 @@ use rocketmq_runtime::ResourcePermit;
 use thiserror::Error;
 
 use crate::base::transient_store_pool::TransientStorePool;
-use crate::mapped_file::retirement::service::ManagedIncarnationCreationError;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::ManagedIncarnationCreateRequest;
 use crate::mapped_file::ManagedLifecycleRuntime;
@@ -49,7 +48,7 @@ impl ManagedAllocationContext {
 /// Failure returned by the Store-owned managed allocation worker.
 #[doc(hidden)]
 #[derive(Debug, Error)]
-pub(crate) enum ManagedMappedFileAllocationError {
+pub(crate) enum ManagedMappedFileAllocationFailure {
     #[error("managed lifecycle allocation worker is not running")]
     WorkerUnavailable,
     #[error("managed lifecycle authority is not installed on the allocation worker")]
@@ -63,40 +62,14 @@ pub(crate) enum ManagedMappedFileAllocationError {
     #[error("managed mapped-file allocation budget rejected the request: {0}")]
     Budget(#[source] rocketmq_runtime::BudgetAcquireError),
     #[error(transparent)]
-    Creation(#[from] ManagedIncarnationCreationError),
-}
-
-impl ManagedMappedFileAllocationError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Invalid sizes and paths are invalid requests, missing worker or
-    /// lifecycle authority and an exhausted allocation budget are backend
-    /// unavailability, and creation faults are write failures. The complete
-    /// leaf is preserved as the typed source.
-    pub(crate) fn into_store_error(self) -> rocketmq_store_api::StoreError {
-        use rocketmq_store_api::StoreComponent;
-        use rocketmq_store_api::StoreError;
-        use rocketmq_store_api::StoreOperation;
-        let descriptor = match &self {
-            Self::InvalidFileSize(_) | Self::QueueOutsideStoreRoot | Self::InvalidQueuePath => {
-                &rocketmq_error::STORAGE_REQUEST_INVALID
-            }
-            Self::WorkerUnavailable | Self::LifecycleUnavailable | Self::Budget(_) => {
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
-            }
-            Self::Creation(_) => &rocketmq_error::STORAGE_WRITE_FAILED,
-        };
-        StoreError::new(descriptor, StoreOperation::Append)
-            .in_component(StoreComponent::MappedFile)
-            .with_source(self)
-    }
+    Store(#[from] rocketmq_store_api::StoreError),
 }
 
 pub(super) struct ManagedAllocationRequest {
     runtime: ManagedLifecycleRuntime,
     queue: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
     request: Mutex<Option<ManagedIncarnationCreateRequest>>,
-    result: Mutex<Option<Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationError>>>,
+    result: Mutex<Option<Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationFailure>>>,
     completion: Condvar,
     _permit: ResourcePermit,
 }
@@ -105,10 +78,6 @@ impl ManagedAllocationRequest {
     #[allow(
         clippy::too_many_arguments,
         reason = "the worker request binds one exact queue, lifecycle runtime, segment, nonce, pool, and budget permit"
-    )]
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
     )]
     pub(super) fn new(
         context: ManagedAllocationContext,
@@ -119,10 +88,11 @@ impl ManagedAllocationRequest {
         request_id: u64,
         transient_store_pool: Option<TransientStorePool>,
         permit: ResourcePermit,
-    ) -> Result<Self, ManagedMappedFileAllocationError> {
+    ) -> Result<Self, ManagedMappedFileAllocationFailure> {
         let directory = relative_directory(&context.store_root, queue_path)?;
         let mut request =
-            ManagedIncarnationCreateRequest::new(&directory, segment_offset, file_size, creation_nonce(request_id))?;
+            ManagedIncarnationCreateRequest::new(&directory, segment_offset, file_size, creation_nonce(request_id))
+                .ok_or(ManagedMappedFileAllocationFailure::InvalidFileSize(file_size))?;
         if let Some(pool) = transient_store_pool {
             request = request.with_transient_store_pool(pool);
         }
@@ -143,35 +113,31 @@ impl ManagedAllocationRequest {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         let result = match request {
-            Some(request) => self
-                .runtime
-                .create_mapped_file(&self.queue, request)
-                .map(|creation| creation.into_mapped_file())
-                .map_err(Into::into),
-            None => Err(ManagedMappedFileAllocationError::WorkerUnavailable),
+            Some(request) => match self.runtime.create_mapped_file(&self.queue, request) {
+                Ok(Some(creation)) => Ok(creation.into_mapped_file()),
+                Ok(None) => Err(ManagedMappedFileAllocationFailure::InvalidQueuePath),
+                Err(error) => Err(ManagedMappedFileAllocationFailure::Store(error)),
+            },
+            None => Err(ManagedMappedFileAllocationFailure::WorkerUnavailable),
         };
         self.complete(result);
     }
 
     pub(super) fn cancel(&self) {
-        self.complete(Err(ManagedMappedFileAllocationError::WorkerUnavailable));
+        self.complete(Err(ManagedMappedFileAllocationFailure::WorkerUnavailable));
     }
 
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(super) fn wait(
         &self,
         worker_completed: &AtomicBool,
-    ) -> Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationError> {
+    ) -> Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationFailure> {
         let mut result = self.result.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         loop {
             if let Some(result) = result.take() {
                 return result;
             }
             if worker_completed.load(Ordering::Acquire) {
-                return Err(ManagedMappedFileAllocationError::WorkerUnavailable);
+                return Err(ManagedMappedFileAllocationFailure::WorkerUnavailable);
             }
             let waited = self
                 .completion
@@ -181,7 +147,7 @@ impl ManagedAllocationRequest {
         }
     }
 
-    fn complete(&self, value: Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationError>) {
+    fn complete(&self, value: Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationFailure>) {
         let mut result = self.result.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if result.is_none() {
             *result = Some(value);
@@ -190,27 +156,23 @@ impl ManagedAllocationRequest {
     }
 }
 
-#[allow(
-    clippy::result_large_err,
-    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-)]
-fn relative_directory(store_root: &Path, queue_path: &Path) -> Result<String, ManagedMappedFileAllocationError> {
+fn relative_directory(store_root: &Path, queue_path: &Path) -> Result<String, ManagedMappedFileAllocationFailure> {
     let relative = queue_path
         .strip_prefix(store_root)
-        .map_err(|_| ManagedMappedFileAllocationError::QueueOutsideStoreRoot)?;
+        .map_err(|_| ManagedMappedFileAllocationFailure::QueueOutsideStoreRoot)?;
     let mut components = Vec::new();
     for component in relative.components() {
         let Component::Normal(component) = component else {
-            return Err(ManagedMappedFileAllocationError::InvalidQueuePath);
+            return Err(ManagedMappedFileAllocationFailure::InvalidQueuePath);
         };
         let component = component
             .to_str()
             .filter(|component| !component.is_empty())
-            .ok_or(ManagedMappedFileAllocationError::InvalidQueuePath)?;
+            .ok_or(ManagedMappedFileAllocationFailure::InvalidQueuePath)?;
         components.push(component);
     }
     if components.is_empty() {
-        return Err(ManagedMappedFileAllocationError::InvalidQueuePath);
+        return Err(ManagedMappedFileAllocationFailure::InvalidQueuePath);
     }
     Ok(components.join("/"))
 }
@@ -251,11 +213,11 @@ mod tests {
         );
         assert!(matches!(
             relative_directory(root, Path::new("another-root/commitlog")),
-            Err(ManagedMappedFileAllocationError::QueueOutsideStoreRoot)
+            Err(ManagedMappedFileAllocationFailure::QueueOutsideStoreRoot)
         ));
         assert!(matches!(
             relative_directory(root, root),
-            Err(ManagedMappedFileAllocationError::InvalidQueuePath)
+            Err(ManagedMappedFileAllocationFailure::InvalidQueuePath)
         ));
     }
 

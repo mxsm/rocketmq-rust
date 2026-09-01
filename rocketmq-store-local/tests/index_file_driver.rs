@@ -27,10 +27,14 @@ use rocketmq_store_local::index::file::IndexHeaderUpdate;
 use rocketmq_store_local::index::file::IndexPutOutcome;
 use rocketmq_store_local::index::file::IndexQueryOutcome;
 
+fn index_size(hash_slot_num: usize, index_num: usize) -> usize {
+    index_file_total_size(hash_slot_num, index_num).expect("valid test layout")
+}
+
 #[test]
 fn put_driver_writes_entry_and_slot_before_the_legacy_header_sequence() {
     let snapshot = IndexFileSnapshot::new(2, 8, 1, 0);
-    let storage = RefCell::new(vec![0_u8; index_file_total_size(2, 8).unwrap()]);
+    let storage = RefCell::new(vec![0_u8; index_size(2, 8)]);
     let updates = RefCell::new(Vec::new());
 
     let outcome = drive_index_put(
@@ -66,7 +70,7 @@ fn put_driver_writes_entry_and_slot_before_the_legacy_header_sequence() {
 #[test]
 fn put_driver_normalizes_chain_head_and_clamps_time_diff() {
     let snapshot = IndexFileSnapshot::new(1, 8, 3, 1_000_000);
-    let storage = RefCell::new(vec![0_u8; index_file_total_size(1, 8).unwrap()]);
+    let storage = RefCell::new(vec![0_u8; index_size(1, 8)]);
     write_bytes(&mut storage.borrow_mut(), 40, &IndexSlot(99).encode());
     let updates = RefCell::new(Vec::new());
 
@@ -120,7 +124,7 @@ fn put_driver_stops_before_io_when_full_or_invalid() {
 #[test]
 fn query_driver_walks_collision_chain_and_honors_time_and_result_limits() {
     let hash_slot_num = 1;
-    let storage = RefCell::new(vec![0_u8; index_file_total_size(hash_slot_num, 8).unwrap()]);
+    let storage = RefCell::new(vec![0_u8; index_size(hash_slot_num, 8)]);
     write_bytes(&mut storage.borrow_mut(), 40, &IndexSlot(3).encode());
     write_entry(&storage, hash_slot_num, 1, IndexEntry::new(7, 100, 0, 0));
     write_entry(&storage, hash_slot_num, 2, IndexEntry::new(8, 200, 1, 1));
@@ -158,7 +162,7 @@ fn query_driver_walks_collision_chain_and_honors_time_and_result_limits() {
 
 #[test]
 fn query_driver_reports_unavailable_storage_without_losing_prior_results() {
-    let storage = RefCell::new(vec![0_u8; index_file_total_size(1, 4).unwrap()]);
+    let storage = RefCell::new(vec![0_u8; index_size(1, 4)]);
     write_bytes(&mut storage.borrow_mut(), 40, &IndexSlot(2).encode());
     write_entry(&storage, 1, 2, IndexEntry::new(7, 200, 0, 1));
     let mut offsets = Vec::new();

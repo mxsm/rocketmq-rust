@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -27,13 +25,16 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use parking_lot::Mutex;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerPayloadStoreLocator;
 use rocketmq_store_api::TimerSnapshotFile;
 use sha2::Digest;
 use sha2::Sha256;
 use thiserror::Error;
 
-use crate::timer::partition_manifest::PartitionManifestError;
+use crate::timer::partition_manifest::PartitionManifestFailure;
 use crate::timer::partition_manifest::TimerPayloadPartitionKey;
 use crate::timer::partition_manifest::TimerPayloadPartitionManifest;
 use crate::timer::partition_manifest::TimerPayloadPartitionState;
@@ -72,7 +73,7 @@ impl TimerPayloadStoreConfig {
         }
     }
 
-    fn validate(&self) -> Result<(), TimerPayloadStoreError> {
+    fn validate(&self) -> Result<(), TimerPayloadStoreFailure> {
         if self.root.as_os_str().is_empty()
             || self.segment_bytes == 0
             || self.max_open_handles == 0
@@ -81,7 +82,7 @@ impl TimerPayloadStoreConfig {
             || self.max_partition_live_bytes == 0
             || self.max_record_bytes as u64 > self.segment_bytes
         {
-            return Err(TimerPayloadStoreError::InvalidConfig);
+            return Err(TimerPayloadStoreFailure::InvalidConfig);
         }
         Ok(())
     }
@@ -117,12 +118,7 @@ impl TimerPayloadStore {
     /// # Errors
     ///
     /// Returns an error when capacity limits are inconsistent.
-    /// Reports failures through the canonical storage facade.
-    pub fn new(config: TimerPayloadStoreConfig) -> Result<Self, StoreError> {
-        Self::new_typed(config).map_err(|error| error.into_store_error(StoreOperation::Load))
-    }
-
-    fn new_typed(config: TimerPayloadStoreConfig) -> Result<Self, TimerPayloadStoreError> {
+    fn new_checked(config: TimerPayloadStoreConfig) -> Result<Self, TimerPayloadStoreFailure> {
         config.validate()?;
         Ok(Self {
             config,
@@ -131,13 +127,7 @@ impl TimerPayloadStore {
     }
 
     /// Recovers every existing partition and truncates only incomplete active tails.
-    /// Reports failures through the canonical storage facade.
-    pub fn load(&self) -> Result<(), StoreError> {
-        self.load_typed()
-            .map_err(|error| error.into_store_error(StoreOperation::Load))
-    }
-
-    fn load_typed(&self) -> Result<(), TimerPayloadStoreError> {
+    fn load_checked(&self) -> Result<(), TimerPayloadStoreFailure> {
         std::fs::create_dir_all(&self.config.root)?;
         let mut discovered = Vec::new();
         for day_entry in std::fs::read_dir(&self.config.root)? {
@@ -186,33 +176,27 @@ impl TimerPayloadStore {
     ///
     /// A failure may leave unreferenced payload records. Replaying the source is idempotent at the
     /// Timeline layer, and orphan GC removes records not referenced by any non-terminal state.
-    /// Reports failures through the canonical storage facade.
-    pub fn append_batch(&self, records: &[TimerPayloadRecordV1]) -> Result<Vec<TimerPayloadStoreLocator>, StoreError> {
-        self.append_batch_typed(records)
-            .map_err(|error| error.into_store_error(StoreOperation::Append))
-    }
-
-    fn append_batch_typed(
+    fn append_batch_checked(
         &self,
         records: &[TimerPayloadRecordV1],
-    ) -> Result<Vec<TimerPayloadStoreLocator>, TimerPayloadStoreError> {
+    ) -> Result<Vec<TimerPayloadStoreLocator>, TimerPayloadStoreFailure> {
         if records.is_empty() {
             return Ok(Vec::new());
         }
         let mut prepared = Vec::with_capacity(records.len());
         let mut batch_bytes = 0usize;
         for record in records {
-            let encoded = record.encode()?;
+            let encoded = record.encode_checked()?;
             if encoded.len() > self.config.max_record_bytes {
-                return Err(TimerPayloadStoreError::RecordLimitExceeded(encoded.len()));
+                return Err(TimerPayloadStoreFailure::RecordLimitExceeded(encoded.len()));
             }
             batch_bytes = batch_bytes.saturating_add(encoded.len());
             if batch_bytes > self.config.batch_bytes {
-                return Err(TimerPayloadStoreError::BatchLimitExceeded(batch_bytes));
+                return Err(TimerPayloadStoreFailure::BatchLimitExceeded(batch_bytes));
             }
             prepared.push((
                 TimerPayloadPartitionKey {
-                    due_day_utc: record.due_day_utc()?,
+                    due_day_utc: record.due_day_utc_checked()?,
                     lane: record.lane,
                 },
                 encoded,
@@ -229,13 +213,13 @@ impl TimerPayloadStore {
                 .partitions
                 .get(&partition)
                 .copied()
-                .ok_or(TimerPayloadStoreError::PartitionMissing)?;
+                .ok_or(TimerPayloadStoreFailure::PartitionMissing)?;
             if current.manifest.state != TimerPayloadPartitionState::Open {
-                return Err(TimerPayloadStoreError::PartitionNotOpen(partition));
+                return Err(TimerPayloadStoreFailure::PartitionNotOpen(partition));
             }
             let encoded_len = encoded.len() as u64;
             if current.manifest.live_bytes.saturating_add(encoded_len) > self.config.max_partition_live_bytes {
-                return Err(TimerPayloadStoreError::PartitionLimitExceeded(partition));
+                return Err(TimerPayloadStoreFailure::PartitionLimitExceeded(partition));
             }
 
             let mut segment_id = current.manifest.active_segment_id;
@@ -263,14 +247,15 @@ impl TimerPayloadStore {
                 partition.lane,
                 segment_id,
                 segment_len,
-                u32::try_from(encoded.len()).map_err(|_| TimerPayloadStoreError::RecordLimitExceeded(encoded.len()))?,
+                u32::try_from(encoded.len())
+                    .map_err(|_| TimerPayloadStoreFailure::RecordLimitExceeded(encoded.len()))?,
                 checksum,
             )
-            .map_err(|_| TimerPayloadStoreError::RecordLimitExceeded(encoded.len()))?;
+            .map_err(|_| TimerPayloadStoreFailure::RecordLimitExceeded(encoded.len()))?;
             let runtime = state
                 .partitions
                 .get_mut(&partition)
-                .ok_or(TimerPayloadStoreError::PartitionMissing)?;
+                .ok_or(TimerPayloadStoreFailure::PartitionMissing)?;
             runtime.manifest.active_segment_id = segment_id;
             runtime.manifest.active_segment_len = segment_len.saturating_add(encoded_len);
             runtime.manifest.record_count = runtime.manifest.record_count.saturating_add(1);
@@ -288,7 +273,7 @@ impl TimerPayloadStore {
             state
                 .partitions
                 .get_mut(&partition)
-                .ok_or(TimerPayloadStoreError::PartitionMissing)?
+                .ok_or(TimerPayloadStoreFailure::PartitionMissing)?
                 .manifest
                 .persist(&path)?;
         }
@@ -296,13 +281,10 @@ impl TimerPayloadStore {
     }
 
     /// Reads and verifies one durable payload locator.
-    /// Reports failures through the canonical storage facade.
-    pub fn read(&self, locator: TimerPayloadStoreLocator) -> Result<TimerPayloadRecordV1, StoreError> {
-        self.read_typed(locator)
-            .map_err(|error| error.into_store_error(StoreOperation::Read))
-    }
-
-    fn read_typed(&self, locator: TimerPayloadStoreLocator) -> Result<TimerPayloadRecordV1, TimerPayloadStoreError> {
+    fn read_checked(
+        &self,
+        locator: TimerPayloadStoreLocator,
+    ) -> Result<TimerPayloadRecordV1, TimerPayloadStoreFailure> {
         let partition = TimerPayloadPartitionKey {
             due_day_utc: locator.due_day_utc(),
             lane: locator.lane(),
@@ -313,23 +295,17 @@ impl TimerPayloadStore {
         let mut encoded = vec![0u8; locator.length() as usize];
         file.read_exact(&mut encoded)?;
         if TimerPayloadRecordV1::checksum(&encoded)? != locator.checksum() {
-            return Err(TimerPayloadStoreError::LocatorChecksumMismatch);
+            return Err(TimerPayloadStoreFailure::LocatorChecksumMismatch);
         }
-        let record = TimerPayloadRecordV1::decode(&encoded)?;
-        if record.due_day_utc()? != partition.due_day_utc || record.lane != partition.lane {
-            return Err(TimerPayloadStoreError::LocatorPartitionMismatch);
+        let record = TimerPayloadRecordV1::decode_checked(&encoded)?;
+        if record.due_day_utc_checked()? != partition.due_day_utc || record.lane != partition.lane {
+            return Err(TimerPayloadStoreFailure::LocatorPartitionMismatch);
         }
         Ok(record)
     }
 
     /// Seals one partition after its UTC day is closed for new materialization.
-    /// Reports failures through the canonical storage facade.
-    pub fn seal_partition(&self, key: TimerPayloadPartitionKey) -> Result<(), StoreError> {
-        self.seal_partition_typed(key)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn seal_partition_typed(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreError> {
+    fn seal_partition_checked(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreFailure> {
         self.transition_partition(
             key,
             TimerPayloadPartitionState::Open,
@@ -338,13 +314,7 @@ impl TimerPayloadStore {
     }
 
     /// Marks a sealed partition eligible for whole-partition GC.
-    /// Reports failures through the canonical storage facade.
-    pub fn mark_gc_eligible(&self, key: TimerPayloadPartitionKey) -> Result<(), StoreError> {
-        self.mark_gc_eligible_typed(key)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn mark_gc_eligible_typed(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreError> {
+    fn mark_gc_eligible_checked(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreFailure> {
         self.transition_partition(
             key,
             TimerPayloadPartitionState::Sealed,
@@ -353,25 +323,13 @@ impl TimerPayloadStore {
     }
 
     /// Deletes a GC-eligible partition only after state, snapshot, and replication fences agree.
-    /// Reports failures through the canonical storage facade.
-    pub fn gc_partition(
+    fn gc_partition_checked(
         &self,
         key: TimerPayloadPartitionKey,
         no_live_timeline_references: bool,
         snapshot_safe: bool,
         replication_safe: bool,
-    ) -> Result<bool, StoreError> {
-        self.gc_partition_typed(key, no_live_timeline_references, snapshot_safe, replication_safe)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn gc_partition_typed(
-        &self,
-        key: TimerPayloadPartitionKey,
-        no_live_timeline_references: bool,
-        snapshot_safe: bool,
-        replication_safe: bool,
-    ) -> Result<bool, TimerPayloadStoreError> {
+    ) -> Result<bool, TimerPayloadStoreFailure> {
         if !no_live_timeline_references || !snapshot_safe || !replication_safe {
             return Ok(false);
         }
@@ -379,14 +337,14 @@ impl TimerPayloadStore {
         let canonical_root = self.config.root.canonicalize()?;
         let canonical_partition = partition_path.canonicalize()?;
         if !canonical_partition.starts_with(&canonical_root) || canonical_partition == canonical_root {
-            return Err(TimerPayloadStoreError::UnsafeGcPath);
+            return Err(TimerPayloadStoreFailure::UnsafeGcPath);
         }
         let mut state = self.state.lock();
         let runtime = state
             .partitions
             .get(&key)
             .copied()
-            .ok_or(TimerPayloadStoreError::PartitionMissing)?;
+            .ok_or(TimerPayloadStoreFailure::PartitionMissing)?;
         if runtime.manifest.state != TimerPayloadPartitionState::GcEligible {
             return Ok(false);
         }
@@ -436,23 +394,13 @@ impl TimerPayloadStore {
     ///
     /// Only one artifact generation may be active at a time. A failed copy intentionally leaves
     /// its durable pins in place so GC cannot invalidate a partially published artifact.
-    /// Reports failures through the canonical storage facade.
-    pub fn create_snapshot_files(
+    fn create_snapshot_files_checked(
         &self,
         target_root: &Path,
         generation: u64,
-    ) -> Result<Vec<TimerSnapshotFile>, StoreError> {
-        self.create_snapshot_files_typed(target_root, generation)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn create_snapshot_files_typed(
-        &self,
-        target_root: &Path,
-        generation: u64,
-    ) -> Result<Vec<TimerSnapshotFile>, TimerPayloadStoreError> {
+    ) -> Result<Vec<TimerSnapshotFile>, TimerPayloadStoreFailure> {
         if generation == 0 {
-            return Err(TimerPayloadStoreError::InvalidSnapshotGeneration);
+            return Err(TimerPayloadStoreFailure::InvalidSnapshotGeneration);
         }
         let mut state = self.state.lock();
         if state
@@ -460,7 +408,7 @@ impl TimerPayloadStore {
             .values()
             .any(|partition| partition.manifest.snapshot_pin_generation != 0)
         {
-            return Err(TimerPayloadStoreError::SnapshotAlreadyPinned);
+            return Err(TimerPayloadStoreFailure::SnapshotAlreadyPinned);
         }
         for handle in state.handles.values_mut() {
             handle.sync_data()?;
@@ -512,13 +460,7 @@ impl TimerPayloadStore {
     }
 
     /// Releases one successfully copied snapshot generation from every partition.
-    /// Reports failures through the canonical storage facade.
-    pub fn release_snapshot_pin(&self, generation: u64) -> Result<(), StoreError> {
-        self.release_snapshot_pin_typed(generation)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn release_snapshot_pin_typed(&self, generation: u64) -> Result<(), TimerPayloadStoreError> {
+    fn release_snapshot_pin_checked(&self, generation: u64) -> Result<(), TimerPayloadStoreFailure> {
         let mut state = self.state.lock();
         for runtime in state.partitions.values_mut() {
             if runtime.manifest.snapshot_pin_generation == generation {
@@ -534,7 +476,7 @@ impl TimerPayloadStore {
         key: TimerPayloadPartitionKey,
         expected: TimerPayloadPartitionState,
         next: TimerPayloadPartitionState,
-    ) -> Result<(), TimerPayloadStoreError> {
+    ) -> Result<(), TimerPayloadStoreFailure> {
         let mut state = self.state.lock();
         self.ensure_partition_loaded(&mut state, key)?;
         let handle_keys: Vec<_> = state
@@ -551,9 +493,9 @@ impl TimerPayloadStore {
         let runtime = state
             .partitions
             .get_mut(&key)
-            .ok_or(TimerPayloadStoreError::PartitionMissing)?;
+            .ok_or(TimerPayloadStoreFailure::PartitionMissing)?;
         if runtime.manifest.state != expected {
-            return Err(TimerPayloadStoreError::InvalidPartitionTransition {
+            return Err(TimerPayloadStoreFailure::InvalidPartitionTransition {
                 current: runtime.manifest.state,
                 requested: next,
             });
@@ -567,7 +509,7 @@ impl TimerPayloadStore {
         &self,
         state: &mut PayloadStoreState,
         key: TimerPayloadPartitionKey,
-    ) -> Result<(), TimerPayloadStoreError> {
+    ) -> Result<(), TimerPayloadStoreFailure> {
         if state.partitions.contains_key(&key) {
             return Ok(());
         }
@@ -579,12 +521,12 @@ impl TimerPayloadStore {
     fn recover_partition(
         &self,
         key: TimerPayloadPartitionKey,
-    ) -> Result<TimerPayloadPartitionManifest, TimerPayloadStoreError> {
+    ) -> Result<TimerPayloadPartitionManifest, TimerPayloadStoreFailure> {
         let directory = self.partition_path(key);
         std::fs::create_dir_all(&directory)?;
         let mut manifest = TimerPayloadPartitionManifest::load(&directory, key)?;
         if manifest.state == TimerPayloadPartitionState::Deleted {
-            return Err(TimerPayloadStoreError::PartitionNotOpen(key));
+            return Err(TimerPayloadStoreFailure::PartitionNotOpen(key));
         }
         let mut segments = Vec::new();
         for entry in std::fs::read_dir(&directory)? {
@@ -605,7 +547,7 @@ impl TimerPayloadStore {
         segments.sort_unstable();
         for pair in segments.windows(2) {
             if pair[1] != pair[0].saturating_add(1) {
-                return Err(TimerPayloadStoreError::SegmentHole {
+                return Err(TimerPayloadStoreFailure::SegmentHole {
                     expected: pair[0].saturating_add(1),
                     actual: pair[1],
                 });
@@ -632,7 +574,7 @@ impl TimerPayloadStore {
                 active_len = bytes;
             }
         }
-        let active_segment_id = *segments.last().ok_or(TimerPayloadStoreError::PartitionMissing)?;
+        let active_segment_id = *segments.last().ok_or(TimerPayloadStoreFailure::PartitionMissing)?;
         if manifest.active_segment_id != active_segment_id
             || manifest.active_segment_len != active_len
             || manifest.record_count != total_records
@@ -652,7 +594,7 @@ impl TimerPayloadStore {
         partition: TimerPayloadPartitionKey,
         segment_id: u64,
         active: bool,
-    ) -> Result<(u64, u64), TimerPayloadStoreError> {
+    ) -> Result<(u64, u64), TimerPayloadStoreFailure> {
         let path = self.segment_path(partition, segment_id);
         let mut file = OpenOptions::new().read(true).write(active).open(&path)?;
         let file_len = file.metadata()?.len();
@@ -666,14 +608,14 @@ impl TimerPayloadStore {
                     file.sync_data()?;
                     break;
                 }
-                return Err(TimerPayloadStoreError::CorruptSealedSegment(segment_id));
+                return Err(TimerPayloadStoreFailure::CorruptSealedSegment(segment_id));
             }
             file.seek(SeekFrom::Start(cursor))?;
             let mut header = vec![0u8; TimerPayloadRecordV1::header_size()];
             file.read_exact(&mut header)?;
             let declared_len = match TimerPayloadRecordV1::declared_len(&header) {
                 Ok(length) => length,
-                Err(error) => return Err(TimerPayloadStoreError::Record(error)),
+                Err(error) => return Err(TimerPayloadStoreFailure::Record(error)),
             };
             if declared_len < TimerPayloadRecordV1::header_size() + 4
                 || declared_len > self.config.max_record_bytes
@@ -684,12 +626,12 @@ impl TimerPayloadStore {
                     file.sync_data()?;
                     break;
                 }
-                return Err(TimerPayloadStoreError::CorruptSealedSegment(segment_id));
+                return Err(TimerPayloadStoreFailure::CorruptSealedSegment(segment_id));
             }
             let mut encoded = vec![0u8; declared_len];
             encoded[..header.len()].copy_from_slice(&header);
             file.read_exact(&mut encoded[header.len()..])?;
-            TimerPayloadRecordV1::decode(&encoded)?;
+            TimerPayloadRecordV1::decode_checked(&encoded)?;
             cursor = cursor.saturating_add(declared_len as u64);
             records = records.saturating_add(1);
         }
@@ -701,7 +643,7 @@ impl TimerPayloadStore {
         state: &'a mut PayloadStoreState,
         key: HandleKey,
         path: &Path,
-    ) -> Result<&'a mut File, TimerPayloadStoreError> {
+    ) -> Result<&'a mut File, TimerPayloadStoreFailure> {
         if !state.handles.contains_key(&key) {
             while state.handles.len() >= self.config.max_open_handles {
                 let Some(oldest) = state.handle_order.pop_front() else {
@@ -727,7 +669,7 @@ impl TimerPayloadStore {
         state
             .handles
             .get_mut(&key)
-            .ok_or(TimerPayloadStoreError::PartitionMissing)
+            .ok_or(TimerPayloadStoreFailure::PartitionMissing)
     }
 
     fn partition_path(&self, key: TimerPayloadPartitionKey) -> PathBuf {
@@ -742,12 +684,87 @@ impl TimerPayloadStore {
     }
 }
 
+impl TimerPayloadStore {
+    /// Creates a payload store.
+    ///
+    /// Returns `Ok(None)` when the configured limits are inconsistent.
+    pub fn new(config: TimerPayloadStoreConfig) -> Result<Option<Self>, StoreError> {
+        TimerPayloadStoreFailure::into_public(Self::new_checked(config), StoreOperation::Start)
+    }
+
+    /// Recovers every existing payload partition.
+    pub fn load(&self) -> Result<(), StoreError> {
+        self.load_checked()
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    /// Appends and synchronizes one bounded payload batch.
+    ///
+    /// Returns `Ok(None)` when a record or configured batch limit rejects the input before I/O.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when durable payload or manifest I/O fails.
+    pub fn append_batch(
+        &self,
+        records: &[TimerPayloadRecordV1],
+    ) -> Result<Option<Vec<TimerPayloadStoreLocator>>, StoreError> {
+        TimerPayloadStoreFailure::into_public(self.append_batch_checked(records), StoreOperation::Append)
+    }
+
+    /// Reads and verifies one durable payload locator.
+    pub fn read(&self, locator: TimerPayloadStoreLocator) -> Result<TimerPayloadRecordV1, StoreError> {
+        self.read_checked(locator)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    /// Seals one payload partition.
+    pub fn seal_partition(&self, key: TimerPayloadPartitionKey) -> Result<(), StoreError> {
+        self.seal_partition_checked(key)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Marks one sealed payload partition eligible for collection.
+    pub fn mark_gc_eligible(&self, key: TimerPayloadPartitionKey) -> Result<(), StoreError> {
+        self.mark_gc_eligible_checked(key)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Collects one eligible payload partition when every fence permits it.
+    pub fn gc_partition(
+        &self,
+        key: TimerPayloadPartitionKey,
+        no_live_timeline_references: bool,
+        snapshot_safe: bool,
+        replication_safe: bool,
+    ) -> Result<bool, StoreError> {
+        self.gc_partition_checked(key, no_live_timeline_references, snapshot_safe, replication_safe)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Creates and pins one immutable payload snapshot.
+    pub fn create_snapshot_files(
+        &self,
+        target_root: &Path,
+        generation: u64,
+    ) -> Result<Vec<TimerSnapshotFile>, StoreError> {
+        self.create_snapshot_files_checked(target_root, generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Flush))
+    }
+
+    /// Releases one payload snapshot pin.
+    pub fn release_snapshot_pin(&self, generation: u64) -> Result<(), StoreError> {
+        self.release_snapshot_pin_checked(generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+}
+
 fn copy_snapshot_file(
     source_path: &Path,
     target_path: &Path,
     relative_path: &Path,
     length: u64,
-) -> Result<TimerSnapshotFile, TimerPayloadStoreError> {
+) -> Result<TimerSnapshotFile, TimerPayloadStoreFailure> {
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -786,16 +803,20 @@ pub struct TimerPayloadStoreMetrics {
 
 /// Long-horizon payload-store error.
 #[derive(Debug, Error)]
-pub(crate) enum TimerPayloadStoreError {
+pub(crate) enum TimerPayloadStoreFailure {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
     /// Record codec failed.
-    #[error(transparent)]
-    Record(#[from] TimerPayloadRecordViolation),
+    #[error("timer payload record codec failed: {0}")]
+    Record(
+        #[from]
+        #[source]
+        TimerPayloadRecordViolation,
+    ),
     /// Partition manifest failed.
     #[error(transparent)]
-    Manifest(#[from] PartitionManifestError),
+    Manifest(#[from] PartitionManifestFailure),
     /// Capacity values are inconsistent.
     #[error("invalid timer payload-store configuration")]
     InvalidConfig,
@@ -850,25 +871,82 @@ pub(crate) enum TimerPayloadStoreError {
     UnsafeGcPath,
 }
 
-impl TimerPayloadStoreError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Filesystem faults keep their typed I/O source, nested codec or
-    /// manifest evidence is corrupted state, and the remaining typed failures
-    /// follow the owning operation. The complete leaf is preserved as the
-    /// typed source.
-    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
-        let descriptor = match (&self, operation) {
-            (Self::Io(_), _) => &rocketmq_error::STORAGE_IO_FAILED,
-            (Self::Record(_) | Self::Manifest(_), _) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-            (_, StoreOperation::Load | StoreOperation::Read | StoreOperation::QueryOffset) => {
-                &rocketmq_error::STORAGE_READ_FAILED
+impl TimerPayloadStoreFailure {
+    fn is_contract_violation(&self, operation: StoreOperation) -> bool {
+        matches!((operation, self), (StoreOperation::Start, Self::InvalidConfig))
+            || matches!(
+                (operation, self),
+                (
+                    StoreOperation::Append,
+                    Self::Record(_) | Self::RecordLimitExceeded(_) | Self::BatchLimitExceeded(_)
+                )
+            )
+    }
+
+    fn into_public<T>(result: Result<T, Self>, operation: StoreOperation) -> Result<Option<T>, StoreError> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.is_contract_violation(operation) => Ok(None),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
+    fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        match self {
+            error @ Self::Io(_) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+            error @ Self::PartitionLimitExceeded(_) => {
+                StoreError::new(&rocketmq_error::STORAGE_CAPACITY_EXHAUSTED, operation)
+                    .in_component(StoreComponent::Store)
+                    .with_source(error)
             }
-            (_, StoreOperation::Append | StoreOperation::Flush | StoreOperation::AppendDerived) => {
-                &rocketmq_error::STORAGE_WRITE_FAILED
-            }
-            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
-        };
-        StoreError::new(descriptor, operation).with_source(self)
+            error @ (Self::Manifest(_)
+            | Self::Record(_)
+            | Self::InvalidConfig
+            | Self::RecordLimitExceeded(_)
+            | Self::BatchLimitExceeded(_)
+            | Self::PartitionNotOpen(_)
+            | Self::PartitionMissing
+            | Self::InvalidSnapshotGeneration
+            | Self::SnapshotAlreadyPinned
+            | Self::SegmentHole { .. }
+            | Self::CorruptSealedSegment(_)
+            | Self::LocatorChecksumMismatch
+            | Self::LocatorPartitionMismatch
+            | Self::InvalidPartitionTransition { .. }
+            | Self::UnsafeGcPath) => StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod error_projection_tests {
+    use std::error::Error;
+
+    use super::*;
+
+    #[test]
+    fn direct_record_contract_is_none_but_persisted_corruption_keeps_owning_source() {
+        let direct = TimerPayloadStoreFailure::into_public::<()>(
+            Err(TimerPayloadStoreFailure::Record(TimerPayloadRecordViolation::BadMagic)),
+            StoreOperation::Append,
+        )
+        .expect("direct codec rejection is not operational");
+        assert!(direct.is_none());
+
+        let error = TimerPayloadStoreFailure::Record(TimerPayloadRecordViolation::BadMagic)
+            .into_store_error(StoreOperation::Read);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+        let owner = error
+            .source()
+            .and_then(|source| source.downcast_ref::<TimerPayloadStoreFailure>())
+            .expect("StoreError retains the payload-store owner");
+        assert!(owner
+            .source()
+            .and_then(|source| source.downcast_ref::<TimerPayloadRecordViolation>())
+            .is_some());
     }
 }

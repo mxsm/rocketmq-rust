@@ -83,7 +83,7 @@ fn external_hard_link_is_rejected_before_reconciliation() {
     let root = open_root(directory.path()).expect("open retained root");
     assert!(matches!(
         scan(&root, store_uuid(), needs.recovered(), limits()),
-        Err(ReconciliationInventoryError::HardLinkAlias { .. })
+        Err(ReconciliationInventoryFailure::HardLinkAlias { .. })
     ));
 }
 
@@ -131,7 +131,7 @@ fn missing_parent_and_zero_limits_fail_closed() {
     let root = open_root(directory.path()).expect("open retained root");
     assert!(matches!(
         scan(&root, store_uuid(), needs.recovered(), limits()),
-        Err(ReconciliationInventoryError::MissingDirectory { .. })
+        Err(ReconciliationInventoryFailure::MissingDirectory { .. })
     ));
     assert!(matches!(
         scan(
@@ -143,7 +143,7 @@ fn missing_parent_and_zero_limits_fail_closed() {
                 ..limits()
             },
         ),
-        Err(ReconciliationInventoryError::InvalidLimits)
+        Err(ReconciliationInventoryFailure::InvalidLimits)
     ));
 }
 

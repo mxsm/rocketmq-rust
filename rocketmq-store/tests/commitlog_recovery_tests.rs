@@ -79,6 +79,8 @@ fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConf
 
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,

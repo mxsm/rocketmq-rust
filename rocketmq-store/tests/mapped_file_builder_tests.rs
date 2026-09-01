@@ -15,7 +15,17 @@
 use rocketmq_store::FlushStrategy;
 use rocketmq_store::MappedFile;
 use rocketmq_store::MappedFileBuilder;
+use rocketmq_store::StoreComponent;
+use rocketmq_store::StoreError;
+use rocketmq_store::StoreOperation;
 use tempfile::TempDir;
+
+fn expect_build_error<T>(result: Result<T, StoreError>, message: &str) -> StoreError {
+    match result {
+        Err(error) => error,
+        Ok(_) => panic!("{message}"),
+    }
+}
 
 #[test]
 fn builder_creates_a_writable_mapped_file_with_the_declared_offset() {
@@ -49,10 +59,11 @@ fn builder_rejects_offset_mismatch_before_creating_the_file() {
         mapped_file.destroy(0);
     }
 
-    match result {
-        Ok(_) => panic!("expected invalid configuration"),
-        Err(error) => assert_eq!(error.code().as_str(), "storage.request.invalid"),
-    }
+    let error = expect_build_error(result, "offset mismatch must fail");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.operation(), StoreOperation::Start);
+    assert_eq!(error.component(), StoreComponent::Configuration);
+    assert!(std::error::Error::source(&error).is_none());
     assert!(!path.exists());
 }
 
@@ -74,10 +85,11 @@ fn builder_rejects_invalid_sizes_and_file_names_before_creation() {
     ];
 
     for (path, builder) in cases {
-        match builder.build() {
-            Ok(_) => panic!("expected invalid configuration"),
-            Err(error) => assert_eq!(error.code().as_str(), "storage.request.invalid"),
-        }
+        let error = expect_build_error(builder.build(), "invalid builder input must fail");
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.component(), StoreComponent::Configuration);
+        assert!(std::error::Error::source(&error).is_none());
         assert!(!path.exists());
     }
 }
@@ -117,10 +129,10 @@ fn builder_rejects_unsupported_options_without_filesystem_side_effects() {
         if let Ok(mapped_file) = &result {
             mapped_file.destroy(0);
         }
-        match result {
-            Ok(_) => panic!("expected invalid configuration"),
-            Err(error) => assert_eq!(error.code().as_str(), "storage.request.invalid"),
-        }
+        let error = expect_build_error(result, "unsupported builder option must fail");
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.component(), StoreComponent::Configuration);
         assert!(!path.exists());
     }
     assert_eq!(
@@ -140,9 +152,10 @@ fn builder_preserves_parent_path_io_failures() {
 
     let result = MappedFileBuilder::new(&path).size(4096).build();
 
-    match result {
-        Ok(_) => panic!("expected io failure"),
-        Err(error) => assert_eq!(error.code().as_str(), "storage.io.failed"),
-    }
+    let error = expect_build_error(result, "parent path I/O must fail");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+    assert_eq!(error.operation(), StoreOperation::Load);
+    assert_eq!(error.component(), StoreComponent::MappedFile);
+    assert!(std::error::Error::source(&error).is_some());
     assert!(!path.exists());
 }

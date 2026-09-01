@@ -278,20 +278,20 @@ pub(crate) enum NamespacePolicyViolation {
 /// Proof fields eligible for a following `Tombstoned` ledger append.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NamespaceTombstoneProof {
-    request: NamespaceRetirementRequest,
+    request: Box<NamespaceRetirementRequest>,
     replacement_key: Option<PhysicalFileKey>,
 }
 
 impl NamespaceTombstoneProof {
     pub(super) fn new(request: &NamespaceRetirementRequest, replacement_key: Option<PhysicalFileKey>) -> Self {
         Self {
-            request: request.clone(),
+            request: Box::new(request.clone()),
             replacement_key,
         }
     }
 
-    pub(crate) const fn request(&self) -> &NamespaceRetirementRequest {
-        &self.request
+    pub(crate) fn request(&self) -> &NamespaceRetirementRequest {
+        self.request.as_ref()
     }
 
     pub(crate) const fn replacement_key(&self) -> Option<PhysicalFileKey> {
@@ -310,20 +310,20 @@ impl NamespaceTombstoneProof {
 /// Positive two-name absence proof eligible for a following `NamespaceAbsent` ledger append.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NamespaceAbsenceProof {
-    request: NamespaceRetirementRequest,
+    request: Box<NamespaceRetirementRequest>,
     replacement_key: Option<PhysicalFileKey>,
 }
 
 impl NamespaceAbsenceProof {
     pub(super) fn new(request: &NamespaceRetirementRequest, replacement_key: Option<PhysicalFileKey>) -> Self {
         Self {
-            request: request.clone(),
+            request: Box::new(request.clone()),
             replacement_key,
         }
     }
 
-    pub(crate) const fn request(&self) -> &NamespaceRetirementRequest {
-        &self.request
+    pub(crate) fn request(&self) -> &NamespaceRetirementRequest {
+        self.request.as_ref()
     }
 
     pub(crate) const fn replacement_key(&self) -> Option<PhysicalFileKey> {

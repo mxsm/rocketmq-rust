@@ -15,6 +15,7 @@
 //! Backend-neutral message-store composition.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -34,6 +35,7 @@ use crate::store_error::StoreError;
 use crate::store_ports::StorePorts;
 use crate::telemetry::StoreTelemetry;
 use crate::timer::timer_message_store::TimerMessageStore;
+use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
 
 /// Complete configuration required to open one Broker message store.
 pub struct StoreFactoryConfig {
@@ -43,25 +45,39 @@ pub struct StoreFactoryConfig {
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
     notify_message_arrive_in_batch: bool,
     telemetry: StoreTelemetry,
+    micro_batch_policy: MicroBatchPolicy,
 }
 
 impl StoreFactoryConfig {
-    pub fn new(
+    /// Validates the caller-owned store configuration before backend composition.
+    ///
+    /// Returns `None` when the CommitLog micro-batch limits cannot form a valid policy.
+    pub fn try_new(
         message_store: Arc<MessageStoreConfig>,
         runtime: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
         telemetry: StoreTelemetry,
-    ) -> Self {
-        Self {
+    ) -> Option<Self> {
+        let micro_batch_policy = if message_store.commit_log_micro_batch_enabled {
+            MicroBatchPolicy::try_new(
+                message_store.commit_log_micro_batch_max_items,
+                message_store.commit_log_micro_batch_max_bytes,
+                Duration::from_micros(message_store.commit_log_micro_batch_max_wait_micros),
+            )
+        } else {
+            MicroBatchPolicy::disabled(message_store.commit_log_append_queue_bytes)
+        }?;
+        Some(Self {
             message_store,
             runtime,
             topic_config_table,
             broker_stats_manager,
             notify_message_arrive_in_batch,
             telemetry,
-        }
+            micro_batch_policy,
+        })
     }
 
     pub fn backend(&self) -> StoreType {
@@ -126,6 +142,7 @@ impl StoreFactory {
         let backend = StoreType::LocalFile;
         let mut store = LocalFileMessageStore::try_new_with_telemetry(
             config.message_store,
+            config.micro_batch_policy,
             config.runtime,
             config.topic_config_table,
             config.broker_stats_manager,
@@ -153,6 +170,7 @@ impl StoreFactory {
         let backend = StoreType::RocksDB;
         let store = RocksDBMessageStore::try_new_with_telemetry(
             config.message_store,
+            config.micro_batch_policy,
             config.runtime,
             config.topic_config_table,
             config.broker_stats_manager,

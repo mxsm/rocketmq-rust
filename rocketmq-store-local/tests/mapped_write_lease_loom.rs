@@ -61,6 +61,13 @@ impl LifecycleAtomicUsize for AtomicUsize {
 
 type LoomLifecycle = LifecycleTransitionState<AtomicUsize>;
 
+fn acquire_result(outcome: AcquireTransitionOutcome) -> Result<(), AcquireTransitionRejection> {
+    match outcome {
+        AcquireTransitionOutcome::Acquired => Ok(()),
+        AcquireTransitionOutcome::Rejected(rejection) => Err(rejection),
+    }
+}
+
 #[test]
 fn position_publication_never_exposes_partially_copied_bytes() {
     loom::model(|| {
@@ -223,9 +230,7 @@ impl ModelSealWait {
         lifecycle: Arc<LoomLifecycle>,
         writer_live: Arc<AtomicUsize>,
     ) -> Result<ModelWriterLease, AcquireTransitionRejection> {
-        if let AcquireTransitionOutcome::Rejected(rejection) = lifecycle.try_acquire(MappedFileOperation::Write) {
-            return Err(rejection);
-        }
+        acquire_result(lifecycle.try_acquire(MappedFileOperation::Write))?;
         writer_live.store(1, Ordering::SeqCst);
 
         Ok(ModelWriterLease {
@@ -303,9 +308,7 @@ impl ModelLease {
         operation: MappedFileOperation,
         drain_transitions: Arc<AtomicUsize>,
     ) -> Result<Self, AcquireTransitionRejection> {
-        if let AcquireTransitionOutcome::Rejected(rejection) = lifecycle.try_acquire(operation) {
-            return Err(rejection);
-        }
+        acquire_result(lifecycle.try_acquire(operation))?;
         Ok(Self {
             lifecycle,
             drain_transitions,
@@ -412,8 +415,8 @@ fn seal_and_write_admission_have_one_serialized_outcome() {
         assert_eq!(lifecycle.active_leases(), expected_write + 2);
         assert_eq!(lifecycle.active_writers(), expected_write);
         assert_eq!(
-            lifecycle.try_acquire(MappedFileOperation::Write),
-            AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::Unavailable(
+            acquire_result(lifecycle.try_acquire(MappedFileOperation::Write)),
+            Err(AcquireTransitionRejection::Unavailable(
                 MappedFileAdmissionState::SealedReadable
             ))
         );
@@ -470,8 +473,8 @@ fn packed_writer_and_seal_drain_are_linearized() {
         assert_eq!(lifecycle.active_leases(), 0);
         assert_eq!(lifecycle.active_writers(), 0);
         assert_eq!(
-            lifecycle.try_acquire(MappedFileOperation::Write),
-            AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::Unavailable(
+            acquire_result(lifecycle.try_acquire(MappedFileOperation::Write)),
+            Err(AcquireTransitionRejection::Unavailable(
                 MappedFileAdmissionState::SealedReadable
             ))
         );
@@ -484,10 +487,7 @@ fn active_final_writer_does_not_enter_cold_seal_wait_control() {
         let lifecycle = LoomLifecycle::new();
         let wait = ModelSealWait::new();
 
-        assert!(matches!(
-            lifecycle.try_acquire(MappedFileOperation::Write),
-            AcquireTransitionOutcome::Acquired
-        ));
+        acquire_result(lifecycle.try_acquire(MappedFileOperation::Write)).expect("active writer");
         let snapshot = lifecycle.snapshot();
         assert_eq!(snapshot.active_leases, 1);
         assert_eq!(snapshot.active_writers, 1);
@@ -510,10 +510,7 @@ fn non_closing_final_release_and_drain_waiter_cannot_miss_each_other() {
             if seal_before_wait {
                 assert!(lifecycle.seal_readable());
             }
-            assert!(matches!(
-                lifecycle.try_acquire(MappedFileOperation::Read),
-                AcquireTransitionOutcome::Acquired
-            ));
+            acquire_result(lifecycle.try_acquire(MappedFileOperation::Read)).expect("read admission");
             let wait = Arc::new(ModelDrainWait::new());
 
             let waiter_lifecycle = Arc::clone(&lifecycle);
@@ -542,10 +539,7 @@ fn non_closing_final_release_without_waiter_skips_cold_drain_control() {
     loom::model(|| {
         let lifecycle = LoomLifecycle::new();
         let wait = ModelDrainWait::new();
-        assert!(matches!(
-            lifecycle.try_acquire(MappedFileOperation::Read),
-            AcquireTransitionOutcome::Acquired
-        ));
+        acquire_result(lifecycle.try_acquire(MappedFileOperation::Read)).expect("read admission");
 
         assert_eq!(
             wait.release(&lifecycle, MappedFileOperation::Read),
@@ -559,10 +553,7 @@ fn non_closing_final_release_without_waiter_skips_cold_drain_control() {
 fn multiple_registered_drain_waiters_share_one_notification() {
     loom::model(|| {
         let lifecycle = LoomLifecycle::new();
-        assert!(matches!(
-            lifecycle.try_acquire(MappedFileOperation::Read),
-            AcquireTransitionOutcome::Acquired
-        ));
+        acquire_result(lifecycle.try_acquire(MappedFileOperation::Read)).expect("read admission");
         let wait = ModelDrainWait::new();
         assert!(wait.register(&lifecycle));
         assert!(wait.register(&lifecycle));
@@ -584,10 +575,7 @@ fn multiple_registered_drain_waiters_share_one_notification() {
 fn cancelled_drain_waiter_unregisters_during_final_release() {
     loom::model(|| {
         let lifecycle = Arc::new(LoomLifecycle::new());
-        assert!(matches!(
-            lifecycle.try_acquire(MappedFileOperation::Read),
-            AcquireTransitionOutcome::Acquired
-        ));
+        acquire_result(lifecycle.try_acquire(MappedFileOperation::Read)).expect("read admission");
         let wait = Arc::new(ModelDrainWait::new());
 
         let cancel_lifecycle = Arc::clone(&lifecycle);

@@ -53,10 +53,8 @@ use crate::mapped_file::retirement::platform::physical_file_key;
 use crate::mapped_file::retirement::sidecar::StoreMeta;
 
 use super::inventory::preflight_bootstrap_namespace;
-use super::inventory::BootstrapInventoryError;
+use super::inventory::BootstrapInventoryFailure;
 use super::inventory::BootstrapInventoryLimits;
-use crate::mapped_file::retirement::replay::discovery::platform::PlatformError;
-
 mod durable_unit;
 mod platform;
 
@@ -68,90 +66,73 @@ pub(super) use durable_unit::DurableUnitMachine;
 pub(super) use platform::execute_prepared_initial_bootstrap;
 #[cfg(test)]
 pub(in crate::mapped_file::retirement::bootstrap) use platform::prepare_initial_bootstrap_foundation;
-#[cfg(all(test, not(any(target_os = "linux", windows))))]
-pub(in crate::mapped_file::retirement::bootstrap) use platform::InitialBootstrapFoundationError;
-
 const MAX_BOOTSTRAP_ACTIONS: usize = 64;
 
+/// Private bootstrap leaf retaining the exact nested source.
 #[derive(Debug, Error)]
-enum ManagedLifecycleBootstrapSource {
+pub(crate) enum ManagedLifecycleBootstrapFailure {
     #[error("failed to identify the retained Store root")]
     RootIdentity(#[source] io::Error),
     #[error("failed to derive the managed Store identity")]
     Identity(#[source] IdentityViolation),
     #[error("legacy Store namespace is not eligible for managed bootstrap")]
-    Inventory(#[source] BootstrapInventoryError),
+    Inventory(#[source] BootstrapInventoryFailure),
     #[error("failed to prepare the managed lifecycle bootstrap")]
-    Foundation(#[source] platform::InitialBootstrapFoundationError),
+    Foundation(#[source] platform::InitialBootstrapFoundationFailure),
     #[error("failed to execute the managed lifecycle bootstrap")]
-    Execution(#[source] InitialBootstrapExecutionError<platform::InitialBootstrapFoundationError>),
+    Execution(#[source] InitialBootstrapExecutionFailure<platform::InitialBootstrapFoundationFailure>),
 }
 
-/// Private bootstrap-orchestration leaf retained as the typed StoreError source.
-#[derive(Debug, Error)]
-#[error("managed lifecycle bootstrap failed: {source}")]
-pub(crate) struct ManagedLifecycleBootstrapError {
-    #[source]
-    source: ManagedLifecycleBootstrapSource,
-}
-
-impl ManagedLifecycleBootstrapError {
-    fn new(source: ManagedLifecycleBootstrapSource) -> Self {
-        Self { source }
-    }
-
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Descriptor selection preserves the reviewed bootstrap mapping: an
-    /// unsupported platform is unimplemented, filesystem faults are I/O
-    /// failures, inventory scans are read failures, identity/artifact
-    /// mismatches are corrupted state, and a required recovery is backend
-    /// unavailability. The complete leaf is preserved as the typed source.
-    fn into_store_error(self) -> StoreError {
-        let descriptor = match &self.source {
-            ManagedLifecycleBootstrapSource::RootIdentity(_) => &rocketmq_error::STORAGE_IO_FAILED,
-            ManagedLifecycleBootstrapSource::Identity(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-            ManagedLifecycleBootstrapSource::Inventory(source) => inventory_descriptor(source),
-            ManagedLifecycleBootstrapSource::Foundation(source) => foundation_descriptor(source),
-            ManagedLifecycleBootstrapSource::Execution(source) => match source {
-                InitialBootstrapExecutionError::Backend(source) => foundation_descriptor(source),
-                InitialBootstrapExecutionError::NeedsRecovery(_)
-                | InitialBootstrapExecutionError::ActionBoundExceeded => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-                InitialBootstrapExecutionError::Plan(_) | InitialBootstrapExecutionError::InvalidPlanAction => {
-                    &rocketmq_error::STORAGE_STATE_CORRUPTED
-                }
-            },
-        };
-        StoreError::new(descriptor, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_source(self)
-    }
-}
-
-const fn inventory_descriptor(source: &BootstrapInventoryError) -> &'static rocketmq_error::ErrorDescriptor {
-    match source {
-        BootstrapInventoryError::UnsupportedPlatform => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
-        BootstrapInventoryError::Identity(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-        BootstrapInventoryError::Platform(PlatformError::Unsupported) => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
-        BootstrapInventoryError::Platform(_) => &rocketmq_error::STORAGE_READ_FAILED,
-        _ => &rocketmq_error::STORAGE_READ_FAILED,
-    }
-}
-
-const fn foundation_descriptor(
-    source: &platform::InitialBootstrapFoundationError,
+fn foundation_descriptor(
+    error: &platform::InitialBootstrapFoundationFailure,
 ) -> &'static rocketmq_error::ErrorDescriptor {
-    match source {
-        platform::InitialBootstrapFoundationError::UnsupportedPlatform(_) => {
+    match error {
+        platform::InitialBootstrapFoundationFailure::UnsupportedPlatform(_) => {
             &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
         }
-        platform::InitialBootstrapFoundationError::InvalidArtifact(_)
-        | platform::InitialBootstrapFoundationError::Sidecar(_)
-        | platform::InitialBootstrapFoundationError::Ledger(_)
-        | platform::InitialBootstrapFoundationError::DurableUnit(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-        platform::InitialBootstrapFoundationError::Inventory(_) => &rocketmq_error::STORAGE_READ_FAILED,
-        platform::InitialBootstrapFoundationError::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
+        platform::InitialBootstrapFoundationFailure::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
+        platform::InitialBootstrapFoundationFailure::Inventory(_) => &rocketmq_error::STORAGE_READ_FAILED,
+        platform::InitialBootstrapFoundationFailure::InvalidArtifact(_)
+        | platform::InitialBootstrapFoundationFailure::Sidecar(_)
+        | platform::InitialBootstrapFoundationFailure::Ledger(_)
+        | platform::InitialBootstrapFoundationFailure::DurableUnit(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
     }
+}
+
+fn bootstrap_descriptor(error: &ManagedLifecycleBootstrapFailure) -> Option<&'static rocketmq_error::ErrorDescriptor> {
+    match error {
+        ManagedLifecycleBootstrapFailure::RootIdentity(_) => Some(&rocketmq_error::STORAGE_IO_FAILED),
+        ManagedLifecycleBootstrapFailure::Identity(_) => Some(&rocketmq_error::STORAGE_STATE_CORRUPTED),
+        ManagedLifecycleBootstrapFailure::Inventory(BootstrapInventoryFailure::UnsupportedPlatform)
+        | ManagedLifecycleBootstrapFailure::Inventory(BootstrapInventoryFailure::Platform(
+            super::super::replay::discovery::platform::PlatformFailure::Unsupported,
+        )) => Some(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED),
+        ManagedLifecycleBootstrapFailure::Inventory(BootstrapInventoryFailure::Identity(_)) => {
+            Some(&rocketmq_error::STORAGE_STATE_CORRUPTED)
+        }
+        ManagedLifecycleBootstrapFailure::Inventory(_) => Some(&rocketmq_error::STORAGE_READ_FAILED),
+        ManagedLifecycleBootstrapFailure::Foundation(source) => Some(foundation_descriptor(source)),
+        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::Backend(source)) => {
+            Some(foundation_descriptor(source))
+        }
+        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::NeedsRecovery(_)) => {
+            Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE)
+        }
+        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::ActionBoundExceeded) => None,
+        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::Plan(_)) => {
+            Some(&rocketmq_error::STORAGE_STATE_CORRUPTED)
+        }
+        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::InvalidPlanAction) => None,
+    }
+}
+
+fn bootstrap_store_error(error: ManagedLifecycleBootstrapFailure) -> Option<StoreError> {
+    Some(
+        StoreError::new(bootstrap_descriptor(&error)?, StoreOperation::Load)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail("managed lifecycle bootstrap failed")
+            .with_source(error),
+    )
 }
 
 /// Bootstraps a legacy Store root into managed lifecycle format.
@@ -166,37 +147,41 @@ const fn foundation_descriptor(
 /// The caller must retain an exclusive Store-root lease for `store_root` for the complete call and
 /// must prevent legacy Store components from scanning or mutating the root concurrently.
 #[doc(hidden)]
-pub unsafe fn bootstrap_managed_lifecycle_under_exclusive_lock(
+unsafe fn bootstrap_managed_lifecycle_under_exclusive_lock_checked(
     store_root: &File,
-) -> Result<InitialBootstrapCompletion, StoreError> {
-    // SAFETY: the exclusive Store-root lease contract is forwarded unchanged
-    // to the caller of this function.
-    unsafe { bootstrap_managed_lifecycle_leaf(store_root) }.map_err(ManagedLifecycleBootstrapError::into_store_error)
+) -> Result<InitialBootstrapCompletion, ManagedLifecycleBootstrapFailure> {
+    let meta = derive_store_meta(store_root)?;
+    preflight_bootstrap_namespace(store_root, BootstrapInventoryLimits::default())
+        .map_err(ManagedLifecycleBootstrapFailure::Inventory)?;
+    let cloned_root = store_root
+        .try_clone()
+        .map_err(ManagedLifecycleBootstrapFailure::RootIdentity)?;
+    let prepared = platform::prepare_initial_bootstrap_foundation(cloned_root, &meta)
+        .map_err(ManagedLifecycleBootstrapFailure::Foundation)?;
+    platform::execute_prepared_initial_bootstrap(prepared).map_err(ManagedLifecycleBootstrapFailure::Execution)
 }
 
-/// Typed bootstrap orchestration retained behind the public StoreError facade.
+/// Bootstraps managed lifecycle evidence and promotes its private leaf at the owning facade.
 ///
 /// # Safety
 ///
-/// See [`bootstrap_managed_lifecycle_under_exclusive_lock`].
-unsafe fn bootstrap_managed_lifecycle_leaf(
+/// The caller must retain the exact exclusive Store-root lease for the complete call.
+#[doc(hidden)]
+pub unsafe fn bootstrap_managed_lifecycle_under_exclusive_lock(
     store_root: &File,
-) -> Result<InitialBootstrapCompletion, ManagedLifecycleBootstrapError> {
-    let meta = derive_store_meta(store_root)?;
-    preflight_bootstrap_namespace(store_root, BootstrapInventoryLimits::default())
-        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Inventory(source)))?;
-    let cloned_root = store_root
-        .try_clone()
-        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::RootIdentity(source)))?;
-    let prepared = platform::prepare_initial_bootstrap_foundation(cloned_root, &meta)
-        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Foundation(source)))?;
-    platform::execute_prepared_initial_bootstrap(prepared)
-        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Execution(source)))
+) -> Result<Option<InitialBootstrapCompletion>, StoreError> {
+    // SAFETY: the caller upholds the checked bootstrap's retained-root and exclusivity contract.
+    match unsafe { bootstrap_managed_lifecycle_under_exclusive_lock_checked(store_root) } {
+        Ok(completion) => Ok(Some(completion)),
+        Err(error) => match bootstrap_store_error(error) {
+            Some(error) => Err(error),
+            None => Ok(None),
+        },
+    }
 }
 
-fn derive_store_meta(store_root: &File) -> Result<StoreMeta, ManagedLifecycleBootstrapError> {
-    let key = physical_file_key(store_root)
-        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::RootIdentity(source)))?;
+fn derive_store_meta(store_root: &File) -> Result<StoreMeta, ManagedLifecycleBootstrapFailure> {
+    let key = physical_file_key(store_root).map_err(ManagedLifecycleBootstrapFailure::RootIdentity)?;
     let mut store_uuid = derive_id(b"rocketmq-managed-store-uuid-v1\0", key);
     if store_uuid == [0; 16] {
         store_uuid[15] = 1;
@@ -206,8 +191,7 @@ fn derive_store_meta(store_root: &File) -> Result<StoreMeta, ManagedLifecycleBoo
         bootstrap_id[15] = 1;
     }
     Ok(StoreMeta {
-        store_uuid: StoreUuid::new(store_uuid)
-            .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Identity(source)))?,
+        store_uuid: StoreUuid::new(store_uuid).map_err(ManagedLifecycleBootstrapFailure::Identity)?,
         creation_time_ns: 0,
         bootstrap_id,
     })
@@ -277,7 +261,7 @@ pub(super) trait InitialBootstrapBackend: private::Sealed {
 }
 
 #[derive(Debug, Error)]
-pub(super) enum InitialBootstrapExecutionError<E>
+pub(super) enum InitialBootstrapExecutionFailure<E>
 where
     E: Error + Send + Sync + 'static,
 {
@@ -296,7 +280,7 @@ where
 pub(super) fn execute_initial_bootstrap<B>(
     foundation: BootstrapFoundationEvidence,
     backend: &mut B,
-) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionError<B::Error>>
+) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionFailure<B::Error>>
 where
     B: InitialBootstrapBackend,
 {
@@ -308,90 +292,90 @@ where
 fn execute_store_initialized<B>(
     plan: InitialBootstrapPlan,
     backend: &mut B,
-) -> Result<InitialBootstrapInventoryPlan, InitialBootstrapExecutionError<B::Error>>
+) -> Result<InitialBootstrapInventoryPlan, InitialBootstrapExecutionFailure<B::Error>>
 where
     B: InitialBootstrapBackend,
 {
     for _ in 0..MAX_BOOTSTRAP_ACTIONS {
         let progress = backend
             .inspect_store_initialized(&plan.store_initialized)
-            .map_err(InitialBootstrapExecutionError::Backend)?;
+            .map_err(InitialBootstrapExecutionFailure::Backend)?;
         match plan.decide_store_initialized(progress) {
             BootstrapDecision::Execute(BootstrapAction::AdvanceUnit {
                 record: BootstrapRecord::StoreInitialized,
                 step,
             }) => backend
                 .advance_unit(BootstrapRecord::StoreInitialized, &plan.store_initialized, step)
-                .map_err(InitialBootstrapExecutionError::Backend)?,
+                .map_err(InitialBootstrapExecutionFailure::Backend)?,
             BootstrapDecision::RequireBootstrapInventory => {
                 let inventory = backend
                     .scan_inventory()
-                    .map_err(InitialBootstrapExecutionError::Backend)?;
+                    .map_err(InitialBootstrapExecutionFailure::Backend)?;
                 return plan.consume_inventory(progress, inventory).map_err(Into::into);
             }
             BootstrapDecision::NeedsRecovery(recovery) => {
-                return Err(InitialBootstrapExecutionError::NeedsRecovery(recovery));
+                return Err(InitialBootstrapExecutionFailure::NeedsRecovery(recovery));
             }
-            _ => return Err(InitialBootstrapExecutionError::InvalidPlanAction),
+            _ => return Err(InitialBootstrapExecutionFailure::InvalidPlanAction),
         }
     }
-    Err(InitialBootstrapExecutionError::ActionBoundExceeded)
+    Err(InitialBootstrapExecutionFailure::ActionBoundExceeded)
 }
 
 fn execute_inventory_phase<B>(
     plan: &InitialBootstrapInventoryPlan,
     backend: &mut B,
-) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionError<B::Error>>
+) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionFailure<B::Error>>
 where
     B: InitialBootstrapBackend,
 {
     for _ in 0..MAX_BOOTSTRAP_ACTIONS {
         let progress = backend
             .inspect_inventory_phase(plan)
-            .map_err(InitialBootstrapExecutionError::Backend)?;
+            .map_err(InitialBootstrapExecutionFailure::Backend)?;
         match plan.decide(progress) {
             BootstrapDecision::Execute(action) => execute_inventory_action(plan, backend, action)?,
             BootstrapDecision::NeedsRecovery(recovery) => {
-                return Err(InitialBootstrapExecutionError::NeedsRecovery(recovery));
+                return Err(InitialBootstrapExecutionFailure::NeedsRecovery(recovery));
             }
             BootstrapDecision::FencedComplete(evidence) => return Ok(evidence),
             BootstrapDecision::RequireBootstrapInventory => {
-                return Err(InitialBootstrapExecutionError::InvalidPlanAction);
+                return Err(InitialBootstrapExecutionFailure::InvalidPlanAction);
             }
         }
     }
-    Err(InitialBootstrapExecutionError::ActionBoundExceeded)
+    Err(InitialBootstrapExecutionFailure::ActionBoundExceeded)
 }
 
 fn execute_inventory_action<B>(
     plan: &InitialBootstrapInventoryPlan,
     backend: &mut B,
     action: BootstrapAction,
-) -> Result<(), InitialBootstrapExecutionError<B::Error>>
+) -> Result<(), InitialBootstrapExecutionFailure<B::Error>>
 where
     B: InitialBootstrapBackend,
 {
     match action {
         BootstrapAction::AdvanceSnapshot { step } => backend
             .advance_snapshot(&plan.snapshot, step)
-            .map_err(InitialBootstrapExecutionError::Backend),
+            .map_err(InitialBootstrapExecutionFailure::Backend),
         BootstrapAction::AdvanceInitialMarker { step } => backend
             .advance_initial_marker(&plan.initial_marker, step)
-            .map_err(InitialBootstrapExecutionError::Backend),
+            .map_err(InitialBootstrapExecutionFailure::Backend),
         BootstrapAction::AdvanceUnit { record, step } => {
             let planned = match record {
                 BootstrapRecord::BootstrapInstalled => &plan.bootstrap_installed,
                 BootstrapRecord::MarkerCommitted => &plan.marker_committed,
-                _ => return Err(InitialBootstrapExecutionError::InvalidPlanAction),
+                _ => return Err(InitialBootstrapExecutionFailure::InvalidPlanAction),
             };
             backend
                 .advance_unit(record, planned, step)
-                .map_err(InitialBootstrapExecutionError::Backend)
+                .map_err(InitialBootstrapExecutionFailure::Backend)
         }
         BootstrapAction::Reconcile { phase } => backend
             .reconcile(phase)
-            .map_err(InitialBootstrapExecutionError::Backend),
-        BootstrapAction::AdvanceMarker { .. } => Err(InitialBootstrapExecutionError::InvalidPlanAction),
+            .map_err(InitialBootstrapExecutionFailure::Backend),
+        BootstrapAction::AdvanceMarker { .. } => Err(InitialBootstrapExecutionFailure::InvalidPlanAction),
     }
 }
 
@@ -506,11 +490,11 @@ impl ModelInitialBootstrapBackend {
         }
     }
 
-    fn record_action(&mut self, action: BootstrapAction) -> Result<(), io::Error> {
+    fn record_action(&mut self, action: BootstrapAction) -> Result<(), std::io::Error> {
         let index = self.actions.len();
         self.actions.push(action);
         if self.fail_after == Some(index) {
-            return Err(io::Error::other(format!(
+            return Err(std::io::Error::other(format!(
                 "injected bootstrap failure after action {action:?}"
             )));
         }
@@ -520,7 +504,7 @@ impl ModelInitialBootstrapBackend {
 
 #[cfg(test)]
 impl InitialBootstrapBackend for ModelInitialBootstrapBackend {
-    type Error = io::Error;
+    type Error = std::io::Error;
 
     fn inspect_store_initialized(
         &mut self,

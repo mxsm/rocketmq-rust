@@ -327,14 +327,15 @@ impl CommitLogLoader {
             return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
         }
         let file_name = mapped_file.get_file_name().as_str();
-        mapped_file
-            .with_mapped_slice(|mapped| {
-                (
-                    apply_recovery_mmap_advice(self.recovery_mmap_advice, mapped, file_name),
-                    apply_recovery_file_prefetch(self.recovery_file_prefetch, mapped, file_name),
-                )
-            })
-            .unwrap_or_else(|error| {
+        match mapped_file.with_mapped_slice(|mapped| {
+            (
+                apply_recovery_mmap_advice(self.recovery_mmap_advice, mapped, file_name),
+                apply_recovery_file_prefetch(self.recovery_file_prefetch, mapped, file_name),
+            )
+        }) {
+            Ok(Some(outcomes)) => outcomes,
+            Ok(None) => (HintOutcome::not_attempted(), HintOutcome::not_attempted()),
+            Err(error) => {
                 tracing::warn!(
                     target: "rocketmq_store::log_file::commit_log_loader",
                     file_name,
@@ -342,6 +343,7 @@ impl CommitLogLoader {
                     "CommitLog recovery hints skipped because mapped bytes were unavailable"
                 );
                 (HintOutcome::not_attempted(), HintOutcome::not_attempted())
-            })
+            }
+        }
     }
 }

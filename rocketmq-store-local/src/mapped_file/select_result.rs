@@ -17,6 +17,7 @@ use std::sync::OnceLock;
 
 use bytes::Bytes;
 
+use super::lifecycle::LifecycleAcquireOutcome;
 use super::lifecycle::MappedFileLease;
 use super::DefaultMappedFile;
 use super::MappedFile;
@@ -223,7 +224,8 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         if bytes.len() != size {
             return false;
         }
-        let Ok(lease) = mapped_file.try_acquire_owned_lease(MappedFileOperation::Read) else {
+        let LifecycleAcquireOutcome::Acquired(lease) = mapped_file.try_acquire_owned_lease(MappedFileOperation::Read)
+        else {
             return false;
         };
         if !mapped_file

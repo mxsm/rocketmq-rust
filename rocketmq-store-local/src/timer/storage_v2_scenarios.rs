@@ -63,7 +63,7 @@ fn codec_rejects_crc_and_policy_changes() {
 
     let mut encoded = record(1).encode();
     encoded[24] ^= 1;
-    assert!(TimerLogV2Record::decode(&encoded).is_err());
+    assert!(TimerLogV2Record::decode(&encoded).is_none());
 }
 
 #[test]
@@ -71,12 +71,14 @@ fn segmented_log_crosses_segments_recovers_tail_and_gcs_only_sealed_segments() {
     let directory = tempdir().unwrap();
     let metrics = Arc::new(TimerStorageMetrics::default());
     let segment_size = TIMER_LOG_V2_PHYSICAL_RECORD_SIZE * 4;
-    let log = SegmentedTimerLog::new(directory.path(), segment_size, 2, Arc::clone(&metrics)).unwrap();
+    let log = SegmentedTimerLog::new(directory.path(), segment_size, 2, Arc::clone(&metrics))
+        .unwrap()
+        .unwrap();
     log.load().unwrap();
     log.append_batch(&(0..8).map(record).collect::<Vec<_>>()).unwrap();
     log.flush().unwrap();
     assert_eq!(log.segment_ids().len(), 3);
-    assert_eq!(log.read(TimerLogOffset::new(200)).unwrap(), record(5));
+    assert_eq!(log.read(TimerLogOffset::new(200)).unwrap().unwrap(), record(5));
     assert_eq!(
         log.gc(
             TimerLogOffset::new(240),
@@ -93,7 +95,9 @@ fn segmented_log_crosses_segments_recovers_tail_and_gcs_only_sealed_segments() {
 fn paged_wheel_flushes_only_dirty_pages_and_ignores_ahead_generation() {
     let directory = tempdir().unwrap();
     let metrics = Arc::new(TimerStorageMetrics::default());
-    let wheel = PagedTimerWheel::new(directory.path(), 32, 288, Arc::clone(&metrics)).unwrap();
+    let wheel = PagedTimerWheel::new(directory.path(), 32, 288, Arc::clone(&metrics))
+        .unwrap()
+        .unwrap();
     wheel.load(0).unwrap();
     wheel.put_slot(9, Slot::new_with_num_magic(9_000, 0, 40, 2, 1)).unwrap();
     let generation = wheel.flush_dirty().unwrap();
@@ -102,11 +106,15 @@ fn paged_wheel_flushes_only_dirty_pages_and_ignores_ahead_generation() {
     wheel.put_slot(9, Slot::new_with_num_magic(9_000, 0, 80, 3, 1)).unwrap();
     assert_eq!(wheel.flush_dirty().unwrap(), generation + 1);
 
-    let before_commit = PagedTimerWheel::new(directory.path(), 32, 288, Arc::clone(&metrics)).unwrap();
+    let before_commit = PagedTimerWheel::new(directory.path(), 32, 288, Arc::clone(&metrics))
+        .unwrap()
+        .unwrap();
     before_commit.load(generation).unwrap();
     assert_eq!(before_commit.get_slot(9).unwrap().num, 2);
 
-    let committed = PagedTimerWheel::new(directory.path(), 32, 288, metrics).unwrap();
+    let committed = PagedTimerWheel::new(directory.path(), 32, 288, metrics)
+        .unwrap()
+        .unwrap();
     committed.load(generation).unwrap();
     assert_eq!(committed.get_slot(9).unwrap().num, 2);
 }

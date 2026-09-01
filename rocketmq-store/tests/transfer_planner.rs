@@ -37,14 +37,15 @@ fn zero_configured_batch_size_uses_default_without_zero_data_frame() {
         assert_eq!(offset, 0);
         assert_eq!(max_bytes, DEFAULT_TRANSFER_BATCH_SIZE);
         assert!(!allow_cross_file);
-        Ok(vec![SegmentLease::from_bytes(
+        Ok(Some(vec![SegmentLease::from_bytes(
             0,
             0,
             Bytes::from(vec![1; DEFAULT_TRANSFER_BATCH_SIZE]),
             TransferCacheState::Hot,
-        )])
+        )]))
     })
-    .expect("planner should build data plan");
+    .expect("planner should build data plan")
+    .expect("valid transfer plan");
 
     let TransferPlan::Data(batch) = plan else {
         panic!("expected data batch");
@@ -70,9 +71,10 @@ fn flow_control_zero_returns_no_data_without_selecting_segments() {
 
     let plan = TransferPlanner::plan(input, |_, _, _| {
         selector_called = true;
-        Ok(Vec::new())
+        Ok(Some(Vec::new()))
     })
-    .expect("flow control should not be an error");
+    .expect("flow control should not be an error")
+    .expect("valid transfer plan");
 
     assert!(matches!(plan, TransferPlan::NoData));
     assert!(!selector_called);
@@ -95,14 +97,15 @@ fn single_file_plan_caps_batch_at_mapped_file_boundary() {
         assert_eq!(offset, 900);
         assert_eq!(max_bytes, 124);
         assert!(!allow_cross_file);
-        Ok(vec![SegmentLease::from_bytes(
+        Ok(Some(vec![SegmentLease::from_bytes(
             900,
             900,
             Bytes::from(vec![7; 124]),
             TransferCacheState::Cold,
-        )])
+        )]))
     })
-    .expect("planner should cap at file boundary");
+    .expect("planner should cap at file boundary")
+    .expect("valid transfer plan");
 
     let TransferPlan::Data(batch) = plan else {
         panic!("expected data batch");

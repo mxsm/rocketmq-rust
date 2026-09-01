@@ -26,12 +26,11 @@ use super::corruption;
 use super::io_error;
 use super::limit_error;
 use super::platform;
-use super::ManagedLifecycleReadError;
-use super::ManagedLifecycleReadSource;
+use super::ManagedLifecycleReadFailure;
 
 pub(super) fn validate_snapshot_prefix(
     entry: &mut platform::OpenedEntry,
-) -> Result<[u8; SNAPSHOT_HEADER_LENGTH], ManagedLifecycleReadError> {
+) -> Result<[u8; SNAPSHOT_HEADER_LENGTH], ManagedLifecycleReadFailure> {
     let length = entry.length();
     let maximum = (MIN_SNAPSHOT_FILE_LENGTH + MAX_SNAPSHOT_BODY_LENGTH) as u64;
     if length < MIN_SNAPSHOT_FILE_LENGTH as u64 || length > maximum {
@@ -46,9 +45,9 @@ pub(super) fn validate_snapshot_prefix(
     let major = u16::from_le_bytes(header[4..6].try_into().map_err(|_| corruption("snapshot version"))?);
     let minor = u16::from_le_bytes(header[6..8].try_into().map_err(|_| corruption("snapshot version"))?);
     if (major, minor) != (1, 0) {
-        return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadSource::UnknownVersion(format!("snapshot {major}.{minor}")),
-        ));
+        return Err(ManagedLifecycleReadFailure::UnknownVersion(format!(
+            "snapshot {major}.{minor}"
+        )));
     }
     let total = u64::from_le_bytes(header[12..20].try_into().map_err(|_| corruption("snapshot length"))?);
     let entry_count = u32::from_le_bytes(header[84..88].try_into().map_err(|_| corruption("entry count"))?);
@@ -73,7 +72,7 @@ pub(super) fn read_snapshot_file(
     header: &[u8; SNAPSHOT_HEADER_LENGTH],
     total_read: &mut u64,
     max_total_read_bytes: u64,
-) -> Result<Vec<u8>, ManagedLifecycleReadError> {
+) -> Result<Vec<u8>, ManagedLifecycleReadFailure> {
     let length = entry.length();
     let next_total = total_read
         .checked_add(length)
@@ -108,8 +107,8 @@ pub(super) fn read_snapshot_file(
         .map_err(io_error)?;
     let mut extra = [0_u8; 1];
     if entry.file.read(&mut extra).map_err(io_error)? != 0 {
-        return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadSource::InventoryChanged("snapshot grew while it was read".to_owned()),
+        return Err(ManagedLifecycleReadFailure::InventoryChanged(
+            "snapshot grew while it was read".to_owned(),
         ));
     }
     *total_read = next_total;
@@ -122,7 +121,7 @@ pub(super) fn read_exact_file(
     maximum: u64,
     total_read: &mut u64,
     max_total_read_bytes: u64,
-) -> Result<Vec<u8>, ManagedLifecycleReadError> {
+) -> Result<Vec<u8>, ManagedLifecycleReadFailure> {
     let length = entry.length();
     if exact.is_some_and(|expected| length != expected as u64) {
         return Err(corruption(format!("fixed sidecar length {length} is invalid")));
@@ -146,8 +145,8 @@ pub(super) fn read_exact_file(
     entry.file.read_exact(&mut bytes).map_err(io_error)?;
     let mut extra = [0_u8; 1];
     if entry.file.read(&mut extra).map_err(io_error)? != 0 {
-        return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadSource::InventoryChanged("sidecar grew while it was read".to_owned()),
+        return Err(ManagedLifecycleReadFailure::InventoryChanged(
+            "sidecar grew while it was read".to_owned(),
         ));
     }
     *total_read = next_total;

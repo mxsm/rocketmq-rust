@@ -89,7 +89,7 @@ impl BrokerRuntime {
             error!("Message store requires an injected broker service context");
             return false;
         };
-        let factory_config = StoreFactoryConfig::new(
+        let Some(factory_config) = StoreFactoryConfig::try_new(
             Arc::clone(&message_store_config),
             store_runtime_config,
             self.composition
@@ -99,7 +99,10 @@ impl BrokerRuntime {
             self.composition.state.broker_stats_manager.clone(),
             false,
             self.composition.state.store_telemetry.clone(),
-        );
+        ) else {
+            error!("Invalid CommitLog micro-batch policy");
+            return false;
+        };
         let opened = match StoreFactory::open(factory_config, service_context.component("broker.store")) {
             Ok(opened) => opened,
             Err(error) => {

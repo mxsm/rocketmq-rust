@@ -267,14 +267,15 @@ impl TimelineIndexMigrationManager {
         let native_receipt = if exported.is_empty() {
             None
         } else {
+            let records = exported
+                .iter()
+                .copied()
+                .map(entry_to_native)
+                .collect::<Result<Vec<_>, _>>()?;
             Some(
-                self.native.append_batch(
-                    &exported
-                        .iter()
-                        .copied()
-                        .map(entry_to_native)
-                        .collect::<Result<Vec<_>, _>>()?,
-                )?,
+                self.native
+                    .append_batch(&records)?
+                    .ok_or(IndexMigrationError::CorruptState)?,
             )
         };
         for entry in &exported {
@@ -532,13 +533,17 @@ impl TimelineIndexMigrationManager {
         let state_index = RocksDbTimelineStateIndex::new(self.rocks.store());
         let mut continuation = None;
         loop {
-            let page = self.native.scan_due(
+            let Some(page) = self.native.scan_due(
                 None,
                 i64::MAX,
                 page_records,
                 page_records.saturating_mul(TimelineSegmentRecord::encoded_size()),
                 continuation,
-            )?;
+            )?
+            else {
+                summary.finalize();
+                return Ok(summary);
+            };
             let states = state_index.get_many(
                 &page
                     .records
@@ -601,7 +606,8 @@ impl TimelineIndexMigrationManager {
 
 impl MigrationComparison {
     fn add(&mut self, entry: TimelineIndexEntry) -> Result<(), IndexMigrationError> {
-        let partition = TimelinePartitionKey::from_deadline(entry.key.due_time_ms, entry.key.lane)?;
+        let partition = TimelinePartitionKey::from_deadline(entry.key.due_time_ms, entry.key.lane)
+            .ok_or(IndexMigrationError::CorruptState)?;
         let hash = hash_entry(FNV_OFFSET, entry);
         let partition_summary = self.partitions.entry(partition).or_default();
         partition_summary.0 = partition_summary.0.saturating_add(1);
@@ -795,7 +801,7 @@ pub(crate) enum IndexMigrationError {
     #[error(transparent)]
     Rocks(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
-    Store(#[from] crate::store_error::StoreError),
+    Store(#[from] rocketmq_store_api::StoreError),
     #[error(transparent)]
     Commit(#[from] SegmentedCommitError),
     #[error(transparent)]

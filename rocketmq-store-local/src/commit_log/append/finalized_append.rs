@@ -46,7 +46,7 @@ impl<'a> FinalizedAppend<'a> {
     /// # Errors
     ///
     /// Returns [`FinalizeAppendViolation`] when queue or physical offset arithmetic overflows.
-    pub fn try_new(
+    fn try_new_checked(
         prepared: &'a PreparedPayload,
         first_queue_offset: i64,
         first_physical_offset: i64,
@@ -107,7 +107,7 @@ impl<'a> FinalizedAppend<'a> {
     ///
     /// Returns [`FinalizeAppendViolation::DestinationTooSmall`] without modifying the destination when
     /// it cannot hold the complete payload.
-    pub fn write_into<F>(&self, destination: &mut [u8], mut finalize_crc: F) -> Result<(), FinalizeAppendViolation>
+    fn write_into_checked<F>(&self, destination: &mut [u8], mut finalize_crc: F) -> Result<(), FinalizeAppendViolation>
     where
         F: FnMut(&mut [u8], AppendFrameCrcPlan),
     {
@@ -135,11 +135,29 @@ impl<'a> FinalizedAppend<'a> {
         }
         Ok(())
     }
+
+    /// Binds runtime fields for all frames without touching mapped memory.
+    pub fn try_new(
+        prepared: &'a PreparedPayload,
+        first_queue_offset: i64,
+        first_physical_offset: i64,
+        store_timestamp: i64,
+    ) -> Option<Self> {
+        Self::try_new_checked(prepared, first_queue_offset, first_physical_offset, store_timestamp).ok()
+    }
+
+    /// Copies and patches the payload into an exclusive mapped-file staging buffer.
+    pub fn write_into<F>(&self, destination: &mut [u8], finalize_crc: F) -> Option<()>
+    where
+        F: FnMut(&mut [u8], AppendFrameCrcPlan),
+    {
+        self.write_into_checked(destination, finalize_crc).ok()
+    }
 }
 
 /// Failure to bind or copy final append fields.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum FinalizeAppendViolation {
+pub(crate) enum FinalizeAppendViolation {
     /// A batch queue offset cannot be represented.
     #[error("queue offset overflow: first offset {first_queue_offset}, frame index {frame_index}")]
     QueueOffsetOverflow {
@@ -209,7 +227,7 @@ mod tests {
         let mut destination = vec![0xA5; 79];
 
         let error = finalized
-            .write_into(&mut destination, |_, _| {})
+            .write_into_checked(&mut destination, |_, _| {})
             .expect_err("small destination");
 
         assert_eq!(

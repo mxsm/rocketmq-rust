@@ -101,7 +101,7 @@ pub enum CommitLogFileLoadDecision {
     "{} length {actual} not matched expected size {expected}, please check it manually",
     path.display()
 )]
-pub struct CommitLogFileValidationViolation {
+pub(crate) struct CommitLogFileValidationViolation {
     /// Filesystem path of the invalid CommitLog segment.
     pub path: PathBuf,
     /// Observed segment length in bytes.
@@ -111,7 +111,7 @@ pub struct CommitLogFileValidationViolation {
 }
 
 /// Validates one CommitLog segment without performing filesystem I/O.
-pub fn validate_commit_log_file(
+pub(crate) fn validate_commit_log_file_checked(
     metadata: &CommitLogFileMetadata,
     expected: u64,
     is_last: bool,
@@ -127,6 +127,15 @@ pub fn validate_commit_log_file(
         });
     }
     Ok(CommitLogFileLoadDecision::Load)
+}
+
+/// Validates one CommitLog segment without performing filesystem I/O.
+pub fn validate_commit_log_file(
+    metadata: &CommitLogFileMetadata,
+    expected: u64,
+    is_last: bool,
+) -> Option<CommitLogFileLoadDecision> {
+    validate_commit_log_file_checked(metadata, expected, is_last).ok()
 }
 
 /// Collects and validates ordered filesystem metadata for CommitLog segments.
@@ -198,7 +207,7 @@ fn collect_file_metadata(
         path: path.to_path_buf(),
         size,
     };
-    match validate_commit_log_file(&metadata, expected_size, is_last) {
+    match validate_commit_log_file_checked(&metadata, expected_size, is_last) {
         Ok(CommitLogFileLoadDecision::Load) => Ok(Some(metadata)),
         Ok(CommitLogFileLoadDecision::RemoveEmptyLast) => {
             remove_empty_last_file(path);

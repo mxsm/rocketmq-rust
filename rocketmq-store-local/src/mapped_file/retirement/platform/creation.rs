@@ -45,19 +45,22 @@ pub(in crate::mapped_file::retirement) enum IncarnationCreationStage {
 /// Handle-relative creation failure that never loses the underlying OS error.
 #[derive(Debug, Error)]
 #[error("managed incarnation creation failed during {stage:?}: {source}")]
-pub(crate) struct IncarnationCreationError {
+pub(in crate::mapped_file::retirement) struct IncarnationCreationFailure {
     stage: IncarnationCreationStage,
     #[source]
-    source: IncarnationCreationErrorSource,
+    source: IncarnationCreationFailureSource,
 }
 
 #[derive(Debug, Error)]
-enum IncarnationCreationErrorSource {
-    #[error(transparent)]
-    Io(#[from] io::Error),
-    #[error("namespace verification failed: {0:?}")]
-    #[allow(dead_code, reason = "constructed by the platform-gated namespace engines")]
-    Namespace(NamespaceTransitionOutcome),
+enum IncarnationCreationFailureSource {
+    #[error("{0}")]
+    Io(
+        #[from]
+        #[source]
+        io::Error,
+    ),
+    #[error("namespace transition rejected: {0:?}")]
+    Namespace(Box<NamespaceTransitionOutcome>),
     #[error("{0}")]
     Policy(&'static str),
     #[allow(
@@ -71,8 +74,7 @@ enum IncarnationCreationErrorSource {
     },
 }
 
-impl IncarnationCreationError {
-    #[allow(dead_code, reason = "constructed only by the platform-gated namespace engines")]
+impl IncarnationCreationFailure {
     pub(super) fn io(stage: IncarnationCreationStage, source: io::Error) -> Self {
         Self {
             stage,
@@ -83,15 +85,14 @@ impl IncarnationCreationError {
     pub(super) fn policy(stage: IncarnationCreationStage, reason: &'static str) -> Self {
         Self {
             stage,
-            source: IncarnationCreationErrorSource::Policy(reason),
+            source: IncarnationCreationFailureSource::Policy(reason),
         }
     }
 
-    #[allow(dead_code, reason = "constructed only by the platform-gated namespace engines")]
     pub(super) fn namespace(stage: IncarnationCreationStage, source: NamespaceTransitionOutcome) -> Self {
         Self {
             stage,
-            source: IncarnationCreationErrorSource::Namespace(source),
+            source: IncarnationCreationFailureSource::Namespace(Box::new(source)),
         }
     }
 
@@ -102,7 +103,7 @@ impl IncarnationCreationError {
     pub(super) fn unsupported(stage: IncarnationCreationStage, platform: &'static str, reason: &'static str) -> Self {
         Self {
             stage,
-            source: IncarnationCreationErrorSource::Unsupported { platform, reason },
+            source: IncarnationCreationFailureSource::Unsupported { platform, reason },
         }
     }
 
@@ -149,16 +150,12 @@ impl VerifiedCreatedIncarnation {
 
 impl VerifiedNamespaceRoot {
     /// Creates, sizes, syncs, and key-binds the unique create-file name.
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(in crate::mapped_file::retirement) fn create_incarnation_temp(
         &self,
         allocated: &AllocatedIncarnationReceipt,
-    ) -> Result<CreatedIncarnationTemp, IncarnationCreationError> {
+    ) -> Result<CreatedIncarnationTemp, IncarnationCreationFailure> {
         if allocated.incarnation().store_uuid() != self.store_uuid {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "allocation belongs to a different Store UUID",
             ));
@@ -169,22 +166,71 @@ impl VerifiedNamespaceRoot {
     }
 
     /// Publishes the exact bound temp file and returns a reopened canonical handle.
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(in crate::mapped_file::retirement) fn publish_bound_incarnation(
         &self,
         created: CreatedIncarnationTemp,
         bound: &BoundIncarnationReceipt,
-    ) -> Result<VerifiedCreatedIncarnation, IncarnationCreationError> {
+    ) -> Result<VerifiedCreatedIncarnation, IncarnationCreationFailure> {
         if bound.incarnation().store_uuid() != self.store_uuid {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "binding belongs to a different Store UUID",
             ));
         }
         let (file, physical_key) = self.native.publish_bound_incarnation(created.native, bound)?;
         Ok(VerifiedCreatedIncarnation { file, physical_key })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::mem::size_of;
+
+    use super::IncarnationCreationFailure;
+    use super::IncarnationCreationFailureSource;
+    use super::IncarnationCreationStage;
+    use crate::mapped_file::retirement::platform::types::NamespacePolicyViolation;
+    use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
+
+    #[test]
+    fn creation_failure_is_compact_and_preserves_the_typed_io_chain() {
+        assert!(size_of::<IncarnationCreationFailure>() <= 128);
+
+        let failure = IncarnationCreationFailure::io(
+            IncarnationCreationStage::CreateTemp,
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        );
+        let source = failure.source().expect("private creation source");
+        assert!(source.downcast_ref::<IncarnationCreationFailureSource>().is_some());
+        assert_eq!(
+            source
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        assert!(matches!(
+            &failure.source,
+            IncarnationCreationFailureSource::Io(source)
+                if source.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[test]
+    fn creation_failure_preserves_the_boxed_namespace_outcome() {
+        let failure = IncarnationCreationFailure::namespace(
+            IncarnationCreationStage::OpenParent,
+            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot),
+        );
+
+        assert!(matches!(
+            failure.source,
+            IncarnationCreationFailureSource::Namespace(source)
+                if matches!(
+                    source.as_ref(),
+                    NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot)
+                )
+        ));
     }
 }

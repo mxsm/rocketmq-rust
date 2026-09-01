@@ -57,7 +57,7 @@ mod managed;
 
 use managed::ManagedAllocationContext;
 use managed::ManagedAllocationRequest;
-pub(crate) use managed::ManagedMappedFileAllocationError;
+pub(crate) use managed::ManagedMappedFileAllocationFailure;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1409,38 +1409,65 @@ impl AllocateMappedFileService {
         queue_path: &Path,
         segment_offset: u64,
         file_size: u64,
-    ) -> Result<Arc<DefaultMappedFile>, rocketmq_store_api::StoreError> {
-        self.put_managed_request_blocking_typed(queue, queue_path, segment_offset, file_size)
-            .map_err(ManagedMappedFileAllocationError::into_store_error)
+    ) -> Result<Option<Arc<DefaultMappedFile>>, rocketmq_store_api::StoreError> {
+        match self.put_managed_request_and_return_mapped_file_blocking_checked(
+            queue,
+            queue_path,
+            segment_offset,
+            file_size,
+        ) {
+            Ok(mapped_file) => Ok(Some(mapped_file)),
+            Err(
+                ManagedMappedFileAllocationFailure::InvalidFileSize(_)
+                | ManagedMappedFileAllocationFailure::QueueOutsideStoreRoot
+                | ManagedMappedFileAllocationFailure::InvalidQueuePath,
+            ) => Ok(None),
+            Err(ManagedMappedFileAllocationFailure::Store(source)) => Err(source),
+            Err(error) => {
+                let descriptor = match &error {
+                    ManagedMappedFileAllocationFailure::WorkerUnavailable
+                    | ManagedMappedFileAllocationFailure::LifecycleUnavailable => {
+                        &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+                    }
+                    ManagedMappedFileAllocationFailure::Budget(_) => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+                    ManagedMappedFileAllocationFailure::InvalidFileSize(_)
+                    | ManagedMappedFileAllocationFailure::QueueOutsideStoreRoot
+                    | ManagedMappedFileAllocationFailure::InvalidQueuePath
+                    | ManagedMappedFileAllocationFailure::Store(_) => unreachable!(),
+                };
+                Err(
+                    rocketmq_store_api::StoreError::new(descriptor, rocketmq_store_api::StoreOperation::Append)
+                        .in_component(rocketmq_store_api::StoreComponent::MappedFile)
+                        .with_detail("managed mapped-file allocation failed")
+                        .with_source(error),
+                )
+            }
+        }
     }
 
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
-    fn put_managed_request_blocking_typed(
+    fn put_managed_request_and_return_mapped_file_blocking_checked(
         &self,
         queue: crate::mapped_file::ManagedMappedFileQueueGeneration<DefaultMappedFile>,
         queue_path: &Path,
         segment_offset: u64,
         file_size: u64,
-    ) -> Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationError> {
+    ) -> Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationFailure> {
         if !self.is_started() {
-            return Err(ManagedMappedFileAllocationError::WorkerUnavailable);
+            return Err(ManagedMappedFileAllocationFailure::WorkerUnavailable);
         }
         let charged_bytes = usize::try_from(file_size)
             .ok()
             .filter(|size| *size > 0)
-            .ok_or(ManagedMappedFileAllocationError::InvalidFileSize(file_size))?;
+            .ok_or(ManagedMappedFileAllocationFailure::InvalidFileSize(file_size))?;
         let permit = self
             .allocation_budget
             .try_acquire(charged_bytes, BudgetClass::Data)
-            .map_err(ManagedMappedFileAllocationError::Budget)?;
+            .map_err(ManagedMappedFileAllocationFailure::Budget)?;
         let context = self
             .managed_context
             .read()
             .clone()
-            .ok_or(ManagedMappedFileAllocationError::LifecycleUnavailable)?;
+            .ok_or(ManagedMappedFileAllocationFailure::LifecycleUnavailable)?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let request = Arc::new(ManagedAllocationRequest::new(
             context,

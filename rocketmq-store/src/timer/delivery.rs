@@ -664,7 +664,7 @@ pub(crate) enum TimelineDeliveryError {
     #[error("Timeline storage failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("payload storage failure: {0}")]
-    Payload(#[from] crate::store_error::StoreError),
+    Store(#[from] rocketmq_store_api::StoreError),
     #[error("completion replay failure: {0}")]
     Completion(#[from] crate::timer::timeline::TimelineCompletionError),
     #[error("formal Timeline entry has no state")]

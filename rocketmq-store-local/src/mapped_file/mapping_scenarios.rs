@@ -95,7 +95,7 @@ fn concurrent_lazy_callers_publish_one_generation() {
         for handle in handles {
             assert_eq!(
                 handle.join().expect("caller does not panic").expect("mapping succeeds"),
-                8
+                Some(8)
             );
         }
     });
@@ -163,7 +163,7 @@ fn failed_lazy_initialization_is_retryable_and_accounted() {
     assert!(!mapped_file.is_mapped());
     assert_eq!(mapped_file.lazy_mmap_stats().map_failures, 1);
 
-    assert_eq!(mapped_file.with_mapped_slice(<[u8]>::len).expect("retry maps"), 8);
+    assert_eq!(mapped_file.with_mapped_slice(<[u8]>::len).expect("retry maps"), Some(8));
     assert_eq!(RETRY_MAP_ATTEMPTS.load(Ordering::SeqCst), 2);
     assert_eq!(mapped_file.lazy_mmap_stats().map_operations, 1);
     assert_eq!(mapped_file.lazy_mmap_stats().map_failures, 1);

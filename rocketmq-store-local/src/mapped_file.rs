@@ -70,9 +70,9 @@ pub use retirement::registry::MappedFileQueueGeneration;
 pub use retirement::registry::MappedFileQueueSnapshot;
 #[doc(hidden)]
 pub use retirement::replay::{
-    inspect_managed_lifecycle_read_only, inspect_managed_lifecycle_read_only_with_limits,
-    inspect_managed_lifecycle_under_exclusive_lock, LockedManagedLifecycleInspection, ManagedLifecycleReadLimits,
-    ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    inspect_managed_lifecycle_read_only_for_store, inspect_managed_lifecycle_read_only_with_limits_for_store,
+    inspect_managed_lifecycle_under_exclusive_lock_for_store, LockedManagedLifecycleInspection,
+    ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
 };
 #[doc(hidden)]
 pub use retirement::service::{
@@ -103,21 +103,21 @@ pub use default_mapped_file::LazyMmapStats;
 pub use default_mapped_file::OS_PAGE_SIZE;
 pub use direct_io::DirectIoBuffer;
 pub use direct_io::DirectIoRequest;
-pub use direct_io::DirectIoValidationViolation;
 pub use flush_strategy::FlushStrategy;
 pub use generation::MappedReadLease;
 pub use generation::MappingGenerationId;
 pub use io_uring_impl::io_uring_backend_status;
 pub use io_uring_impl::IoUringBackendStatus;
+pub use lifecycle::LifecycleAcquireOutcome;
+pub use lifecycle::LifecycleAcquireRejection;
 pub use lifecycle::MappedFileAdmissionState;
 pub use lifecycle::MappedFileLifecycleSnapshot;
 pub use lifecycle::MappedFileOperation;
 pub use lifecycle_outcome::MappedFileDestroyOutcome;
 pub use lifecycle_outcome::MappedFileDetachOutcome;
 pub use mapped_buffer::MappedBuffer;
-pub(crate) use mapped_file_error::MappedFileError;
+pub(crate) use mapped_file_error::MappedFileFailure;
 pub use memory::MappedMemory;
-pub use memory::MmapRangeViolation;
 pub use memory::NativeMappedMemory;
 pub use memory::NativeReadOnlyMappedMemory;
 pub use memory::ReadOnlyMappedMemory;

@@ -19,8 +19,6 @@ use crate::config::FlushDiskType;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
 use crate::mapped_file::MappedFileAdmissionState;
-use crate::mapped_file::MappedFileError;
-use crate::mapped_file::MappedFileOperation;
 use crate::mapped_file::MappedWriteLease;
 use cheetah_string::CheetahString;
 use tempfile::TempDir;
@@ -42,106 +40,40 @@ fn lazy_mapped_file(size: u64) -> (TempDir, DefaultMappedFile) {
     (directory, mapped_file)
 }
 
-fn assert_unavailable(error: rocketmq_store_api::StoreError, operation: MappedFileOperation) {
-    assert_unavailable_in_state(error, MappedFileAdmissionState::Closing, operation);
-}
-
-fn assert_unavailable_in_state(
-    error: rocketmq_store_api::StoreError,
-    state: MappedFileAdmissionState,
-    operation: MappedFileOperation,
-) {
-    assert_eq!(error.code().as_str(), "storage.backend.unavailable");
-    let source = std::error::Error::source(&error).and_then(|source| source.downcast_ref::<MappedFileError>());
-    assert!(matches!(
-        source,
-        Some(MappedFileError::Unavailable {
-            state: observed_state,
-            operation: observed,
-        }) if *observed_state == state && *observed == operation
-    ));
-}
-
-fn assert_unavailable_typed(error: MappedFileError, operation: MappedFileOperation) {
-    assert!(matches!(
-        error,
-        MappedFileError::Unavailable {
-            state: MappedFileAdmissionState::Closing,
-            operation: observed,
-        } if observed == operation
-    ));
-}
-
 #[test]
 fn closing_rejects_new_read_write_and_maintenance_operations() {
     let (_directory, mapped_file) = mapped_file(64);
     assert!(mapped_file.append_message_bytes(b"readable"));
     mapped_file.shutdown(u64::MAX);
 
-    assert_unavailable(
-        mapped_file.try_get_bytes(0, 1).expect_err("read must be rejected"),
-        MappedFileOperation::Read,
+    assert!(matches!(mapped_file.try_get_bytes(0, 1), Ok(None)));
+    assert!(matches!(mapped_file.try_get_data(0, 1), Ok(None)));
+    assert!(matches!(mapped_file.try_get_slice(0, 1), Ok(None)));
+    assert!(matches!(mapped_file.try_select_mapped_buffer(0, 1), Ok(None)));
+    assert!(matches!(
+        mapped_file.try_select_mapped_buffer_with_position(0),
+        Ok(None)
+    ));
+    assert!(matches!(mapped_file.try_select_mapped_buffer(-1, -1), Ok(None)));
+    assert!(matches!(mapped_file.try_get_slice(usize::MAX, 2), Ok(None)));
+    assert!(matches!(mapped_file.reserve_write(1), Ok(None)));
+    assert_eq!(
+        mapped_file.try_flush(0).expect("closed flush sentinel"),
+        mapped_file.get_flushed_position()
     );
-    assert_unavailable(
-        mapped_file
-            .try_get_data(0, 1)
-            .expect_err("readable data must be rejected"),
-        MappedFileOperation::Read,
+    assert_eq!(
+        mapped_file.try_commit(0).expect("closed commit sentinel"),
+        mapped_file.get_committed_position()
     );
-    assert_unavailable(
-        mapped_file.try_get_slice(0, 1).expect_err("slice must be rejected"),
-        MappedFileOperation::Read,
+    assert_eq!(
+        mapped_file.try_flush_range(8, 1).expect("closed flush range sentinel"),
+        0
     );
-    let selection_error = match mapped_file.try_select_mapped_buffer(0, 1) {
-        Err(error) => error,
-        Ok(_) => panic!("selection must be rejected"),
-    };
-    assert_unavailable(selection_error, MappedFileOperation::Read);
-    let tail_selection_error = match mapped_file.try_select_mapped_buffer_with_position(0) {
-        Err(error) => error,
-        Ok(_) => panic!("tail selection must be rejected"),
-    };
-    assert_unavailable(tail_selection_error, MappedFileOperation::Read);
-    let invalid_selection_error = match mapped_file.try_select_mapped_buffer(-1, -1) {
-        Err(error) => error,
-        Ok(_) => panic!("invalid selection must still observe closing"),
-    };
-    assert_unavailable(invalid_selection_error, MappedFileOperation::Read);
-    assert_unavailable(
-        mapped_file
-            .try_get_slice(usize::MAX, 2)
-            .expect_err("invalid slice must still observe closing"),
-        MappedFileOperation::Read,
-    );
-    let write_error = match mapped_file.reserve_write(1) {
-        Ok(_) => panic!("write must be rejected"),
-        Err(error) => error,
-    };
-    assert_unavailable(write_error, MappedFileOperation::Write);
-    assert_unavailable(
-        mapped_file.try_flush(0).expect_err("flush must be rejected"),
-        MappedFileOperation::Maintenance,
-    );
-    assert_unavailable(
-        mapped_file.try_commit(0).expect_err("commit must be rejected"),
-        MappedFileOperation::Maintenance,
-    );
-    assert_unavailable_typed(
-        mapped_file
-            .try_flush_range(8, 1)
-            .expect_err("invalid flush range must still observe closing"),
-        MappedFileOperation::Maintenance,
-    );
-    assert_unavailable(
-        mapped_file
-            .try_warm_mapped_file(FlushDiskType::AsyncFlush, 1)
-            .expect_err("warm-up must be rejected"),
-        MappedFileOperation::Write,
-    );
-    assert_unavailable(
-        mapped_file.try_mlock().expect_err("mlock must be rejected"),
-        MappedFileOperation::Maintenance,
-    );
+    assert!(!mapped_file
+        .try_warm_mapped_file(FlushDiskType::AsyncFlush, 1)
+        .expect("closed warm sentinel"));
+    assert!(!mapped_file.try_mlock().expect("closed mlock sentinel"));
+    assert!(!mapped_file.try_munlock().expect("closed munlock sentinel"));
 }
 
 #[test]
@@ -161,21 +93,16 @@ fn sealed_readable_admits_reads_and_maintenance_but_rejects_writes() {
     );
     mapped_file.try_flush(0).expect("maintenance admission");
 
-    let error = match mapped_file.reserve_write(1) {
-        Ok(_) => panic!("sealed segment must reject writes"),
-        Err(error) => error,
-    };
-    assert_unavailable_in_state(
-        error,
-        MappedFileAdmissionState::SealedReadable,
-        MappedFileOperation::Write,
-    );
+    assert!(matches!(mapped_file.reserve_write(1), Ok(None)));
 }
 
 #[test]
 fn admitted_write_remains_valid_until_its_guard_drops() {
     let (_directory, mapped_file) = mapped_file(16);
-    let mut lease = mapped_file.reserve_write(4).expect("pre-close lease");
+    let mut lease = mapped_file
+        .reserve_write(4)
+        .expect("pre-close lease")
+        .expect("valid reservation");
     lease.buffer_mut().copy_from_slice(b"data");
 
     mapped_file.shutdown(u64::MAX);
@@ -185,7 +112,7 @@ fn admitted_write_remains_valid_until_its_guard_drops() {
     assert!(pending.started_at.is_some());
     assert!(!pending.logical_cleanup_marked);
 
-    assert_eq!(lease.commit(4, None).expect("admitted write finishes"), 4);
+    assert_eq!(lease.commit(4, None).expect("admitted write finishes"), Some(4));
     let drained = mapped_file.lifecycle_snapshot();
     assert_eq!(drained.active_leases, 0);
     assert!(drained.logical_cleanup_marked);
@@ -197,10 +124,7 @@ fn close_before_lazy_initialization_prevents_late_mapping_publication() {
     assert!(!mapped_file.is_mapped());
 
     mapped_file.shutdown(u64::MAX);
-    assert_unavailable(
-        mapped_file.try_get_bytes(0, 1).expect_err("late lazy read must fail"),
-        MappedFileOperation::Read,
-    );
+    assert!(matches!(mapped_file.try_get_bytes(0, 1), Ok(None)));
     assert!(!mapped_file.is_mapped());
     assert_eq!(mapped_file.lazy_mmap_stats().map_operations, 0);
 }
@@ -208,7 +132,10 @@ fn close_before_lazy_initialization_prevents_late_mapping_publication() {
 #[test]
 fn repeated_force_observation_never_invalidates_a_live_lease() {
     let (_directory, mapped_file) = mapped_file(16);
-    let lease = mapped_file.reserve_write(4).expect("pre-close lease");
+    let lease = mapped_file
+        .reserve_write(4)
+        .expect("pre-close lease")
+        .expect("valid reservation");
 
     mapped_file.shutdown(0);
     mapped_file.shutdown(0);

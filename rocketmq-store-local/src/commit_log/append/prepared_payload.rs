@@ -95,7 +95,7 @@ impl PreparedPayload {
     ///
     /// Returns [`PreparedPayloadViolation`] when the payload is malformed, contains multiple frames,
     /// or cannot safely accommodate the runtime fields and configured checksum trailer.
-    pub fn try_single(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadViolation> {
+    pub(crate) fn try_single_checked(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadViolation> {
         Self::try_from_encoded(bytes, PreparedPayloadKind::Single, crc_trailer_bytes)
     }
 
@@ -105,7 +105,7 @@ impl PreparedPayload {
     ///
     /// Returns [`PreparedPayloadViolation`] when any frame is malformed, the frame partition is not
     /// exact, or a runtime field/checksum trailer would be out of bounds.
-    pub fn try_batch(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadViolation> {
+    pub(crate) fn try_batch_checked(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadViolation> {
         Self::try_from_encoded(bytes, PreparedPayloadKind::Batch, crc_trailer_bytes)
     }
 
@@ -246,11 +246,21 @@ impl PreparedPayload {
     pub fn into_bytes(self) -> Bytes {
         self.bytes
     }
+
+    /// Validates an encoded single-message frame.
+    pub fn try_single(bytes: Bytes, crc_trailer_bytes: usize) -> Option<Self> {
+        Self::try_single_checked(bytes, crc_trailer_bytes).ok()
+    }
+
+    /// Validates one or more contiguous encoded batch frames.
+    pub fn try_batch(bytes: Bytes, crc_trailer_bytes: usize) -> Option<Self> {
+        Self::try_batch_checked(bytes, crc_trailer_bytes).ok()
+    }
 }
 
 /// Structural validation failure for encoded CommitLog bytes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum PreparedPayloadViolation {
+pub(crate) enum PreparedPayloadViolation {
     /// No frame bytes were supplied.
     #[error("prepared CommitLog payload is empty")]
     Empty,
@@ -330,7 +340,7 @@ mod tests {
         let mut frame = encoded_frame(80, 0).to_vec();
         frame[..4].copy_from_slice(&81_i32.to_be_bytes());
 
-        let error = PreparedPayload::try_single(Bytes::from(frame), 0).expect_err("truncated frame");
+        let error = PreparedPayload::try_single_checked(Bytes::from(frame), 0).expect_err("truncated frame");
 
         assert!(matches!(error, PreparedPayloadViolation::FrameOutOfBounds { .. }));
     }
@@ -343,7 +353,7 @@ mod tests {
         batch.put(first);
         batch.put(second);
 
-        let error = PreparedPayload::try_single(batch.freeze(), 0).expect_err("multiple frames");
+        let error = PreparedPayload::try_single_checked(batch.freeze(), 0).expect_err("multiple frames");
 
         assert_eq!(error, PreparedPayloadViolation::SingleFrameCount { actual: 2 });
     }

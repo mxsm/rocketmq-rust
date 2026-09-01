@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Arc;
@@ -49,9 +52,8 @@ use quarantine::QuarantineRead;
 use reading::read_exact_file;
 use reading::read_snapshot_file;
 use reading::validate_snapshot_prefix;
-use rocketmq_store_api::StoreError;
-pub(crate) use types::ManagedLifecycleReadError;
-use types::{corruption, io_error, limit_error, ManagedLifecycleReadSource};
+pub(crate) use types::ManagedLifecycleReadFailure;
+use types::{corruption, io_error, limit_error};
 pub use types::{
     LockedManagedLifecycleInspection, ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome,
     ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
@@ -77,8 +79,10 @@ const MAX_TOTAL_READ_BYTES: u64 = 1024 * 1024 * 1024;
 ///
 /// Returns a typed failure if containment, complete inventory, bounded decoding, or replay cannot be proven.
 #[doc(hidden)]
-pub fn inspect_managed_lifecycle_read_only(store_root: &File) -> Result<ManagedLifecycleReadOutcome, StoreError> {
-    inspect_with_hook(store_root, || {}).map_err(ManagedLifecycleReadError::into_store_error)
+pub(crate) fn inspect_managed_lifecycle_read_only(
+    store_root: &File,
+) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+    inspect_with_hook(store_root, || {})
 }
 
 /// Inspects lifecycle artifacts with caller-selected work bounds.
@@ -88,11 +92,11 @@ pub fn inspect_managed_lifecycle_read_only(store_root: &File) -> Result<ManagedL
 /// Returns a typed failure for invalid/insufficient bounds or if containment, complete inventory,
 /// bounded decoding, or replay cannot be proven.
 #[doc(hidden)]
-pub fn inspect_managed_lifecycle_read_only_with_limits(
+pub(crate) fn inspect_managed_lifecycle_read_only_with_limits(
     store_root: &File,
     limits: ManagedLifecycleReadLimits,
-) -> Result<ManagedLifecycleReadOutcome, StoreError> {
-    inspect_with_limits_and_hooks(store_root, limits, || {}, || {}).map_err(ManagedLifecycleReadError::into_store_error)
+) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+    inspect_with_limits_and_hooks(store_root, limits, || {}, || {})
 }
 
 /// Inspects managed lifecycle evidence while the caller retains the exclusive Store-root lease.
@@ -114,18 +118,10 @@ pub fn inspect_managed_lifecycle_read_only_with_limits(
 /// Returns a typed failure if bounded, stable, handle-relative discovery and replay cannot be
 /// proven, or if the retained root handle cannot be duplicated.
 #[doc(hidden)]
-pub unsafe fn inspect_managed_lifecycle_under_exclusive_lock(
+pub(crate) unsafe fn inspect_managed_lifecycle_under_exclusive_lock(
     store_root: &File,
     exclusive_lease: Arc<dyn Send + Sync>,
-) -> Result<LockedManagedLifecycleInspection, StoreError> {
-    inspect_managed_lifecycle_under_exclusive_lock_leaf(store_root, exclusive_lease)
-        .map_err(ManagedLifecycleReadError::into_store_error)
-}
-
-fn inspect_managed_lifecycle_under_exclusive_lock_leaf(
-    store_root: &File,
-    exclusive_lease: Arc<dyn Send + Sync>,
-) -> Result<LockedManagedLifecycleInspection, ManagedLifecycleReadError> {
+) -> Result<LockedManagedLifecycleInspection, ManagedLifecycleReadFailure> {
     let classification =
         inspect_stable_with_limits_and_hooks(store_root, ManagedLifecycleReadLimits::default(), || {}, || {})?;
     match classification {
@@ -148,7 +144,7 @@ fn inspect_managed_lifecycle_under_exclusive_lock_leaf(
 fn inspect_with_hook(
     store_root: &File,
     after_first_inventory: impl FnOnce(),
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadError> {
+) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
     inspect_with_limits_and_hooks(
         store_root,
         ManagedLifecycleReadLimits::default(),
@@ -161,7 +157,7 @@ fn inspect_with_hooks(
     store_root: &File,
     after_first_inventory: impl FnOnce(),
     before_third_inventory: impl FnOnce(),
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadError> {
+) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
     inspect_with_limits_and_hooks(
         store_root,
         ManagedLifecycleReadLimits::default(),
@@ -175,7 +171,7 @@ fn inspect_with_limits_and_hooks(
     limits: ManagedLifecycleReadLimits,
     after_first_inventory: impl FnOnce(),
     before_third_inventory: impl FnOnce(),
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadError> {
+) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
     inspect_stable_with_limits_and_hooks(store_root, limits, after_first_inventory, before_third_inventory)
         .map(StableLifecycleInspection::outcome)
 }
@@ -185,7 +181,7 @@ fn inspect_stable_with_limits_and_hooks(
     limits: ManagedLifecycleReadLimits,
     after_first_inventory: impl FnOnce(),
     before_third_inventory: impl FnOnce(),
-) -> Result<StableLifecycleInspection, ManagedLifecycleReadError> {
+) -> Result<StableLifecycleInspection, ManagedLifecycleReadFailure> {
     let limits = limits.validate()?;
     let Some(lifecycle) =
         platform::LifecycleDirectory::open(store_root, LIFECYCLE_DIRECTORY).map_err(map_platform_error)?
@@ -220,10 +216,8 @@ fn inspect_stable_with_limits_and_hooks(
         }
         let quarantine_second = opened[index].enumerate(remaining).map_err(map_platform_error)?;
         if quarantine_second != quarantine_first {
-            return Err(ManagedLifecycleReadError::new(
-                ManagedLifecycleReadSource::InventoryChanged(
-                    "quarantine inventory changed while entries were opened".to_owned(),
-                ),
+            return Err(ManagedLifecycleReadFailure::InventoryChanged(
+                "quarantine inventory changed while entries were opened".to_owned(),
             ));
         }
         Some(QuarantineRead {
@@ -239,10 +233,8 @@ fn inspect_stable_with_limits_and_hooks(
         .enumerate(limits.max_directory_entries)
         .map_err(map_platform_error)?;
     if second != first {
-        return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadSource::InventoryChanged(
-                "lifecycle inventory changed while entries were opened".to_owned(),
-            ),
+        return Err(ManagedLifecycleReadFailure::InventoryChanged(
+            "lifecycle inventory changed while entries were opened".to_owned(),
         ));
     }
 
@@ -273,10 +265,8 @@ fn inspect_stable_with_limits_and_hooks(
             .as_ref()
             .is_none_or(|expected| quarantine_third != expected.first)
         {
-            return Err(ManagedLifecycleReadError::new(
-                ManagedLifecycleReadSource::InventoryChanged(
-                    "quarantine inventory changed while evidence was read".to_owned(),
-                ),
+            return Err(ManagedLifecycleReadFailure::InventoryChanged(
+                "quarantine inventory changed while evidence was read".to_owned(),
             ));
         }
     }
@@ -284,10 +274,8 @@ fn inspect_stable_with_limits_and_hooks(
         .enumerate(limits.max_directory_entries)
         .map_err(map_platform_error)?;
     if third != first {
-        return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadSource::InventoryChanged(
-                "lifecycle inventory changed while sidecars were read".to_owned(),
-            ),
+        return Err(ManagedLifecycleReadFailure::InventoryChanged(
+            "lifecycle inventory changed while sidecars were read".to_owned(),
         ));
     }
 
@@ -349,7 +337,7 @@ impl InventoryPlan {
     fn parse(
         inventory: &platform::InventorySnapshot,
         limits: ManagedLifecycleReadLimits,
-    ) -> Result<Self, ManagedLifecycleReadError> {
+    ) -> Result<Self, ManagedLifecycleReadFailure> {
         let mut plan = Self {
             store_meta: None,
             marker: None,
@@ -362,12 +350,10 @@ impl InventoryPlan {
         let mut physical_files = BTreeMap::<(u64, [u8; 16]), &str>::new();
         for (index, entry) in inventory.entries.iter().enumerate() {
             if entry.kind == platform::EntryKind::Reparse {
-                return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                        "lifecycle entry {:?} is a symlink or reparse point",
-                        entry.name
-                    )),
-                ));
+                return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                    "lifecycle entry {:?} is a symlink or reparse point",
+                    entry.name
+                )));
             }
             let folded = entry.name.to_ascii_lowercase();
             if let Some(previous) = case_folded.insert(folded, &entry.name) {
@@ -378,21 +364,17 @@ impl InventoryPlan {
             }
             if entry.kind == platform::EntryKind::File {
                 if entry.stamp.link_count != 1 {
-                    return Err(ManagedLifecycleReadError::new(
-                        ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                            "lifecycle file {:?} has {} hard links; exactly one is required",
-                            entry.name, entry.stamp.link_count
-                        )),
-                    ));
+                    return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                        "lifecycle file {:?} has {} hard links; exactly one is required",
+                        entry.name, entry.stamp.link_count
+                    )));
                 }
                 let physical_id = (entry.stamp.volume, entry.stamp.file_id);
                 if let Some(previous) = physical_files.insert(physical_id, &entry.name) {
-                    return Err(ManagedLifecycleReadError::new(
-                        ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                            "lifecycle files {previous:?} and {:?} are hard-link aliases",
-                            entry.name
-                        )),
-                    ));
+                    return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                        "lifecycle files {previous:?} and {:?} are hard-link aliases",
+                        entry.name
+                    )));
                 }
             }
             match entry.name.as_str() {
@@ -460,7 +442,7 @@ impl InventoryPlan {
     }
 }
 
-fn require_file(entry: &platform::InventoryEntry) -> Result<(), ManagedLifecycleReadError> {
+fn require_file(entry: &platform::InventoryEntry) -> Result<(), ManagedLifecycleReadFailure> {
     if entry.kind != platform::EntryKind::File {
         return Err(corruption(format!(
             "lifecycle artifact {:?} is not a regular file",
@@ -511,7 +493,10 @@ impl StableInventoryProof {
         Self { decoded }
     }
 
-    fn classify(self, limits: ManagedLifecycleReadLimits) -> Result<StableManagedLifecycle, ManagedLifecycleReadError> {
+    fn classify(
+        self,
+        limits: ManagedLifecycleReadLimits,
+    ) -> Result<StableManagedLifecycle, ManagedLifecycleReadFailure> {
         self.decoded.classify(limits)
     }
 }
@@ -527,7 +512,7 @@ fn read_and_decode_inventory(
     opened: &mut [platform::OpenedEntry],
     total_read: &mut u64,
     limits: ManagedLifecycleReadLimits,
-) -> Result<DecodedInventory, ManagedLifecycleReadError> {
+) -> Result<DecodedInventory, ManagedLifecycleReadFailure> {
     let store_meta = plan
         .store_meta
         .map(|index| {
@@ -564,7 +549,7 @@ fn read_and_decode_inventory(
                 total_read,
                 limits.max_total_read_bytes,
             )?;
-            Ok::<_, ManagedLifecycleReadError>(bytes)
+            Ok::<_, ManagedLifecycleReadFailure>(bytes)
         })
         .transpose()?;
 
@@ -625,7 +610,10 @@ fn read_and_decode_inventory(
 }
 
 impl DecodedInventory {
-    fn classify(self, limits: ManagedLifecycleReadLimits) -> Result<StableManagedLifecycle, ManagedLifecycleReadError> {
+    fn classify(
+        self,
+        limits: ManagedLifecycleReadLimits,
+    ) -> Result<StableManagedLifecycle, ManagedLifecycleReadFailure> {
         let Some(marker) = self.marker else {
             if self.has_quarantine || !self.tail_evidence.is_empty() {
                 return Err(corruption("quarantine artifacts cannot precede ENABLED.v1"));
@@ -728,20 +716,113 @@ impl DecodedInventory {
     }
 }
 
-fn map_platform_error(error: platform::PlatformError) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Platform(error))
+fn map_platform_error(error: platform::PlatformFailure) -> ManagedLifecycleReadFailure {
+    ManagedLifecycleReadFailure::Platform(error)
 }
 
-fn map_sidecar_error(error: SidecarViolation) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Sidecar(error))
+fn lifecycle_read_store_error(error: ManagedLifecycleReadFailure) -> StoreError {
+    let descriptor = match &error {
+        ManagedLifecycleReadFailure::Io(_)
+        | ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Io { .. }) => {
+            &rocketmq_error::STORAGE_IO_FAILED
+        }
+        #[cfg(windows)]
+        ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Windows { .. }) => {
+            &rocketmq_error::STORAGE_IO_FAILED
+        }
+        ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Changed { .. })
+        | ManagedLifecycleReadFailure::InventoryChanged(_) => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Limit { .. })
+        | ManagedLifecycleReadFailure::Limit(_)
+        | ManagedLifecycleReadFailure::ReplayLimit(_) => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Unsupported) => {
+            &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
+        }
+        ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::UnsafeNamespace { .. })
+        | ManagedLifecycleReadFailure::Sidecar(_)
+        | ManagedLifecycleReadFailure::UnknownSidecarVersion(_)
+        | ManagedLifecycleReadFailure::Codec(_)
+        | ManagedLifecycleReadFailure::UnknownCodecVersion(_)
+        | ManagedLifecycleReadFailure::Replay(_)
+        | ManagedLifecycleReadFailure::ReplayUnknownVersion(_)
+        | ManagedLifecycleReadFailure::Corruption(_)
+        | ManagedLifecycleReadFailure::UnsafeNamespace(_)
+        | ManagedLifecycleReadFailure::UnknownVersion(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+    };
+    StoreError::new(descriptor, StoreOperation::Load)
+        .in_component(StoreComponent::MappedFile)
+        .with_detail("managed lifecycle read failed")
+        .with_source(error)
 }
 
-fn map_codec_error(error: CodecViolation) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Codec(error))
+#[doc(hidden)]
+pub fn inspect_managed_lifecycle_read_only_for_store(
+    store_root: &File,
+) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+    inspect_managed_lifecycle_read_only(store_root).map_err(lifecycle_read_store_error)
 }
 
-fn map_replay_error(error: ReplayViolation) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Replay(error))
+#[doc(hidden)]
+pub fn inspect_managed_lifecycle_read_only_with_limits_for_store(
+    store_root: &File,
+    limits: ManagedLifecycleReadLimits,
+) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+    inspect_managed_lifecycle_read_only_with_limits(store_root, limits).map_err(lifecycle_read_store_error)
+}
+
+/// Inspects managed lifecycle evidence for the Store owner while retaining its exclusive lease.
+///
+/// # Safety
+///
+/// The caller must uphold the same retained-root and exclusive-lock invariants as the checked
+/// internal inspector.
+#[doc(hidden)]
+pub unsafe fn inspect_managed_lifecycle_under_exclusive_lock_for_store(
+    store_root: &File,
+    exclusive_lease: Arc<dyn Send + Sync>,
+) -> Result<LockedManagedLifecycleInspection, StoreError> {
+    // SAFETY: the public Store owner is required to uphold the checked inspector's invariants.
+    unsafe { inspect_managed_lifecycle_under_exclusive_lock(store_root, exclusive_lease) }
+        .map_err(lifecycle_read_store_error)
+}
+
+fn map_sidecar_error(error: SidecarViolation) -> ManagedLifecycleReadFailure {
+    if matches!(
+        error,
+        SidecarViolation::UnsupportedVersion { .. } | SidecarViolation::UnsupportedSnapshotEntryVersion { .. }
+    ) {
+        ManagedLifecycleReadFailure::UnknownSidecarVersion(error)
+    } else {
+        ManagedLifecycleReadFailure::Sidecar(error)
+    }
+}
+
+fn map_codec_error(error: CodecViolation) -> ManagedLifecycleReadFailure {
+    if matches!(
+        error,
+        CodecViolation::UnsupportedFormatVersion { .. } | CodecViolation::UnsupportedRecordVersion { .. }
+    ) {
+        ManagedLifecycleReadFailure::UnknownCodecVersion(error)
+    } else {
+        ManagedLifecycleReadFailure::Codec(error)
+    }
+}
+
+fn map_replay_error(error: ReplayViolation) -> ManagedLifecycleReadFailure {
+    match &error {
+        ReplayViolation::LimitExceeded { .. } => ManagedLifecycleReadFailure::ReplayLimit(error),
+        ReplayViolation::Snapshot(
+            SidecarViolation::UnsupportedVersion { .. } | SidecarViolation::UnsupportedSnapshotEntryVersion { .. },
+        )
+        | ReplayViolation::Marker(
+            SidecarViolation::UnsupportedVersion { .. } | SidecarViolation::UnsupportedSnapshotEntryVersion { .. },
+        )
+        | ReplayViolation::InvalidLog {
+            source: CodecViolation::UnsupportedFormatVersion { .. } | CodecViolation::UnsupportedRecordVersion { .. },
+            ..
+        } => ManagedLifecycleReadFailure::ReplayUnknownVersion(error),
+        _ => ManagedLifecycleReadFailure::Replay(error),
+    }
 }
 
 #[cfg(test)]

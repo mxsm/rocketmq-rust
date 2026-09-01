@@ -17,38 +17,49 @@ use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TransferError {
-    #[error("invalid transfer input: {0}")]
-    InvalidInput(String),
-    #[error("commitlog segment selection failed: {0}")]
-    SegmentSelection(String),
-    #[error("unsupported transfer segment source: {0}")]
-    UnsupportedSegmentSource(&'static str),
+pub(crate) enum TransferFailure {
     #[error("transfer I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-impl TransferError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Transfer I/O keeps its typed source; input, selection, and
-    /// unsupported-source violations are invalid requests. Replication owners
-    /// report the high-availability component, while read owners report the
-    /// commit log.
-    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
-        let descriptor = match &self {
-            Self::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
-            Self::InvalidInput(_) | Self::SegmentSelection(_) | Self::UnsupportedSegmentSource(_) => {
-                &rocketmq_error::STORAGE_REQUEST_INVALID
-            }
-        };
-        let component = if matches!(operation, StoreOperation::Replicate) {
-            StoreComponent::HighAvailability
-        } else {
-            StoreComponent::CommitLog
-        };
-        StoreError::new(descriptor, operation)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransferViolation {
+    InvalidInput(String),
+    SegmentSelection(String),
+    UnsupportedSegmentSource(&'static str),
+}
+
+impl TransferFailure {
+    pub(crate) fn into_store_error(self, operation: StoreOperation, component: StoreComponent) -> StoreError {
+        StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
             .in_component(component)
             .with_source(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn transfer_io_maps_with_its_typed_cause() {
+        let error = TransferFailure::Io(io::Error::new(io::ErrorKind::WriteZero, "write stalled"))
+            .into_store_error(StoreOperation::Replicate, StoreComponent::HighAvailability);
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        let transfer = error
+            .source()
+            .and_then(|source| source.downcast_ref::<TransferFailure>())
+            .expect("transfer failure remains typed");
+        assert_eq!(
+            transfer
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .map(io::Error::kind),
+            Some(io::ErrorKind::WriteZero)
+        );
     }
 }

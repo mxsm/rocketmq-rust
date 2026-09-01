@@ -21,12 +21,12 @@ use super::super::types::DurableUnitProgress;
 use super::super::types::DurableUnitStep;
 use super::super::types::PlannedAcknowledgedUnit;
 use crate::mapped_file::retirement::io::LedgerIo;
-use crate::mapped_file::retirement::io::LedgerIoError;
+use crate::mapped_file::retirement::io::LedgerIoFailure;
 
 #[derive(Debug, Error)]
-pub(in crate::mapped_file::retirement::bootstrap) enum DurableUnitError {
+pub(in crate::mapped_file::retirement::bootstrap) enum DurableUnitFailure {
     #[error(transparent)]
-    Io(#[from] LedgerIoError),
+    Io(#[from] LedgerIoFailure),
     #[error("bootstrap durable unit is not an exact prefix of its canonical bytes: {0}")]
     NonCanonical(&'static str),
     #[error("bootstrap durable-unit offset arithmetic overflowed")]
@@ -74,15 +74,15 @@ where
         &mut self,
         record: BootstrapRecord,
         planned: &PlannedAcknowledgedUnit,
-    ) -> Result<DurableUnitProgress, DurableUnitError> {
+    ) -> Result<DurableUnitProgress, DurableUnitFailure> {
         let durability = self.durability(record, planned.sequence);
         let log_length = self.io.log_len()?;
         if log_length < planned.frame_start_offset {
-            return Err(DurableUnitError::NonCanonical("log ends before planned frame start"));
+            return Err(DurableUnitFailure::NonCanonical("log ends before planned frame start"));
         }
         if log_length < planned.frame_end_offset {
             let prefix_length = usize::try_from(log_length - planned.frame_start_offset)
-                .map_err(|_| DurableUnitError::OffsetOverflow)?;
+                .map_err(|_| DurableUnitFailure::OffsetOverflow)?;
             self.require_log_bytes(planned.frame_start_offset, &planned.frame[..prefix_length])?;
             return Ok(if prefix_length == 0 {
                 DurableUnitProgress::Missing
@@ -116,13 +116,13 @@ where
         }
 
         if acknowledgement != planned.acknowledgement_slot {
-            return Err(DurableUnitError::NonCanonical(
+            return Err(DurableUnitFailure::NonCanonical(
                 "seal bytes exist without the exact acknowledgement slot",
             ));
         }
         if log_length < sealed_end {
-            let prefix_length =
-                usize::try_from(log_length - planned.frame_end_offset).map_err(|_| DurableUnitError::OffsetOverflow)?;
+            let prefix_length = usize::try_from(log_length - planned.frame_end_offset)
+                .map_err(|_| DurableUnitFailure::OffsetOverflow)?;
             self.require_log_bytes(planned.frame_end_offset, &planned.seal[..prefix_length])?;
             return Ok(if prefix_length == 0 {
                 DurableUnitProgress::AcknowledgementVerified
@@ -145,7 +145,7 @@ where
         record: BootstrapRecord,
         planned: &PlannedAcknowledgedUnit,
         step: DurableUnitStep,
-    ) -> Result<(), DurableUnitError> {
+    ) -> Result<(), DurableUnitFailure> {
         let identity = UnitIdentity {
             record,
             sequence: planned.sequence,
@@ -170,7 +170,7 @@ where
             DurableUnitStep::VerifyAcknowledgementSlot => {
                 let actual = self.io.read_acknowledgement_slot(slot_index(planned)?)?;
                 if actual != planned.acknowledgement_slot {
-                    return Err(DurableUnitError::NonCanonical("acknowledgement reread mismatch"));
+                    return Err(DurableUnitFailure::NonCanonical("acknowledgement reread mismatch"));
                 }
                 self.durability.entry(identity).or_default().acknowledgement_verified = true;
             }
@@ -184,7 +184,7 @@ where
             DurableUnitStep::VerifySealAndEof => {
                 self.require_log_bytes(planned.frame_end_offset, &planned.seal)?;
                 if self.io.log_len()? != planned.sealed_log_length {
-                    return Err(DurableUnitError::NonCanonical("sealed log EOF mismatch"));
+                    return Err(DurableUnitFailure::NonCanonical("sealed log EOF mismatch"));
                 }
                 self.durability.entry(identity).or_default().seal_verified = true;
             }
@@ -202,46 +202,46 @@ where
         *self.durability.entry(identity).or_default()
     }
 
-    fn append_remaining(&mut self, start: u64, expected: &[u8]) -> Result<(), DurableUnitError> {
+    fn append_remaining(&mut self, start: u64, expected: &[u8]) -> Result<(), DurableUnitFailure> {
         let actual = self.io.log_len()?;
         let end = start
-            .checked_add(u64::try_from(expected.len()).map_err(|_| DurableUnitError::OffsetOverflow)?)
-            .ok_or(DurableUnitError::OffsetOverflow)?;
+            .checked_add(u64::try_from(expected.len()).map_err(|_| DurableUnitFailure::OffsetOverflow)?)
+            .ok_or(DurableUnitFailure::OffsetOverflow)?;
         if actual < start || actual > end {
-            return Err(DurableUnitError::NonCanonical(
+            return Err(DurableUnitFailure::NonCanonical(
                 "append frontier is outside planned bytes",
             ));
         }
-        let consumed = usize::try_from(actual - start).map_err(|_| DurableUnitError::OffsetOverflow)?;
+        let consumed = usize::try_from(actual - start).map_err(|_| DurableUnitFailure::OffsetOverflow)?;
         self.require_log_bytes(start, &expected[..consumed])?;
         self.io.append_log(actual, &expected[consumed..])?;
         Ok(())
     }
 
-    fn require_log_bytes(&mut self, offset: u64, expected: &[u8]) -> Result<(), DurableUnitError> {
+    fn require_log_bytes(&mut self, offset: u64, expected: &[u8]) -> Result<(), DurableUnitFailure> {
         if expected.is_empty() {
             return Ok(());
         }
         let mut actual = Vec::new();
         actual
             .try_reserve_exact(expected.len())
-            .map_err(|_| DurableUnitError::OffsetOverflow)?;
+            .map_err(|_| DurableUnitFailure::OffsetOverflow)?;
         actual.resize(expected.len(), 0);
         self.io.read_log_exact(offset, &mut actual)?;
         if actual != expected {
-            return Err(DurableUnitError::NonCanonical("log byte mismatch"));
+            return Err(DurableUnitFailure::NonCanonical("log byte mismatch"));
         }
         Ok(())
     }
 }
 
-fn slot_index(planned: &PlannedAcknowledgedUnit) -> Result<u8, DurableUnitError> {
+fn slot_index(planned: &PlannedAcknowledgedUnit) -> Result<u8, DurableUnitFailure> {
     u8::try_from(
         planned
             .acknowledgement_epoch
             .checked_sub(1)
-            .ok_or(DurableUnitError::OffsetOverflow)?
+            .ok_or(DurableUnitFailure::OffsetOverflow)?
             & 1,
     )
-    .map_err(|_| DurableUnitError::OffsetOverflow)
+    .map_err(|_| DurableUnitFailure::OffsetOverflow)
 }

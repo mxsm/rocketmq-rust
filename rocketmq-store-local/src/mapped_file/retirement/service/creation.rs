@@ -17,6 +17,9 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use super::ManagedLifecycleRuntime;
@@ -27,13 +30,13 @@ use crate::mapped_file::retirement::identity::IdentityViolation;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::identity::StoreUuid;
 use crate::mapped_file::retirement::io::LedgerIo;
-use crate::mapped_file::retirement::platform::IncarnationCreationError;
+use crate::mapped_file::retirement::platform::IncarnationCreationFailure;
 use crate::mapped_file::retirement::platform::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::registry::CreationPublicationFailure;
 use crate::mapped_file::retirement::registry::ManagedMappedFileQueueGeneration;
 use crate::mapped_file::retirement::registry::RegistryViolation;
 use crate::mapped_file::retirement::writer::IncarnationAllocationPlan;
-use crate::mapped_file::retirement::writer::IncarnationWriteError;
+use crate::mapped_file::retirement::writer::IncarnationWriteFailure;
 use crate::mapped_file::DefaultMappedFile;
 
 /// Validated request for one new managed mapped-file incarnation.
@@ -60,27 +63,27 @@ impl fmt::Debug for ManagedIncarnationCreateRequest {
 
 impl ManagedIncarnationCreateRequest {
     /// Validates namespace-independent creation fields before any ledger I/O.
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
-    pub(crate) fn new(
+    pub fn new(directory: &str, segment_offset: u64, expected_length: u64, create_nonce: [u8; 16]) -> Option<Self> {
+        Self::new_checked(directory, segment_offset, expected_length, create_nonce).ok()
+    }
+
+    fn new_checked(
         directory: &str,
         segment_offset: u64,
         expected_length: u64,
         create_nonce: [u8; 16],
-    ) -> Result<Self, ManagedIncarnationCreationError> {
+    ) -> Result<Self, ManagedIncarnationCreationFailure> {
         if expected_length == 0 {
-            return Err(ManagedIncarnationCreationError::preflight(
+            return Err(ManagedIncarnationCreationFailure::preflight(
                 "managed creation expected length is zero",
             ));
         }
         if create_nonce == [0; 16] {
-            return Err(ManagedIncarnationCreationError::preflight(
+            return Err(ManagedIncarnationCreationFailure::preflight(
                 "managed creation nonce is zero",
             ));
         }
-        let directory = StoreRelativePath::new(directory).map_err(ManagedIncarnationCreationError::identity)?;
+        let directory = StoreRelativePath::new(directory).map_err(ManagedIncarnationCreationFailure::identity)?;
         Ok(Self {
             directory,
             segment_offset,
@@ -127,11 +130,14 @@ impl ManagedIncarnationCreation {
     }
 }
 
-/// Private incarnation-creation orchestration leaf with its former kind folded in.
+/// Typed creation failure retaining its protocol or OS source.
+#[doc(hidden)]
 #[derive(Debug, Error)]
-pub(crate) enum ManagedIncarnationCreationError {
+pub(in crate::mapped_file::retirement) enum ManagedIncarnationCreationFailure {
     #[error("{0}")]
     Preflight(&'static str),
+    #[error("managed creation preflight failed: {0}")]
+    PreflightPlan(#[source] IncarnationWriteFailure),
     #[error("managed lifecycle admission is closed")]
     AdmissionClosed,
     #[error("managed lifecycle requires replay before another creation")]
@@ -141,16 +147,16 @@ pub(crate) enum ManagedIncarnationCreationError {
     #[error(transparent)]
     Identity(#[from] IdentityViolation),
     #[error(transparent)]
-    Writer(#[from] IncarnationWriteError),
+    Writer(#[from] IncarnationWriteFailure),
     #[error(transparent)]
-    Namespace(#[from] IncarnationCreationError),
+    Namespace(#[from] IncarnationCreationFailure),
     #[error("managed mapping construction failed: {0}")]
     Mapping(#[source] io::Error),
     #[error(transparent)]
     Registry(#[from] RegistryViolation),
 }
 
-impl ManagedIncarnationCreationError {
+impl ManagedIncarnationCreationFailure {
     fn preflight(reason: &'static str) -> Self {
         Self::Preflight(reason)
     }
@@ -164,6 +170,30 @@ impl ManagedIncarnationCreationError {
     }
 }
 
+fn managed_creation_store_error(error: ManagedIncarnationCreationFailure) -> Option<StoreError> {
+    let descriptor = match &error {
+        ManagedIncarnationCreationFailure::Writer(_) | ManagedIncarnationCreationFailure::Namespace(_) => {
+            &rocketmq_error::STORAGE_WRITE_FAILED
+        }
+        ManagedIncarnationCreationFailure::Mapping(_) => &rocketmq_error::STORAGE_IO_FAILED,
+        ManagedIncarnationCreationFailure::Preflight(_)
+        | ManagedIncarnationCreationFailure::PreflightPlan(_)
+        | ManagedIncarnationCreationFailure::AdmissionClosed
+        | ManagedIncarnationCreationFailure::RecoveryRequired
+        | ManagedIncarnationCreationFailure::SequenceExhausted
+        | ManagedIncarnationCreationFailure::Identity(_)
+        | ManagedIncarnationCreationFailure::Registry(_) => {
+            return None;
+        }
+    };
+    Some(
+        StoreError::new(descriptor, StoreOperation::Append)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail("managed mapped-file creation failed")
+            .with_source(error),
+    )
+}
+
 pub(super) struct ManagedCreationContext {
     store_root: PathBuf,
     store_uuid: StoreUuid,
@@ -175,20 +205,31 @@ impl ManagedLifecycleRuntime {
     ///
     /// This method performs blocking ledger and filesystem I/O. Store code must execute it through
     /// the storage `BlockingExecutor`, exactly like retirement submission and reaper batches.
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(crate) fn create_mapped_file(
         &self,
         queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
         request: ManagedIncarnationCreateRequest,
-    ) -> Result<ManagedIncarnationCreation, ManagedIncarnationCreationError> {
+    ) -> Result<Option<ManagedIncarnationCreation>, StoreError> {
         let mut inner = self.inner.lock();
         if inner.admission != super::RuntimeAdmission::Running {
-            return Err(ManagedIncarnationCreationError::AdmissionClosed);
+            return Ok(None);
         }
-        inner.core.create_mapped_file(queue, request)
+        match inner.core.create_mapped_file(queue, request) {
+            Ok(creation) => Ok(Some(creation)),
+            Err(
+                ManagedIncarnationCreationFailure::Preflight(_)
+                | ManagedIncarnationCreationFailure::PreflightPlan(_)
+                | ManagedIncarnationCreationFailure::AdmissionClosed
+                | ManagedIncarnationCreationFailure::RecoveryRequired
+                | ManagedIncarnationCreationFailure::SequenceExhausted
+                | ManagedIncarnationCreationFailure::Identity(_)
+                | ManagedIncarnationCreationFailure::Registry(_),
+            ) => Ok(None),
+            Err(error) => match managed_creation_store_error(error) {
+                Some(error) => Err(error),
+                None => Ok(None),
+            },
+        }
     }
 }
 
@@ -201,17 +242,13 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
         });
     }
 
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     fn create_mapped_file(
         &mut self,
         queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
         request: ManagedIncarnationCreateRequest,
-    ) -> Result<ManagedIncarnationCreation, ManagedIncarnationCreationError> {
+    ) -> Result<ManagedIncarnationCreation, ManagedIncarnationCreationFailure> {
         if self.recovery_required || self.registry.needs_recovery() {
-            return Err(ManagedIncarnationCreationError::recovery_required());
+            return Err(ManagedIncarnationCreationFailure::recovery_required());
         }
         let (store_root, store_uuid, create_high_water) = self
             .creation
@@ -223,21 +260,23 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
                     context.create_high_water,
                 )
             })
-            .ok_or_else(|| ManagedIncarnationCreationError::preflight("managed creation context is not configured"))?;
+            .ok_or_else(|| {
+                ManagedIncarnationCreationFailure::preflight("managed creation context is not configured")
+            })?;
         let next_create_sequence = create_high_water
             .checked_add(1)
-            .ok_or(ManagedIncarnationCreationError::SequenceExhausted)?;
+            .ok_or(ManagedIncarnationCreationFailure::SequenceExhausted)?;
         let incarnation = FileIncarnationId::new(store_uuid, next_create_sequence)
-            .map_err(ManagedIncarnationCreationError::identity)?;
+            .map_err(ManagedIncarnationCreationFailure::identity)?;
         let canonical_path = StoreRelativePath::new(&format!(
             "{}/{:020}",
             request.directory.as_str(),
             request.segment_offset
         ))
-        .map_err(ManagedIncarnationCreationError::identity)?;
+        .map_err(ManagedIncarnationCreationFailure::identity)?;
         let create_file_path = canonical_path
             .create_file_path(incarnation, request.segment_offset, &request.create_nonce)
-            .map_err(ManagedIncarnationCreationError::identity)?;
+            .map_err(ManagedIncarnationCreationFailure::identity)?;
         let plan = IncarnationAllocationPlan::new(
             incarnation,
             request.segment_offset,
@@ -246,21 +285,21 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
             canonical_path.clone(),
             create_file_path,
         )
-        .map_err(ManagedIncarnationCreationError::Writer)?;
+        .map_err(ManagedIncarnationCreationFailure::PreflightPlan)?;
 
         let allocated = self.writer.append_allocate_incarnation(plan).map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::Writer(source)
+            ManagedIncarnationCreationFailure::Writer(source)
         })?;
         let Some(context) = self.creation.as_mut() else {
             self.recovery_required = true;
-            return Err(ManagedIncarnationCreationError::recovery_required());
+            return Err(ManagedIncarnationCreationFailure::recovery_required());
         };
         context.create_high_water = next_create_sequence;
 
         let created = self.namespace.create_incarnation_temp(&allocated).map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::Namespace(source)
+            ManagedIncarnationCreationFailure::Namespace(source)
         })?;
         let physical_key = created.physical_key();
         let bound = self
@@ -268,18 +307,18 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
             .append_bind_incarnation(allocated, physical_key)
             .map_err(|source| {
                 self.recovery_required = true;
-                ManagedIncarnationCreationError::Writer(source)
+                ManagedIncarnationCreationFailure::Writer(source)
             })?;
         let verified = self
             .namespace
             .publish_bound_incarnation(created, &bound)
             .map_err(|source| {
                 self.recovery_required = true;
-                ManagedIncarnationCreationError::Namespace(source)
+                ManagedIncarnationCreationFailure::Namespace(source)
             })?;
         let published = self.writer.append_publish_incarnation(bound).map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::Writer(source)
+            ManagedIncarnationCreationFailure::Writer(source)
         })?;
 
         let mapped_file = DefaultMappedFile::try_new_managed_created(
@@ -293,11 +332,11 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
         .map(Arc::new)
         .map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::Mapping(source)
+            ManagedIncarnationCreationFailure::Mapping(source)
         })?;
         let mapping_generation = mapped_file.current_mapping_generation_id().ok_or_else(|| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::Mapping(io::Error::other(
+            ManagedIncarnationCreationFailure::Mapping(io::Error::other(
                 "new managed mapped file has no published mapping generation",
             ))
         })?;
@@ -314,10 +353,10 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
     fn publication_failure(
         &mut self,
         failure: CreationPublicationFailure<DefaultMappedFile>,
-    ) -> ManagedIncarnationCreationError {
+    ) -> ManagedIncarnationCreationFailure {
         self.recovery_required = true;
         let (_receipt, _owner, source) = failure.into_parts();
-        ManagedIncarnationCreationError::Registry(source)
+        ManagedIncarnationCreationFailure::Registry(source)
     }
 
     #[cfg(test)]
@@ -335,6 +374,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::super::ManagedRetirementCore;
+    use super::ManagedIncarnationCreationFailure;
     use crate::mapped_file::retirement::identity::StoreUuid;
     use crate::mapped_file::retirement::platform::VerifiedNamespaceRoot;
     use crate::mapped_file::retirement::registry::ManagedMappedFileQueueGeneration;
@@ -395,7 +435,7 @@ mod tests {
         let first = core
             .create_mapped_file(&queue, request)
             .expect_err("namespace collision follows durable Allocate");
-        assert!(matches!(first, super::ManagedIncarnationCreationError::Namespace(_)));
+        assert!(matches!(first, ManagedIncarnationCreationFailure::Namespace(_)));
         assert_eq!(core.creation_high_water_for_test(), Some(1));
         assert!(core.report(std::time::Instant::now(), 0, 0).recovery_required());
         assert!(queue.snapshot().is_empty());
@@ -406,10 +446,7 @@ mod tests {
         let error = core
             .create_mapped_file(&queue, retry)
             .expect_err("replay fence rejects a second allocation");
-        assert!(matches!(
-            error,
-            super::ManagedIncarnationCreationError::RecoveryRequired
-        ));
+        assert!(matches!(error, ManagedIncarnationCreationFailure::RecoveryRequired));
     }
 
     struct Fixture {

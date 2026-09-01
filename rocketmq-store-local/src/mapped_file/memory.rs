@@ -21,7 +21,7 @@ use memmap2::MmapMut;
 
 /// Failure to construct a safe view over a mapped range.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum MmapRangeViolation {
+pub(crate) enum MmapRangeViolation {
     /// `offset + len` cannot be represented by [`usize`].
     #[error("mapped range offset {offset} + length {len} overflowed")]
     Overflow { offset: usize, len: usize },

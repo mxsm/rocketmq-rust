@@ -20,7 +20,7 @@ use std::os::fd::FromRawFd;
 use std::os::unix::fs::FileExt;
 use std::os::unix::fs::MetadataExt;
 
-use super::InitialBootstrapFoundationError;
+use super::InitialBootstrapFoundationFailure;
 use super::PreparedInitialBootstrapFoundation;
 use crate::mapped_file::retirement::bootstrap::proof::BootstrapFoundationEvidence;
 use crate::mapped_file::retirement::bootstrap::proof::CanonicalStoreMetaEvidence;
@@ -54,20 +54,20 @@ const STRICT_RESOLVE: u64 =
 pub(super) fn prepare(
     store_root: File,
     expected_meta: &StoreMeta,
-) -> Result<PreparedInitialBootstrapFoundation, InitialBootstrapFoundationError> {
-    let root_metadata = store_root.metadata().map_err(InitialBootstrapFoundationError::io)?;
+) -> Result<PreparedInitialBootstrapFoundation, InitialBootstrapFoundationFailure> {
+    let root_metadata = store_root.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
     if !root_metadata.is_dir() {
-        return Err(InitialBootstrapFoundationError::invalid(
+        return Err(InitialBootstrapFoundationFailure::invalid(
             "Store root is not a directory",
         ));
     }
     let lifecycle = open_or_create_lifecycle_directory(&store_root, root_metadata.dev())?;
-    let canonical_meta = encode_store_meta(expected_meta).map_err(InitialBootstrapFoundationError::sidecar)?;
+    let canonical_meta = encode_store_meta(expected_meta).map_err(InitialBootstrapFoundationFailure::sidecar)?;
     publish_store_meta(&lifecycle, &canonical_meta)?;
     let acknowledgement = ensure_acknowledgement(&lifecycle)?;
     ensure_generation_zero_log(&lifecycle, &acknowledgement)?;
 
-    let decoded_meta = decode_store_meta(&canonical_meta).map_err(InitialBootstrapFoundationError::sidecar)?;
+    let decoded_meta = decode_store_meta(&canonical_meta).map_err(InitialBootstrapFoundationFailure::sidecar)?;
     let foundation = BootstrapFoundationEvidence {
         store_meta: CanonicalStoreMetaEvidence {
             meta: decoded_meta,
@@ -75,14 +75,15 @@ pub(super) fn prepare(
             stored_crc32: u32::from_le_bytes(
                 canonical_meta[60..64]
                     .try_into()
-                    .map_err(|_| InitialBootstrapFoundationError::invalid("store.meta CRC field is unavailable"))?,
+                    .map_err(|_| InitialBootstrapFoundationFailure::invalid("store.meta CRC field is unavailable"))?,
             ),
         },
     };
-    let ledger = FileLedgerIo::open_from_store_root(&store_root, 0).map_err(InitialBootstrapFoundationError::ledger)?;
+    let ledger =
+        FileLedgerIo::open_from_store_root(&store_root, 0).map_err(InitialBootstrapFoundationFailure::ledger)?;
     let artifacts = InitialArtifactStore::new(
-        store_root.try_clone().map_err(InitialBootstrapFoundationError::io)?,
-        lifecycle.try_clone().map_err(InitialBootstrapFoundationError::io)?,
+        store_root.try_clone().map_err(InitialBootstrapFoundationFailure::io)?,
+        lifecycle.try_clone().map_err(InitialBootstrapFoundationFailure::io)?,
     )?;
     Ok(PreparedInitialBootstrapFoundation::new(
         foundation,
@@ -106,10 +107,10 @@ pub(super) struct InitialArtifactStore {
 }
 
 impl InitialArtifactStore {
-    fn new(store_root: File, lifecycle: File) -> Result<Self, InitialBootstrapFoundationError> {
-        let metadata = lifecycle.metadata().map_err(InitialBootstrapFoundationError::io)?;
+    fn new(store_root: File, lifecycle: File) -> Result<Self, InitialBootstrapFoundationFailure> {
+        let metadata = lifecycle.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
         if !metadata.is_dir() {
-            return Err(InitialBootstrapFoundationError::invalid(
+            return Err(InitialBootstrapFoundationFailure::invalid(
                 "retained lifecycle handle is not a directory",
             ));
         }
@@ -129,7 +130,7 @@ impl InitialArtifactStore {
     pub(super) fn inspect_snapshot(
         &self,
         planned: &PlannedSnapshot,
-    ) -> Result<ImmutableArtifactProgress, InitialBootstrapFoundationError> {
+    ) -> Result<ImmutableArtifactProgress, InitialBootstrapFoundationFailure> {
         self.verify_lifecycle()?;
         let final_file = open_optional(
             &self.lifecycle,
@@ -150,7 +151,7 @@ impl InitialArtifactStore {
                     ImmutableArtifactProgress::Published
                 })
             }
-            (Some(_), Some(_)) => Err(InitialBootstrapFoundationError::invalid(
+            (Some(_), Some(_)) => Err(InitialBootstrapFoundationFailure::invalid(
                 "bootstrap snapshot final and temporary both exist",
             )),
             (None, Some(temporary)) => {
@@ -171,7 +172,7 @@ impl InitialArtifactStore {
         &mut self,
         planned: &PlannedSnapshot,
         step: ImmutableArtifactStep,
-    ) -> Result<(), InitialBootstrapFoundationError> {
+    ) -> Result<(), InitialBootstrapFoundationFailure> {
         self.verify_lifecycle()?;
         match step {
             ImmutableArtifactStep::WriteTemporary => {
@@ -192,20 +193,22 @@ impl InitialArtifactStore {
                     libc::O_RDWR | libc::O_NONBLOCK,
                 )?;
                 require_exact_file(&temporary, &planned.encoded, "bootstrap snapshot temporary")?;
-                temporary.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+                temporary.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
                 self.snapshot_temporary_synced = true;
                 Ok(())
             }
             ImmutableArtifactStep::PublishFinalNoReplace => {
                 if !self.snapshot_temporary_synced {
-                    return Err(InitialBootstrapFoundationError::invalid(
+                    return Err(InitialBootstrapFoundationFailure::invalid(
                         "bootstrap snapshot temporary was not synced in this process",
                     ));
                 }
                 rename_no_replace(&self.lifecycle, GENERATION_ZERO_SNAPSHOT_TEMP, GENERATION_ZERO_SNAPSHOT)
             }
             ImmutableArtifactStep::ReopenAndVerify => {
-                self.lifecycle.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+                self.lifecycle
+                    .sync_all()
+                    .map_err(InitialBootstrapFoundationFailure::io)?;
                 let final_file = open_required(
                     &self.lifecycle,
                     GENERATION_ZERO_SNAPSHOT,
@@ -221,7 +224,7 @@ impl InitialArtifactStore {
     pub(super) fn inspect_initial_marker(
         &self,
         planned: &PlannedInitialMarker,
-    ) -> Result<InitialMarkerProgress, InitialBootstrapFoundationError> {
+    ) -> Result<InitialMarkerProgress, InitialBootstrapFoundationFailure> {
         self.verify_lifecycle()?;
         let final_file = open_optional(&self.lifecycle, ENABLED_MARKER, libc::O_RDONLY | libc::O_NONBLOCK)?;
         let temporary = open_optional(&self.lifecycle, ENABLED_MARKER_TEMP, libc::O_RDWR | libc::O_NONBLOCK)?;
@@ -231,7 +234,9 @@ impl InitialArtifactStore {
                 if self.marker_verified {
                     let evidence =
                         InitialMarkerVerificationEvidence::from_reopened_bytes(planned.encoded_file, planned)
-                            .ok_or_else(|| InitialBootstrapFoundationError::invalid("marker verification mismatch"))?;
+                            .ok_or_else(|| {
+                                InitialBootstrapFoundationFailure::invalid("marker verification mismatch")
+                            })?;
                     Ok(InitialMarkerProgress::Verified(Box::new(evidence)))
                 } else if self.marker_directory_synced {
                     Ok(InitialMarkerProgress::DirectorySynced)
@@ -239,7 +244,7 @@ impl InitialArtifactStore {
                     Ok(InitialMarkerProgress::Published)
                 }
             }
-            (Some(_), Some(_)) => Err(InitialBootstrapFoundationError::invalid(
+            (Some(_), Some(_)) => Err(InitialBootstrapFoundationFailure::invalid(
                 "ENABLED.v1 final and temporary both exist",
             )),
             (None, Some(temporary)) => {
@@ -260,7 +265,7 @@ impl InitialArtifactStore {
         &mut self,
         planned: &PlannedInitialMarker,
         step: InitialMarkerStep,
-    ) -> Result<(), InitialBootstrapFoundationError> {
+    ) -> Result<(), InitialBootstrapFoundationFailure> {
         self.verify_lifecycle()?;
         match step {
             InitialMarkerStep::WriteTemporary => {
@@ -274,26 +279,28 @@ impl InitialArtifactStore {
             InitialMarkerStep::SyncTemporary => {
                 let temporary = open_required(&self.lifecycle, ENABLED_MARKER_TEMP, libc::O_RDWR | libc::O_NONBLOCK)?;
                 require_exact_file(&temporary, &planned.encoded_file, "ENABLED.v1 temporary")?;
-                temporary.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+                temporary.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
                 self.marker_temporary_synced = true;
                 Ok(())
             }
             InitialMarkerStep::PublishFinalNoReplace => {
                 if !self.marker_temporary_synced {
-                    return Err(InitialBootstrapFoundationError::invalid(
+                    return Err(InitialBootstrapFoundationFailure::invalid(
                         "ENABLED.v1 temporary was not synced in this process",
                     ));
                 }
                 rename_no_replace(&self.lifecycle, ENABLED_MARKER_TEMP, ENABLED_MARKER)
             }
             InitialMarkerStep::SyncLifecycleDirectory => {
-                self.lifecycle.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+                self.lifecycle
+                    .sync_all()
+                    .map_err(InitialBootstrapFoundationFailure::io)?;
                 self.marker_directory_synced = true;
                 Ok(())
             }
             InitialMarkerStep::ReopenAndVerifyEntireFile => {
                 if !self.marker_directory_synced {
-                    return Err(InitialBootstrapFoundationError::invalid(
+                    return Err(InitialBootstrapFoundationFailure::invalid(
                         "ENABLED.v1 directory entry was not synced in this process",
                     ));
                 }
@@ -305,14 +312,17 @@ impl InitialArtifactStore {
         }
     }
 
-    fn verify_lifecycle(&self) -> Result<(), InitialBootstrapFoundationError> {
-        let metadata = self.lifecycle.metadata().map_err(InitialBootstrapFoundationError::io)?;
+    fn verify_lifecycle(&self) -> Result<(), InitialBootstrapFoundationFailure> {
+        let metadata = self
+            .lifecycle
+            .metadata()
+            .map_err(InitialBootstrapFoundationFailure::io)?;
         let reopened = open_required(
             &self.store_root,
             LIFECYCLE_DIRECTORY,
             libc::O_RDONLY | libc::O_DIRECTORY,
         )?;
-        let reopened_metadata = reopened.metadata().map_err(InitialBootstrapFoundationError::io)?;
+        let reopened_metadata = reopened.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
         if metadata.is_dir()
             && metadata.dev() == self.device
             && metadata.ino() == self.inode
@@ -322,7 +332,7 @@ impl InitialArtifactStore {
         {
             Ok(())
         } else {
-            Err(InitialBootstrapFoundationError::invalid(
+            Err(InitialBootstrapFoundationFailure::invalid(
                 "retained lifecycle directory is no longer bound beneath the retained Store root",
             ))
         }
@@ -332,7 +342,7 @@ impl InitialArtifactStore {
 fn open_or_create_lifecycle_directory(
     store_root: &File,
     root_device: u64,
-) -> Result<File, InitialBootstrapFoundationError> {
+) -> Result<File, InitialBootstrapFoundationFailure> {
     let lifecycle = match open_optional(store_root, LIFECYCLE_DIRECTORY, libc::O_RDONLY | libc::O_DIRECTORY)? {
         Some(directory) => directory,
         None => {
@@ -340,15 +350,15 @@ fn open_or_create_lifecycle_directory(
             // component, and no pointer escapes this call.
             let result = unsafe { libc::mkdirat(store_root.as_raw_fd(), LIFECYCLE_DIRECTORY.as_ptr(), 0o700) };
             if result != 0 {
-                return Err(InitialBootstrapFoundationError::io(io::Error::last_os_error()));
+                return Err(InitialBootstrapFoundationFailure::io(io::Error::last_os_error()));
             }
-            store_root.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+            store_root.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
             open_required(store_root, LIFECYCLE_DIRECTORY, libc::O_RDONLY | libc::O_DIRECTORY)?
         }
     };
-    let metadata = lifecycle.metadata().map_err(InitialBootstrapFoundationError::io)?;
+    let metadata = lifecycle.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
     if !metadata.is_dir() || metadata.dev() != root_device {
-        return Err(InitialBootstrapFoundationError::invalid(
+        return Err(InitialBootstrapFoundationFailure::invalid(
             "lifecycle directory is not a contained same-device directory",
         ));
     }
@@ -358,15 +368,15 @@ fn open_or_create_lifecycle_directory(
 fn publish_store_meta(
     lifecycle: &File,
     expected: &[u8; STORE_META_LENGTH],
-) -> Result<(), InitialBootstrapFoundationError> {
+) -> Result<(), InitialBootstrapFoundationFailure> {
     let final_file = open_optional(lifecycle, STORE_META_FILE, libc::O_RDONLY | libc::O_NONBLOCK)?;
     let temporary = open_optional(lifecycle, STORE_META_TEMP_FILE, libc::O_RDWR | libc::O_NONBLOCK)?;
     match (final_file, temporary) {
         (Some(final_file), None) => {
             require_exact_file(&final_file, expected, "store.meta")?;
-            lifecycle.sync_all().map_err(InitialBootstrapFoundationError::io)
+            lifecycle.sync_all().map_err(InitialBootstrapFoundationFailure::io)
         }
-        (Some(_), Some(_)) => Err(InitialBootstrapFoundationError::invalid(
+        (Some(_), Some(_)) => Err(InitialBootstrapFoundationFailure::invalid(
             "store.meta final and bootstrap temporary both exist",
         )),
         (None, temporary) => {
@@ -375,10 +385,10 @@ fn publish_store_meta(
                 None => create_exclusive(lifecycle, STORE_META_TEMP_FILE)?,
             };
             complete_exact_prefix(&temporary, expected, "store.meta bootstrap temporary")?;
-            temporary.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+            temporary.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
             require_exact_file(&temporary, expected, "store.meta bootstrap temporary")?;
             rename_no_replace(lifecycle, STORE_META_TEMP_FILE, STORE_META_FILE)?;
-            lifecycle.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+            lifecycle.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
             let final_file = open_required(lifecycle, STORE_META_FILE, libc::O_RDONLY | libc::O_NONBLOCK)?;
             require_same_file(&temporary, &final_file, "store.meta publication changed identity")?;
             require_exact_file(&final_file, expected, "store.meta")
@@ -388,16 +398,18 @@ fn publish_store_meta(
 
 fn ensure_acknowledgement(
     lifecycle: &File,
-) -> Result<[u8; ACKNOWLEDGEMENT_FILE_LENGTH], InitialBootstrapFoundationError> {
+) -> Result<[u8; ACKNOWLEDGEMENT_FILE_LENGTH], InitialBootstrapFoundationFailure> {
     let file = match open_optional(lifecycle, ACKNOWLEDGEMENT_FILE, libc::O_RDWR | libc::O_NONBLOCK)? {
         Some(file) => file,
         None => create_exclusive(lifecycle, ACKNOWLEDGEMENT_FILE)?,
     };
     validate_regular(&file, "ACKNOWLEDGED.v1")?;
-    let length = usize::try_from(file.metadata().map_err(InitialBootstrapFoundationError::io)?.len())
-        .map_err(|_| InitialBootstrapFoundationError::invalid("ACKNOWLEDGED.v1 length is not representable"))?;
+    let length = usize::try_from(file.metadata().map_err(InitialBootstrapFoundationFailure::io)?.len())
+        .map_err(|_| InitialBootstrapFoundationFailure::invalid("ACKNOWLEDGED.v1 length is not representable"))?;
     if length > ACKNOWLEDGEMENT_FILE_LENGTH {
-        return Err(InitialBootstrapFoundationError::invalid("ACKNOWLEDGED.v1 is oversized"));
+        return Err(InitialBootstrapFoundationFailure::invalid(
+            "ACKNOWLEDGED.v1 is oversized",
+        ));
     }
     let mut bytes = [0_u8; ACKNOWLEDGEMENT_FILE_LENGTH];
     if length != 0 {
@@ -405,56 +417,56 @@ fn ensure_acknowledgement(
     }
     if length < ACKNOWLEDGEMENT_FILE_LENGTH {
         if bytes[..length].iter().any(|byte| *byte != 0) {
-            return Err(InitialBootstrapFoundationError::invalid(
+            return Err(InitialBootstrapFoundationFailure::invalid(
                 "partial ACKNOWLEDGED.v1 contains nonzero bytes",
             ));
         }
         write_all_at(&file, &bytes[length..], length as u64)?;
     }
-    file.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+    file.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
     require_exact_file(&file, &bytes, "ACKNOWLEDGED.v1")?;
-    lifecycle.sync_all().map_err(InitialBootstrapFoundationError::io)?;
+    lifecycle.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
     Ok(bytes)
 }
 
 fn ensure_generation_zero_log(
     lifecycle: &File,
     acknowledgement: &[u8; ACKNOWLEDGEMENT_FILE_LENGTH],
-) -> Result<(), InitialBootstrapFoundationError> {
+) -> Result<(), InitialBootstrapFoundationFailure> {
     if let Some(file) = open_optional(lifecycle, GENERATION_ZERO_LOG, libc::O_RDWR | libc::O_NONBLOCK)? {
         validate_regular(&file, "generation-0 log")?;
         return Ok(());
     }
     if acknowledgement.iter().any(|byte| *byte != 0) {
-        return Err(InitialBootstrapFoundationError::invalid(
+        return Err(InitialBootstrapFoundationFailure::invalid(
             "acknowledgement bytes exist without generation-0 log",
         ));
     }
     let file = create_exclusive(lifecycle, GENERATION_ZERO_LOG)?;
-    file.sync_all().map_err(InitialBootstrapFoundationError::io)?;
-    lifecycle.sync_all().map_err(InitialBootstrapFoundationError::io)
+    file.sync_all().map_err(InitialBootstrapFoundationFailure::io)?;
+    lifecycle.sync_all().map_err(InitialBootstrapFoundationFailure::io)
 }
 
-fn open_optional(parent: &File, name: &CStr, flags: i32) -> Result<Option<File>, InitialBootstrapFoundationError> {
+fn open_optional(parent: &File, name: &CStr, flags: i32) -> Result<Option<File>, InitialBootstrapFoundationFailure> {
     match openat2(parent, name, flags, 0) {
         Ok(file) => Ok(Some(file)),
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => Ok(None),
-        Err(error) => Err(InitialBootstrapFoundationError::io(error)),
+        Err(error) => Err(InitialBootstrapFoundationFailure::io(error)),
     }
 }
 
-fn open_required(parent: &File, name: &CStr, flags: i32) -> Result<File, InitialBootstrapFoundationError> {
-    openat2(parent, name, flags, 0).map_err(InitialBootstrapFoundationError::io)
+fn open_required(parent: &File, name: &CStr, flags: i32) -> Result<File, InitialBootstrapFoundationFailure> {
+    openat2(parent, name, flags, 0).map_err(InitialBootstrapFoundationFailure::io)
 }
 
-fn create_exclusive(parent: &File, name: &CStr) -> Result<File, InitialBootstrapFoundationError> {
+fn create_exclusive(parent: &File, name: &CStr) -> Result<File, InitialBootstrapFoundationFailure> {
     openat2(
         parent,
         name,
         libc::O_RDWR | libc::O_NONBLOCK | libc::O_CREAT | libc::O_EXCL,
         0o600,
     )
-    .map_err(InitialBootstrapFoundationError::io)
+    .map_err(InitialBootstrapFoundationFailure::io)
 }
 
 fn openat2(parent: &File, name: &CStr, flags: i32, mode: u32) -> io::Result<File> {
@@ -484,7 +496,11 @@ fn openat2(parent: &File, name: &CStr, flags: i32, mode: u32) -> io::Result<File
     Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
-fn rename_no_replace(parent: &File, source: &CStr, destination: &CStr) -> Result<(), InitialBootstrapFoundationError> {
+fn rename_no_replace(
+    parent: &File,
+    source: &CStr,
+    destination: &CStr,
+) -> Result<(), InitialBootstrapFoundationFailure> {
     // SAFETY: both names are live NUL-terminated components beneath the same retained directory;
     // `RENAME_NOREPLACE` forbids overwriting an existing final artifact.
     let result = unsafe {
@@ -498,7 +514,7 @@ fn rename_no_replace(parent: &File, source: &CStr, destination: &CStr) -> Result
         )
     };
     if result < 0 {
-        Err(InitialBootstrapFoundationError::io(io::Error::last_os_error()))
+        Err(InitialBootstrapFoundationFailure::io(io::Error::last_os_error()))
     } else {
         Ok(())
     }
@@ -508,14 +524,14 @@ fn complete_exact_prefix(
     file: &File,
     expected: &[u8],
     object: &'static str,
-) -> Result<(), InitialBootstrapFoundationError> {
+) -> Result<(), InitialBootstrapFoundationFailure> {
     let complete = require_exact_prefix(file, expected, object)?;
     if complete {
         return Ok(());
     }
-    let length = file.metadata().map_err(InitialBootstrapFoundationError::io)?.len();
+    let length = file.metadata().map_err(InitialBootstrapFoundationFailure::io)?.len();
     let consumed = usize::try_from(length)
-        .map_err(|_| InitialBootstrapFoundationError::invalid("artifact length is not representable"))?;
+        .map_err(|_| InitialBootstrapFoundationFailure::invalid("artifact length is not representable"))?;
     write_all_at(file, &expected[consumed..], length)
 }
 
@@ -523,12 +539,12 @@ fn require_exact_prefix(
     file: &File,
     expected: &[u8],
     object: &'static str,
-) -> Result<bool, InitialBootstrapFoundationError> {
+) -> Result<bool, InitialBootstrapFoundationFailure> {
     validate_regular(file, object)?;
-    let length = usize::try_from(file.metadata().map_err(InitialBootstrapFoundationError::io)?.len())
-        .map_err(|_| InitialBootstrapFoundationError::invalid("artifact length is not representable"))?;
+    let length = usize::try_from(file.metadata().map_err(InitialBootstrapFoundationFailure::io)?.len())
+        .map_err(|_| InitialBootstrapFoundationFailure::invalid("artifact length is not representable"))?;
     if length > expected.len() {
-        return Err(InitialBootstrapFoundationError::invalid(
+        return Err(InitialBootstrapFoundationFailure::invalid(
             "artifact is longer than canonical bytes",
         ));
     }
@@ -536,7 +552,7 @@ fn require_exact_prefix(
         let mut prefix = vec![0_u8; length];
         read_exact_at(file, &mut prefix, 0)?;
         if prefix != expected[..length] {
-            return Err(InitialBootstrapFoundationError::invalid(
+            return Err(InitialBootstrapFoundationFailure::invalid(
                 "artifact prefix differs from canonical bytes",
             ));
         }
@@ -548,28 +564,28 @@ fn require_exact_file(
     file: &File,
     expected: &[u8],
     object: &'static str,
-) -> Result<(), InitialBootstrapFoundationError> {
+) -> Result<(), InitialBootstrapFoundationFailure> {
     validate_regular(file, object)?;
-    let actual_length = file.metadata().map_err(InitialBootstrapFoundationError::io)?.len();
+    let actual_length = file.metadata().map_err(InitialBootstrapFoundationFailure::io)?.len();
     if actual_length != expected.len() as u64 {
-        return Err(InitialBootstrapFoundationError::invalid(
+        return Err(InitialBootstrapFoundationFailure::invalid(
             "artifact length differs from canonical bytes",
         ));
     }
     let mut actual = vec![0_u8; expected.len()];
     read_exact_at(file, &mut actual, 0)?;
     if actual != expected {
-        return Err(InitialBootstrapFoundationError::invalid(
+        return Err(InitialBootstrapFoundationFailure::invalid(
             "artifact bytes differ from canonical bytes",
         ));
     }
     Ok(())
 }
 
-fn validate_regular(file: &File, object: &'static str) -> Result<(), InitialBootstrapFoundationError> {
-    let metadata = file.metadata().map_err(InitialBootstrapFoundationError::io)?;
+fn validate_regular(file: &File, object: &'static str) -> Result<(), InitialBootstrapFoundationFailure> {
+    let metadata = file.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
     if !metadata.is_file() || metadata.nlink() != 1 {
-        return Err(InitialBootstrapFoundationError::invalid(match object {
+        return Err(InitialBootstrapFoundationFailure::invalid(match object {
             "store.meta" => "store.meta is not a single-link regular file",
             "store.meta bootstrap temporary" => "store.meta temporary is not a single-link regular file",
             "ACKNOWLEDGED.v1" => "ACKNOWLEDGED.v1 is not a single-link regular file",
@@ -580,22 +596,22 @@ fn validate_regular(file: &File, object: &'static str) -> Result<(), InitialBoot
     Ok(())
 }
 
-fn require_same_file(left: &File, right: &File, detail: &'static str) -> Result<(), InitialBootstrapFoundationError> {
-    let left = left.metadata().map_err(InitialBootstrapFoundationError::io)?;
-    let right = right.metadata().map_err(InitialBootstrapFoundationError::io)?;
+fn require_same_file(left: &File, right: &File, detail: &'static str) -> Result<(), InitialBootstrapFoundationFailure> {
+    let left = left.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
+    let right = right.metadata().map_err(InitialBootstrapFoundationFailure::io)?;
     if left.dev() == right.dev() && left.ino() == right.ino() {
         Ok(())
     } else {
-        Err(InitialBootstrapFoundationError::invalid(detail))
+        Err(InitialBootstrapFoundationFailure::invalid(detail))
     }
 }
 
-fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64) -> Result<(), InitialBootstrapFoundationError> {
+fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64) -> Result<(), InitialBootstrapFoundationFailure> {
     let mut interrupted = 0;
     while !bytes.is_empty() {
         match file.write_at(bytes, offset) {
             Ok(0) => {
-                return Err(InitialBootstrapFoundationError::io(io::Error::new(
+                return Err(InitialBootstrapFoundationFailure::io(io::Error::new(
                     io::ErrorKind::WriteZero,
                     "bootstrap positional write returned zero",
                 )));
@@ -605,23 +621,23 @@ fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64) -> Result<(), In
                 bytes = &bytes[written..];
                 offset = offset
                     .checked_add(written as u64)
-                    .ok_or_else(|| InitialBootstrapFoundationError::invalid("write offset overflow"))?;
+                    .ok_or_else(|| InitialBootstrapFoundationFailure::invalid("write offset overflow"))?;
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted && interrupted < MAX_INTERRUPTED_RETRIES => {
                 interrupted += 1;
             }
-            Err(error) => return Err(InitialBootstrapFoundationError::io(error)),
+            Err(error) => return Err(InitialBootstrapFoundationFailure::io(error)),
         }
     }
     Ok(())
 }
 
-fn read_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> Result<(), InitialBootstrapFoundationError> {
+fn read_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> Result<(), InitialBootstrapFoundationFailure> {
     let mut interrupted = 0;
     while !bytes.is_empty() {
         match file.read_at(bytes, offset) {
             Ok(0) => {
-                return Err(InitialBootstrapFoundationError::io(io::Error::new(
+                return Err(InitialBootstrapFoundationFailure::io(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "bootstrap positional read reached EOF",
                 )));
@@ -632,12 +648,12 @@ fn read_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> Result<(
                 bytes = remaining;
                 offset = offset
                     .checked_add(read as u64)
-                    .ok_or_else(|| InitialBootstrapFoundationError::invalid("read offset overflow"))?;
+                    .ok_or_else(|| InitialBootstrapFoundationFailure::invalid("read offset overflow"))?;
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted && interrupted < MAX_INTERRUPTED_RETRIES => {
                 interrupted += 1;
             }
-            Err(error) => return Err(InitialBootstrapFoundationError::io(error)),
+            Err(error) => return Err(InitialBootstrapFoundationFailure::io(error)),
         }
     }
     Ok(())

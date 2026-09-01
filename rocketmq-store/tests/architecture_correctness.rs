@@ -82,6 +82,8 @@ fn new_store(root: &Path, flush_disk_type: FlushDiskType) -> LocalFileMessageSto
     };
     let mut store = LocalFileMessageStore::new(
         Arc::new(config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,

@@ -411,6 +411,8 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
 
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -476,6 +478,8 @@ fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
 
     let error = RocksDBMessageStore::try_new(
         message_store_config,
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -506,6 +510,8 @@ fn rocksdb_message_store_close_closes_consume_queue_and_message_rocksdb() {
 
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -548,6 +554,8 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
 
     let error = RocksDBMessageStore::try_new(
         message_store_config,
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -3048,6 +3056,8 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(
         message_store_config,
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,
@@ -3136,6 +3146,8 @@ fn rocksdb_message_store_registers_trans_dispatcher_when_enabled() {
     });
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::new()),
         None,
@@ -3179,6 +3191,8 @@ fn rocksdb_message_store_keeps_trans_service_disabled_by_default() {
     });
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::new()),
         None,
@@ -3202,6 +3216,8 @@ fn rocksdb_message_store_registers_timer_dispatcher_when_enabled() {
     });
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::new()),
         None,
@@ -3244,6 +3260,8 @@ fn rocksdb_message_store_keeps_timer_service_disabled_by_default() {
     });
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::new()),
         None,
@@ -3268,6 +3286,8 @@ fn rocksdb_message_store_delete_topics_removes_rocksdb_consume_queue_state() {
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(
         message_store_config,
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,
@@ -3303,6 +3323,8 @@ fn rocksdb_message_store_truncate_dirty_logic_files_corrects_rocksdb_consume_que
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(
         message_store_config,
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,
@@ -3343,6 +3365,8 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(
         message_store_config,
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,

@@ -19,7 +19,6 @@ use std::rc::Rc;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 
@@ -68,12 +67,7 @@ fn segment_started_state_error_skips_started_and_next() {
         |_, _: &mut Record| panic!("observe must not run"),
     );
 
-    assert_eq!(
-        outcome,
-        NormalRecoverySegmentOutcome::StateFailed(NormalRecoveryOffsetViolation::OffsetExceedsI64 {
-            offset: i64::MAX as u64 + 1,
-        })
-    );
+    assert_eq!(outcome, NormalRecoverySegmentOutcome::StateFailed);
     assert!(events.borrow().is_empty());
 }
 
@@ -264,13 +258,7 @@ fn message_state_overflow_skips_observe_drops_payload_and_stops_reading() {
         |_, _| events.borrow_mut().push("observe".into()),
     );
 
-    assert_eq!(
-        outcome,
-        NormalRecoverySegmentOutcome::StateFailed(NormalRecoveryOffsetViolation::BaseRelativeOverflow {
-            base_offset: u64::MAX,
-            relative_start: 1,
-        })
-    );
+    assert_eq!(outcome, NormalRecoverySegmentOutcome::StateFailed);
     assert_eq!(next_calls, 1);
     assert_eq!(records.len(), 1);
     assert_eq!(&*events.borrow(), &["started", "drop:overflow:false"]);

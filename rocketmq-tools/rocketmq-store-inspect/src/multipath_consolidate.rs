@@ -24,7 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use rocketmq_store::decode_commit_log_record;
+use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecordBodyMode;
 use rocketmq_store::CommitLogRecordChecksum;
 use rocketmq_store::CommitLogRecordOutcome;
@@ -207,20 +207,11 @@ fn validate_segment_frames(path: &Path, segment_offset: u64) -> io::Result<usize
                 format!("truncated CommitLog frame in {} at byte {position}", path.display()),
             )
         })?;
-        match decode_commit_log_record(
+        match inspect_commit_log_record(
             &Bytes::copy_from_slice(frame),
             CommitLogRecordBodyMode::Skip,
             &IgnoredChecksum,
-        )
-        .map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "invalid CommitLog frame in {} at byte {position}: {error:?}",
-                    path.display()
-                ),
-            )
-        })? {
+        ) {
             CommitLogRecordOutcome::Message(record) => {
                 let expected_offset = segment_offset
                     .checked_add(position as u64)
@@ -245,6 +236,15 @@ fn validate_segment_frames(path: &Path, segment_offset: u64) -> io::Result<usize
                     ));
                 }
                 return Ok(records);
+            }
+            invalid => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "invalid CommitLog frame in {} at byte {position}: {invalid:?}",
+                        path.display()
+                    ),
+                ));
             }
         }
         position = end;

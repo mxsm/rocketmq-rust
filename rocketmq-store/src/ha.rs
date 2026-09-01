@@ -33,6 +33,101 @@ pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
 pub(crate) mod write_lease;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HAServiceFailure {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Store(#[from] rocketmq_store_api::StoreError),
+    #[error(transparent)]
+    Runtime(#[from] rocketmq_runtime::RuntimeError),
+    #[error("Connection error: {0}")]
+    Connection(String),
+    #[error("Service error: {0}")]
+    Service(String),
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+}
+
+impl From<HAServiceFailure> for rocketmq_store_api::StoreError {
+    fn from(error: HAServiceFailure) -> Self {
+        match error {
+            HAServiceFailure::Store(error) => error,
+            error => rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                rocketmq_store_api::StoreOperation::Start,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
+            .with_source(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod failure_mapping_tests {
+    use std::error::Error;
+
+    use rocketmq_runtime::RuntimeError;
+    use rocketmq_store_api::StoreComponent;
+    use rocketmq_store_api::StoreError;
+    use rocketmq_store_api::StoreOperation;
+
+    use super::HAServiceFailure;
+
+    #[test]
+    fn connection_start_failure_maps_once_with_typed_source() {
+        let error: StoreError = HAServiceFailure::Io(std::io::Error::other("connection start failed")).into();
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.component(), StoreComponent::HighAvailability);
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<HAServiceFailure>())
+            .expect("HA service source remains typed");
+        assert!(matches!(source, HAServiceFailure::Io(_)));
+        assert!(source
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+    }
+
+    #[test]
+    fn nested_store_error_passes_through_unchanged() {
+        let nested = StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Replicate)
+            .in_component(StoreComponent::CommitLog)
+            .with_source(std::io::Error::other("replication read failed"));
+
+        let error: StoreError = HAServiceFailure::Store(nested).into();
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
+        assert_eq!(error.operation(), StoreOperation::Replicate);
+        assert_eq!(error.component(), StoreComponent::CommitLog);
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+    }
+
+    #[test]
+    fn runtime_failure_maps_once_with_its_typed_cause() {
+        let error: StoreError = HAServiceFailure::Runtime(RuntimeError::NoCurrentRuntime).into();
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.component(), StoreComponent::HighAvailability);
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<HAServiceFailure>())
+            .expect("HA service source remains typed");
+        assert!(matches!(source, HAServiceFailure::Runtime(_)));
+        assert!(source
+            .source()
+            .and_then(|source| source.downcast_ref::<RuntimeError>())
+            .is_some());
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::Path;
@@ -64,6 +159,8 @@ pub(crate) mod test_support {
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = LocalFileMessageStore::new(
             Arc::new(message_store_config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             Arc::new(broker_config),
             topic_table,
             None,

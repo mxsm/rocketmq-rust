@@ -31,7 +31,7 @@ use crate::mapped_file::retirement::platform::NamespaceTransition;
 use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::platform::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::writer::ManagedLedgerWriter;
-use crate::mapped_file::retirement::writer::ManagedLedgerWriterError;
+use crate::mapped_file::retirement::writer::ManagedLedgerWriterFailure;
 use thiserror::Error;
 
 /// Durable or pending result after one logical-removal namespace observation.
@@ -50,9 +50,9 @@ pub(in crate::mapped_file::retirement) enum LogicalNamespaceProgress<O> {
     reason = "the pending arm intentionally retains the durable capability together with the typed namespace disposition"
 )]
 pub(in crate::mapped_file::retirement) enum TombstoneNamespaceProgress<O> {
-    NamespaceAbsent(NamespaceAbsentCapability<O>),
+    NamespaceAbsent(Box<NamespaceAbsentCapability<O>>),
     Pending {
-        capability: TombstonedCapability<O>,
+        capability: Box<TombstonedCapability<O>>,
         status: NamespacePending,
     },
 }
@@ -77,11 +77,11 @@ pub(in crate::mapped_file::retirement) enum NamespacePending {
 
 /// Fail-closed errors that consume an ambiguous capability and require replay.
 #[derive(Debug, Error)]
-pub(in crate::mapped_file::retirement) enum ReaperDriveError {
+pub(in crate::mapped_file::retirement) enum ReaperDriveFailure {
     #[error(transparent)]
     Request(#[from] NamespaceRequestViolation),
     #[error(transparent)]
-    Writer(#[from] ManagedLedgerWriterError),
+    Writer(#[from] ManagedLedgerWriterFailure),
 }
 
 /// Performs one complete handle-relative attempt for a durable logical-removal capability.
@@ -91,7 +91,7 @@ pub(in crate::mapped_file::retirement) fn drive_logical_namespace<I: LedgerIo, O
     capability: LogicalRemovedCapability<O>,
     transition: NamespaceTransition,
     observation_time_ns: u64,
-) -> Result<LogicalNamespaceProgress<O>, ReaperDriveError> {
+) -> Result<LogicalNamespaceProgress<O>, ReaperDriveFailure> {
     let authorization = authorize_namespace_transition(capability, transition)?;
     let verified = match root.reserve_authorized(authorization) {
         Ok(verified) => verified,
@@ -113,14 +113,14 @@ pub(in crate::mapped_file::retirement) fn drive_tombstone_namespace<I: LedgerIo,
     writer: &mut ManagedLedgerWriter<I>,
     capability: TombstonedCapability<O>,
     observation_time_ns: u64,
-) -> Result<TombstoneNamespaceProgress<O>, ReaperDriveError> {
+) -> Result<TombstoneNamespaceProgress<O>, ReaperDriveFailure> {
     let authorization = authorize_tombstone_removal(capability)?;
     let verified = match root.reserve_authorized(authorization) {
         Ok(verified) => verified,
         Err(failure) => {
             let (authorization, error) = failure.into_parts();
             return Ok(TombstoneNamespaceProgress::Pending {
-                capability: authorization.into_capability(),
+                capability: Box::new(authorization.into_capability()),
                 status: NamespacePending::Verification(error),
             });
         }
@@ -134,7 +134,7 @@ pub(in crate::mapped_file::retirement) fn commit_logical_namespace_outcome<I: Le
     writer: &mut ManagedLedgerWriter<I>,
     result: AuthorizedNamespaceTransitionResult<LogicalRemovedCapability<O>>,
     observation_time_ns: u64,
-) -> Result<LogicalNamespaceProgress<O>, ManagedLedgerWriterError> {
+) -> Result<LogicalNamespaceProgress<O>, ManagedLedgerWriterFailure> {
     let (capability, outcome) = result.into_parts();
     match outcome {
         NamespaceTransitionOutcome::Tombstoned(proof) => writer
@@ -186,34 +186,34 @@ pub(in crate::mapped_file::retirement) fn commit_tombstone_namespace_outcome<I: 
     writer: &mut ManagedLedgerWriter<I>,
     result: AuthorizedNamespaceTransitionResult<TombstonedCapability<O>>,
     observation_time_ns: u64,
-) -> Result<TombstoneNamespaceProgress<O>, ManagedLedgerWriterError> {
+) -> Result<TombstoneNamespaceProgress<O>, ManagedLedgerWriterFailure> {
     let (capability, outcome) = result.into_parts();
     match outcome {
         NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) => writer
             .append_namespace_absent_after_tombstone(capability, proof, observation_time_ns)
-            .map(TombstoneNamespaceProgress::NamespaceAbsent),
+            .map(|capability| TombstoneNamespaceProgress::NamespaceAbsent(Box::new(capability))),
         NamespaceTransitionOutcome::Retryable(failure) => Ok(TombstoneNamespaceProgress::Pending {
-            capability,
+            capability: Box::new(capability),
             status: NamespacePending::Retryable(failure),
         }),
         NamespaceTransitionOutcome::Failed(failure) => Ok(TombstoneNamespaceProgress::Pending {
-            capability,
+            capability: Box::new(capability),
             status: NamespacePending::Failed(failure),
         }),
         NamespaceTransitionOutcome::Rejected(violation) => Ok(TombstoneNamespaceProgress::Pending {
-            capability,
+            capability: Box::new(capability),
             status: NamespacePending::Rejected(violation),
         }),
         NamespaceTransitionOutcome::Unsupported { platform, reason } => Ok(TombstoneNamespaceProgress::Pending {
-            capability,
+            capability: Box::new(capability),
             status: NamespacePending::Unsupported { platform, reason },
         }),
         NamespaceTransitionOutcome::Tombstoned(_) => Ok(TombstoneNamespaceProgress::Pending {
-            capability,
+            capability: Box::new(capability),
             status: NamespacePending::UnexpectedOutcome("RemoveTombstone returned Tombstoned"),
         }),
         NamespaceTransitionOutcome::Superseded { .. } => Ok(TombstoneNamespaceProgress::Pending {
-            capability,
+            capability: Box::new(capability),
             status: NamespacePending::UnexpectedOutcome("RemoveTombstone returned Superseded"),
         }),
     }

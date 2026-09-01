@@ -20,7 +20,7 @@ use std::ptr::NonNull;
 use std::slice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectIoValidationViolation {
+pub(crate) enum DirectIoValidationViolation {
     InvalidAlignment { alignment: usize },
     ZeroLength,
     UnalignedLength { len: usize, alignment: usize },
@@ -64,7 +64,7 @@ pub struct DirectIoBuffer {
 }
 
 impl DirectIoBuffer {
-    pub fn new(len: usize, alignment: usize) -> Result<Self, DirectIoValidationViolation> {
+    pub(crate) fn new_checked(len: usize, alignment: usize) -> Result<Self, DirectIoValidationViolation> {
         validate_alignment(alignment)?;
         validate_len(len, alignment)?;
 
@@ -75,6 +75,11 @@ impl DirectIoBuffer {
         let ptr = NonNull::new(ptr).ok_or(DirectIoValidationViolation::AllocationFailed { len, alignment })?;
 
         Ok(Self { ptr, len, alignment })
+    }
+
+    /// Allocates one aligned direct-I/O buffer.
+    pub fn new(len: usize, alignment: usize) -> Option<Self> {
+        Self::new_checked(len, alignment).ok()
     }
 
     #[inline]
@@ -133,7 +138,7 @@ pub struct DirectIoRequest {
 }
 
 impl DirectIoRequest {
-    pub fn new(file_offset: u64, buffer: DirectIoBuffer) -> Result<Self, DirectIoValidationViolation> {
+    pub(crate) fn new_checked(file_offset: u64, buffer: DirectIoBuffer) -> Result<Self, DirectIoValidationViolation> {
         let alignment = buffer.alignment();
         if !file_offset.is_multiple_of(alignment as u64) {
             return Err(DirectIoValidationViolation::UnalignedFileOffset {
@@ -143,6 +148,11 @@ impl DirectIoRequest {
         }
 
         Ok(Self { file_offset, buffer })
+    }
+
+    /// Creates one aligned direct-I/O request.
+    pub fn new(file_offset: u64, buffer: DirectIoBuffer) -> Option<Self> {
+        Self::new_checked(file_offset, buffer).ok()
     }
 
     #[inline]
@@ -200,7 +210,7 @@ mod tests {
 
     #[test]
     fn direct_io_buffer_allocates_aligned_memory() {
-        let buffer = DirectIoBuffer::new(8192, 4096).expect("aligned buffer");
+        let buffer = DirectIoBuffer::new_checked(8192, 4096).expect("aligned buffer");
 
         assert_eq!(buffer.len(), 8192);
         assert_eq!(buffer.alignment(), 4096);
@@ -211,11 +221,11 @@ mod tests {
     #[test]
     fn direct_io_buffer_rejects_invalid_alignment_and_length() {
         assert_eq!(
-            DirectIoBuffer::new(4096, 1000).expect_err("alignment must be power of two"),
+            DirectIoBuffer::new_checked(4096, 1000).expect_err("alignment must be power of two"),
             DirectIoValidationViolation::InvalidAlignment { alignment: 1000 }
         );
         assert_eq!(
-            DirectIoBuffer::new(4097, 4096).expect_err("length must be aligned"),
+            DirectIoBuffer::new_checked(4097, 4096).expect_err("length must be aligned"),
             DirectIoValidationViolation::UnalignedLength {
                 len: 4097,
                 alignment: 4096,
@@ -225,15 +235,15 @@ mod tests {
 
     #[test]
     fn direct_io_request_requires_aligned_file_offset() {
-        let buffer = DirectIoBuffer::new(4096, 4096).expect("aligned buffer");
-        let request = DirectIoRequest::new(8192, buffer).expect("aligned request");
+        let buffer = DirectIoBuffer::new_checked(4096, 4096).expect("aligned buffer");
+        let request = DirectIoRequest::new_checked(8192, buffer).expect("aligned request");
 
         assert_eq!(request.file_offset(), 8192);
         assert_eq!(request.len(), 4096);
 
-        let buffer = DirectIoBuffer::new(4096, 4096).expect("aligned buffer");
+        let buffer = DirectIoBuffer::new_checked(4096, 4096).expect("aligned buffer");
         assert_eq!(
-            DirectIoRequest::new(1, buffer).expect_err("file offset must be aligned"),
+            DirectIoRequest::new_checked(1, buffer).expect_err("file offset must be aligned"),
             DirectIoValidationViolation::UnalignedFileOffset {
                 offset: 1,
                 alignment: 4096,

@@ -1311,6 +1311,8 @@ fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext)
         message_store_config.trans_rocksdb_enable = false;
         let store = RocksDBMessageStore::try_new(
             Arc::new(message_store_config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid example policy"),
             Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
@@ -1326,6 +1328,8 @@ fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext)
 
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid example policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,

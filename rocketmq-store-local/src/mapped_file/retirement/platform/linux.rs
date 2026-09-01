@@ -37,7 +37,7 @@ use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
 use crate::mapped_file::retirement::writer::BoundIncarnationReceipt;
 
-use super::creation::IncarnationCreationError;
+use super::creation::IncarnationCreationFailure;
 use super::creation::IncarnationCreationStage;
 
 const STRICT_RESOLVE: u64 =
@@ -58,10 +58,6 @@ pub(super) struct NamespaceRoot {
 }
 
 impl NamespaceRoot {
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(super) fn open(file: File) -> Result<Self, NamespaceTransitionOutcome> {
         let metadata = file
             .metadata()
@@ -179,31 +175,31 @@ impl NamespaceRoot {
     pub(super) fn create_incarnation_temp(
         &self,
         allocated: &AllocatedIncarnationReceipt,
-    ) -> Result<CreatedIncarnationTemp, IncarnationCreationError> {
+    ) -> Result<CreatedIncarnationTemp, IncarnationCreationFailure> {
         let (parent_path, canonical_name) = split_parent(allocated.canonical_path().as_str());
         let (create_parent, create_name) = split_parent(allocated.create_file_path().as_str());
         if parent_path != create_parent {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "canonical and create-file paths have different parents",
             ));
         }
         let parent = open_or_create_parent_strict(&self.file, parent_path)
-            .map_err(|error| IncarnationCreationError::namespace(IncarnationCreationStage::OpenParent, error))?;
+            .map_err(|error| IncarnationCreationFailure::namespace(IncarnationCreationStage::OpenParent, error))?;
         let metadata = parent
             .metadata()
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::OpenParent, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::OpenParent, error))?;
         if !metadata.is_dir() || metadata.dev() != self.device {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::OpenParent,
                 "create-file parent escaped the retained Store filesystem",
             ));
         }
         let canonical_name = CString::new(canonical_name).map_err(|_| {
-            IncarnationCreationError::policy(IncarnationCreationStage::VerifyNames, "canonical name contains NUL")
+            IncarnationCreationFailure::policy(IncarnationCreationStage::VerifyNames, "canonical name contains NUL")
         })?;
         let create_name = CString::new(create_name).map_err(|_| {
-            IncarnationCreationError::policy(IncarnationCreationStage::VerifyNames, "create name contains NUL")
+            IncarnationCreationFailure::policy(IncarnationCreationStage::VerifyNames, "create name contains NUL")
         })?;
         require_missing(&parent, &canonical_name, IncarnationCreationStage::VerifyNames)?;
         require_missing(&parent, &create_name, IncarnationCreationStage::VerifyNames)?;
@@ -214,15 +210,15 @@ impl NamespaceRoot {
             libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             0o600,
         )
-        .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::CreateTemp, error))?;
+        .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::CreateTemp, error))?;
         file.set_len(allocated.expected_length())
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::SizeTemp, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::SizeTemp, error))?;
         file.sync_all()
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::SyncTemp, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::SyncTemp, error))?;
         let physical_key = physical_key::capture(&file)
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::CapturePhysicalKey, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::CapturePhysicalKey, error))?;
         if !matches!(physical_key, PhysicalFileKey::Unix(_)) {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::CapturePhysicalKey,
                 "created file returned a non-Unix physical key",
             ));
@@ -241,9 +237,9 @@ impl NamespaceRoot {
         &self,
         created: CreatedIncarnationTemp,
         bound: &BoundIncarnationReceipt,
-    ) -> Result<(File, PhysicalFileKey), IncarnationCreationError> {
+    ) -> Result<(File, PhysicalFileKey), IncarnationCreationFailure> {
         if bound.physical_key() != created.physical_key || bound.expected_length() != created.expected_length {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "BindIncarnation differs from the created file",
             ));
@@ -254,7 +250,7 @@ impl NamespaceRoot {
             || created.canonical_name.as_bytes() != bound_canonical_name.as_bytes()
             || created.create_name.as_bytes() != bound_create_name.as_bytes()
         {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "BindIncarnation paths differ from the created file",
             ));
@@ -273,7 +269,7 @@ impl NamespaceRoot {
             )
         };
         if result != 0 {
-            return Err(IncarnationCreationError::io(
+            return Err(IncarnationCreationFailure::io(
                 IncarnationCreationStage::RenameNoReplace,
                 io::Error::last_os_error(),
             ));
@@ -281,7 +277,7 @@ impl NamespaceRoot {
         created
             .parent
             .sync_all()
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::SyncParent, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::SyncParent, error))?;
         drop(created.file);
 
         let canonical = openat2(
@@ -289,14 +285,14 @@ impl NamespaceRoot {
             &created.canonical_name,
             libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW,
         )
-        .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::ReopenCanonical, error))?;
+        .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::ReopenCanonical, error))?;
         let metadata = canonical
             .metadata()
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::VerifyCanonical, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::VerifyCanonical, error))?;
         let reopened_key = physical_key::capture(&canonical)
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::VerifyCanonical, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::VerifyCanonical, error))?;
         if !metadata.is_file() || metadata.len() != created.expected_length || reopened_key != created.physical_key {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyCanonical,
                 "reopened canonical file differs from the durable binding",
             ));
@@ -474,10 +470,6 @@ fn observe_entry(
     })
 }
 
-#[allow(
-    clippy::result_large_err,
-    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-)]
 fn open_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
     let path = CString::new(if parent_path.is_empty() { "." } else { parent_path })
         .map_err(|_| NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
@@ -498,10 +490,6 @@ fn open_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceT
     }
 }
 
-#[allow(
-    clippy::result_large_err,
-    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-)]
 fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
     let root_device = root
         .metadata()
@@ -613,14 +601,14 @@ fn require_missing(
     parent: &File,
     name: &CString,
     stage: IncarnationCreationStage,
-) -> Result<(), IncarnationCreationError> {
+) -> Result<(), IncarnationCreationFailure> {
     match openat2(parent, name, libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW) {
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => Ok(()),
-        Ok(_) => Err(IncarnationCreationError::io(
+        Ok(_) => Err(IncarnationCreationFailure::io(
             stage,
             io::Error::new(io::ErrorKind::AlreadyExists, "managed creation name already exists"),
         )),
-        Err(error) => Err(IncarnationCreationError::io(stage, error)),
+        Err(error) => Err(IncarnationCreationFailure::io(stage, error)),
     }
 }
 

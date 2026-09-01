@@ -55,13 +55,15 @@ fn payload_record_crc_and_unknown_damage_fail_closed() {
     let mut encoded = expected.encode().expect("encode");
     assert_eq!(TimerPayloadRecordV1::decode(&encoded).expect("decode"), expected);
     encoded[30] ^= 1;
-    assert!(TimerPayloadRecordV1::decode(&encoded).is_err());
+    assert!(TimerPayloadRecordV1::decode(&encoded).is_none());
 }
 
 #[test]
 fn payload_store_supports_180_366_and_400_day_partitions_with_bounded_handles() {
     let directory = tempfile::tempdir().expect("root");
-    let store = TimerPayloadStore::new(config(directory.path())).expect("store");
+    let store = TimerPayloadStore::new(config(directory.path()))
+        .expect("store")
+        .expect("valid store configuration");
     store.load().expect("load");
     let base_day = 20_000;
     let records = [
@@ -69,7 +71,10 @@ fn payload_store_supports_180_366_and_400_day_partitions_with_bounded_handles() 
         record(2, base_day + 366, 1, &[2; 32]),
         record(3, base_day + 400, 2, &[3; 32]),
     ];
-    let locators = store.append_batch(&records).expect("append");
+    let locators = store
+        .append_batch(&records)
+        .expect("append")
+        .expect("valid payload batch");
     assert_eq!(locators.len(), records.len());
     for (locator, expected) in locators.into_iter().zip(records) {
         assert_eq!(store.read(locator).expect("read"), expected);
@@ -83,12 +88,17 @@ fn payload_store_rolls_segments_repairs_torn_tail_and_survives_source_cleanup() 
     let store_config = config(directory.path());
     let source_path = directory.path().join("ordinary-commitlog-segment");
     std::fs::write(&source_path, b"source-can-expire").expect("source");
-    let store = TimerPayloadStore::new(store_config.clone()).expect("store");
+    let store = TimerPayloadStore::new(store_config.clone())
+        .expect("store")
+        .expect("valid store configuration");
     store.load().expect("load");
     let due_day = 20_500;
     let first = record(1, due_day, 0, &[1; 72]);
     let second = record(2, due_day, 0, &[2; 72]);
-    let locators = store.append_batch(&[first.clone(), second.clone()]).expect("append");
+    let locators = store
+        .append_batch(&[first.clone(), second.clone()])
+        .expect("append")
+        .expect("valid payload batch");
     assert_ne!(locators[0].segment_id(), locators[1].segment_id());
     std::fs::remove_file(&source_path).expect("ordinary source cleanup");
     assert_eq!(store.read(locators[0]).expect("payload remains"), first);
@@ -106,7 +116,9 @@ fn payload_store_rolls_segments_repairs_torn_tail_and_survives_source_cleanup() 
         .write_all(b"torn")
         .expect("torn tail");
 
-    let recovered = TimerPayloadStore::new(store_config).expect("recovered store");
+    let recovered = TimerPayloadStore::new(store_config)
+        .expect("recovered store")
+        .expect("valid store configuration");
     recovered.load().expect("tail recovery");
     assert_eq!(recovered.read(locators[1]).expect("second payload"), second);
     assert_eq!(
@@ -118,14 +130,19 @@ fn payload_store_rolls_segments_repairs_torn_tail_and_survives_source_cleanup() 
 #[test]
 fn whole_partition_gc_requires_every_safety_fence() {
     let directory = tempfile::tempdir().expect("root");
-    let store = TimerPayloadStore::new(config(directory.path())).expect("store");
+    let store = TimerPayloadStore::new(config(directory.path()))
+        .expect("store")
+        .expect("valid store configuration");
     store.load().expect("load");
     let due_day = 20_600;
     let key = TimerPayloadPartitionKey {
         due_day_utc: due_day,
         lane: 4,
     };
-    store.append_batch(&[record(1, due_day, 4, &[4; 16])]).expect("append");
+    store
+        .append_batch(&[record(1, due_day, 4, &[4; 16])])
+        .expect("append")
+        .expect("valid payload batch");
     store.seal_partition(key).expect("seal");
     store.mark_gc_eligible(key).expect("eligible");
     assert!(!store.gc_partition(key, true, false, true).expect("snapshot blocks GC"));

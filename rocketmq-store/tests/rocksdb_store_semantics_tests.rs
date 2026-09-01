@@ -83,6 +83,8 @@ fn new_owned_test_store(temp_dir: &TempDir) -> RocksDBMessageStore {
 
     RocksDBMessageStore::try_new(
         Arc::new(rocksdb_store_config(temp_dir)),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,
@@ -98,6 +100,8 @@ fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessag
 
     RocksDBMessageStore::try_new(
         Arc::new(config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         broker_config,
         topic_table,
         None,

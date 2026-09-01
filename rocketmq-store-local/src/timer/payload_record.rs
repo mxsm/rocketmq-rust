@@ -53,7 +53,7 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error when the deadline predates the Unix epoch or the day exceeds V1 range.
-    pub fn due_day_utc(&self) -> Result<i32, TimerPayloadRecordViolation> {
+    pub(crate) fn due_day_utc_checked(&self) -> Result<i32, TimerPayloadRecordViolation> {
         if self.due_time_ms < 0 {
             return Err(TimerPayloadRecordViolation::InvalidDeadline(self.due_time_ms));
         }
@@ -66,7 +66,7 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error when variable fields cannot fit the V1 length fields.
-    pub fn encoded_len(&self) -> Result<usize, TimerPayloadRecordViolation> {
+    pub(crate) fn encoded_len_checked(&self) -> Result<usize, TimerPayloadRecordViolation> {
         validate(self)?;
         Ok(PAYLOAD_HEADER_SIZE
             .saturating_add(self.real_topic.len())
@@ -79,8 +79,8 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error for invalid metadata or oversized variable fields.
-    pub fn encode(&self) -> Result<Vec<u8>, TimerPayloadRecordViolation> {
-        let total_len = self.encoded_len()?;
+    pub(crate) fn encode_checked(&self) -> Result<Vec<u8>, TimerPayloadRecordViolation> {
+        let total_len = self.encoded_len_checked()?;
         let total_len_u32 =
             u32::try_from(total_len).map_err(|_| TimerPayloadRecordViolation::RecordTooLarge(total_len))?;
         let topic_len = u16::try_from(self.real_topic.len())
@@ -114,7 +114,7 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error for unknown versions, length damage, UTF-8 damage, or CRC mismatch.
-    pub fn decode(bytes: &[u8]) -> Result<Self, TimerPayloadRecordViolation> {
+    pub(crate) fn decode_checked(bytes: &[u8]) -> Result<Self, TimerPayloadRecordViolation> {
         if bytes.len() < PAYLOAD_HEADER_SIZE + PAYLOAD_TRAILER_SIZE {
             return Err(TimerPayloadRecordViolation::Truncated);
         }
@@ -184,10 +184,30 @@ impl TimerPayloadRecordV1 {
         }
         read_u32(bytes, bytes.len() - PAYLOAD_TRAILER_SIZE)
     }
+
+    /// Returns the UTC day partition derived from the original deadline.
+    pub fn due_day_utc(&self) -> Option<i32> {
+        self.due_day_utc_checked().ok()
+    }
+
+    /// Returns the encoded record length.
+    pub fn encoded_len(&self) -> Option<usize> {
+        self.encoded_len_checked().ok()
+    }
+
+    /// Encodes the record with a trailing CRC32C.
+    pub fn encode(&self) -> Option<Vec<u8>> {
+        self.encode_checked().ok()
+    }
+
+    /// Decodes and verifies a complete payload record.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        Self::decode_checked(bytes).ok()
+    }
 }
 
 fn validate(record: &TimerPayloadRecordV1) -> Result<(), TimerPayloadRecordViolation> {
-    record.due_day_utc()?;
+    record.due_day_utc_checked()?;
     if record.source_cq_offset.get() < 0 || record.source_physical_offset < 0 {
         return Err(TimerPayloadRecordViolation::InvalidIdentity);
     }
@@ -233,7 +253,7 @@ fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, TimerPayloadRecordViol
 
 /// Payload record codec error.
 #[derive(Debug, Error)]
-pub enum TimerPayloadRecordViolation {
+pub(crate) enum TimerPayloadRecordViolation {
     /// Original deadline cannot map to a V1 UTC-day partition.
     #[error("invalid timer payload deadline: {0}")]
     InvalidDeadline(i64),

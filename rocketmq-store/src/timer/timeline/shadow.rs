@@ -120,7 +120,6 @@ impl ShadowReconciler {
                 }
                 if payload
                     .encode()
-                    .ok()
                     .and_then(|bytes| bytes.get(bytes.len().saturating_sub(4)..).map(<[u8; 4]>::try_from))
                     .and_then(Result::ok)
                     .map(u32::from_be_bytes)
@@ -216,7 +215,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("timeline"));
         let payloads = Arc::new(
-            TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(dir.path())).expect("payload store"),
+            TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(dir.path()))
+                .expect("payload store")
+                .expect("valid payload configuration"),
         );
         payloads.load().expect("payload load");
         let reconciler = ShadowReconciler::new(timeline, payloads, 2);

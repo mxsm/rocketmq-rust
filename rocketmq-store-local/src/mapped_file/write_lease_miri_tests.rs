@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 
-use crate::mapped_file::MappedFileError;
 use crate::mapped_file::MappedWriteLease;
 use crate::transfer::segment::SegmentLease;
 use crate::transfer::segment::TransferCacheState;
@@ -43,24 +43,24 @@ impl SafeLeaseOwner {
         }
     }
 
-    fn reserve_write(&self, required_space: usize) -> Result<SafeWriteLease<'_>, MappedFileError> {
+    fn reserve_write(&self, required_space: usize) -> Result<Option<SafeWriteLease<'_>>, StoreError> {
         let writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let start_position = self.wrote_position.load(Ordering::Acquire);
         let capacity = self.bytes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len();
         if required_space == 0 {
-            return Err(MappedFileError::InvalidWriteCommit { reserved: 0, actual: 0 });
+            return Ok(None);
         }
         if start_position >= capacity {
-            return Err(MappedFileError::file_full(start_position, capacity as u64));
+            return Err(mapped_file_capacity_error());
         }
 
         let reserved = required_space.min(capacity - start_position);
-        Ok(SafeWriteLease {
+        Ok(Some(SafeWriteLease {
             owner: self,
             _writer: writer,
             staging: vec![0; reserved],
             start_position,
-        })
+        }))
     }
 
     fn snapshot(&self) -> Vec<u8> {
@@ -91,55 +91,43 @@ impl MappedWriteLease for SafeWriteLease<'_> {
         &mut self.staging
     }
 
-    fn commit(self, actual_bytes: usize, _store_timestamp: Option<u64>) -> Result<usize, StoreError> {
-        self.commit_typed(actual_bytes)
-            .map_err(|error| error.into_store_error(StoreOperation::Append))
-    }
-}
-
-impl SafeWriteLease<'_> {
-    fn commit_typed(self, actual_bytes: usize) -> Result<usize, MappedFileError> {
+    fn commit(self, actual_bytes: usize, _store_timestamp: Option<u64>) -> Result<Option<usize>, StoreError> {
         if actual_bytes == 0 || actual_bytes > self.capacity() {
-            return Err(MappedFileError::InvalidWriteCommit {
-                reserved: self.capacity(),
-                actual: actual_bytes,
-            });
+            return Ok(None);
         }
-        let end_position = self
-            .start_position
-            .checked_add(actual_bytes)
-            .filter(|end| {
-                *end <= self
-                    .owner
-                    .bytes
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .len()
-            })
-            .ok_or_else(|| {
-                let capacity = self
-                    .owner
-                    .bytes
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .len();
-                MappedFileError::out_of_bounds(self.start_position, actual_bytes, capacity as u64)
-            })?;
+        let Some(end_position) = self.start_position.checked_add(actual_bytes).filter(|end| {
+            *end <= self
+                .owner
+                .bytes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+        }) else {
+            return Ok(None);
+        };
 
         let mut bytes = self.owner.bytes.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         bytes[self.start_position..end_position].copy_from_slice(&self.staging[..actual_bytes]);
         self.owner.wrote_position.store(end_position, Ordering::Release);
-        Ok(end_position)
+        Ok(Some(end_position))
     }
+}
+
+fn mapped_file_capacity_error() -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_CAPACITY_EXHAUSTED, StoreOperation::Append)
+        .in_component(StoreComponent::MappedFile)
 }
 
 #[test]
 fn write_lease_publishes_only_committed_bytes() {
     let owner = SafeLeaseOwner::new(16);
-    let mut lease = owner.reserve_write(8).expect("safe lease reservation");
+    let mut lease = owner
+        .reserve_write(8)
+        .expect("safe lease reservation")
+        .expect("valid reservation");
     lease.buffer_mut()[..6].copy_from_slice(b"commit");
 
-    assert_eq!(lease.commit(6, None).expect("safe lease commit"), 6);
+    assert_eq!(lease.commit(6, None).expect("safe lease commit"), Some(6));
     assert_eq!(&owner.snapshot()[..6], b"commit");
     assert_eq!(&owner.snapshot()[6..], &[0; 10]);
 }
@@ -148,7 +136,10 @@ fn write_lease_publishes_only_committed_bytes() {
 fn dropped_write_lease_does_not_publish_staged_bytes() {
     let owner = SafeLeaseOwner::new(8);
     {
-        let mut lease = owner.reserve_write(4).expect("safe lease reservation");
+        let mut lease = owner
+            .reserve_write(4)
+            .expect("safe lease reservation")
+            .expect("valid reservation");
         lease.buffer_mut().copy_from_slice(b"drop");
     }
 
@@ -159,9 +150,12 @@ fn dropped_write_lease_does_not_publish_staged_bytes() {
 #[test]
 fn invalid_commit_preserves_bytes_and_position() {
     let owner = SafeLeaseOwner::new(8);
-    let lease = owner.reserve_write(4).expect("safe lease reservation");
+    let lease = owner
+        .reserve_write(4)
+        .expect("safe lease reservation")
+        .expect("valid reservation");
 
-    assert!(lease.commit(5, None).is_err());
+    assert_eq!(lease.commit(5, None).expect("contract result"), None);
     assert_eq!(owner.wrote_position.load(Ordering::Acquire), 0);
     assert_eq!(owner.snapshot(), vec![0; 8]);
 }
@@ -169,11 +163,17 @@ fn invalid_commit_preserves_bytes_and_position() {
 #[test]
 fn tail_reservation_is_bounded_by_remaining_capacity() {
     let owner = SafeLeaseOwner::new(8);
-    let mut first = owner.reserve_write(6).expect("first safe lease reservation");
+    let mut first = owner
+        .reserve_write(6)
+        .expect("first safe lease reservation")
+        .expect("valid reservation");
     first.buffer_mut().copy_from_slice(b"first!");
-    assert_eq!(first.commit(6, None).expect("first safe lease commit"), 6);
+    assert_eq!(first.commit(6, None).expect("first safe lease commit"), Some(6));
 
-    let tail = owner.reserve_write(8).expect("tail safe lease reservation");
+    let tail = owner
+        .reserve_write(8)
+        .expect("tail safe lease reservation")
+        .expect("valid reservation");
     assert_eq!(tail.start_position(), 6);
     assert_eq!(tail.capacity(), 2);
 }

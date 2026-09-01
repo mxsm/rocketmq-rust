@@ -125,7 +125,6 @@ use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObserva
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
-use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicyViolation;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
@@ -140,14 +139,12 @@ use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::record::read_declared_frame;
-use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
+use rocketmq_store_local::commit_log::record_parser::inspect_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
-use rocketmq_store_local::commit_log::record_parser::CommitLogRecordViolation;
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateViolation;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
@@ -168,13 +165,6 @@ pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockRuntimeInfo;
 
-fn micro_batch_policy_store_error(error: MicroBatchPolicyViolation) -> StoreError {
-    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Start)
-        .in_component(StoreComponent::Configuration)
-        .with_detail("invalid CommitLog micro-batch policy")
-        .with_source(error)
-}
-
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
@@ -188,11 +178,15 @@ enum NormalRecoveryAdapterError {
 
 #[derive(Debug)]
 enum AbnormalRecoveryAdapterError {
-    ConfirmCandidate(AbnormalRecoveryConfirmCandidateViolation),
+    ConfirmCandidate,
     ConfirmLimitConversion(std::num::TryFromIntError),
     FramePositionOverflow { position: usize, size: usize },
     RelativeOffsetConversion(std::num::TryFromIntError),
     ValidatedSizeConversion(std::num::TryFromIntError),
+}
+
+fn confirm_candidate_value(candidate: Option<i64>) -> Result<i64, AbnormalRecoveryAdapterError> {
+    candidate.ok_or(AbnormalRecoveryAdapterError::ConfirmCandidate)
 }
 
 fn log_abnormal_recovery_window(
@@ -432,9 +426,14 @@ impl CommitLog {
             && self.mapped_file_queue.bind_managed_runtime(runtime)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the Store composition root passes the validated micro-batch policy with the existing commit-log owners"
+    )]
     pub(crate) fn try_new(
         runtime_scope: crate::runtime::StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
+        micro_batch: MicroBatchPolicy,
         store_runtime_state: Arc<StoreRuntimeState>,
         broker_config: Arc<StoreRuntimeConfig>,
         store_context: CommitLogStoreContext,
@@ -503,16 +502,6 @@ impl CommitLog {
             mapped_file_flush,
             store_checkpoint.clone(),
         );
-        let micro_batch = if message_store_config.commit_log_micro_batch_enabled {
-            MicroBatchPolicy::try_new(
-                message_store_config.commit_log_micro_batch_max_items,
-                message_store_config.commit_log_micro_batch_max_bytes,
-                std::time::Duration::from_micros(message_store_config.commit_log_micro_batch_max_wait_micros),
-            )
-        } else {
-            MicroBatchPolicy::disabled(message_store_config.commit_log_append_queue_bytes)
-        }
-        .map_err(micro_batch_policy_store_error)?;
         let append_processor = CommitLogAppendProcessor::new(CommitLogAppendDependencies {
             append: mapped_file_queue.append_handle(),
             message_store_config: Arc::clone(&message_store_config),
@@ -1519,9 +1508,9 @@ impl CommitLog {
             }
         };
         let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Optimized) {
-            Ok(state) => state,
-            Err(error) => {
-                warn!("normal optimized recovery initial state failed: {error}");
+            Some(state) => state,
+            None => {
+                warn!("normal optimized recovery initial state rejected its offset");
                 return false;
             }
         };
@@ -1624,8 +1613,8 @@ impl CommitLog {
                     warn!("normal optimized recovery frame position overflow at {position} with size {size}");
                     break 'segments;
                 }
-                NormalRecoverySegmentOutcome::StateFailed(error) => {
-                    warn!("normal optimized recovery offset state failed: {error}");
+                NormalRecoverySegmentOutcome::StateFailed => {
+                    warn!("normal optimized recovery offset state failed");
                     break 'segments;
                 }
             }
@@ -1674,9 +1663,9 @@ impl CommitLog {
             };
             let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Standard)
             {
-                Ok(state) => state,
-                Err(error) => {
-                    warn!("normal recovery initial state failed: {error}");
+                Some(state) => state,
+                None => {
+                    warn!("normal recovery initial state rejected its offset");
                     return false;
                 }
             };
@@ -1792,8 +1781,8 @@ impl CommitLog {
                         warn!("normal recovery message size conversion failed: {error}");
                         break 'segments;
                     }
-                    NormalRecoverySegmentOutcome::StateFailed(error) => {
-                        warn!("normal recovery offset state failed: {error}");
+                    NormalRecoverySegmentOutcome::StateFailed => {
+                        warn!("normal recovery offset state failed");
                         break 'segments;
                     }
                 }
@@ -1908,9 +1897,9 @@ impl CommitLog {
         };
         let mut abnormal_recovery =
             match AbnormalRecoveryState::try_new(initial_offset, AbnormalRecoveryPolicy::Optimized) {
-                Ok(state) => state,
-                Err(error) => {
-                    warn!("optimized abnormal recovery initial state failed: {error}");
+                Some(state) => state,
+                None => {
+                    warn!("optimized abnormal recovery initial state rejected its offset");
                     return false;
                 }
             };
@@ -1941,9 +1930,10 @@ impl CommitLog {
                     };
                     let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
                     if dispatch_request.success && dispatch_request.msg_size > 0 {
-                        let confirm_candidate_end =
-                            abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)
-                                .map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;
+                        let confirm_candidate_end = confirm_candidate_value(abnormal_confirm_candidate_end(
+                            dispatch_request.commit_log_offset,
+                            msg_size,
+                        ))?;
                         let validated_size = u64::try_from(dispatch_request.msg_size)
                             .map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;
                         let relative_start = u64::try_from(absolute_offset)
@@ -2018,10 +2008,8 @@ impl CommitLog {
                     index += 1;
                 }
                 AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate(
-                    error,
-                )) => {
-                    warn!("optimized abnormal recovery confirm candidate failed: {error}");
+                AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate) => {
+                    warn!("optimized abnormal recovery confirm candidate failed");
                     break 'segments;
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
@@ -2048,8 +2036,8 @@ impl CommitLog {
                     warn!("optimized abnormal recovery frame position overflow at {position} with size {size}");
                     break 'segments;
                 }
-                AbnormalRecoverySegmentOutcome::StateFailed(error) => {
-                    warn!("optimized abnormal recovery offset state failed: {error}");
+                AbnormalRecoverySegmentOutcome::StateFailed => {
+                    warn!("optimized abnormal recovery offset state failed");
                     break 'segments;
                 }
                 AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
@@ -2104,9 +2092,9 @@ impl CommitLog {
             let initial_offset = first_recovery_file.get_file_from_offset();
             let mut abnormal_recovery =
                 match AbnormalRecoveryState::try_new(initial_offset, AbnormalRecoveryPolicy::Standard) {
-                    Ok(state) => state,
-                    Err(error) => {
-                        warn!("standard abnormal recovery initial state failed: {error}");
+                    Some(state) => state,
+                    None => {
+                        warn!("standard abnormal recovery initial state rejected its offset");
                         return false;
                     }
                 };
@@ -2148,9 +2136,10 @@ impl CommitLog {
                             delay_level_table.as_ref(),
                         );
                         if dispatch_request.success && dispatch_request.msg_size > 0 {
-                            let confirm_candidate_end =
-                                abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size)
-                                    .map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;
+                            let confirm_candidate_end = confirm_candidate_value(abnormal_confirm_candidate_end(
+                                dispatch_request.commit_log_offset,
+                                input_size,
+                            ))?;
                             let validated_size = u64::try_from(dispatch_request.msg_size)
                                 .map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;
                             let relative_start = u64::try_from(frame_position)
@@ -2218,10 +2207,8 @@ impl CommitLog {
                         }
                     }
                     AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate(
-                        error,
-                    )) => {
-                        warn!("standard abnormal recovery confirm candidate failed: {error}");
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate) => {
+                        warn!("standard abnormal recovery confirm candidate failed");
                         break 'segments;
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
@@ -2248,8 +2235,8 @@ impl CommitLog {
                         warn!("standard abnormal recovery validated size conversion failed: {error}");
                         break 'segments;
                     }
-                    AbnormalRecoverySegmentOutcome::StateFailed(error) => {
-                        warn!("standard abnormal recovery offset state failed: {error}");
+                    AbnormalRecoverySegmentOutcome::StateFailed => {
+                        warn!("standard abnormal recovery offset state failed");
                         break 'segments;
                     }
                     AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
@@ -2479,7 +2466,7 @@ impl CommitLog {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> Result<Vec<SegmentLease>, StoreError> {
+    ) -> Result<Option<Vec<SegmentLease>>, StoreError> {
         self.read_handle().select_segments(offset, max_bytes, allow_cross_file)
     }
 
@@ -2589,14 +2576,17 @@ impl CommitLog {
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mut updated = 0;
         for mapped_file in mapped_files.iter() {
-            if mapped_file.apply_memory_advice(advice).is_ok() {
-                updated += 1;
-            } else {
-                warn!(
-                    "failed to apply read mode {} for {}",
-                    read_ahead_mode.wire_value(),
-                    mapped_file.get_file_name()
-                );
+            match mapped_file.apply_memory_advice(advice) {
+                Ok(true) => updated += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    warn!(
+                        %error,
+                        "failed to apply read mode {} for {}",
+                        read_ahead_mode.wire_value(),
+                        mapped_file.get_file_name()
+                    );
+                }
             }
         }
         updated
@@ -2628,8 +2618,8 @@ pub fn check_message_and_return_size(
     } else {
         CommitLogRecordBodyMode::Read
     };
-    let record = match decode_commit_log_record(bytes, body_mode, &CommonCommitLogChecksum) {
-        Ok(CommitLogRecordOutcome::Blank { .. }) => {
+    let record = match inspect_commit_log_record(bytes, body_mode, &CommonCommitLogChecksum) {
+        CommitLogRecordOutcome::Blank { .. } => {
             bytes.advance(8);
             return DispatchRequest {
                 msg_size: 0,
@@ -2637,30 +2627,41 @@ pub fn check_message_and_return_size(
                 ..Default::default()
             };
         }
-        Ok(CommitLogRecordOutcome::Message(record)) => record,
-        Err(error) => {
-            match error {
-                CommitLogRecordViolation::IllegalMagic { magic_code, .. } => {
-                    warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code));
-                }
-                CommitLogRecordViolation::BodyCrcMismatch { computed, stored, .. } => {
-                    warn!("CRC check failed. bodyCRC={}, currentCRC={}", computed, stored);
-                }
-                CommitLogRecordViolation::Truncated {
-                    field,
-                    needed,
-                    remaining,
-                    ..
-                } => {
-                    warn!(
-                        "truncated commitlog record at {:?}: needed={}, remaining={}",
-                        field, needed, remaining
-                    );
-                }
-                CommitLogRecordViolation::NegativeLength { field, value, .. } => {
-                    warn!("negative commitlog record length at {:?}: value={}", field, value);
-                }
-            }
+        CommitLogRecordOutcome::Message(record) => record,
+        CommitLogRecordOutcome::IllegalMagic { magic_code, .. } => {
+            warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code));
+            return DispatchRequest {
+                msg_size: -1,
+                success: false,
+                ..Default::default()
+            };
+        }
+        CommitLogRecordOutcome::BodyCrcMismatch { computed, stored, .. } => {
+            warn!("CRC check failed. bodyCRC={}, currentCRC={}", computed, stored);
+            return DispatchRequest {
+                msg_size: -1,
+                success: false,
+                ..Default::default()
+            };
+        }
+        CommitLogRecordOutcome::Truncated {
+            field,
+            needed,
+            remaining,
+            ..
+        } => {
+            warn!(
+                "truncated commitlog record at {:?}: needed={}, remaining={}",
+                field, needed, remaining
+            );
+            return DispatchRequest {
+                msg_size: -1,
+                success: false,
+                ..Default::default()
+            };
+        }
+        CommitLogRecordOutcome::NegativeLength { field, value, .. } => {
+            warn!("negative commitlog record length at {:?}: value={}", field, value);
             return DispatchRequest {
                 msg_size: -1,
                 success: false,
@@ -2919,19 +2920,6 @@ mod tests {
     use rocketmq_store_api::WriteAuthority;
 
     #[test]
-    fn micro_batch_policy_promotion_preserves_typed_source() {
-        let error = micro_batch_policy_store_error(MicroBatchPolicyViolation::ZeroMaxItems);
-
-        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
-        assert_eq!(error.operation(), StoreOperation::Start);
-        assert_eq!(error.component(), StoreComponent::Configuration);
-        assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<MicroBatchPolicyViolation>())
-            .is_some());
-        assert!(!error.to_string().contains("max-items"));
-    }
-
-    #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {
         let state = CommitLogRuntimeState::new(true, 0);
 
@@ -2979,6 +2967,7 @@ mod tests {
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = LocalFileMessageStore::new(
             message_store_config,
+            MicroBatchPolicy::disabled(1).expect("valid test policy"),
             broker_config,
             topic_table,
             None,
@@ -3674,10 +3663,18 @@ mod tests {
             commit_log.put_message(append_test_message("append-sequencer-rollover", b"third-message-body")),
         );
         let results = [first, second, third];
-
-        assert!(results
+        let statuses = results
             .iter()
-            .all(|result| result.put_message_status() == PutMessageStatus::PutOk));
+            .map(|result| result.put_message_status())
+            .collect::<Vec<_>>();
+        let queue = commit_log.append_sequencer_runtime_info();
+
+        assert!(
+            results
+                .iter()
+                .all(|result| result.put_message_status() == PutMessageStatus::PutOk),
+            "unexpected append statuses: {statuses:?}; queue={queue:?}"
+        );
         assert_eq!(
             results
                 .iter()
@@ -3710,7 +3707,6 @@ mod tests {
             "three appends should cross the configured CommitLog segment boundary"
         );
 
-        let queue = commit_log.append_sequencer_runtime_info();
         assert_eq!(queue.depth, 0);
         assert_eq!(queue.reserved_count, 0);
         assert_eq!(commit_log.put_message_lock_runtime_info().acquire_total, 1);
@@ -3762,7 +3758,12 @@ mod tests {
             }
         })
         .await
-        .expect("first append should retain one bounded queue permit");
+        .unwrap_or_else(|error| {
+            panic!(
+                "first append should retain one bounded queue permit: {error}; queue={:?}",
+                store.get_commit_log().append_sequencer_runtime_info()
+            )
+        });
 
         let saturated = store
             .get_commit_log()
@@ -4100,7 +4101,8 @@ mod tests {
         let segments = store
             .get_commit_log()
             .select_segments(12, 8, false)
-            .expect("single-file transfer segments");
+            .expect("single-file transfer segments")
+            .expect("valid selector input");
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].segment().global_offset(), 12);
@@ -4114,6 +4116,16 @@ mod tests {
             file_range.to_bytes().expect("exact fallback"),
             Bytes::from_static(b"CDEF")
         );
+        assert!(store
+            .get_commit_log()
+            .select_segments(-1, 8, false)
+            .expect("negative offset is a contract outcome")
+            .is_none());
+        assert!(store
+            .get_commit_log()
+            .select_segments(0, 0, false)
+            .expect("zero selection size is a contract outcome")
+            .is_none());
         let after = store.get_commit_log().selection_stats();
         assert_eq!(after.copied_bytes, before.copied_bytes);
         assert_eq!(after.compared_bytes, before.compared_bytes);

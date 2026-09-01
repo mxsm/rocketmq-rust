@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 use crate::timer::metrics::TimerStorageMetrics;
 use crate::timer::metrics::TimerStorageMetricsSnapshot;
 use crate::timer::paged_timer_wheel::PagedTimerWheel;
-use crate::timer::paged_timer_wheel::PagedTimerWheelError;
+use crate::timer::paged_timer_wheel::PagedTimerWheelFailure;
 use crate::timer::slot::Slot;
 
 const DEFAULT_PAGE_SIZE: usize = 4_096;
@@ -74,17 +74,17 @@ impl TimerWheel {
     }
 
     pub fn load_at_generation(&self, committed_generation: u64) -> std::io::Result<()> {
-        let paged = PagedTimerWheel::new(
+        let paged = PagedTimerWheel::new_checked(
             self.v2_directory(),
             self.wheel_len(),
             self.page_size,
             Arc::clone(&self.metrics),
         )
         .map_err(as_io_error)?;
-        paged.load(committed_generation).map_err(as_io_error)?;
+        paged.load_checked(committed_generation).map_err(as_io_error)?;
         if committed_generation == 0 && self.should_import_legacy()? {
             paged
-                .import_legacy_slots(&self.read_legacy_slots()?)
+                .import_legacy_slots_checked(&self.read_legacy_slots()?)
                 .map_err(as_io_error)?;
         }
         *self.inner.lock() = Some(paged);
@@ -92,19 +92,21 @@ impl TimerWheel {
     }
 
     pub fn load_rebuilt(&self, committed_generation: u64, pending_slots: &[Slot]) -> std::io::Result<()> {
-        let paged = PagedTimerWheel::new(
+        let paged = PagedTimerWheel::new_checked(
             self.v2_directory(),
             self.wheel_len(),
             self.page_size,
             Arc::clone(&self.metrics),
         )
         .map_err(as_io_error)?;
-        paged.reset_for_repair(committed_generation).map_err(as_io_error)?;
+        paged
+            .reset_for_repair_checked(committed_generation)
+            .map_err(as_io_error)?;
         let mut slots = vec![Slot::new_with_num_magic(0, 0, 0, 0, 0); self.wheel_len()];
         for slot in pending_slots.iter().copied().filter(|slot| slot.num > 0) {
             slots[self.get_slot_index(slot.time_ms)] = slot;
         }
-        paged.import_legacy_slots(&slots).map_err(as_io_error)?;
+        paged.import_legacy_slots_checked(&slots).map_err(as_io_error)?;
         for _ in 0..paged.dirty_page_count() {
             self.metrics.record_wheel_repair();
         }
@@ -118,11 +120,11 @@ impl TimerWheel {
     }
 
     pub fn flush_generation(&self) -> std::io::Result<u64> {
-        self.with_inner(PagedTimerWheel::flush_dirty)
+        self.with_inner(PagedTimerWheel::flush_dirty_checked)
     }
 
     pub fn commit_generation(&self, generation: u64) -> std::io::Result<()> {
-        self.with_inner(|wheel| wheel.commit_generation(generation))?;
+        self.with_inner(|wheel| wheel.commit_generation_checked(generation))?;
         if self.file_name.exists() && !self.migration_marker().exists() {
             let mut marker = OpenOptions::new()
                 .create_new(true)
@@ -159,7 +161,7 @@ impl TimerWheel {
     pub fn put_slot(&self, time_ms: i64, first_pos: i64, last_pos: i64, num: i32, magic: i32) -> std::io::Result<()> {
         let index = self.get_slot_index(time_ms);
         let slot = Slot::new_with_num_magic(self.format_time_ms(time_ms), first_pos, last_pos, num, magic);
-        self.with_inner(|wheel| wheel.put_slot(index, slot))
+        self.with_inner(|wheel| wheel.put_slot_checked(index, slot))
     }
 
     pub fn get_num(&self, time_ms: i64) -> i64 {
@@ -172,7 +174,7 @@ impl TimerWheel {
     {
         self.with_inner(|wheel| {
             wheel.revise_slots(revise);
-            Ok::<_, PagedTimerWheelError>(())
+            Ok::<_, PagedTimerWheelFailure>(())
         })
     }
 
