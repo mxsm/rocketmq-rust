@@ -18,8 +18,11 @@ impl LedgerStateMachine {
     pub(in crate::mapped_file::retirement) fn validate_successor_projection(
         &self,
         successor: &Self,
-    ) -> Result<(), StateError> {
-        let source_last_sequence = self.next_sequence.checked_sub(1).ok_or(StateError::SequenceOverflow)?;
+    ) -> Result<(), StateViolation> {
+        let source_last_sequence = self
+            .next_sequence
+            .checked_sub(1)
+            .ok_or(StateViolation::SequenceOverflow)?;
         if self.store_uuid != successor.store_uuid
             || self.generation.checked_add(1) != Some(successor.generation)
             || successor.snapshot_base_sequence != source_last_sequence
@@ -28,7 +31,7 @@ impl LedgerStateMachine {
             || self.quarantines != successor.quarantines
             || successor.prepared_generation.is_some()
         {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
 
         if successor
@@ -40,7 +43,7 @@ impl LedgerStateMachine {
                 .iter()
                 .any(|(id, state)| self.retirements.get(id).map(|source| &source.entry) != Some(&state.entry))
         {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
 
         for (ticket_id, state) in &self.retirements {
@@ -49,7 +52,7 @@ impl LedgerStateMachine {
                 && !successor.retirements.contains_key(ticket_id)
                 && !successor.incarnations.contains_key(&state.entry.incarnation);
             if !retained_exact && !omitted_as_pair {
-                return Err(StateError::InvalidSnapshotState);
+                return Err(StateViolation::InvalidSnapshotState);
             }
         }
         for (incarnation, entry) in &self.incarnations {
@@ -65,7 +68,7 @@ impl LedgerStateMachine {
                         && !successor.retirements.contains_key(ticket_id)
                 });
             if !omitted_with_completed_ticket {
-                return Err(StateError::InvalidSnapshotState);
+                return Err(StateViolation::InvalidSnapshotState);
             }
         }
 

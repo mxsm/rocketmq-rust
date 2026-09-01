@@ -27,7 +27,8 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
-use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionErrorKind;
+use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionOutcome;
+use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionRejection;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencer;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerReceiver;
@@ -101,11 +102,8 @@ impl CommitLogAppendPort {
             completion,
         };
         let retained_bytes = request.retained_bytes();
-        if let Err(error) = self.sender.try_submit(request, retained_bytes) {
-            let kind = error.kind();
-            error
-                .into_request()
-                .reject(PutMessageResult::new_default(Self::admission_status(kind)));
+        if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+            request.reject(PutMessageResult::new_default(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
             error!(error = %response_error, "CommitLog append worker dropped a message response");
@@ -130,11 +128,8 @@ impl CommitLogAppendPort {
             completion,
         };
         let retained_bytes = request.retained_bytes();
-        if let Err(error) = self.sender.try_submit(request, retained_bytes) {
-            let kind = error.kind();
-            error
-                .into_request()
-                .reject(PutMessageResult::new_default(Self::admission_status(kind)));
+        if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+            request.reject(PutMessageResult::new_default(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
             error!(error = %response_error, "CommitLog append worker dropped a batch response");
@@ -157,10 +152,10 @@ impl CommitLogAppendPort {
         self.sender.snapshot()
     }
 
-    fn admission_status(kind: AppendAdmissionErrorKind) -> PutMessageStatus {
-        match kind {
-            AppendAdmissionErrorKind::Saturated => PutMessageStatus::OsPageCacheBusy,
-            AppendAdmissionErrorKind::Closed => PutMessageStatus::ServiceNotAvailable,
+    fn admission_status(reason: AppendAdmissionRejection) -> PutMessageStatus {
+        match reason {
+            AppendAdmissionRejection::Saturated => PutMessageStatus::OsPageCacheBusy,
+            AppendAdmissionRejection::Closed => PutMessageStatus::ServiceNotAvailable,
         }
     }
 }

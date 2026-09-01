@@ -21,7 +21,7 @@ use memmap2::MmapMut;
 
 /// Failure to construct a safe view over a mapped range.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum MmapRangeError {
+pub enum MmapRangeViolation {
     /// `offset + len` cannot be represented by [`usize`].
     #[error("mapped range offset {offset} + length {len} overflowed")]
     Overflow { offset: usize, len: usize },
@@ -179,12 +179,12 @@ pub(crate) fn checked_mmap_range(
     mapping_len: usize,
     offset: usize,
     len: usize,
-) -> Result<Range<usize>, MmapRangeError> {
+) -> Result<Range<usize>, MmapRangeViolation> {
     let end = offset
         .checked_add(len)
-        .ok_or(MmapRangeError::Overflow { offset, len })?;
+        .ok_or(MmapRangeViolation::Overflow { offset, len })?;
     if end > mapping_len {
-        return Err(MmapRangeError::OutOfBounds {
+        return Err(MmapRangeViolation::OutOfBounds {
             offset,
             len,
             mapping_len,
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(checked_mmap_range(8, 8, 0), Ok(8..8));
         assert_eq!(
             checked_mmap_range(8, 8, 1),
-            Err(MmapRangeError::OutOfBounds {
+            Err(MmapRangeViolation::OutOfBounds {
                 offset: 8,
                 len: 1,
                 mapping_len: 8,
@@ -212,14 +212,14 @@ mod tests {
         );
         assert_eq!(
             checked_mmap_range(8, usize::MAX, 1),
-            Err(MmapRangeError::Overflow {
+            Err(MmapRangeViolation::Overflow {
                 offset: usize::MAX,
                 len: 1,
             })
         );
         assert_eq!(
             checked_mmap_range(8, 1, usize::MAX),
-            Err(MmapRangeError::Overflow {
+            Err(MmapRangeViolation::Overflow {
                 offset: 1,
                 len: usize::MAX,
             })

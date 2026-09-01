@@ -22,7 +22,7 @@ use super::types::NamespaceFailureClass;
 use super::types::NamespaceOperation;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
-use super::types::NamespaceVerificationError;
+use super::types::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
@@ -36,36 +36,52 @@ const REASON: &str = "no audited handle-relative managed-retirement backend exis
 pub(super) struct NamespaceRoot;
 
 impl NamespaceRoot {
-    pub(super) fn open(_file: File) -> Result<Self, NamespaceVerificationError> {
-        Err(NamespaceVerificationError::Unsupported {
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
+    pub(super) fn open(_file: File) -> Result<Self, NamespaceTransitionOutcome> {
+        Err(NamespaceTransitionOutcome::Unsupported {
             platform: "unsupported target",
             reason: REASON,
         })
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(super) fn open_active_segment(
         &self,
         _path: &StoreRelativePath,
         _expected_key: PhysicalFileKey,
         _expected_length: u64,
-    ) -> Result<File, NamespaceVerificationError> {
-        Err(NamespaceVerificationError::Unsupported {
+    ) -> Result<File, NamespaceTransitionOutcome> {
+        Err(NamespaceTransitionOutcome::Unsupported {
             platform: "unsupported target",
             reason: REASON,
         })
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(super) fn reserve(
         &self,
         _request: &NamespaceRetirementRequest,
         _transition: NamespaceTransition,
-    ) -> Result<NamespaceReservation, NamespaceVerificationError> {
-        Err(NamespaceVerificationError::Unsupported {
+    ) -> Result<NamespaceReservation, NamespaceTransitionOutcome> {
+        Err(NamespaceTransitionOutcome::Unsupported {
             platform: "unsupported target",
             reason: REASON,
         })
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(super) fn create_incarnation_temp(
         &self,
         _allocated: &AllocatedIncarnationReceipt,
@@ -77,6 +93,10 @@ impl NamespaceRoot {
         ))
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(super) fn publish_bound_incarnation(
         &self,
         _created: CreatedIncarnationTemp,

@@ -29,19 +29,19 @@ impl<O> RegistryAuthority<O> {
         self: &Arc<Self>,
         mut capability: RetirementHandoffCapability<O>,
         durability: DurabilityCoordinates,
-    ) -> Result<LogicalRemovedCapability<O>, RegistryError> {
+    ) -> Result<LogicalRemovedCapability<O>, RegistryViolation> {
         let ticket_id = capability.binding.ticket_id();
         let mut state = self.state.lock();
         if state.needs_recovery || self.seal.needs_recovery() {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let exact_predecessor = match &entry.phase {
             RegistryEntryPhase::IntentDurable {
@@ -57,7 +57,7 @@ impl<O> RegistryAuthority<O> {
         };
         if !exact_predecessor {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         entry.phase = RegistryEntryPhase::LogicalRemoved {
             binding: capability.binding.clone(),
@@ -82,19 +82,19 @@ impl<O> RegistryAuthority<O> {
         mut capability: LogicalRemovedCapability<O>,
         durability: DurabilityCoordinates,
         observed_replacement_key: PhysicalFileKey,
-    ) -> Result<LogicalRemovedCapability<O>, RegistryError> {
+    ) -> Result<LogicalRemovedCapability<O>, RegistryViolation> {
         let ticket_id = capability.binding.ticket_id();
         let mut state = self.state.lock();
         if state.needs_recovery || self.seal.needs_recovery() {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let exact_predecessor = match &entry.phase {
             RegistryEntryPhase::LogicalRemoved {
@@ -113,7 +113,7 @@ impl<O> RegistryAuthority<O> {
         };
         if !exact_predecessor {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         let observed_replacement_key = merge_observed_replacement_key(
             ticket_id,
@@ -144,19 +144,19 @@ impl<O> RegistryAuthority<O> {
         durability: DurabilityCoordinates,
         tombstone_path: Option<StoreRelativePath>,
         observed_replacement_key: Option<PhysicalFileKey>,
-    ) -> Result<NamespaceAbsentCapability<O>, RegistryError> {
+    ) -> Result<NamespaceAbsentCapability<O>, RegistryViolation> {
         let ticket_id = capability.binding.ticket_id();
         let mut state = self.state.lock();
         if state.needs_recovery || self.seal.needs_recovery() {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let exact_predecessor = match &entry.phase {
             RegistryEntryPhase::LogicalRemoved {
@@ -175,7 +175,7 @@ impl<O> RegistryAuthority<O> {
         };
         if !exact_predecessor {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         let observed_replacement_key =
             merge_observed_replacement_key(ticket_id, capability.observed_replacement_key, observed_replacement_key)?;
@@ -205,19 +205,19 @@ impl<O> RegistryAuthority<O> {
         durability: DurabilityCoordinates,
         tombstone_path: StoreRelativePath,
         observed_replacement_key: Option<PhysicalFileKey>,
-    ) -> Result<TombstonedCapability<O>, RegistryError> {
+    ) -> Result<TombstonedCapability<O>, RegistryViolation> {
         let ticket_id = capability.binding.ticket_id();
         let mut state = self.state.lock();
         if state.needs_recovery || self.seal.needs_recovery() {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let exact_predecessor = match &entry.phase {
             RegistryEntryPhase::LogicalRemoved {
@@ -236,7 +236,7 @@ impl<O> RegistryAuthority<O> {
         };
         if !exact_predecessor {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         let observed_replacement_key =
             merge_observed_replacement_key(ticket_id, capability.observed_replacement_key, observed_replacement_key)?;
@@ -265,19 +265,19 @@ impl<O> RegistryAuthority<O> {
         mut capability: TombstonedCapability<O>,
         durability: DurabilityCoordinates,
         observed_replacement_key: Option<PhysicalFileKey>,
-    ) -> Result<NamespaceAbsentCapability<O>, RegistryError> {
+    ) -> Result<NamespaceAbsentCapability<O>, RegistryViolation> {
         let ticket_id = capability.binding.ticket_id();
         let mut state = self.state.lock();
         if state.needs_recovery || self.seal.needs_recovery() {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let exact_predecessor = match &entry.phase {
             RegistryEntryPhase::Tombstoned {
@@ -298,7 +298,7 @@ impl<O> RegistryAuthority<O> {
         };
         if !exact_predecessor {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         let observed_replacement_key =
             merge_observed_replacement_key(ticket_id, capability.observed_replacement_key, observed_replacement_key)?;
@@ -326,20 +326,20 @@ impl<O> RegistryAuthority<O> {
         self: &Arc<Self>,
         mut capability: NamespaceAbsentCapability<O>,
         durability: DurabilityCoordinates,
-    ) -> Result<CompletedRetirementReceipt, RegistryError> {
+    ) -> Result<CompletedRetirementReceipt, RegistryViolation> {
         let ticket_id = capability.binding.ticket_id();
         let incarnation = capability.binding.incarnation();
         let mut state = self.state.lock();
         if state.needs_recovery || self.seal.needs_recovery() {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         if state.incarnation_by_ticket.get(&ticket_id) != Some(&incarnation) {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         let Some(entry) = state.entries.get(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         };
         let exact_predecessor = match &entry.phase {
             RegistryEntryPhase::NamespaceAbsent {
@@ -360,7 +360,7 @@ impl<O> RegistryAuthority<O> {
         };
         if !exact_predecessor {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
         }
         let owner_identity = match &entry.runtime_identity {
             RuntimeIdentity::Active { owner, .. } => Some(Arc::as_ptr(owner) as usize),

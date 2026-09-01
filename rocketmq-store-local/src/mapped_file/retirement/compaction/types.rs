@@ -16,7 +16,7 @@ use thiserror::Error;
 
 #[cfg(test)]
 use super::super::codec::crc32;
-use super::super::codec::CodecError;
+use super::super::codec::CodecViolation;
 use super::super::codec::LedgerRecord;
 use super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 use super::super::codec::COMMIT_SEAL_LENGTH;
@@ -29,7 +29,7 @@ use super::super::sidecar::EnabledMarkerSlot;
 use super::super::sidecar::LifecycleSnapshot;
 use super::super::sidecar::RetirementStage;
 use super::super::sidecar::RetirementTicketSnapshotEntry;
-use super::super::sidecar::SidecarError;
+use super::super::sidecar::SidecarViolation;
 use super::super::sidecar::SnapshotEntry;
 use super::super::sidecar::SnapshotMode;
 use super::super::sidecar::StoreMeta;
@@ -81,7 +81,7 @@ impl CleanStartOmissionEvidence {
         marker_anchor_sequence: u64,
         replayed_through_sequence: u64,
         completed_entry: RetirementTicketSnapshotEntry,
-    ) -> Result<Self, CompactionPlanError> {
+    ) -> Result<Self, CompactionPlanViolation> {
         let canonical_store_meta = encode_store_meta(meta)?;
         let canonical_entry_binding =
             canonical_completed_binding(meta, selected_generation, replayed_through_sequence, &completed_entry)?;
@@ -139,7 +139,7 @@ impl VerifiedCompactionSource {
         meta: StoreMeta,
         canonical_store_meta: [u8; STORE_META_LENGTH],
         parts: VerifiedSourcePartsForTest,
-    ) -> Result<Self, CompactionPlanError> {
+    ) -> Result<Self, CompactionPlanViolation> {
         validate_meta_binding(&meta, &canonical_store_meta)?;
         validate_source_frontier(
             parts.source_generation,
@@ -245,11 +245,11 @@ pub(super) struct PlannedCompactionMarker {
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(super) enum CompactionPlanError {
+pub(super) enum CompactionPlanViolation {
     #[error("compaction codec validation failed: {0}")]
-    Codec(#[from] CodecError),
+    Codec(#[from] CodecViolation),
     #[error("compaction sidecar validation failed: {0}")]
-    Sidecar(#[from] SidecarError),
+    Sidecar(#[from] SidecarViolation),
     #[error("verified compaction foundation is invalid: {reason}")]
     InvalidFoundation { reason: &'static str },
     #[error("committed GenerationPrepared receipt is invalid: {reason}")]
@@ -712,9 +712,9 @@ pub(super) fn old_pair_gc_decision(
 pub(super) fn validate_meta_binding(
     meta: &StoreMeta,
     canonical_store_meta: &[u8; STORE_META_LENGTH],
-) -> Result<(), CompactionPlanError> {
+) -> Result<(), CompactionPlanViolation> {
     if encode_store_meta(meta)? != *canonical_store_meta || decode_store_meta(canonical_store_meta)? != *meta {
-        return Err(CompactionPlanError::InvalidFoundation {
+        return Err(CompactionPlanViolation::InvalidFoundation {
             reason: "canonical store.meta bytes differ in UUID, bootstrap id, or creation time",
         });
     }
@@ -728,19 +728,19 @@ pub(super) fn validate_source_frontier(
     terminal_sequence: u64,
     acknowledgement_epoch: u64,
     sealed_log_length: u64,
-) -> Result<(), CompactionPlanError> {
+) -> Result<(), CompactionPlanViolation> {
     if marker_anchor_sequence == 0
         || terminal_sequence == 0
         || marker_anchor_sequence > terminal_sequence
         || acknowledgement_epoch == 0
         || sealed_log_length == 0
     {
-        return Err(CompactionPlanError::InvalidFoundation {
+        return Err(CompactionPlanViolation::InvalidFoundation {
             reason: "selected source frontier has zero or reversed coordinates",
         });
     }
     if marker_epoch != add_one(source_generation, "source marker epoch")? {
-        return Err(CompactionPlanError::InvalidFoundation {
+        return Err(CompactionPlanViolation::InvalidFoundation {
             reason: "source marker epoch must equal source generation plus one",
         });
     }
@@ -752,9 +752,9 @@ pub(super) fn canonical_completed_binding(
     selected_generation: u64,
     replayed_through_sequence: u64,
     entry: &RetirementTicketSnapshotEntry,
-) -> Result<Vec<u8>, CompactionPlanError> {
+) -> Result<Vec<u8>, CompactionPlanViolation> {
     if entry.stage != RetirementStage::CompletedRetained || replayed_through_sequence == 0 {
-        return Err(CompactionPlanError::InvalidOmissionEvidence {
+        return Err(CompactionPlanViolation::InvalidOmissionEvidence {
             reason: "only a replayed Completed-retained entry can be bound",
         });
     }
@@ -776,18 +776,18 @@ pub(super) fn check_space(
     input: CompactionSpace,
     snapshot_length: u64,
     target_log_length: u64,
-) -> Result<SufficientCompactionSpace, CompactionPlanError> {
+) -> Result<SufficientCompactionSpace, CompactionPlanViolation> {
     let required_bytes = snapshot_length
         .checked_mul(2)
         .and_then(|value| target_log_length.checked_mul(2).and_then(|log| value.checked_add(log)))
         .and_then(|value| value.checked_add(input.marker_referenced_pair_bytes[0]))
         .and_then(|value| value.checked_add(input.marker_referenced_pair_bytes[1]))
         .and_then(|value| value.checked_add(COMPACTION_SAFETY_MARGIN_BYTES))
-        .ok_or(CompactionPlanError::ArithmeticOverflow {
+        .ok_or(CompactionPlanViolation::ArithmeticOverflow {
             field: "free-space requirement",
         })?;
     if input.available_bytes < required_bytes {
-        return Err(CompactionPlanError::InsufficientSpace {
+        return Err(CompactionPlanViolation::InsufficientSpace {
             required: required_bytes,
             available: input.available_bytes,
         });
@@ -798,8 +798,8 @@ pub(super) fn check_space(
     })
 }
 
-pub(super) fn add_one(value: u64, field: &'static str) -> Result<u64, CompactionPlanError> {
+pub(super) fn add_one(value: u64, field: &'static str) -> Result<u64, CompactionPlanViolation> {
     value
         .checked_add(1)
-        .ok_or(CompactionPlanError::ArithmeticOverflow { field })
+        .ok_or(CompactionPlanViolation::ArithmeticOverflow { field })
 }

@@ -444,7 +444,7 @@ pub trait ReferenceResource: Send + Sync {
 
     #[inline]
     fn hold(&self) -> bool {
-        let Ok(lease) = self.base().lifecycle.try_acquire(MappedFileOperation::Read) else {
+        let Some(lease) = self.base().lifecycle.try_acquire(MappedFileOperation::Read).acquired() else {
             return false;
         };
         self.base().legacy_holds.lock().push(lease);
@@ -550,13 +550,14 @@ impl ReferenceResourceCounter {
     /// or [`super::MappedFileError::LeaseCountOverflow`] when the active lease count is exhausted.
     #[doc(hidden)]
     #[inline]
-    pub fn try_acquire(&self, operation: MappedFileOperation) -> Result<MappedFileLease, super::MappedFileError> {
-        self.base.lifecycle.try_acquire(operation).map_err(|error| match error {
-            super::lifecycle::LifecycleAcquireError::Unavailable { state, operation } => {
-                super::MappedFileError::Unavailable { state, operation }
-            }
-            super::lifecycle::LifecycleAcquireError::LeaseCountOverflow => super::MappedFileError::LeaseCountOverflow,
-        })
+    pub(crate) fn try_acquire(
+        &self,
+        operation: MappedFileOperation,
+    ) -> Result<MappedFileLease, super::MappedFileError> {
+        match self.base.lifecycle.try_acquire(operation) {
+            super::lifecycle::LifecycleAcquireOutcome::Acquired(lease) => Ok(lease),
+            super::lifecycle::LifecycleAcquireOutcome::Rejected(rejection) => Err(rejection.into()),
+        }
     }
 
     /// Acquires a borrowed operation lease without cloning the lifecycle owner.
@@ -565,17 +566,10 @@ impl ReferenceResourceCounter {
         &self,
         operation: MappedFileOperation,
     ) -> Result<BorrowedMappedFileLease<'_>, super::MappedFileError> {
-        self.base
-            .lifecycle
-            .try_acquire_borrowed(operation)
-            .map_err(|error| match error {
-                super::lifecycle::LifecycleAcquireError::Unavailable { state, operation } => {
-                    super::MappedFileError::Unavailable { state, operation }
-                }
-                super::lifecycle::LifecycleAcquireError::LeaseCountOverflow => {
-                    super::MappedFileError::LeaseCountOverflow
-                }
-            })
+        match self.base.lifecycle.try_acquire_borrowed(operation) {
+            super::lifecycle::LifecycleAcquireOutcome::Acquired(lease) => Ok(lease),
+            super::lifecycle::LifecycleAcquireOutcome::Rejected(rejection) => Err(rejection.into()),
+        }
     }
 
     #[inline]

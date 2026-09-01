@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::CodecError;
+use super::CodecViolation;
 use super::LedgerRecord;
 use super::OpenReason;
 use super::RecordType;
@@ -22,15 +22,15 @@ pub(super) fn validate_initial_record_envelope(
     record_type: RecordType,
     sequence: u64,
     log_generation: u64,
-) -> Result<(), CodecError> {
+) -> Result<(), CodecViolation> {
     match record_type {
         RecordType::StoreInitialized if sequence != 1 || log_generation != 0 => {
-            Err(CodecError::InvalidEnvelopeRelationship {
+            Err(CodecViolation::InvalidEnvelopeRelationship {
                 detail: "StoreInitialized must be sequence 1 in generation 0",
             })
         }
         RecordType::BootstrapInstalled if sequence != 2 || log_generation != 0 => {
-            Err(CodecError::InvalidEnvelopeRelationship {
+            Err(CodecViolation::InvalidEnvelopeRelationship {
                 detail: "BootstrapInstalled must bind generation 0 at base sequence 1 and frame sequence 2",
             })
         }
@@ -42,7 +42,7 @@ pub(super) fn validate_envelope_relationships(
     record: &LedgerRecord,
     sequence: u64,
     log_generation: u64,
-) -> Result<(), CodecError> {
+) -> Result<(), CodecViolation> {
     validate_initial_record_envelope(record.record_type(), sequence, log_generation)?;
     match record {
         LedgerRecord::BootstrapInstalled {
@@ -50,7 +50,7 @@ pub(super) fn validate_envelope_relationships(
             snapshot_base_sequence,
             ..
         } if *snapshot_generation != 0 || *snapshot_base_sequence != 1 => {
-            Err(CodecError::InvalidEnvelopeRelationship {
+            Err(CodecViolation::InvalidEnvelopeRelationship {
                 detail: "BootstrapInstalled must bind generation 0 at base sequence 1 and frame sequence 2",
             })
         }
@@ -64,21 +64,21 @@ pub(super) fn validate_envelope_relationships(
             let expected_target =
                 source_generation
                     .checked_add(1)
-                    .ok_or(CodecError::InvalidGenerationRelationship {
+                    .ok_or(CodecViolation::InvalidGenerationRelationship {
                         detail: "GenerationPrepared source generation cannot advance",
                     })?;
             if *source_generation != log_generation {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "GenerationPrepared source must equal the containing log generation",
                 });
             }
             if *target_generation != expected_target || *target_snapshot_generation != *target_generation {
-                return Err(CodecError::InvalidGenerationRelationship {
+                return Err(CodecViolation::InvalidGenerationRelationship {
                     detail: "GenerationPrepared target and snapshot must equal source + 1",
                 });
             }
             if *open_reason != OpenReason::Compaction {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "GenerationPrepared v1 open reason must be compaction",
                 });
             }
@@ -93,22 +93,22 @@ pub(super) fn validate_envelope_relationships(
             let expected_target =
                 source_generation
                     .checked_add(1)
-                    .ok_or(CodecError::InvalidGenerationRelationship {
+                    .ok_or(CodecViolation::InvalidGenerationRelationship {
                         detail: "GenerationAborted source generation cannot advance",
                     })?;
             let expected_sequence =
                 prepared_sequence
                     .checked_add(1)
-                    .ok_or(CodecError::InvalidEnvelopeRelationship {
+                    .ok_or(CodecViolation::InvalidEnvelopeRelationship {
                         detail: "GenerationAborted prepared sequence cannot advance",
                     })?;
             if *source_generation != log_generation || *target_generation != expected_target {
-                return Err(CodecError::InvalidGenerationRelationship {
+                return Err(CodecViolation::InvalidGenerationRelationship {
                     detail: "GenerationAborted target must equal containing source generation + 1",
                 });
             }
             if sequence != expected_sequence {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "GenerationAborted must immediately follow its GenerationPrepared",
                 });
             }
@@ -123,28 +123,28 @@ pub(super) fn validate_envelope_relationships(
             ..
         } => {
             if *marker_epoch == 0 {
-                return Err(CodecError::ZeroMarkerEpoch);
+                return Err(CodecViolation::ZeroMarkerEpoch);
             }
             if *slot_index > 1 {
-                return Err(CodecError::InvalidMarkerSlotIndex {
+                return Err(CodecViolation::InvalidMarkerSlotIndex {
                     slot_index: *slot_index,
                 });
             }
             let expected_slot_index = ((*marker_epoch - 1) & 1) as u8;
             if *slot_index != expected_slot_index {
-                return Err(CodecError::MarkerSlotParityMismatch {
+                return Err(CodecViolation::MarkerSlotParityMismatch {
                     marker_epoch: *marker_epoch,
                     expected_slot_index,
                     actual_slot_index: *slot_index,
                 });
             }
             if *snapshot_generation != log_generation || *selected_log_generation != log_generation {
-                return Err(CodecError::InvalidGenerationRelationship {
+                return Err(CodecViolation::InvalidGenerationRelationship {
                     detail: "MarkerCommitted snapshot and log must equal the containing generation",
                 });
             }
             if anchor_sequence.checked_add(1) != Some(sequence) {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "MarkerCommitted must immediately follow its anchor",
                 });
             }
@@ -165,41 +165,41 @@ pub(super) fn validate_envelope_relationships(
             let expected_generation =
                 predecessor_log_generation
                     .checked_add(1)
-                    .ok_or(CodecError::InvalidGenerationRelationship {
+                    .ok_or(CodecViolation::InvalidGenerationRelationship {
                         detail: "LogOpened predecessor generation cannot advance",
                     })?;
             let expected_sequence =
                 snapshot_base_sequence
                     .checked_add(1)
-                    .ok_or(CodecError::InvalidEnvelopeRelationship {
+                    .ok_or(CodecViolation::InvalidEnvelopeRelationship {
                         detail: "LogOpened snapshot base sequence cannot advance",
                     })?;
             if *generation != log_generation
                 || *snapshot_generation != *generation
                 || *generation != expected_generation
             {
-                return Err(CodecError::InvalidGenerationRelationship {
+                return Err(CodecViolation::InvalidGenerationRelationship {
                     detail: "LogOpened generation and snapshot must equal predecessor + 1 and the containing log",
                 });
             }
             if sequence != expected_sequence {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "LogOpened must be the first sequence after its snapshot base",
                 });
             }
             if *predecessor_terminal_acknowledged_sequence == 0
                 || *predecessor_terminal_acknowledged_sequence != *snapshot_base_sequence
             {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "LogOpened predecessor terminal sequence must be nonzero and equal its snapshot base",
                 });
             }
             if *predecessor_acknowledgement_epoch == 0 {
-                return Err(CodecError::ZeroAcknowledgementEpoch);
+                return Err(CodecViolation::ZeroAcknowledgementEpoch);
             }
             predecessor_acknowledgement_epoch
                 .checked_add(1)
-                .ok_or(CodecError::AcknowledgementEpochOverflow)?;
+                .ok_or(CodecViolation::AcknowledgementEpochOverflow)?;
             let suffix_valid = match open_reason {
                 OpenReason::Compaction => *unacknowledged_suffix_length == 0 && *unacknowledged_suffix_crc32 == 0,
                 OpenReason::TailRepair => {
@@ -208,7 +208,7 @@ pub(super) fn validate_envelope_relationships(
                 }
             };
             if !suffix_valid {
-                return Err(CodecError::InvalidTailRepairFields);
+                return Err(CodecViolation::InvalidTailRepairFields);
             }
             Ok(())
         }
@@ -216,7 +216,7 @@ pub(super) fn validate_envelope_relationships(
             namespace_absent_sequence,
             ..
         } if *namespace_absent_sequence == 0 || *namespace_absent_sequence >= sequence => {
-            Err(CodecError::InvalidNamespaceAbsentSequence)
+            Err(CodecViolation::InvalidNamespaceAbsentSequence)
         }
         _ => Ok(()),
     }

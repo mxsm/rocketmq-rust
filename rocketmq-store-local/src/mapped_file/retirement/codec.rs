@@ -14,7 +14,7 @@
 
 use thiserror::Error;
 
-use super::identity::IdentityError;
+use super::identity::IdentityViolation;
 
 const FRAME_MAGIC: [u8; 4] = *b"RMLC";
 const FORMAT_MAJOR: u16 = 1;
@@ -53,9 +53,9 @@ pub(crate) enum RecordType {
 }
 
 impl RecordType {
-    fn from_wire(value: u16) -> Result<Self, CodecError> {
+    fn from_wire(value: u16) -> Result<Self, CodecViolation> {
         match value {
-            0x0000 => Err(CodecError::InvalidRecordTypeZero),
+            0x0000 => Err(CodecViolation::InvalidRecordTypeZero),
             0x0001 => Ok(Self::StoreInitialized),
             0x0002 => Ok(Self::BootstrapInstalled),
             0x0003 => Ok(Self::LogOpened),
@@ -155,12 +155,12 @@ impl<'a> DecodedFrame<'a> {
         self.encoded_len
     }
 
-    pub(crate) fn next_sequence(&self) -> Result<u64, CodecError> {
-        self.sequence.checked_add(1).ok_or(CodecError::SequenceOverflow)
+    pub(crate) fn next_sequence(&self) -> Result<u64, CodecViolation> {
+        self.sequence.checked_add(1).ok_or(CodecViolation::SequenceOverflow)
     }
 
     /// Decodes the typed v1 payload, or returns `None` for a validated unknown noncritical record.
-    pub(crate) fn decode_record(&self) -> Result<Option<LedgerRecord>, CodecError> {
+    pub(crate) fn decode_record(&self) -> Result<Option<LedgerRecord>, CodecViolation> {
         if !self.record_type.is_known() {
             return Ok(None);
         }
@@ -185,7 +185,7 @@ pub(crate) struct TrailingPartial {
 
 /// A bounded v1 frame encoding or decoding failure.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum CodecError {
+pub(crate) enum CodecViolation {
     #[error("ledger frame magic is invalid: {found:02x?}")]
     InvalidMagic { found: [u8; 4] },
     #[error("incomplete ledger header diverges from the required v1 prefix at byte {offset}")]
@@ -235,7 +235,10 @@ pub(crate) enum CodecError {
     #[error("{field} must not be all zero")]
     ZeroOpaqueIdentifier { field: &'static str },
     #[error("invalid {field}: {source}")]
-    InvalidIdentity { field: &'static str, source: IdentityError },
+    InvalidIdentity {
+        field: &'static str,
+        source: IdentityViolation,
+    },
     #[error("{field} is not valid UTF-8")]
     InvalidUtf8Path { field: &'static str },
     #[error(
@@ -386,7 +389,7 @@ pub(crate) fn encode_ledger_frame(
     record: &LedgerRecord,
     sequence: u64,
     log_generation: u64,
-) -> Result<Vec<u8>, CodecError> {
+) -> Result<Vec<u8>, CodecViolation> {
     validate_envelope_relationships(record, sequence, log_generation)?;
     let payload = encode_record_payload(record, sequence)?;
     encode_frame(record.record_type(), sequence, log_generation, &payload)
@@ -411,17 +414,17 @@ fn encode_frame(
     sequence: u64,
     log_generation: u64,
     payload: &[u8],
-) -> Result<Vec<u8>, CodecError> {
+) -> Result<Vec<u8>, CodecViolation> {
     if !record_type.is_known() {
-        return Err(CodecError::CannotEncodeUnknownRecordType {
+        return Err(CodecViolation::CannotEncodeUnknownRecordType {
             record_type: record_type.wire_value(),
         });
     }
     if sequence == 0 {
-        return Err(CodecError::ZeroSequence);
+        return Err(CodecViolation::ZeroSequence);
     }
     if payload.len() > MAX_PAYLOAD_LENGTH {
-        return Err(CodecError::PayloadTooLarge {
+        return Err(CodecViolation::PayloadTooLarge {
             length: payload.len(),
             maximum: MAX_PAYLOAD_LENGTH,
         });
@@ -430,14 +433,14 @@ fn encode_frame(
     let frame_length = MIN_HEADER_LENGTH
         .checked_add(payload.len())
         .and_then(|value| value.checked_add(4))
-        .ok_or(CodecError::FrameLengthOverflow)?;
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     if frame_length > MAX_FRAME_LENGTH {
-        return Err(CodecError::FrameTooLarge {
+        return Err(CodecViolation::FrameTooLarge {
             length: frame_length,
             maximum: MAX_FRAME_LENGTH,
         });
     }
-    let payload_length = u32::try_from(payload.len()).map_err(|_| CodecError::PayloadTooLarge {
+    let payload_length = u32::try_from(payload.len()).map_err(|_| CodecViolation::PayloadTooLarge {
         length: payload.len(),
         maximum: MAX_PAYLOAD_LENGTH,
     })?;
@@ -464,12 +467,12 @@ pub(crate) fn decode_next_frame(
     input: &[u8],
     expected_sequence: u64,
     expected_log_generation: u64,
-) -> Result<DecodeOutcome<'_>, CodecError> {
+) -> Result<DecodeOutcome<'_>, CodecViolation> {
     if input.is_empty() {
         return Ok(DecodeOutcome::EndOfInput);
     }
     if expected_sequence == 0 {
-        return Err(CodecError::ZeroExpectedSequence);
+        return Err(CodecViolation::ZeroExpectedSequence);
     }
 
     validate_fixed_prefix(input)?;
@@ -477,26 +480,26 @@ pub(crate) fn decode_next_frame(
         return Ok(partial(input.len(), MIN_HEADER_LENGTH));
     }
 
-    let major = read_u16(input, 4).ok_or(CodecError::FrameLengthOverflow)?;
-    let minor = read_u16(input, 6).ok_or(CodecError::FrameLengthOverflow)?;
+    let major = read_u16(input, 4).ok_or(CodecViolation::FrameLengthOverflow)?;
+    let minor = read_u16(input, 6).ok_or(CodecViolation::FrameLengthOverflow)?;
     if (major, minor) != (FORMAT_MAJOR, FORMAT_MINOR) {
-        return Err(CodecError::UnsupportedFormatVersion { major, minor });
+        return Err(CodecViolation::UnsupportedFormatVersion { major, minor });
     }
     if input.len() < 10 {
         return Ok(partial(input.len(), MIN_HEADER_LENGTH));
     }
-    let record_type_wire = read_u16(input, 8).ok_or(CodecError::FrameLengthOverflow)?;
+    let record_type_wire = read_u16(input, 8).ok_or(CodecViolation::FrameLengthOverflow)?;
     let record_type = RecordType::from_wire(record_type_wire)?;
     semantics::validate_initial_record_envelope(record_type, expected_sequence, expected_log_generation)?;
     if input.len() < 12 {
         if record_type.is_known() && matches!(input.get(10), Some(low_byte) if *low_byte != RECORD_VERSION as u8) {
-            return Err(CodecError::InvalidHeaderPrefix { offset: 10 });
+            return Err(CodecViolation::InvalidHeaderPrefix { offset: 10 });
         }
         return Ok(partial(input.len(), MIN_HEADER_LENGTH));
     }
-    let record_version = read_u16(input, 10).ok_or(CodecError::FrameLengthOverflow)?;
+    let record_version = read_u16(input, 10).ok_or(CodecViolation::FrameLengthOverflow)?;
     if record_type.is_known() && record_version != RECORD_VERSION {
-        return Err(CodecError::UnsupportedRecordVersion {
+        return Err(CodecViolation::UnsupportedRecordVersion {
             record_type: record_type_wire,
             version: record_version,
         });
@@ -504,19 +507,19 @@ pub(crate) fn decode_next_frame(
     if input.len() < 14 {
         let required_low_byte = if record_type.is_known() { CRITICAL_FLAG as u8 } else { 0 };
         if matches!(input.get(12), Some(low_byte) if *low_byte != required_low_byte) {
-            return Err(CodecError::InvalidHeaderPrefix { offset: 12 });
+            return Err(CodecViolation::InvalidHeaderPrefix { offset: 12 });
         }
         return Ok(partial(input.len(), MIN_HEADER_LENGTH));
     }
-    let flags = read_u16(input, 12).ok_or(CodecError::FrameLengthOverflow)?;
+    let flags = read_u16(input, 12).ok_or(CodecViolation::FrameLengthOverflow)?;
     if flags & !CRITICAL_FLAG != 0 || (record_type.is_known() && flags != CRITICAL_FLAG) {
-        return Err(CodecError::InvalidRecordFlags {
+        return Err(CodecViolation::InvalidRecordFlags {
             record_type: record_type_wire,
             flags,
         });
     }
     if !record_type.is_known() && flags & CRITICAL_FLAG != 0 {
-        return Err(CodecError::UnknownCriticalRecordType {
+        return Err(CodecViolation::UnknownCriticalRecordType {
             record_type: record_type_wire,
         });
     }
@@ -528,19 +531,19 @@ pub(crate) fn decode_next_frame(
                 low_byte == 0 || usize::from(low_byte) >= MIN_HEADER_LENGTH
             };
             if !possible {
-                return Err(CodecError::InvalidHeaderPrefix { offset: 14 });
+                return Err(CodecViolation::InvalidHeaderPrefix { offset: 14 });
             }
         }
         return Ok(partial(input.len(), MIN_HEADER_LENGTH));
     }
-    let header_length = usize::from(read_u16(input, 14).ok_or(CodecError::FrameLengthOverflow)?);
+    let header_length = usize::from(read_u16(input, 14).ok_or(CodecViolation::FrameLengthOverflow)?);
     let maximum_header_length = if record_type.is_known() {
         MIN_HEADER_LENGTH
     } else {
         MAX_HEADER_LENGTH
     };
     if !(MIN_HEADER_LENGTH..=maximum_header_length).contains(&header_length) {
-        return Err(CodecError::InvalidHeaderLength {
+        return Err(CodecViolation::InvalidHeaderLength {
             length: header_length,
             minimum: MIN_HEADER_LENGTH,
             maximum: maximum_header_length,
@@ -549,11 +552,11 @@ pub(crate) fn decode_next_frame(
     if input.len() < 20 {
         let available = input.len() - 16;
         let mut lower_bound_bytes = [0_u8; 4];
-        let prefix = input.get(16..).ok_or(CodecError::FrameLengthOverflow)?;
+        let prefix = input.get(16..).ok_or(CodecViolation::FrameLengthOverflow)?;
         lower_bound_bytes[..available].copy_from_slice(prefix);
         let lower_bound = u32::from_le_bytes(lower_bound_bytes) as usize;
         if lower_bound > MAX_PAYLOAD_LENGTH {
-            return Err(CodecError::PayloadTooLarge {
+            return Err(CodecViolation::PayloadTooLarge {
                 length: lower_bound,
                 maximum: MAX_PAYLOAD_LENGTH,
             });
@@ -562,14 +565,14 @@ pub(crate) fn decode_next_frame(
         return Ok(partial(input.len(), header_length));
     }
     let payload_length =
-        usize::try_from(read_u32(input, 16).ok_or(CodecError::FrameLengthOverflow)?).map_err(|_| {
-            CodecError::PayloadTooLarge {
+        usize::try_from(read_u32(input, 16).ok_or(CodecViolation::FrameLengthOverflow)?).map_err(|_| {
+            CodecViolation::PayloadTooLarge {
                 length: usize::MAX,
                 maximum: MAX_PAYLOAD_LENGTH,
             }
         })?;
     if payload_length > MAX_PAYLOAD_LENGTH {
-        return Err(CodecError::PayloadTooLarge {
+        return Err(CodecViolation::PayloadTooLarge {
             length: payload_length,
             maximum: MAX_PAYLOAD_LENGTH,
         });
@@ -578,9 +581,9 @@ pub(crate) fn decode_next_frame(
     let frame_length = header_length
         .checked_add(payload_length)
         .and_then(|value| value.checked_add(4))
-        .ok_or(CodecError::FrameLengthOverflow)?;
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     if frame_length > MAX_FRAME_LENGTH {
-        return Err(CodecError::FrameTooLarge {
+        return Err(CodecViolation::FrameTooLarge {
             length: frame_length,
             maximum: MAX_FRAME_LENGTH,
         });
@@ -589,12 +592,12 @@ pub(crate) fn decode_next_frame(
         validate_available_field_prefix(input, 20, &expected_sequence.to_le_bytes(), "sequence")?;
         return Ok(partial(input.len(), frame_length));
     }
-    let sequence = read_u64(input, 20).ok_or(CodecError::FrameLengthOverflow)?;
+    let sequence = read_u64(input, 20).ok_or(CodecViolation::FrameLengthOverflow)?;
     if sequence == 0 {
-        return Err(CodecError::ZeroSequence);
+        return Err(CodecViolation::ZeroSequence);
     }
     if sequence != expected_sequence {
-        return Err(CodecError::SequenceMismatch {
+        return Err(CodecViolation::SequenceMismatch {
             expected: expected_sequence,
             actual: sequence,
         });
@@ -603,52 +606,54 @@ pub(crate) fn decode_next_frame(
         validate_available_field_prefix(input, 28, &expected_log_generation.to_le_bytes(), "log_generation")?;
         return Ok(partial(input.len(), frame_length));
     }
-    let log_generation = read_u64(input, 28).ok_or(CodecError::FrameLengthOverflow)?;
+    let log_generation = read_u64(input, 28).ok_or(CodecViolation::FrameLengthOverflow)?;
     if log_generation != expected_log_generation {
-        return Err(CodecError::LogGenerationMismatch {
+        return Err(CodecViolation::LogGenerationMismatch {
             expected: expected_log_generation,
             actual: log_generation,
         });
     }
     if input.len() < header_length {
         if header_length == MIN_HEADER_LENGTH {
-            let header_crc = crc32(input.get(..36).ok_or(CodecError::FrameLengthOverflow)?);
+            let header_crc = crc32(input.get(..36).ok_or(CodecViolation::FrameLengthOverflow)?);
             validate_available_field_prefix(input, 36, &header_crc.to_le_bytes(), "header_crc32")?;
         }
         return Ok(partial(input.len(), frame_length));
     }
 
-    let expected_header_crc = read_u32(input, 36).ok_or(CodecError::FrameLengthOverflow)?;
-    let extension = input.get(40..header_length).ok_or(CodecError::FrameLengthOverflow)?;
+    let expected_header_crc = read_u32(input, 36).ok_or(CodecViolation::FrameLengthOverflow)?;
+    let extension = input
+        .get(40..header_length)
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     let actual_header_crc = crc32_parts(&[&input[..36], extension]);
     if expected_header_crc != actual_header_crc {
-        return Err(CodecError::HeaderCrcMismatch {
+        return Err(CodecViolation::HeaderCrcMismatch {
             expected: expected_header_crc,
             actual: actual_header_crc,
         });
     }
     let payload_end = header_length
         .checked_add(payload_length)
-        .ok_or(CodecError::FrameLengthOverflow)?;
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     if input.len() < payload_end {
         let available_payload = input
             .get(header_length..input.len())
-            .ok_or(CodecError::FrameLengthOverflow)?;
+            .ok_or(CodecViolation::FrameLengthOverflow)?;
         validate_known_payload_prefix(record_type, sequence, log_generation, payload_length, available_payload)?;
         return Ok(partial(input.len(), frame_length));
     }
     let payload = input
         .get(header_length..payload_end)
-        .ok_or(CodecError::FrameLengthOverflow)?;
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     let actual_payload_crc = crc32(payload);
     if input.len() < frame_length {
         validate_known_payload_prefix(record_type, sequence, log_generation, payload_length, payload)?;
         validate_available_field_prefix(input, payload_end, &actual_payload_crc.to_le_bytes(), "payload_crc32")?;
         return Ok(partial(input.len(), frame_length));
     }
-    let expected_payload_crc = read_u32(input, payload_end).ok_or(CodecError::FrameLengthOverflow)?;
+    let expected_payload_crc = read_u32(input, payload_end).ok_or(CodecViolation::FrameLengthOverflow)?;
     if expected_payload_crc != actual_payload_crc {
-        return Err(CodecError::PayloadCrcMismatch {
+        return Err(CodecViolation::PayloadCrcMismatch {
             expected: expected_payload_crc,
             actual: actual_payload_crc,
         });
@@ -663,34 +668,34 @@ pub(crate) fn decode_next_frame(
     }))
 }
 
-fn validate_fixed_prefix(input: &[u8]) -> Result<(), CodecError> {
+fn validate_fixed_prefix(input: &[u8]) -> Result<(), CodecViolation> {
     if input.len() < FRAME_MAGIC.len() {
         if let Some(offset) = input
             .iter()
             .zip(FRAME_MAGIC)
             .position(|(actual, expected)| *actual != expected)
         {
-            return Err(CodecError::InvalidHeaderPrefix { offset });
+            return Err(CodecViolation::InvalidHeaderPrefix { offset });
         }
         return Ok(());
     }
-    let found = read_array::<4>(input, 0).ok_or(CodecError::FrameLengthOverflow)?;
+    let found = read_array::<4>(input, 0).ok_or(CodecViolation::FrameLengthOverflow)?;
     if found != FRAME_MAGIC {
-        return Err(CodecError::InvalidMagic { found });
+        return Err(CodecViolation::InvalidMagic { found });
     }
 
     let fixed_version_prefix = [1_u8, 0, 0, 0];
     let available_version_bytes = input.len().saturating_sub(4).min(fixed_version_prefix.len());
     let version_prefix = input
         .get(4..4 + available_version_bytes)
-        .ok_or(CodecError::FrameLengthOverflow)?;
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     if let Some(relative_offset) = version_prefix
         .iter()
         .zip(fixed_version_prefix)
         .position(|(actual, expected)| *actual != expected)
     {
         if input.len() < 8 {
-            return Err(CodecError::InvalidHeaderPrefix {
+            return Err(CodecViolation::InvalidHeaderPrefix {
                 offset: 4 + relative_offset,
             });
         }
@@ -703,17 +708,17 @@ fn validate_available_field_prefix(
     offset: usize,
     expected: &[u8],
     field: &'static str,
-) -> Result<(), CodecError> {
+) -> Result<(), CodecViolation> {
     let available = input.len().saturating_sub(offset).min(expected.len());
     let actual = input
         .get(offset..offset + available)
-        .ok_or(CodecError::FrameLengthOverflow)?;
+        .ok_or(CodecViolation::FrameLengthOverflow)?;
     if let Some(relative_offset) = actual
         .iter()
         .zip(expected)
         .position(|(actual, expected)| actual != expected)
     {
-        return Err(CodecError::InvalidFieldPrefix {
+        return Err(CodecViolation::InvalidFieldPrefix {
             field,
             offset: offset + relative_offset,
         });

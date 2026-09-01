@@ -29,6 +29,8 @@ use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::MutexGuard;
 use rocketmq_error::RocketMQResult;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -42,7 +44,6 @@ use super::MappedFileDetachOutcome;
 use super::MappedFileError;
 use super::MappedFileMetrics;
 use super::MappedFileRawCore;
-use super::MappedFileResult;
 use super::MappedMemory;
 use super::MappedWriteLease;
 use super::NativeMappedMemory;
@@ -321,7 +322,14 @@ impl<M: MappedMemory> MappedWriteLease for DefaultMappedWriteLease<'_, M> {
         &mut self.state.staging[..self.capacity]
     }
 
-    fn commit(mut self, actual_bytes: usize, store_timestamp: Option<u64>) -> MappedFileResult<usize> {
+    fn commit(self, actual_bytes: usize, store_timestamp: Option<u64>) -> Result<usize, StoreError> {
+        self.commit_typed(actual_bytes, store_timestamp)
+            .map_err(|error| error.into_store_error(StoreOperation::Append))
+    }
+}
+
+impl<M: MappedMemory> DefaultMappedWriteLease<'_, M> {
+    fn commit_typed(mut self, actual_bytes: usize, store_timestamp: Option<u64>) -> Result<usize, MappedFileError> {
         if actual_bytes == 0 || actual_bytes > self.capacity {
             return Err(MappedFileError::InvalidWriteCommit {
                 reserved: self.capacity,
@@ -421,19 +429,15 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
     /// Rejects writers, drains already-admitted writes, performs the final flush, and publishes a
     /// read-only mapping generation.
-    pub fn try_seal_readable(&self) -> MappedFileResult<bool> {
+    pub(crate) fn try_seal_readable(&self) -> Result<bool, MappedFileError> {
         let _seal = self.seal_lock.lock();
         let lifecycle = self.reference_resource.lifecycle();
-        let started = lifecycle
-            .seal_readable_and_wait_for_writers()
-            .map_err(|error| match error {
-                crate::mapped_file::lifecycle::LifecycleAcquireError::Unavailable { state, operation } => {
-                    MappedFileError::Unavailable { state, operation }
-                }
-                crate::mapped_file::lifecycle::LifecycleAcquireError::LeaseCountOverflow => {
-                    MappedFileError::LeaseCountOverflow
-                }
-            })?;
+        let started = match lifecycle.seal_readable_and_wait_for_writers() {
+            crate::mapped_file::lifecycle::LifecycleAcquireOutcome::Acquired(started) => started,
+            crate::mapped_file::lifecycle::LifecycleAcquireOutcome::Rejected(rejection) => {
+                return Err(rejection.into());
+            }
+        };
         if self.physical_owners.mapping.load_read_only().is_some() {
             return Ok(false);
         }
@@ -466,7 +470,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                         .try_publish_before_close(&admission, MappedFileOperation::Maintenance, || {
                             publication.publish()
                         })
-                        .ok()
+                        .acquired()
                 },
             )
             .map_err(|error| self.map_publication_error(error, MappedFileOperation::Maintenance))?;
@@ -491,11 +495,12 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ///
     /// Returns a lifecycle error after close, or [`MappedFileError::OutOfBounds`] when the range
     /// overflows or exceeds the configured segment mapping.
-    pub fn try_mapped_read_lease(
+    #[allow(dead_code, reason = "exercised by the in-crate mapped-read scenarios")]
+    pub(crate) fn try_mapped_read_lease(
         &self,
         offset: usize,
         len: usize,
-    ) -> MappedFileResult<Option<MappedReadLease<M::ReadOnly>>> {
+    ) -> Result<Option<MappedReadLease<M::ReadOnly>>, MappedFileError> {
         let end = offset
             .checked_add(len)
             .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
@@ -527,11 +532,12 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ///
     /// Returns a lifecycle error after close, or [`MappedFileError::OutOfBounds`] when the range
     /// or its absolute offset cannot be represented safely.
-    pub fn try_mapped_read_range(
+    #[allow(dead_code, reason = "exercised by the in-crate mapped-read scenarios")]
+    pub(crate) fn try_mapped_read_range(
         &self,
         offset: usize,
         len: usize,
-    ) -> MappedFileResult<Option<MappedReadRange<M::ReadOnly>>> {
+    ) -> Result<Option<MappedReadRange<M::ReadOnly>>, MappedFileError> {
         let file_offset = u64::try_from(offset)
             .map_err(|_| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
         let file_from_offset = self.physical_owners.storage.lock().file_from_offset();
@@ -560,7 +566,16 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         &self,
         offset: usize,
         len: usize,
-    ) -> MappedFileResult<Option<SelectMappedBufferResult<M>>> {
+    ) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
+        self.try_file_range_selection_typed(offset, len)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    fn try_file_range_selection_typed(
+        &self,
+        offset: usize,
+        len: usize,
+    ) -> Result<Option<SelectMappedBufferResult<M>>, MappedFileError> {
         let end = offset
             .checked_add(len)
             .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
@@ -591,7 +606,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     }
 
     #[inline]
-    pub(crate) fn try_acquire_owned_lease(&self, operation: MappedFileOperation) -> MappedFileResult<MappedFileLease> {
+    pub(crate) fn try_acquire_owned_lease(
+        &self,
+        operation: MappedFileOperation,
+    ) -> Result<MappedFileLease, MappedFileError> {
         self.acquire_owned(operation)
     }
 
@@ -630,7 +648,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         self.swap_state.lock().retired.len()
     }
 
-    fn try_swap_read_only_generation(&self) -> MappedFileResult<bool> {
+    fn try_swap_read_only_generation(&self) -> Result<bool, MappedFileError> {
         if self.lifecycle_snapshot().state != MappedFileAdmissionState::SealedReadable {
             return Ok(false);
         }
@@ -664,7 +682,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                         .try_publish_before_close(&admission, MappedFileOperation::Maintenance, || {
                             publication.publish()
                         })
-                        .ok()
+                        .acquired()
                 },
             )
             .map_err(|error| self.map_publication_error(error, MappedFileOperation::Maintenance))?;
@@ -889,12 +907,12 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     }
 
     #[inline]
-    fn acquire_owned(&self, operation: MappedFileOperation) -> MappedFileResult<MappedFileLease> {
+    fn acquire_owned(&self, operation: MappedFileOperation) -> Result<MappedFileLease, MappedFileError> {
         self.reference_resource.try_acquire(operation)
     }
 
     #[inline]
-    fn acquire_borrowed(&self, operation: MappedFileOperation) -> MappedFileResult<BorrowedMappedFileLease<'_>> {
+    fn acquire_borrowed(&self, operation: MappedFileOperation) -> Result<BorrowedMappedFileLease<'_>, MappedFileError> {
         self.reference_resource.try_acquire_borrowed(operation)
     }
 
@@ -902,7 +920,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         &self,
         lease: &L,
         required: MappedFileOperation,
-    ) -> MappedFileResult<()> {
+    ) -> Result<(), MappedFileError> {
         let valid_operation = matches!(
             (lease.operation(), required),
             (
@@ -927,7 +945,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         start: usize,
         end: usize,
         data: &[u8],
-    ) -> MappedFileResult<()> {
+    ) -> Result<(), MappedFileError> {
         generation.with_mapping(|mapped_memory| {
             if end > mapped_memory.as_slice().len() {
                 return Err(MappedFileError::out_of_bounds(
@@ -951,7 +969,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         lease: &L,
         start: usize,
         data: &[u8],
-    ) -> MappedFileResult<()> {
+    ) -> Result<(), MappedFileError> {
         self.copy_to_mapping_for_operation(lease, MappedFileOperation::Write, start, data)
     }
 
@@ -961,7 +979,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         operation: MappedFileOperation,
         start: usize,
         data: &[u8],
-    ) -> MappedFileResult<()> {
+    ) -> Result<(), MappedFileError> {
         let end = start
             .checked_add(data.len())
             .filter(|end| *end <= self.raw_core.file_size() as usize)
@@ -983,7 +1001,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         Self::copy_to_writable_generation(&generation, start, end, data)
     }
 
-    fn ensure_transient_buffer<'a>(&self, state: &'a mut MappedWriteState) -> MappedFileResult<&'a mut PoolLease> {
+    fn ensure_transient_buffer<'a>(
+        &self,
+        state: &'a mut MappedWriteState,
+    ) -> Result<&'a mut PoolLease, MappedFileError> {
         let pool = self
             .transient_store_pool
             .as_ref()
@@ -1009,7 +1030,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         &self,
         state: &mut MappedWriteState,
         admission: &L,
-    ) -> MappedFileResult<i32> {
+    ) -> Result<i32, MappedFileError> {
         if self.transient_store_pool.is_none() {
             return Ok(self.raw_core.committed_position());
         }
@@ -1047,7 +1068,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         Ok(wrote_position)
     }
 
-    fn try_write_at(&self, start: usize, data: &[u8]) -> MappedFileResult<()> {
+    fn try_write_at(&self, start: usize, data: &[u8]) -> Result<(), MappedFileError> {
         let admission = self.acquire_borrowed(MappedFileOperation::Write)?;
         let mut state = self.write_state.lock();
         if self.transient_store_pool.is_some() {
@@ -1073,7 +1094,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         pos: usize,
         size: usize,
         readable_position: Option<i32>,
-    ) -> MappedFileResult<Option<Bytes>> {
+    ) -> Result<Option<Bytes>, MappedFileError> {
         let Some(end) = pos.checked_add(size) else {
             return Ok(None);
         };
@@ -1105,7 +1126,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         pos: usize,
         size: usize,
         readable_position: Option<i32>,
-    ) -> MappedFileResult<Option<Bytes>> {
+    ) -> Result<Option<Bytes>, MappedFileError> {
         let admission = self.acquire_borrowed(MappedFileOperation::Read)?;
         self.copy_range_admitted(&admission, pos, size, readable_position)
     }
@@ -1183,7 +1204,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         &self,
         admission: &L,
         required: MappedFileOperation,
-    ) -> MappedFileResult<Arc<WritableMappingGeneration<M>>> {
+    ) -> Result<Arc<WritableMappingGeneration<M>>, MappedFileError> {
         self.validate_lease(admission, required)?;
         if let Some(generation) = self.physical_owners.mapping.load_writable() {
             return Ok(generation);
@@ -1209,7 +1230,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                 |publication| {
                     lifecycle
                         .try_publish_before_close(admission, required, || publication.publish())
-                        .ok()
+                        .acquired()
                 },
             )
             .map_err(|error| self.map_publication_error(error, required))
@@ -1219,7 +1240,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         &self,
         admission: &L,
         required: MappedFileOperation,
-    ) -> MappedFileResult<AdmittedReadGeneration<M>> {
+    ) -> Result<AdmittedReadGeneration<M>, MappedFileError> {
         self.validate_lease(admission, MappedFileOperation::Read)?;
         if let Some(generation) = self.physical_owners.mapping.load_read_only() {
             return Ok(AdmittedReadGeneration::ReadOnly(generation));
@@ -1252,7 +1273,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
     }
 
-    pub(crate) fn file_owner_admitted(&self, admission: &MappedFileLease) -> MappedFileResult<Arc<FileOwner>> {
+    pub(crate) fn file_owner_admitted(&self, admission: &MappedFileLease) -> Result<Arc<FileOwner>, MappedFileError> {
         self.validate_lease(admission, MappedFileOperation::Read)?;
         self.physical_owners.storage.lock().owner().ok_or_else(|| {
             MappedFileError::Io(io::Error::new(
@@ -1268,7 +1289,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         start_offset: u64,
         file_offset: u64,
         snapshot: &[u8],
-    ) -> MappedFileResult<bool> {
+    ) -> Result<bool, MappedFileError> {
         if self
             .physical_owners
             .storage
@@ -1367,9 +1388,9 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         self.raw_core.is_valid_cache_range(position, size)
     }
 
-    fn try_flush_with<F>(&self, flush_least_pages: i32, flush: F) -> MappedFileResult<i32>
+    fn try_flush_with<F>(&self, flush_least_pages: i32, flush: F) -> Result<i32, MappedFileError>
     where
-        F: FnOnce(&Self, &BorrowedMappedFileLease<'_>, i32, i32) -> MappedFileResult<()>,
+        F: FnOnce(&Self, &BorrowedMappedFileLease<'_>, i32, i32) -> Result<(), MappedFileError>,
     {
         let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
         let _writer = self.write_state.lock();
@@ -1445,8 +1466,9 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         self.try_get_bytes(pos, size).ok().flatten()
     }
 
-    fn try_get_bytes(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
-        self.try_copy_range(pos, size, None)
+    fn try_get_bytes(&self, pos: usize, size: usize) -> Result<Option<bytes::Bytes>, StoreError> {
+        let typed = || -> Result<Option<bytes::Bytes>, MappedFileError> { self.try_copy_range(pos, size, None) };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 
     #[inline]
@@ -1473,41 +1495,45 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         lease.commit(length, None).is_ok()
     }
 
-    fn reserve_write(&self, required_space: usize) -> MappedFileResult<Self::WriteLease<'_>> {
-        if required_space == 0 {
-            return Err(MappedFileError::InvalidWriteCommit { reserved: 0, actual: 0 });
-        }
-        let admission = self.acquire_borrowed(MappedFileOperation::Write)?;
-        let mut state = self.write_state.lock();
-        let wrote_position = self.raw_core.wrote_position();
-        let start_position = usize::try_from(wrote_position).map_err(|_| MappedFileError::InvalidWritePosition {
-            position: wrote_position,
-            capacity: self.raw_core.file_size(),
-        })?;
-        let file_size = self.raw_core.file_size() as usize;
-        if start_position > file_size {
-            return Err(MappedFileError::InvalidWritePosition {
-                position: wrote_position,
-                capacity: self.raw_core.file_size(),
-            });
-        }
-        if start_position == file_size {
-            return Err(MappedFileError::file_full(start_position, self.raw_core.file_size()));
-        }
+    fn reserve_write(&self, required_space: usize) -> Result<Self::WriteLease<'_>, StoreError> {
+        let typed = || -> Result<Self::WriteLease<'_>, MappedFileError> {
+            if required_space == 0 {
+                return Err(MappedFileError::InvalidWriteCommit { reserved: 0, actual: 0 });
+            }
+            let admission = self.acquire_borrowed(MappedFileOperation::Write)?;
+            let mut state = self.write_state.lock();
+            let wrote_position = self.raw_core.wrote_position();
+            let start_position =
+                usize::try_from(wrote_position).map_err(|_| MappedFileError::InvalidWritePosition {
+                    position: wrote_position,
+                    capacity: self.raw_core.file_size(),
+                })?;
+            let file_size = self.raw_core.file_size() as usize;
+            if start_position > file_size {
+                return Err(MappedFileError::InvalidWritePosition {
+                    position: wrote_position,
+                    capacity: self.raw_core.file_size(),
+                });
+            }
+            if start_position == file_size {
+                return Err(MappedFileError::file_full(start_position, self.raw_core.file_size()));
+            }
 
-        let capacity = required_space.min(file_size - start_position);
-        if self.transient_store_pool.is_some() {
-            self.ensure_transient_buffer(&mut state)?;
-        }
-        state.staging.resize(capacity, 0);
-        state.staging[..capacity].fill(0);
-        Ok(DefaultMappedWriteLease {
-            owner: self,
-            state,
-            admission,
-            start_position,
-            capacity,
-        })
+            let capacity = required_space.min(file_size - start_position);
+            if self.transient_store_pool.is_some() {
+                self.ensure_transient_buffer(&mut state)?;
+            }
+            state.staging.resize(capacity, 0);
+            state.staging[..capacity].fill(0);
+            Ok(DefaultMappedWriteLease {
+                owner: self,
+                state,
+                admission,
+                start_position,
+                capacity,
+            })
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Append))
     }
 
     fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
@@ -1542,23 +1568,27 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         }
     }
 
-    fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<i32> {
-        self.try_flush_with(flush_least_pages, |mapped_file, admission, flushed_position, value| {
-            if mapped_file.physical_owners.mapping.load_read_only().is_some() {
-                return Ok(());
-            }
-            let generation = mapped_file.try_get_writable_generation(admission, MappedFileOperation::Maintenance)?;
-            let flush_size = value - flushed_position;
-            if flush_size > 0 && flush_size < (mapped_file.raw_core.file_size() as i32) / 2 {
-                generation.with_mapping(|mapping| {
-                    mapping
-                        .flush_range(flushed_position as usize, flush_size as usize)
-                        .map_err(MappedFileError::FlushFailed)
-                })
-            } else {
-                generation.with_mapping(|mapping| mapping.flush().map_err(MappedFileError::FlushFailed))
-            }
-        })
+    fn try_flush(&self, flush_least_pages: i32) -> Result<i32, StoreError> {
+        let typed = || -> Result<i32, MappedFileError> {
+            self.try_flush_with(flush_least_pages, |mapped_file, admission, flushed_position, value| {
+                if mapped_file.physical_owners.mapping.load_read_only().is_some() {
+                    return Ok(());
+                }
+                let generation =
+                    mapped_file.try_get_writable_generation(admission, MappedFileOperation::Maintenance)?;
+                let flush_size = value - flushed_position;
+                if flush_size > 0 && flush_size < (mapped_file.raw_core.file_size() as i32) / 2 {
+                    generation.with_mapping(|mapping| {
+                        mapping
+                            .flush_range(flushed_position as usize, flush_size as usize)
+                            .map_err(MappedFileError::FlushFailed)
+                    })
+                } else {
+                    generation.with_mapping(|mapping| mapping.flush().map_err(MappedFileError::FlushFailed))
+                }
+            })
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Flush))
     }
 
     #[inline]
@@ -1567,73 +1597,79 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             .unwrap_or_else(|_| self.raw_core.committed_position())
     }
 
-    fn try_commit(&self, commit_least_pages: i32) -> MappedFileResult<i32> {
-        let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
-        let mut state = self.write_state.lock();
-        if self.transient_store_pool.is_none() {
-            return Ok(self.raw_core.commit(commit_least_pages));
-        }
-        if self.raw_core.is_able_to_commit(commit_least_pages)
-            || self.raw_core.wrote_position() == self.raw_core.committed_position()
-        {
-            return self.commit_transient_buffer(&mut state, &admission);
-        }
-        Ok(self.raw_core.committed_position())
+    fn try_commit(&self, commit_least_pages: i32) -> Result<i32, StoreError> {
+        let typed = || -> Result<i32, MappedFileError> {
+            let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
+            let mut state = self.write_state.lock();
+            if self.transient_store_pool.is_none() {
+                return Ok(self.raw_core.commit(commit_least_pages));
+            }
+            if self.raw_core.is_able_to_commit(commit_least_pages)
+                || self.raw_core.wrote_position() == self.raw_core.committed_position()
+            {
+                return self.commit_transient_buffer(&mut state, &admission);
+            }
+            Ok(self.raw_core.committed_position())
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Append))
     }
 
     fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<SelectMappedBufferResult<M>> {
         self.try_select_mapped_buffer(pos, size).ok().flatten()
     }
 
-    fn try_select_mapped_buffer(&self, pos: i32, size: i32) -> MappedFileResult<Option<SelectMappedBufferResult<M>>> {
-        let admission = self.acquire_owned(MappedFileOperation::Read)?;
-        let read_position = self.get_read_position();
-        if self.raw_core.is_readable_range(pos, size, read_position) {
-            self.mapped_byte_buffer_access_count_since_last_swap
-                .fetch_add(1, Ordering::AcqRel);
+    fn try_select_mapped_buffer(&self, pos: i32, size: i32) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
+        let typed = || -> Result<Option<SelectMappedBufferResult<M>>, MappedFileError> {
+            let admission = self.acquire_owned(MappedFileOperation::Read)?;
+            let read_position = self.get_read_position();
+            if self.raw_core.is_readable_range(pos, size, read_position) {
+                self.mapped_byte_buffer_access_count_since_last_swap
+                    .fetch_add(1, Ordering::AcqRel);
 
-            let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
-            if let Some(generation) = self.physical_owners.mapping.load_read_only() {
-                let file_offset = pos as u64;
-                let start_offset = self
-                    .physical_owners
-                    .storage
-                    .lock()
-                    .file_from_offset()
-                    .checked_add(file_offset)
-                    .ok_or_else(|| {
-                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                    })?;
-                let range =
-                    MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
-                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                    })?;
-                let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
-                    .ok_or_else(|| {
-                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                    })?;
-                return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+                let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
+                if let Some(generation) = self.physical_owners.mapping.load_read_only() {
+                    let file_offset = pos as u64;
+                    let start_offset = self
+                        .physical_owners
+                        .storage
+                        .lock()
+                        .file_from_offset()
+                        .checked_add(file_offset)
+                        .ok_or_else(|| {
+                            MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                        })?;
+                    let range =
+                        MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
+                            MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                        })?;
+                    let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
+                        .ok_or_else(|| {
+                            MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                        })?;
+                    return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+                }
+                Ok(self
+                    .copy_range_admitted(&admission, pos as usize, size as usize, None)?
+                    .and_then(|bytes| {
+                        SelectMappedBufferResult::from_bytes_with_metadata(
+                            self.physical_owners.storage.lock().file_from_offset() + pos as u64,
+                            pos as u64,
+                            bytes,
+                            is_in_cache,
+                            SelectMappedBufferCacheState::from_residency(is_in_cache),
+                        )
+                    }))
+            } else {
+                warn!(
+                    "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
+                    pos,
+                    size,
+                    self.physical_owners.storage.lock().file_from_offset()
+                );
+                Ok(None)
             }
-            Ok(self
-                .copy_range_admitted(&admission, pos as usize, size as usize, None)?
-                .and_then(|bytes| {
-                    SelectMappedBufferResult::from_bytes_with_metadata(
-                        self.physical_owners.storage.lock().file_from_offset() + pos as u64,
-                        pos as u64,
-                        bytes,
-                        is_in_cache,
-                        SelectMappedBufferCacheState::from_residency(is_in_cache),
-                    )
-                }))
-        } else {
-            warn!(
-                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
-                pos,
-                size,
-                self.physical_owners.storage.lock().file_from_offset()
-            );
-            Ok(None)
-        }
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 
     #[inline]
@@ -1694,20 +1730,23 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         self.try_get_data(pos, size).ok().flatten()
     }
 
-    fn try_get_data(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
-        let admission = self.acquire_borrowed(MappedFileOperation::Read)?;
-        let read_position = self.get_read_position();
-        if self.raw_core.is_readable_byte_range(pos, size, read_position) {
-            self.copy_range_admitted(&admission, pos, size, Some(read_position))
-        } else {
-            warn!(
-                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
-                pos,
-                size,
-                self.physical_owners.storage.lock().file_from_offset()
-            );
-            Ok(None)
-        }
+    fn try_get_data(&self, pos: usize, size: usize) -> Result<Option<bytes::Bytes>, StoreError> {
+        let typed = || -> Result<Option<bytes::Bytes>, MappedFileError> {
+            let admission = self.acquire_borrowed(MappedFileOperation::Read)?;
+            let read_position = self.get_read_position();
+            if self.raw_core.is_readable_byte_range(pos, size, read_position) {
+                self.copy_range_admitted(&admission, pos, size, Some(read_position))
+            } else {
+                warn!(
+                    "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
+                    pos,
+                    size,
+                    self.physical_owners.storage.lock().file_from_offset()
+                );
+                Ok(None)
+            }
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 
     #[inline]
@@ -1792,11 +1831,14 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         }
     }
 
-    fn try_mlock(&self) -> MappedFileResult<()> {
-        let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
-        let _writer = self.write_state.lock();
-        let generation = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)?;
-        generation.with_slice(|mapped| lock_memory_region(mapped).map_err(MappedFileError::MemoryLockFailed))
+    fn try_mlock(&self) -> Result<(), StoreError> {
+        let typed = || -> Result<(), MappedFileError> {
+            let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
+            let _writer = self.write_state.lock();
+            let generation = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)?;
+            generation.with_slice(|mapped| lock_memory_region(mapped).map_err(MappedFileError::MemoryLockFailed))
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Admin))
     }
 
     #[inline]
@@ -1806,11 +1848,14 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         }
     }
 
-    fn try_munlock(&self) -> MappedFileResult<()> {
-        let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
-        let _writer = self.write_state.lock();
-        let generation = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)?;
-        generation.with_slice(|mapped| unlock_memory_region(mapped).map_err(MappedFileError::MemoryUnlockFailed))
+    fn try_munlock(&self) -> Result<(), StoreError> {
+        let typed = || -> Result<(), MappedFileError> {
+            let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
+            let _writer = self.write_state.lock();
+            let generation = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)?;
+            generation.with_slice(|mapped| unlock_memory_region(mapped).map_err(MappedFileError::MemoryUnlockFailed))
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Admin))
     }
 
     #[inline]
@@ -1820,19 +1865,22 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         }
     }
 
-    fn try_warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) -> MappedFileResult<()> {
-        // Page touching performs volatile writes, so it belongs to writable admission even though
-        // its business purpose is maintenance.
-        let admission = self.acquire_borrowed(MappedFileOperation::Write)?;
-        self.warm_mapped_file_with_ops(
-            &admission,
-            flush_disk_type,
-            pages,
-            Self::touch_mapped_page,
-            Self::flush_mapped_file_range,
-            Self::advise_mapped_file,
-            |event| self.record_linux_storage_degradation(event),
-        )
+    fn try_warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) -> Result<(), StoreError> {
+        let typed = || -> Result<(), MappedFileError> {
+            // Page touching performs volatile writes, so it belongs to writable admission even though
+            // its business purpose is maintenance.
+            let admission = self.acquire_borrowed(MappedFileOperation::Write)?;
+            self.warm_mapped_file_with_ops(
+                &admission,
+                flush_disk_type,
+                pages,
+                Self::touch_mapped_page,
+                Self::flush_mapped_file_range,
+                Self::advise_mapped_file,
+                |event| self.record_linux_storage_degradation(event),
+            )
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Admin))
     }
 
     #[inline]
@@ -1972,41 +2020,46 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_select_mapped_buffer_with_position(
         &self,
         pos: i32,
-    ) -> MappedFileResult<Option<SelectMappedBufferResult<M>>> {
-        let admission = self.acquire_owned(MappedFileOperation::Read)?;
-        let read_position = self.get_read_position();
-        let Some(size) = self.raw_core.readable_tail_size(pos, read_position) else {
-            return Ok(None);
-        };
-        self.mapped_byte_buffer_access_count_since_last_swap
-            .fetch_add(1, Ordering::AcqRel);
-        let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
+    ) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
+        let typed = || -> Result<Option<SelectMappedBufferResult<M>>, MappedFileError> {
+            let admission = self.acquire_owned(MappedFileOperation::Read)?;
+            let read_position = self.get_read_position();
+            let Some(size) = self.raw_core.readable_tail_size(pos, read_position) else {
+                return Ok(None);
+            };
+            self.mapped_byte_buffer_access_count_since_last_swap
+                .fetch_add(1, Ordering::AcqRel);
+            let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
 
-        if let Some(generation) = self.physical_owners.mapping.load_read_only() {
-            let file_offset = pos as u64;
-            let start_offset = self.get_file_from_offset().checked_add(file_offset).ok_or_else(|| {
-                MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-            })?;
-            let range = MappedReadLease::try_new(generation, admission, pos as usize, size as usize)
-                .map_err(|_| MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size()))?;
-            let range =
-                MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone()).ok_or_else(|| {
+            if let Some(generation) = self.physical_owners.mapping.load_read_only() {
+                let file_offset = pos as u64;
+                let start_offset = self.get_file_from_offset().checked_add(file_offset).ok_or_else(|| {
                     MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
                 })?;
-            return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
-        }
+                let range =
+                    MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
+                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
+                    .ok_or_else(|| {
+                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+            }
 
-        Ok(self
-            .copy_range_admitted(&admission, pos as usize, size as usize, None)?
-            .and_then(|bytes| {
-                SelectMappedBufferResult::from_bytes_with_metadata(
-                    self.get_file_from_offset() + pos as u64,
-                    pos as u64,
-                    bytes,
-                    is_in_cache,
-                    SelectMappedBufferCacheState::from_residency(is_in_cache),
-                )
-            }))
+            Ok(self
+                .copy_range_admitted(&admission, pos as usize, size as usize, None)?
+                .and_then(|bytes| {
+                    SelectMappedBufferResult::from_bytes_with_metadata(
+                        self.get_file_from_offset() + pos as u64,
+                        pos as u64,
+                        bytes,
+                        is_in_cache,
+                        SelectMappedBufferCacheState::from_residency(is_in_cache),
+                    )
+                }))
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 
     fn init(
@@ -2045,21 +2098,24 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         self.try_get_slice(pos, size).ok().flatten()
     }
 
-    fn try_get_slice(&self, pos: usize, size: usize) -> MappedFileResult<Option<Bytes>> {
-        let admission = self.acquire_borrowed(MappedFileOperation::Read)?;
-        let Some(end) = pos.checked_add(size) else {
-            return Ok(None);
+    fn try_get_slice(&self, pos: usize, size: usize) -> Result<Option<Bytes>, StoreError> {
+        let typed = || -> Result<Option<Bytes>, MappedFileError> {
+            let admission = self.acquire_borrowed(MappedFileOperation::Read)?;
+            let Some(end) = pos.checked_add(size) else {
+                return Ok(None);
+            };
+            if pos >= self.raw_core.file_size() as usize || end >= self.raw_core.file_size() as usize {
+                return Ok(None);
+            }
+            let Some(slice) = self.copy_range_admitted(&admission, pos, size, None)? else {
+                return Ok(None);
+            };
+            if let Some(metrics) = &self.metrics {
+                metrics.record_read(size, false);
+            }
+            Ok(Some(slice))
         };
-        if pos >= self.raw_core.file_size() as usize || end >= self.raw_core.file_size() as usize {
-            return Ok(None);
-        }
-        let Some(slice) = self.copy_range_admitted(&admission, pos, size, None)? else {
-            return Ok(None);
-        };
-        if let Some(metrics) = &self.metrics {
-            metrics.record_read(size, false);
-        }
-        Ok(Some(slice))
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 }
 
@@ -2112,7 +2168,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ///
     /// Returns an unavailable error after lifecycle closing begins, or a mapping error when the
     /// backing mapping cannot be initialized.
-    pub fn with_mapped_slice<R>(&self, callback: impl FnOnce(&[u8]) -> R) -> MappedFileResult<R> {
+    pub(crate) fn with_mapped_slice<R>(&self, callback: impl FnOnce(&[u8]) -> R) -> Result<R, MappedFileError> {
         let admission = self.acquire_borrowed(MappedFileOperation::Read)?;
         let _writer = self.write_state.lock();
         let generation = self.try_get_read_generation(&admission, MappedFileOperation::Read)?;
@@ -2163,7 +2219,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         mut flush_range: F,
         mut advise: A,
         mut record_degradation: R,
-    ) -> MappedFileResult<()>
+    ) -> Result<(), MappedFileError>
     where
         L: MappedFileLeaseProof + ?Sized,
         T: FnMut(*mut u8, usize) -> io::Result<()>,
@@ -2536,7 +2592,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     }
 
     /// Flushes a specific range while preserving lifecycle and I/O failures.
-    pub fn try_flush_range(&self, start: usize, end: usize) -> MappedFileResult<i32> {
+    pub(crate) fn try_flush_range(&self, start: usize, end: usize) -> Result<i32, MappedFileError> {
         use std::time::Instant;
 
         let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;

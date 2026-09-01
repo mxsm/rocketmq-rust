@@ -18,6 +18,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
+use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionOutcome;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencer;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use tokio_util::sync::CancellationToken;
@@ -33,9 +34,10 @@ async fn run_sequencer(policy: MicroBatchPolicy) {
     };
     let (sender, mut receiver) = AppendSequencer::bounded(config).expect("sequencer");
     for request in 0..REQUESTS_PER_ITERATION {
-        sender
-            .try_submit(request, RETAINED_BYTES_PER_REQUEST)
-            .expect("admission");
+        assert!(matches!(
+            sender.try_submit(request, RETAINED_BYTES_PER_REQUEST),
+            AppendAdmissionOutcome::Accepted
+        ));
     }
     sender.close();
     let cancellation = CancellationToken::new();

@@ -14,7 +14,7 @@
 
 use thiserror::Error;
 
-use super::identity::IdentityError;
+use super::identity::IdentityViolation;
 
 mod fixed;
 #[allow(
@@ -54,7 +54,7 @@ pub(crate) const MAX_SNAPSHOT_ENTRY_COUNT: u32 = 1_000_000;
 pub(crate) const MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH: usize = 16_384;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum SidecarError {
+pub(crate) enum SidecarViolation {
     #[error("{structure} has length {actual}; expected {expected}")]
     InvalidLength {
         structure: &'static str,
@@ -96,7 +96,10 @@ pub(crate) enum SidecarError {
     #[error("{field} must not be all zero")]
     ZeroOpaqueIdentifier { field: &'static str },
     #[error("invalid {field}: {source}")]
-    InvalidIdentity { field: &'static str, source: IdentityError },
+    InvalidIdentity {
+        field: &'static str,
+        source: IdentityViolation,
+    },
     #[error("physical marker slot index {slot_index} is invalid")]
     InvalidMarkerSlotIndex { slot_index: u8 },
     #[error("marker slot declares index {declared}, but occupies physical slot {physical}")]
@@ -209,7 +212,7 @@ pub(crate) enum SidecarError {
     },
 }
 
-impl SidecarError {
+impl SidecarViolation {
     #[cfg(test)]
     const fn category(&self) -> &'static str {
         match self {

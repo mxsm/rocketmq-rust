@@ -41,7 +41,6 @@ use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointBarrier;
-use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointError;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointService;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointSnapshot;
 use thiserror::Error;
@@ -454,10 +453,6 @@ fn store_checkpoint_error(operation: StoreOperation, error: StoreReleaseCheckpoi
                 | StoreReleaseCheckpointError::RestoreLayout(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
                 StoreReleaseCheckpointError::Runtime(source) => runtime_error_descriptor(source),
                 StoreReleaseCheckpointError::IdentityIo { .. } => &rocketmq_error::STORAGE_IO_FAILED,
-                StoreReleaseCheckpointError::Local(_) => match operation {
-                    StoreOperation::Read => &rocketmq_error::STORAGE_READ_FAILED,
-                    _ => &rocketmq_error::STORAGE_WRITE_FAILED,
-                },
                 #[cfg(feature = "rocksdb_store")]
                 StoreReleaseCheckpointError::RocksDb(_) => match operation {
                     StoreOperation::Read => &rocketmq_error::STORAGE_READ_FAILED,
@@ -515,8 +510,6 @@ pub enum StoreReleaseCheckpointError {
     Runtime(#[source] RuntimeError),
     #[error("Store checkpoint barrier failed: {0}")]
     Store(#[from] crate::store_error::StoreError),
-    #[error("Local Store checkpoint failed: {0}")]
-    Local(#[source] LocalReleaseCheckpointError),
     #[cfg(feature = "rocksdb_store")]
     #[error("RocksDB Store checkpoint failed: {0}")]
     RocksDb(#[source] rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointError),

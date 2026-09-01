@@ -12,6 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_store_local::mapped_file::MmapRangeError;
+pub use rocketmq_store_local::mapped_file::MmapRangeViolation;
 pub use rocketmq_store_local::mapped_file::MmapRegionSlice;
 pub use rocketmq_store_local::mapped_file::NativeMappedMemory as StoreMappedMemory;

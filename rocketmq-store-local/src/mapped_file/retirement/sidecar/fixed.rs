@@ -14,7 +14,7 @@
 
 use super::super::codec::crc32;
 use super::super::identity::StoreUuid;
-use super::SidecarError;
+use super::SidecarViolation;
 use super::ENABLED_MARKER_FILE_LENGTH;
 use super::ENABLED_MARKER_SLOT_LENGTH;
 use super::MIN_SNAPSHOT_FILE_LENGTH;
@@ -54,7 +54,7 @@ pub(crate) struct EnabledMarkerFile {
 }
 
 impl EnabledMarkerFile {
-    pub(crate) fn selected_slot(&self) -> Result<&EnabledMarkerSlot, SidecarError> {
+    pub(crate) fn selected_slot(&self) -> Result<&EnabledMarkerSlot, SidecarViolation> {
         for (physical, slot) in self.slots.iter().enumerate() {
             if let Some(slot) = slot {
                 validate_marker_slot(slot, physical as u8)?;
@@ -62,16 +62,16 @@ impl EnabledMarkerFile {
         }
 
         match (&self.slots[0], &self.slots[1]) {
-            (None, None) => Err(SidecarError::NoValidMarkerSlot),
+            (None, None) => Err(SidecarViolation::NoValidMarkerSlot),
             (Some(slot), None) if slot.marker_epoch == 1 && slot.snapshot_generation == 0 => Ok(slot),
-            (Some(_), None) | (None, Some(_)) => Err(SidecarError::InvalidMarkerSlotHistory),
+            (Some(_), None) | (None, Some(_)) => Err(SidecarViolation::InvalidMarkerSlotHistory),
             (Some(first), Some(second)) => {
                 if first.store_uuid != second.store_uuid || first.bootstrap_id != second.bootstrap_id {
-                    return Err(SidecarError::MarkerIdentityMismatch);
+                    return Err(SidecarViolation::MarkerIdentityMismatch);
                 }
                 let distance = first.marker_epoch.abs_diff(second.marker_epoch);
                 if distance != 1 {
-                    return Err(SidecarError::NonConsecutiveMarkerEpochs {
+                    return Err(SidecarViolation::NonConsecutiveMarkerEpochs {
                         first: first.marker_epoch,
                         second: second.marker_epoch,
                     });
@@ -81,22 +81,20 @@ impl EnabledMarkerFile {
                 } else {
                     (second, first)
                 };
-                let expected_generation =
-                    older
-                        .snapshot_generation
-                        .checked_add(1)
-                        .ok_or(SidecarError::NonConsecutiveMarkerGenerations {
-                            older: older.snapshot_generation,
-                            newer: newer.snapshot_generation,
-                        })?;
+                let expected_generation = older.snapshot_generation.checked_add(1).ok_or(
+                    SidecarViolation::NonConsecutiveMarkerGenerations {
+                        older: older.snapshot_generation,
+                        newer: newer.snapshot_generation,
+                    },
+                )?;
                 if newer.snapshot_generation != expected_generation {
-                    return Err(SidecarError::NonConsecutiveMarkerGenerations {
+                    return Err(SidecarViolation::NonConsecutiveMarkerGenerations {
                         older: older.snapshot_generation,
                         newer: newer.snapshot_generation,
                     });
                 }
                 if newer.anchor_sequence <= older.anchor_sequence {
-                    return Err(SidecarError::NonIncreasingMarkerAnchorSequence {
+                    return Err(SidecarViolation::NonIncreasingMarkerAnchorSequence {
                         older: older.anchor_sequence,
                         newer: newer.anchor_sequence,
                     });
@@ -107,7 +105,7 @@ impl EnabledMarkerFile {
     }
 }
 
-pub(crate) fn encode_store_meta(meta: &StoreMeta) -> Result<[u8; STORE_META_LENGTH], SidecarError> {
+pub(crate) fn encode_store_meta(meta: &StoreMeta) -> Result<[u8; STORE_META_LENGTH], SidecarViolation> {
     validate_nonzero_id("bootstrap_id", &meta.bootstrap_id)?;
 
     let mut encoded = [0_u8; STORE_META_LENGTH];
@@ -123,14 +121,14 @@ pub(crate) fn encode_store_meta(meta: &StoreMeta) -> Result<[u8; STORE_META_LENG
     Ok(encoded)
 }
 
-pub(crate) fn decode_store_meta(input: &[u8]) -> Result<StoreMeta, SidecarError> {
+pub(crate) fn decode_store_meta(input: &[u8]) -> Result<StoreMeta, SidecarViolation> {
     require_exact_length("store.meta", input, STORE_META_LENGTH)?;
     require_magic("store.meta", input, STORE_META_MAGIC)?;
     require_version("store.meta", input)?;
     require_length_field("store.meta", read_u32(input, 8)?.into(), STORE_META_LENGTH as u64)?;
     let flags = read_u32(input, 12)?;
     if flags != 0 {
-        return Err(SidecarError::InvalidFlags {
+        return Err(SidecarViolation::InvalidFlags {
             field: "store.meta",
             value: u64::from(flags),
         });
@@ -139,7 +137,7 @@ pub(crate) fn decode_store_meta(input: &[u8]) -> Result<StoreMeta, SidecarError>
     require_crc("store.meta", &input[..60], read_u32(input, 60)?)?;
 
     let uuid_bytes = read_array::<16>(input, 16)?;
-    let store_uuid = StoreUuid::new(uuid_bytes).map_err(|source| SidecarError::InvalidIdentity {
+    let store_uuid = StoreUuid::new(uuid_bytes).map_err(|source| SidecarViolation::InvalidIdentity {
         field: "store_uuid",
         source,
     })?;
@@ -154,7 +152,7 @@ pub(crate) fn decode_store_meta(input: &[u8]) -> Result<StoreMeta, SidecarError>
 
 pub(crate) fn encode_enabled_marker_slot(
     slot: &EnabledMarkerSlot,
-) -> Result<[u8; ENABLED_MARKER_SLOT_LENGTH], SidecarError> {
+) -> Result<[u8; ENABLED_MARKER_SLOT_LENGTH], SidecarViolation> {
     validate_marker_slot(slot, slot.slot_index)?;
 
     let mut encoded = [0_u8; ENABLED_MARKER_SLOT_LENGTH];
@@ -182,9 +180,9 @@ pub(crate) fn encode_enabled_marker_slot(
 pub(crate) fn decode_enabled_marker_slot(
     input: &[u8],
     physical_slot_index: u8,
-) -> Result<EnabledMarkerSlot, SidecarError> {
+) -> Result<EnabledMarkerSlot, SidecarViolation> {
     if physical_slot_index > 1 {
-        return Err(SidecarError::InvalidMarkerSlotIndex {
+        return Err(SidecarViolation::InvalidMarkerSlotIndex {
             slot_index: physical_slot_index,
         });
     }
@@ -198,30 +196,30 @@ pub(crate) fn decode_enabled_marker_slot(
     )?;
     let declared_slot_index = input[10];
     if declared_slot_index > 1 {
-        return Err(SidecarError::InvalidMarkerSlotIndex {
+        return Err(SidecarViolation::InvalidMarkerSlotIndex {
             slot_index: declared_slot_index,
         });
     }
     if declared_slot_index != physical_slot_index {
-        return Err(SidecarError::MarkerSlotPositionMismatch {
+        return Err(SidecarViolation::MarkerSlotPositionMismatch {
             declared: declared_slot_index,
             physical: physical_slot_index,
         });
     }
     if input[11] != ENABLED_FLAG {
-        return Err(SidecarError::InvalidFlags {
+        return Err(SidecarViolation::InvalidFlags {
             field: "ENABLED.v1 slot",
             value: u64::from(input[11]),
         });
     }
     let features = read_u32(input, 12)?;
     if features != MANAGED_RETIREMENT_FEATURE {
-        return Err(SidecarError::InvalidMarkerFeatures { value: features });
+        return Err(SidecarViolation::InvalidMarkerFeatures { value: features });
     }
     require_zero("ENABLED.v1 slot.reserved", read_u32(input, 96)?.into())?;
     require_crc("ENABLED.v1 slot", &input[..100], read_u32(input, 100)?)?;
 
-    let store_uuid = StoreUuid::new(read_array(input, 16)?).map_err(|source| SidecarError::InvalidIdentity {
+    let store_uuid = StoreUuid::new(read_array(input, 16)?).map_err(|source| SidecarViolation::InvalidIdentity {
         field: "store_uuid",
         source,
     })?;
@@ -243,7 +241,7 @@ pub(crate) fn decode_enabled_marker_slot(
 
 pub(crate) fn encode_enabled_marker_file(
     marker: &EnabledMarkerFile,
-) -> Result<[u8; ENABLED_MARKER_FILE_LENGTH], SidecarError> {
+) -> Result<[u8; ENABLED_MARKER_FILE_LENGTH], SidecarViolation> {
     marker.selected_slot()?;
     let mut encoded = [0_u8; ENABLED_MARKER_FILE_LENGTH];
     for (index, slot) in marker.slots.iter().enumerate() {
@@ -257,7 +255,7 @@ pub(crate) fn encode_enabled_marker_file(
     Ok(encoded)
 }
 
-pub(crate) fn decode_enabled_marker_file(input: &[u8]) -> Result<EnabledMarkerFile, SidecarError> {
+pub(crate) fn decode_enabled_marker_file(input: &[u8]) -> Result<EnabledMarkerFile, SidecarViolation> {
     require_exact_length("ENABLED.v1", input, ENABLED_MARKER_FILE_LENGTH)?;
     let decode_slot = |index: usize| {
         let start = index * ENABLED_MARKER_SLOT_LENGTH;
@@ -276,44 +274,44 @@ pub(crate) fn decode_enabled_marker_file(input: &[u8]) -> Result<EnabledMarkerFi
     Ok(marker)
 }
 
-fn validate_marker_slot(slot: &EnabledMarkerSlot, physical: u8) -> Result<(), SidecarError> {
+fn validate_marker_slot(slot: &EnabledMarkerSlot, physical: u8) -> Result<(), SidecarViolation> {
     if slot.slot_index > 1 {
-        return Err(SidecarError::InvalidMarkerSlotIndex {
+        return Err(SidecarViolation::InvalidMarkerSlotIndex {
             slot_index: slot.slot_index,
         });
     }
     if slot.slot_index != physical {
-        return Err(SidecarError::MarkerSlotPositionMismatch {
+        return Err(SidecarViolation::MarkerSlotPositionMismatch {
             declared: slot.slot_index,
             physical,
         });
     }
     validate_nonzero_id("bootstrap_id", &slot.bootstrap_id)?;
     if slot.marker_epoch == 0 {
-        return Err(SidecarError::ZeroMarkerEpoch);
+        return Err(SidecarViolation::ZeroMarkerEpoch);
     }
     let expected_physical = ((slot.marker_epoch - 1) & 1) as u8;
     if slot.slot_index != expected_physical {
-        return Err(SidecarError::InvalidMarkerSlotHistory);
+        return Err(SidecarViolation::InvalidMarkerSlotHistory);
     }
     let expected_generation = slot.marker_epoch - 1;
     if slot.snapshot_generation != expected_generation {
-        return Err(SidecarError::InvalidMarkerSlotHistory);
+        return Err(SidecarViolation::InvalidMarkerSlotHistory);
     }
     if slot.snapshot_generation != slot.log_generation {
-        return Err(SidecarError::MarkerGenerationMismatch {
+        return Err(SidecarViolation::MarkerGenerationMismatch {
             snapshot: slot.snapshot_generation,
             log: slot.log_generation,
         });
     }
     if slot.anchor_sequence == 0 {
-        return Err(SidecarError::ZeroSnapshotAnchorSequence);
+        return Err(SidecarViolation::ZeroSnapshotAnchorSequence);
     }
     if slot.marker_epoch == 1 && slot.anchor_sequence != 2 {
-        return Err(SidecarError::InvalidMarkerSlotHistory);
+        return Err(SidecarViolation::InvalidMarkerSlotHistory);
     }
     if slot.snapshot_file_length < MIN_SNAPSHOT_FILE_LENGTH as u64 {
-        return Err(SidecarError::MarkerSnapshotTooShort {
+        return Err(SidecarViolation::MarkerSnapshotTooShort {
             actual: slot.snapshot_file_length,
             minimum: MIN_SNAPSHOT_FILE_LENGTH as u64,
         });
@@ -321,16 +319,16 @@ fn validate_marker_slot(slot: &EnabledMarkerSlot, physical: u8) -> Result<(), Si
     Ok(())
 }
 
-fn validate_nonzero_id(field: &'static str, value: &[u8; 16]) -> Result<(), SidecarError> {
+fn validate_nonzero_id(field: &'static str, value: &[u8; 16]) -> Result<(), SidecarViolation> {
     if *value == [0; 16] {
-        return Err(SidecarError::ZeroOpaqueIdentifier { field });
+        return Err(SidecarViolation::ZeroOpaqueIdentifier { field });
     }
     Ok(())
 }
 
-fn require_exact_length(structure: &'static str, input: &[u8], expected: usize) -> Result<(), SidecarError> {
+fn require_exact_length(structure: &'static str, input: &[u8], expected: usize) -> Result<(), SidecarViolation> {
     if input.len() != expected {
-        return Err(SidecarError::InvalidLength {
+        return Err(SidecarViolation::InvalidLength {
             structure,
             expected,
             actual: input.len(),
@@ -339,19 +337,19 @@ fn require_exact_length(structure: &'static str, input: &[u8], expected: usize) 
     Ok(())
 }
 
-fn require_magic(structure: &'static str, input: &[u8], expected: [u8; 4]) -> Result<(), SidecarError> {
+fn require_magic(structure: &'static str, input: &[u8], expected: [u8; 4]) -> Result<(), SidecarViolation> {
     let found = read_array(input, 0)?;
     if found != expected {
-        return Err(SidecarError::InvalidMagic { structure, found });
+        return Err(SidecarViolation::InvalidMagic { structure, found });
     }
     Ok(())
 }
 
-fn require_version(structure: &'static str, input: &[u8]) -> Result<(), SidecarError> {
+fn require_version(structure: &'static str, input: &[u8]) -> Result<(), SidecarViolation> {
     let major = read_u16(input, 4)?;
     let minor = read_u16(input, 6)?;
     if (major, minor) != (FORMAT_MAJOR, FORMAT_MINOR) {
-        return Err(SidecarError::UnsupportedVersion {
+        return Err(SidecarViolation::UnsupportedVersion {
             structure,
             major,
             minor,
@@ -360,9 +358,9 @@ fn require_version(structure: &'static str, input: &[u8]) -> Result<(), SidecarE
     Ok(())
 }
 
-fn require_length_field(structure: &'static str, actual: u64, expected: u64) -> Result<(), SidecarError> {
+fn require_length_field(structure: &'static str, actual: u64, expected: u64) -> Result<(), SidecarViolation> {
     if actual != expected {
-        return Err(SidecarError::InvalidLengthField {
+        return Err(SidecarViolation::InvalidLengthField {
             structure,
             expected,
             actual,
@@ -371,17 +369,17 @@ fn require_length_field(structure: &'static str, actual: u64, expected: u64) -> 
     Ok(())
 }
 
-fn require_zero(field: &'static str, value: u64) -> Result<(), SidecarError> {
+fn require_zero(field: &'static str, value: u64) -> Result<(), SidecarViolation> {
     if value != 0 {
-        return Err(SidecarError::NonZeroReserved { field, value });
+        return Err(SidecarViolation::NonZeroReserved { field, value });
     }
     Ok(())
 }
 
-fn require_crc(structure: &'static str, covered: &[u8], expected: u32) -> Result<(), SidecarError> {
+fn require_crc(structure: &'static str, covered: &[u8], expected: u32) -> Result<(), SidecarViolation> {
     let actual = crc32(covered);
     if actual != expected {
-        return Err(SidecarError::ChecksumMismatch {
+        return Err(SidecarViolation::ChecksumMismatch {
             structure,
             expected,
             actual,
@@ -390,36 +388,38 @@ fn require_crc(structure: &'static str, covered: &[u8], expected: u32) -> Result
     Ok(())
 }
 
-fn read_array<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N], SidecarError> {
-    let end = offset.checked_add(N).ok_or(SidecarError::UnexpectedFixedSidecarEnd {
-        offset,
-        needed: N,
-        remaining: input.len().saturating_sub(offset),
-    })?;
+fn read_array<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N], SidecarViolation> {
+    let end = offset
+        .checked_add(N)
+        .ok_or(SidecarViolation::UnexpectedFixedSidecarEnd {
+            offset,
+            needed: N,
+            remaining: input.len().saturating_sub(offset),
+        })?;
     input
         .get(offset..end)
-        .ok_or(SidecarError::UnexpectedFixedSidecarEnd {
+        .ok_or(SidecarViolation::UnexpectedFixedSidecarEnd {
             offset,
             needed: N,
             remaining: input.len().saturating_sub(offset),
         })?
         .try_into()
-        .map_err(|_| SidecarError::UnexpectedFixedSidecarEnd {
+        .map_err(|_| SidecarViolation::UnexpectedFixedSidecarEnd {
             offset,
             needed: N,
             remaining: input.len().saturating_sub(offset),
         })
 }
 
-fn read_u16(input: &[u8], offset: usize) -> Result<u16, SidecarError> {
+fn read_u16(input: &[u8], offset: usize) -> Result<u16, SidecarViolation> {
     Ok(u16::from_le_bytes(read_array(input, offset)?))
 }
 
-fn read_u32(input: &[u8], offset: usize) -> Result<u32, SidecarError> {
+fn read_u32(input: &[u8], offset: usize) -> Result<u32, SidecarViolation> {
     Ok(u32::from_le_bytes(read_array(input, offset)?))
 }
 
-fn read_u64(input: &[u8], offset: usize) -> Result<u64, SidecarError> {
+fn read_u64(input: &[u8], offset: usize) -> Result<u64, SidecarViolation> {
     Ok(u64::from_le_bytes(read_array(input, offset)?))
 }
 

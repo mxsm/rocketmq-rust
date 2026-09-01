@@ -23,7 +23,7 @@ use crate::ha::transfer_engine::sendfile::SendfileTransferEngine;
 use crate::ha::transfer_engine::vectored::VectoredTransferEngine;
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::error::TransferError;
-use crate::transfer::error::TransferResult;
+use rocketmq_store_api::StoreError;
 
 pub mod bytes;
 pub mod sendfile;
@@ -190,7 +190,13 @@ impl<W> HaTransferEngine<W>
 where
     W: AsyncWrite + SendfileWriteTarget + Unpin,
 {
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+    /// Sends one framed batch through the selected engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_IO_FAILED` for replication write failures and
+    /// `STORAGE_REQUEST_INVALID` for malformed batches.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
         match self {
             Self::Bytes(engine) => engine.send_batch(batch).await,
             Self::Vectored(engine) => engine.send_batch(batch).await,
@@ -204,7 +210,13 @@ impl<W> HaTransferEngine<W>
 where
     W: AsyncWrite + Unpin,
 {
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+    /// Sends one framed batch through the selected engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_IO_FAILED` for replication write failures and
+    /// `STORAGE_REQUEST_INVALID` for malformed batches.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
         match self {
             Self::Bytes(engine) => engine.send_batch(batch).await,
             Self::Vectored(engine) => engine.send_batch(batch).await,
@@ -212,7 +224,7 @@ where
     }
 }
 
-pub(crate) fn batch_body_bytes(batch: &TransferBatch) -> TransferResult<Bytes> {
+pub(crate) fn batch_body_bytes(batch: &TransferBatch) -> Result<Bytes, TransferError> {
     let mut chunks = batch_body_chunks(batch)?;
     match chunks.len() {
         0 => Ok(Bytes::new()),
@@ -227,7 +239,7 @@ pub(crate) fn batch_body_bytes(batch: &TransferBatch) -> TransferResult<Bytes> {
     }
 }
 
-pub(crate) fn batch_body_chunks(batch: &TransferBatch) -> TransferResult<Vec<Bytes>> {
+pub(crate) fn batch_body_chunks(batch: &TransferBatch) -> Result<Vec<Bytes>, TransferError> {
     let mut remaining = batch.total_body_len;
     if remaining == 0 {
         return Ok(Vec::new());

@@ -17,8 +17,8 @@ use std::fs::File;
 
 use thiserror::Error;
 
-use super::super::identity::IdentityError;
-use super::super::sidecar::SidecarError;
+use super::super::identity::IdentityViolation;
+use super::super::sidecar::SidecarViolation;
 use super::super::sidecar::StoreMeta;
 use super::proof::BootstrapInventoryEvidence;
 
@@ -91,19 +91,9 @@ impl BootstrapInventoryLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BootstrapInventoryErrorKind {
-    UnsupportedPlatform,
-    LimitExceeded,
-    UnsafeNamespace,
-    InventoryChanged,
-    InvalidSegment,
-    InvalidIdentity,
-    InvalidSnapshot,
-}
-
+/// Legacy-namespace bootstrap eligibility failure with its former kind folded in.
 #[derive(Debug, Error)]
-enum BootstrapInventorySource {
+pub(super) enum BootstrapInventoryError {
     #[error("this platform has no qualified managed lifecycle writer")]
     UnsupportedPlatform,
     #[error("bootstrap inventory limits are invalid")]
@@ -117,102 +107,48 @@ enum BootstrapInventorySource {
     #[error("invalid numeric segment: {0}")]
     InvalidSegment(&'static str),
     #[error("bootstrap inventory path or incarnation is invalid")]
-    Identity(#[source] IdentityError),
+    Identity(#[source] IdentityViolation),
     #[error("bootstrap inventory snapshot is invalid")]
-    Sidecar(#[source] SidecarError),
+    Sidecar(#[source] SidecarViolation),
     #[error("handle-relative bootstrap inventory failed")]
     Platform(#[source] PlatformError),
 }
 
-#[derive(Debug, Error)]
-#[error("bootstrap inventory failed ({kind:?}): {source}")]
-pub(super) struct BootstrapInventoryError {
-    kind: BootstrapInventoryErrorKind,
-    #[source]
-    source: BootstrapInventorySource,
-}
-
 impl BootstrapInventoryError {
-    pub(super) const fn kind(&self) -> BootstrapInventoryErrorKind {
-        self.kind
-    }
-
     fn unsupported() -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::UnsupportedPlatform,
-            source: BootstrapInventorySource::UnsupportedPlatform,
-        }
+        Self::UnsupportedPlatform
     }
 
     fn invalid_limits() -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::LimitExceeded,
-            source: BootstrapInventorySource::InvalidLimits,
-        }
+        Self::InvalidLimits
     }
 
     fn limit(detail: &'static str) -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::LimitExceeded,
-            source: BootstrapInventorySource::Limit(detail),
-        }
+        Self::Limit(detail)
     }
 
     fn unsafe_namespace(detail: &'static str) -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::UnsafeNamespace,
-            source: BootstrapInventorySource::UnsafeNamespace(detail),
-        }
+        Self::UnsafeNamespace(detail)
     }
 
     fn changed() -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::InventoryChanged,
-            source: BootstrapInventorySource::InventoryChanged,
-        }
+        Self::InventoryChanged
     }
 
     fn invalid_segment(detail: &'static str) -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::InvalidSegment,
-            source: BootstrapInventorySource::InvalidSegment(detail),
-        }
+        Self::InvalidSegment(detail)
     }
 
-    fn identity(source: IdentityError) -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::InvalidIdentity,
-            source: BootstrapInventorySource::Identity(source),
-        }
+    fn identity(source: IdentityViolation) -> Self {
+        Self::Identity(source)
     }
 
-    fn sidecar(source: SidecarError) -> Self {
-        Self {
-            kind: BootstrapInventoryErrorKind::InvalidSnapshot,
-            source: BootstrapInventorySource::Sidecar(source),
-        }
+    fn sidecar(source: SidecarViolation) -> Self {
+        Self::Sidecar(source)
     }
 
     fn platform(source: PlatformError) -> Self {
-        let kind = match source.kind() {
-            super::super::replay::discovery::platform::PlatformErrorKind::Changed => {
-                BootstrapInventoryErrorKind::InventoryChanged
-            }
-            super::super::replay::discovery::platform::PlatformErrorKind::Limit => {
-                BootstrapInventoryErrorKind::LimitExceeded
-            }
-            super::super::replay::discovery::platform::PlatformErrorKind::Unsupported => {
-                BootstrapInventoryErrorKind::UnsupportedPlatform
-            }
-            super::super::replay::discovery::platform::PlatformErrorKind::Io
-            | super::super::replay::discovery::platform::PlatformErrorKind::UnsafeNamespace => {
-                BootstrapInventoryErrorKind::UnsafeNamespace
-            }
-        };
-        Self {
-            kind,
-            source: BootstrapInventorySource::Platform(source),
-        }
+        Self::Platform(source)
     }
 }
 

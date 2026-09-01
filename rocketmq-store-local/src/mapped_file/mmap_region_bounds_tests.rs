@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
+use crate::mapped_file::MappedFileError;
+use crate::mapped_file::NativeMappedMemory;
 use cheetah_string::CheetahString;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
-use rocketmq_store_local::mapped_file::MappedFileError;
-use rocketmq_store_local::mapped_file::NativeMappedMemory;
 use std::panic::catch_unwind;
 use std::panic::AssertUnwindSafe;
 

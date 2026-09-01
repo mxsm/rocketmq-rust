@@ -16,7 +16,7 @@
 
 use super::LogicalRemovedCapability;
 use super::NamespaceAbsentCapability;
-use super::RegistryError;
+use super::RegistryViolation;
 use super::TombstonedCapability;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::io::LedgerIo;
@@ -26,10 +26,9 @@ use crate::mapped_file::retirement::platform::authorize_tombstone_removal;
 use crate::mapped_file::retirement::platform::AuthorizedNamespaceTransitionResult;
 use crate::mapped_file::retirement::platform::NamespaceFailure;
 use crate::mapped_file::retirement::platform::NamespacePolicyViolation;
-use crate::mapped_file::retirement::platform::NamespaceRequestError;
+use crate::mapped_file::retirement::platform::NamespaceRequestViolation;
 use crate::mapped_file::retirement::platform::NamespaceTransition;
 use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
-use crate::mapped_file::retirement::platform::NamespaceVerificationError;
 use crate::mapped_file::retirement::platform::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::writer::ManagedLedgerWriter;
 use crate::mapped_file::retirement::writer::ManagedLedgerWriterError;
@@ -46,6 +45,10 @@ pub(in crate::mapped_file::retirement) enum LogicalNamespaceProgress<O> {
 }
 
 /// Durable or pending result after one tombstone-removal namespace observation.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the pending arm intentionally retains the durable capability together with the typed namespace disposition"
+)]
 pub(in crate::mapped_file::retirement) enum TombstoneNamespaceProgress<O> {
     NamespaceAbsent(NamespaceAbsentCapability<O>),
     Pending {
@@ -68,7 +71,7 @@ pub(in crate::mapped_file::retirement) enum NamespacePending {
         platform: &'static str,
         reason: &'static str,
     },
-    Verification(NamespaceVerificationError),
+    Verification(NamespaceTransitionOutcome),
     UnexpectedOutcome(&'static str),
 }
 
@@ -76,7 +79,7 @@ pub(in crate::mapped_file::retirement) enum NamespacePending {
 #[derive(Debug, Error)]
 pub(in crate::mapped_file::retirement) enum ReaperDriveError {
     #[error(transparent)]
-    Request(#[from] NamespaceRequestError),
+    Request(#[from] NamespaceRequestViolation),
     #[error(transparent)]
     Writer(#[from] ManagedLedgerWriterError),
 }
@@ -145,7 +148,7 @@ pub(in crate::mapped_file::retirement) fn commit_logical_namespace_outcome<I: Le
             observed_key,
         } => {
             if expected_key != capability.binding().target_key() {
-                return Err(RegistryError::NamespaceProofMismatch {
+                return Err(RegistryViolation::NamespaceProofMismatch {
                     ticket_id: capability.binding().ticket_id(),
                 }
                 .into());

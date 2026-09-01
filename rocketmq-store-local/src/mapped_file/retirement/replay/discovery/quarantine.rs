@@ -30,7 +30,6 @@ use super::map_sidecar_error;
 use super::platform;
 use super::read_exact_file;
 use super::ManagedLifecycleReadError;
-use super::ManagedLifecycleReadErrorKind;
 use super::ManagedLifecycleReadSource;
 use super::OwnedGeneration;
 use super::GENERATION_DIGITS;
@@ -79,7 +78,6 @@ impl QuarantinePlan {
         for (index, entry) in quarantine.entries.iter().enumerate() {
             if entry.kind == platform::EntryKind::Reparse {
                 return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadErrorKind::UnsafeNamespace,
                     ManagedLifecycleReadSource::UnsafeNamespace(format!(
                         "quarantine entry {:?} is a symlink or reparse point",
                         entry.name
@@ -88,7 +86,6 @@ impl QuarantinePlan {
             }
             if entry.kind != platform::EntryKind::File {
                 return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadErrorKind::UnsafeNamespace,
                     ManagedLifecycleReadSource::UnsafeNamespace(format!(
                         "quarantine entry {:?} is not a regular file",
                         entry.name
@@ -97,7 +94,6 @@ impl QuarantinePlan {
             }
             if entry.stamp.link_count != 1 {
                 return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadErrorKind::UnsafeNamespace,
                     ManagedLifecycleReadSource::UnsafeNamespace(format!(
                         "quarantine file {:?} has {} hard links; exactly one is required",
                         entry.name, entry.stamp.link_count
@@ -114,7 +110,6 @@ impl QuarantinePlan {
             let physical_id = (entry.stamp.volume, entry.stamp.file_id);
             if let Some(previous) = physical_files.insert(physical_id, &entry.name) {
                 return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadErrorKind::UnsafeNamespace,
                     ManagedLifecycleReadSource::UnsafeNamespace(format!(
                         "lifecycle/quarantine files {previous:?} and {:?} are hard-link aliases",
                         entry.name

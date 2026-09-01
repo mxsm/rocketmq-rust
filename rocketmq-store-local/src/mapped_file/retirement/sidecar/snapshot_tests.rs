@@ -19,7 +19,7 @@ use crate::mapped_file::retirement::codec::QuarantineEntityKind;
 use crate::mapped_file::retirement::codec::QuarantineReason;
 use crate::mapped_file::retirement::codec::RetirementReason;
 use crate::mapped_file::retirement::identity::FileIncarnationId;
-use crate::mapped_file::retirement::identity::IdentityError;
+use crate::mapped_file::retirement::identity::IdentityViolation;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::identity::StoreUuid;
@@ -42,14 +42,14 @@ fn incarnation_payload_rejects_every_flag_reserved_key_and_identity_corruption_c
         let damaged = mutate_payload(&encoded, payload_offset, &replacement);
         let error = decode_snapshot(&damaged).expect_err("payload corruption must fail");
         let matches = match expected {
-            "flags" => matches!(error, SidecarError::InvalidFlags { .. }),
-            "reserved" => matches!(error, SidecarError::NonZeroReserved { .. }),
-            "key_kind" => matches!(error, SidecarError::InvalidPhysicalFileKeyKind { kind: 9 }),
-            "key_reserved" => matches!(error, SidecarError::NonZeroPhysicalFileKeyReserved),
-            "nonce" => matches!(error, SidecarError::ZeroOpaqueIdentifier { field: "create_nonce" }),
+            "flags" => matches!(error, SidecarViolation::InvalidFlags { .. }),
+            "reserved" => matches!(error, SidecarViolation::NonZeroReserved { .. }),
+            "key_kind" => matches!(error, SidecarViolation::InvalidPhysicalFileKeyKind { kind: 9 }),
+            "key_reserved" => matches!(error, SidecarViolation::NonZeroPhysicalFileKeyReserved),
+            "nonce" => matches!(error, SidecarViolation::ZeroOpaqueIdentifier { field: "create_nonce" }),
             "path" => matches!(
                 error,
-                SidecarError::InvalidIdentity {
+                SidecarViolation::InvalidIdentity {
                     field: "canonical_path",
                     ..
                 }
@@ -62,12 +62,12 @@ fn incarnation_payload_rejects_every_flag_reserved_key_and_identity_corruption_c
     let phase_without_absent_key = mutate_payload(&encoded, 24, &[1]);
     assert!(matches!(
         decode_snapshot(&phase_without_absent_key),
-        Err(SidecarError::IncarnationPhaseKeyMismatch)
+        Err(SidecarViolation::IncarnationPhaseKeyMismatch)
     ));
     let zero_length = mutate_payload(&encoded, 36, &[0; 8]);
     assert!(matches!(
         decode_snapshot(&zero_length),
-        Err(SidecarError::ZeroExpectedFileLength)
+        Err(SidecarViolation::ZeroExpectedFileLength)
     ));
 }
 
@@ -90,32 +90,32 @@ fn retirement_payload_rejects_enums_flags_sequences_nonce_key_and_optional_path_
         let matches = match expected {
             "stage" => matches!(
                 error,
-                SidecarError::InvalidEnumValue {
+                SidecarViolation::InvalidEnumValue {
                     field: "retirement_stage",
                     value: 6
                 }
             ),
-            "flags" => matches!(error, SidecarError::InvalidFlags { .. }),
+            "flags" => matches!(error, SidecarViolation::InvalidFlags { .. }),
             "reason" => matches!(
                 error,
-                SidecarError::InvalidEnumValue {
+                SidecarViolation::InvalidEnumValue {
                     field: "retirement_reason",
                     value: 10
                 }
             ),
-            "stage_sequence" => matches!(error, SidecarError::StageSequenceOutOfRange { .. }),
-            "mapping_generation" => matches!(error, SidecarError::ZeroMappingGeneration),
-            "expected_length" => matches!(error, SidecarError::ZeroExpectedFileLength),
+            "stage_sequence" => matches!(error, SidecarViolation::StageSequenceOutOfRange { .. }),
+            "mapping_generation" => matches!(error, SidecarViolation::ZeroMappingGeneration),
+            "expected_length" => matches!(error, SidecarViolation::ZeroExpectedFileLength),
             "nonce" => matches!(
                 error,
-                SidecarError::ZeroOpaqueIdentifier {
+                SidecarViolation::ZeroOpaqueIdentifier {
                     field: "retirement_nonce"
                 }
             ),
-            "key" => matches!(error, SidecarError::InvalidPhysicalFileKeyKind { kind: 9 }),
+            "key" => matches!(error, SidecarViolation::InvalidPhysicalFileKeyKind { kind: 9 }),
             "tombstone_path" => matches!(
                 error,
-                SidecarError::OptionalPathFlagMismatch {
+                SidecarViolation::OptionalPathFlagMismatch {
                     field: "tombstone_path"
                 }
             ),
@@ -143,30 +143,30 @@ fn quarantine_payload_rejects_enums_flags_presence_reserved_and_observation_sequ
         let matches = match expected {
             "entity_kind" => matches!(
                 error,
-                SidecarError::InvalidEnumValue {
+                SidecarViolation::InvalidEnumValue {
                     field: "quarantine_entity_kind",
                     value: 5
                 }
             ),
             "reason" => matches!(
                 error,
-                SidecarError::InvalidEnumValue {
+                SidecarViolation::InvalidEnumValue {
                     field: "quarantine_reason",
                     value: 5
                 }
             ),
             "flags" | "content_presence" => {
-                matches!(error, SidecarError::InvalidQuarantineFields { .. })
+                matches!(error, SidecarViolation::InvalidQuarantineFields { .. })
             }
-            "sequence" => matches!(error, SidecarError::ObservationSequenceOutOfRange { .. }),
-            "key_presence" => matches!(error, SidecarError::InvalidAbsentPhysicalFileKey),
+            "sequence" => matches!(error, SidecarViolation::ObservationSequenceOutOfRange { .. }),
+            "key_presence" => matches!(error, SidecarViolation::InvalidAbsentPhysicalFileKey),
             "destination_presence" => matches!(
                 error,
-                SidecarError::OptionalPathFlagMismatch {
+                SidecarViolation::OptionalPathFlagMismatch {
                     field: "destination_path"
                 }
             ),
-            "reserved" => matches!(error, SidecarError::NonZeroReserved { .. }),
+            "reserved" => matches!(error, SidecarViolation::NonZeroReserved { .. }),
             _ => false,
         };
         assert!(matches, "class={expected}, error={error:?}");
@@ -186,7 +186,7 @@ fn snapshot_decoder_enforces_each_kind_specific_payload_max_before_truncation() 
         rewrite_body_crc(&mut encoded);
         assert!(matches!(
             decode_snapshot(&encoded),
-            Err(SidecarError::SnapshotEntryPayloadTooLarge {
+            Err(SidecarViolation::SnapshotEntryPayloadTooLarge {
                 kind: actual_kind,
                 length,
                 maximum: actual_maximum,
@@ -201,7 +201,7 @@ fn snapshot_modes_and_retirement_tombstone_stage_rules_fail_closed() {
     bootstrap.mode = SnapshotMode::BootstrapInventory;
     assert!(matches!(
         encode_snapshot(&bootstrap),
-        Err(SidecarError::SnapshotModeGenerationMismatch {
+        Err(SidecarViolation::SnapshotModeGenerationMismatch {
             mode: "bootstrap_inventory",
             generation: 1,
         })
@@ -211,7 +211,7 @@ fn snapshot_modes_and_retirement_tombstone_stage_rules_fail_closed() {
     retirement.stage = RetirementStage::LogicalRemoved;
     assert!(matches!(
         encode_snapshot(&snapshot_with(SnapshotEntry::RetirementTicket(retirement))),
-        Err(SidecarError::RetirementTombstoneStageMismatch)
+        Err(SidecarViolation::RetirementTombstoneStageMismatch)
     ));
 
     let mut direct_absence = retirement_entry();
@@ -228,9 +228,9 @@ fn snapshot_paths_are_bound_to_offsets_ids_generations_nonces_and_parent_directo
     wrong_canonical.segment_offset = 1;
     assert!(matches!(
         encode_snapshot(&snapshot_with(SnapshotEntry::Incarnation(wrong_canonical))),
-        Err(SidecarError::InvalidIdentity {
+        Err(SidecarViolation::InvalidIdentity {
             field: "canonical_path",
-            source: IdentityError::CanonicalSegmentPathIdentityMismatch,
+            source: IdentityViolation::CanonicalSegmentPathIdentityMismatch,
         })
     ));
 
@@ -239,9 +239,9 @@ fn snapshot_paths_are_bound_to_offsets_ids_generations_nonces_and_parent_directo
         path("consumequeue/.create.i0000000000000007.s00000000000000000000.n01010101010101010101010101010101");
     assert!(matches!(
         encode_snapshot(&snapshot_with(SnapshotEntry::Incarnation(wrong_create))),
-        Err(SidecarError::InvalidIdentity {
+        Err(SidecarViolation::InvalidIdentity {
             field: "create_file_path",
-            source: IdentityError::CreateFilePathIdentityMismatch,
+            source: IdentityViolation::CreateFilePathIdentityMismatch,
         })
     ));
 
@@ -251,9 +251,9 @@ fn snapshot_paths_are_bound_to_offsets_ids_generations_nonces_and_parent_directo
     ));
     assert!(matches!(
         encode_snapshot(&snapshot_with(SnapshotEntry::RetirementTicket(wrong_tombstone))),
-        Err(SidecarError::InvalidIdentity {
+        Err(SidecarViolation::InvalidIdentity {
             field: "tombstone_path",
-            source: IdentityError::TombstonePathIdentityMismatch,
+            source: IdentityViolation::TombstonePathIdentityMismatch,
         })
     ));
 
@@ -261,9 +261,9 @@ fn snapshot_paths_are_bound_to_offsets_ids_generations_nonces_and_parent_directo
     let corrupted_canonical = mutate_payload(&encoded_incarnation, 94 + 29, b"1");
     assert!(matches!(
         decode_snapshot(&corrupted_canonical),
-        Err(SidecarError::InvalidIdentity {
+        Err(SidecarViolation::InvalidIdentity {
             field: "canonical_path",
-            source: IdentityError::CanonicalSegmentPathIdentityMismatch,
+            source: IdentityViolation::CanonicalSegmentPathIdentityMismatch,
         })
     ));
 
@@ -277,9 +277,9 @@ fn snapshot_paths_are_bound_to_offsets_ids_generations_nonces_and_parent_directo
     let corrupted_tombstone = mutate_payload(&encoded_retirement, 150 + tombstone_length - 1, b"3");
     assert!(matches!(
         decode_snapshot(&corrupted_tombstone),
-        Err(SidecarError::InvalidIdentity {
+        Err(SidecarViolation::InvalidIdentity {
             field: "tombstone_path",
-            source: IdentityError::TombstonePathIdentityMismatch,
+            source: IdentityViolation::TombstonePathIdentityMismatch,
         })
     ));
 }

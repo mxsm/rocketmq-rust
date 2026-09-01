@@ -15,7 +15,7 @@
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryOffsetError;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoverySummary;
@@ -68,7 +68,7 @@ fn constructor_freezes_standard_and_windowed_optimized_seed_model() {
 
     assert_eq!(
         AbnormalRecoveryState::try_new(I64_MAX_U64 + 1, AbnormalRecoveryPolicy::Standard),
-        Err(AbnormalRecoveryOffsetError::OffsetExceedsI64 {
+        Err(AbnormalRecoveryOffsetViolation::OffsetExceedsI64 {
             offset: I64_MAX_U64 + 1,
         })
     );
@@ -295,13 +295,13 @@ fn offset_errors_are_transactional_for_both_policies() {
                     confirm_candidate_end: 0,
                     dispatch_gate: AbnormalRecoveryDispatchGate::Ungated,
                 },
-                AbnormalRecoveryOffsetError::OffsetExceedsI64 {
+                AbnormalRecoveryOffsetViolation::OffsetExceedsI64 {
                     offset: I64_MAX_U64 + 1,
                 },
             ),
             (
                 message(0, 1, -1, AbnormalRecoveryDispatchGate::Ungated),
-                AbnormalRecoveryOffsetError::NegativeConfirmCandidate { candidate: -1 },
+                AbnormalRecoveryOffsetViolation::NegativeConfirmCandidate { candidate: -1 },
             ),
         ];
         if policy == AbnormalRecoveryPolicy::Optimized {
@@ -315,7 +315,7 @@ fn offset_errors_are_transactional_for_both_policies() {
                         confirm_candidate_end: 0,
                         dispatch_gate: AbnormalRecoveryDispatchGate::Ungated,
                     },
-                    AbnormalRecoveryOffsetError::BaseRelativeOverflow {
+                    AbnormalRecoveryOffsetViolation::BaseRelativeOverflow {
                         base_offset: u64::MAX,
                         relative_start: 1,
                     },

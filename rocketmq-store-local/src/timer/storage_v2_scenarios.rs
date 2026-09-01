@@ -16,16 +16,16 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Arc;
 
-use rocketmq_store_local::timer::checkpoint::TimerCheckpointV2Record;
-use rocketmq_store_local::timer::checkpoint::VersionedTimerCheckpointStore;
-use rocketmq_store_local::timer::metrics::TimerStorageMetrics;
-use rocketmq_store_local::timer::paged_timer_wheel::PagedTimerWheel;
-use rocketmq_store_local::timer::segmented_timer_log::SegmentedTimerLog;
-use rocketmq_store_local::timer::segmented_timer_log::TimerLogV2Record;
-use rocketmq_store_local::timer::segmented_timer_log::TIMER_LOG_V2_PHYSICAL_RECORD_SIZE;
-use rocketmq_store_local::timer::slot::Slot;
-use rocketmq_store_local::timer::storage_format::TimerLogOffset;
-use rocketmq_store_local::timer::storage_format::TimerStorageFingerprint;
+use crate::timer::checkpoint::TimerCheckpointV2Record;
+use crate::timer::checkpoint::VersionedTimerCheckpointStore;
+use crate::timer::metrics::TimerStorageMetrics;
+use crate::timer::paged_timer_wheel::PagedTimerWheel;
+use crate::timer::segmented_timer_log::SegmentedTimerLog;
+use crate::timer::segmented_timer_log::TimerLogV2Record;
+use crate::timer::segmented_timer_log::TIMER_LOG_V2_PHYSICAL_RECORD_SIZE;
+use crate::timer::slot::Slot;
+use crate::timer::storage_format::TimerLogOffset;
+use crate::timer::storage_format::TimerStorageFingerprint;
 use tempfile::tempdir;
 
 fn record(queue_offset: i64) -> TimerLogV2Record {

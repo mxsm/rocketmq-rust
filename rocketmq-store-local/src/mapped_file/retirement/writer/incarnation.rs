@@ -16,7 +16,9 @@ use thiserror::Error;
 
 use super::{LedgerIo, ManagedLedgerWriter, WriterError};
 use crate::mapped_file::retirement::codec::LedgerRecord;
-use crate::mapped_file::retirement::identity::{FileIncarnationId, IdentityError, PhysicalFileKey, StoreRelativePath};
+use crate::mapped_file::retirement::identity::{
+    FileIncarnationId, IdentityViolation, PhysicalFileKey, StoreRelativePath,
+};
 
 /// Fully validated durable allocation coordinates for one new segment incarnation.
 #[derive(Debug)]
@@ -307,7 +309,7 @@ fn immediate_successor(sequence: u64) -> Result<u64, IncarnationWriteError> {
 /// Failure while validating or durably advancing a creation typestate.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(in crate::mapped_file::retirement) struct IncarnationWriteError {
+pub(crate) struct IncarnationWriteError {
     source: IncarnationWriteErrorSource,
 }
 
@@ -330,13 +332,13 @@ enum IncarnationWriteErrorSource {
     #[error("another ledger record interrupted the creation chain: expected sequence {expected}, found {actual}")]
     InterleavedLedgerRecord { expected: u64, actual: u64 },
     #[error(transparent)]
-    Identity(#[from] IdentityError),
+    Identity(#[from] IdentityViolation),
     #[error(transparent)]
     Writer(#[from] WriterError),
 }
 
-impl From<IdentityError> for IncarnationWriteError {
-    fn from(source: IdentityError) -> Self {
+impl From<IdentityViolation> for IncarnationWriteError {
+    fn from(source: IdentityViolation) -> Self {
         Self::new(IncarnationWriteErrorSource::Identity(source))
     }
 }

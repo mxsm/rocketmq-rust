@@ -161,15 +161,6 @@ impl OpenedEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PlatformErrorKind {
-    Io,
-    UnsafeNamespace,
-    Changed,
-    Limit,
-    Unsupported,
-}
-
 #[derive(Debug, Error)]
 pub(crate) enum PlatformError {
     #[error("{context}: {source}")]
@@ -219,17 +210,5 @@ impl PlatformError {
 
     pub(super) fn unsupported() -> Self {
         Self::Unsupported
-    }
-
-    pub(in crate::mapped_file::retirement) const fn kind(&self) -> PlatformErrorKind {
-        match self {
-            Self::Io { .. } => PlatformErrorKind::Io,
-            #[cfg(windows)]
-            Self::Windows { .. } => PlatformErrorKind::Io,
-            Self::UnsafeNamespace { .. } => PlatformErrorKind::UnsafeNamespace,
-            Self::Changed { .. } => PlatformErrorKind::Changed,
-            Self::Limit { .. } => PlatformErrorKind::Limit,
-            Self::Unsupported => PlatformErrorKind::Unsupported,
-        }
     }
 }

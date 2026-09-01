@@ -20,7 +20,7 @@ use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::ha::HAConnectionError;
+use crate::store_error::StoreError;
 
 pub enum GeneralHAConnection {
     Default(DefaultHAConnection),
@@ -55,7 +55,7 @@ impl GeneralHAConnection {
 }
 
 impl HAConnection for GeneralHAConnection {
-    async fn start(&mut self) -> Result<(), HAConnectionError> {
+    async fn start(&mut self) -> Result<(), StoreError> {
         match self {
             Self::Default(connection) => connection.start().await,
             Self::AutoSwitch(connection) => connection.start().await,

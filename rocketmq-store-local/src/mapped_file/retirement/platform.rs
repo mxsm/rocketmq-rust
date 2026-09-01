@@ -62,7 +62,7 @@ pub(crate) use types::NamespacePolicyViolation;
     unused_imports,
     reason = "M3 request errors are staged for the future reaper boundary"
 )]
-pub(crate) use types::NamespaceRequestError;
+pub(crate) use types::NamespaceRequestViolation;
 pub(crate) use types::NamespaceRetirementRequest;
 #[allow(
     unused_imports,
@@ -73,7 +73,6 @@ pub(crate) use types::NamespaceTicketBinding;
 pub(crate) use types::NamespaceTombstoneProof;
 pub(crate) use types::NamespaceTransition;
 pub(crate) use types::NamespaceTransitionOutcome;
-pub(crate) use types::NamespaceVerificationError;
 
 pub(in crate::mapped_file::retirement) use creation::IncarnationCreationError;
 #[cfg(test)]
@@ -90,7 +89,7 @@ const _: fn(
     &StoreRelativePath,
     PhysicalFileKey,
     u64,
-) -> Result<File, NamespaceVerificationError> = unsupported_contract::NamespaceRoot::open_active_segment;
+) -> Result<File, NamespaceTransitionOutcome> = unsupported_contract::NamespaceRoot::open_active_segment;
 
 /// Exact namespace mutation authority derived from one durable `LogicalRemoved` stage.
 ///
@@ -127,11 +126,11 @@ impl<C> AuthorizedNamespaceTransition<C> {
 #[derive(Debug)]
 pub(crate) struct NamespaceReservationFailure<C> {
     authorization: Box<AuthorizedNamespaceTransition<C>>,
-    error: NamespaceVerificationError,
+    error: NamespaceTransitionOutcome,
 }
 
 impl<C> NamespaceReservationFailure<C> {
-    pub(crate) fn into_parts(self) -> (AuthorizedNamespaceTransition<C>, NamespaceVerificationError) {
+    pub(crate) fn into_parts(self) -> (AuthorizedNamespaceTransition<C>, NamespaceTransitionOutcome) {
         (*self.authorization, self.error)
     }
 }
@@ -164,9 +163,9 @@ impl<C> AuthorizedNamespaceTransitionResult<C> {
 pub(crate) fn authorize_namespace_transition<O>(
     capability: LogicalRemovedCapability<O>,
     transition: NamespaceTransition,
-) -> Result<AuthorizedNamespaceTransition<LogicalRemovedCapability<O>>, NamespaceRequestError> {
+) -> Result<AuthorizedNamespaceTransition<LogicalRemovedCapability<O>>, NamespaceRequestViolation> {
     if transition == NamespaceTransition::RemoveTombstone {
-        return Err(NamespaceRequestError::TombstoneStageRequired);
+        return Err(NamespaceRequestViolation::TombstoneStageRequired);
     }
     let binding = capability.binding();
     let ticket = NamespaceTicketBinding::new(
@@ -204,7 +203,7 @@ pub(crate) fn authorize_namespace_transition<O>(
 /// Consumes a durable tombstone capability and authorizes removal of that exact tombstone only.
 pub(crate) fn authorize_tombstone_removal<O>(
     capability: TombstonedCapability<O>,
-) -> Result<AuthorizedNamespaceTransition<TombstonedCapability<O>>, NamespaceRequestError> {
+) -> Result<AuthorizedNamespaceTransition<TombstonedCapability<O>>, NamespaceRequestViolation> {
     let binding = capability.binding();
     let ticket = NamespaceTicketBinding::new(
         binding.ticket_id(),
@@ -256,18 +255,26 @@ impl VerifiedNamespaceRoot {
     /// Production construction remains unavailable until Wave-B can consume the retained Store
     /// lock, root-identity, activation-fence, and replay-inventory proofs as one opaque capability.
     #[cfg(test)]
-    pub(crate) fn open(file: File, store_uuid: StoreUuid) -> Result<Self, NamespaceVerificationError> {
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
+    pub(crate) fn open(file: File, store_uuid: StoreUuid) -> Result<Self, NamespaceTransitionOutcome> {
         let native = native::NamespaceRoot::open(file)?;
         Ok(Self { store_uuid, native })
     }
 
     /// Derives namespace authority only from the opaque reconciled session that still owns the
     /// exact Store-root lock and retained root handle.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(in crate::mapped_file::retirement) fn from_reconciled_session(
         session: &super::state::reconciliation::ReconciledLifecycleSession,
-    ) -> Result<Self, NamespaceVerificationError> {
+    ) -> Result<Self, NamespaceTransitionOutcome> {
         let file = session.retained_root().try_clone().map_err(|error| {
-            NamespaceVerificationError::Failed(types::NamespaceFailure::new(
+            NamespaceTransitionOutcome::Failed(types::NamespaceFailure::new(
                 types::NamespaceOperation::VerifyRoot,
                 types::NamespaceFailureClass::OtherIo,
                 error.raw_os_error(),
@@ -284,23 +291,31 @@ impl VerifiedNamespaceRoot {
     ///
     /// The native backend performs strict handle-relative, no-follow resolution and revalidates
     /// the exact physical key and durable length before returning the handle.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(in crate::mapped_file::retirement) fn open_active_segment(
         &self,
         path: &StoreRelativePath,
         physical_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<File, NamespaceVerificationError> {
+    ) -> Result<File, NamespaceTransitionOutcome> {
         self.native.open_active_segment(path, physical_key, expected_length)
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(crate) fn reserve(
         &self,
         request: NamespaceRetirementRequest,
         transition: NamespaceTransition,
-    ) -> Result<VerifiedPathReservation, NamespaceVerificationError> {
+    ) -> Result<VerifiedPathReservation, NamespaceTransitionOutcome> {
         let incarnation_uuid = request.ticket().incarnation().store_uuid();
         if incarnation_uuid != self.store_uuid {
-            return Err(NamespaceVerificationError::Rejected(
+            return Err(NamespaceTransitionOutcome::Rejected(
                 NamespacePolicyViolation::StoreUuidMismatch {
                     root: self.store_uuid,
                     incarnation: incarnation_uuid,
@@ -316,6 +331,10 @@ impl VerifiedNamespaceRoot {
     }
 
     /// Opens all namespace objects for one exact durable logical-removal authorization.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(crate) fn reserve_authorized<C>(
         &self,
         authorization: AuthorizedNamespaceTransition<C>,

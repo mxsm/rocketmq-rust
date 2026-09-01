@@ -18,11 +18,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
-use rocketmq_store_local::mapped_file::MappedFileError;
-use rocketmq_store_local::mapped_file::MappedFileResult;
-use rocketmq_store_local::mapped_file::MappedWriteLease;
-use rocketmq_store_local::transfer::segment::SegmentLease;
-use rocketmq_store_local::transfer::segment::TransferCacheState;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+
+use crate::mapped_file::MappedFileError;
+use crate::mapped_file::MappedWriteLease;
+use crate::transfer::segment::SegmentLease;
+use crate::transfer::segment::TransferCacheState;
 
 /// Safe heap-backed owner used to exercise the production write-lease interface
 /// under Miri without relying on operating-system memory mapping support.
@@ -41,7 +43,7 @@ impl SafeLeaseOwner {
         }
     }
 
-    fn reserve_write(&self, required_space: usize) -> MappedFileResult<SafeWriteLease<'_>> {
+    fn reserve_write(&self, required_space: usize) -> Result<SafeWriteLease<'_>, MappedFileError> {
         let writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let start_position = self.wrote_position.load(Ordering::Acquire);
         let capacity = self.bytes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len();
@@ -89,7 +91,14 @@ impl MappedWriteLease for SafeWriteLease<'_> {
         &mut self.staging
     }
 
-    fn commit(self, actual_bytes: usize, _store_timestamp: Option<u64>) -> MappedFileResult<usize> {
+    fn commit(self, actual_bytes: usize, _store_timestamp: Option<u64>) -> Result<usize, StoreError> {
+        self.commit_typed(actual_bytes)
+            .map_err(|error| error.into_store_error(StoreOperation::Append))
+    }
+}
+
+impl SafeWriteLease<'_> {
+    fn commit_typed(self, actual_bytes: usize) -> Result<usize, MappedFileError> {
         if actual_bytes == 0 || actual_bytes > self.capacity() {
             return Err(MappedFileError::InvalidWriteCommit {
                 reserved: self.capacity(),

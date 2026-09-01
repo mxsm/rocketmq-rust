@@ -64,8 +64,8 @@ pub(crate) use types::LogicalRemovedCapability;
 pub(crate) use types::NamespaceAbsentCapability;
 pub(crate) use types::PublishedFileRegistration;
 pub(crate) use types::QueueIdentity;
-pub(crate) use types::RegistryError;
 use types::RegistrySeal;
+pub(crate) use types::RegistryViolation;
 pub(crate) use types::RetirementHandoffCapability;
 pub(crate) use types::RetirementIntentBinding;
 pub(crate) use types::RetirementOperation;
@@ -75,11 +75,11 @@ pub(crate) use types::TombstonedCapability;
 #[derive(Debug)]
 pub(crate) struct HandoffPreparationFailure<O> {
     token: Box<DurableRetirementToken<O>>,
-    error: RegistryError,
+    error: RegistryViolation,
 }
 
 impl<O> HandoffPreparationFailure<O> {
-    fn new(token: DurableRetirementToken<O>, error: RegistryError) -> Self {
+    fn new(token: DurableRetirementToken<O>, error: RegistryViolation) -> Self {
         Self {
             token: Box::new(token),
             error,
@@ -87,7 +87,7 @@ impl<O> HandoffPreparationFailure<O> {
     }
 
     /// Returns the original token and typed validation error.
-    pub(crate) fn into_parts(self) -> (DurableRetirementToken<O>, RegistryError) {
+    pub(crate) fn into_parts(self) -> (DurableRetirementToken<O>, RegistryViolation) {
         (*self.token, self.error)
     }
 }
@@ -222,7 +222,7 @@ impl<O> RetirementRegistry<O> {
     }
 
     /// Adds one published incarnation while reserving its identity, path, and physical key.
-    fn register_published(&self, registration: PublishedFileRegistration<O>) -> Result<(), RegistryError> {
+    fn register_published(&self, registration: PublishedFileRegistration<O>) -> Result<(), RegistryViolation> {
         self.register_published_batch(vec![registration])
     }
 
@@ -230,17 +230,20 @@ impl<O> RetirementRegistry<O> {
     ///
     /// Every identity and uniqueness check completes before the first registry mutation, so a
     /// conflict cannot publish a prefix of the recovered generation.
-    fn register_published_batch(&self, registrations: Vec<PublishedFileRegistration<O>>) -> Result<(), RegistryError> {
+    fn register_published_batch(
+        &self,
+        registrations: Vec<PublishedFileRegistration<O>>,
+    ) -> Result<(), RegistryViolation> {
         if registrations
             .iter()
             .any(|registration| registration.incarnation.store_uuid() != self.authority.store_uuid)
         {
-            return Err(RegistryError::StoreUuidMismatch);
+            return Err(RegistryViolation::StoreUuidMismatch);
         }
 
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
 
         let mut batch_incarnations = BTreeMap::new();
@@ -251,7 +254,7 @@ impl<O> RetirementRegistry<O> {
             if state.entries.contains_key(&registration.incarnation)
                 || batch_incarnations.insert(registration.incarnation, ()).is_some()
             {
-                return Err(RegistryError::DuplicateIncarnation {
+                return Err(RegistryViolation::DuplicateIncarnation {
                     incarnation: registration.incarnation,
                 });
             }
@@ -260,7 +263,7 @@ impl<O> RetirementRegistry<O> {
                 .get(&registration.canonical_path)
                 .or_else(|| batch_paths.get(&registration.canonical_path))
             {
-                return Err(RegistryError::CanonicalPathReserved {
+                return Err(RegistryViolation::CanonicalPathReserved {
                     path: registration.canonical_path.clone(),
                     incumbent: *incumbent,
                 });
@@ -271,7 +274,7 @@ impl<O> RetirementRegistry<O> {
                 .get(&registration.physical_key)
                 .or_else(|| batch_keys.get(&registration.physical_key))
             {
-                return Err(RegistryError::PhysicalKeyReserved {
+                return Err(RegistryViolation::PhysicalKeyReserved {
                     physical_key: registration.physical_key,
                     incumbent: *incumbent,
                 });
@@ -283,7 +286,7 @@ impl<O> RetirementRegistry<O> {
                 .get(&owner_identity)
                 .or_else(|| batch_owners.get(&owner_identity))
             {
-                return Err(RegistryError::OwnerAlreadyRegistered { incumbent: *incumbent });
+                return Err(RegistryViolation::OwnerAlreadyRegistered { incumbent: *incumbent });
             }
             batch_owners.insert(owner_identity, registration.incarnation);
         }
@@ -323,38 +326,38 @@ impl<O> RetirementRegistry<O> {
         operation: RetirementOperation,
         owner: &Arc<O>,
         queue_identity: &QueueIdentity,
-    ) -> Result<PreparedRetirementIntent<'_, O>, RegistryError> {
+    ) -> Result<PreparedRetirementIntent<'_, O>, RegistryViolation> {
         if operation.incarnation().store_uuid() != self.authority.store_uuid {
-            return Err(RegistryError::StoreUuidMismatch);
+            return Err(RegistryViolation::StoreUuidMismatch);
         }
 
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         if state.pending.is_some() {
-            return Err(RegistryError::IntentReservationBusy);
+            return Err(RegistryViolation::IntentReservationBusy);
         }
         let ticket_value = state
             .ticket_high_water
             .checked_add(1)
-            .ok_or(RegistryError::TicketHighWaterExhausted)?;
-        let ticket_id = TicketId::new(ticket_value).map_err(|_| RegistryError::TicketHighWaterExhausted)?;
+            .ok_or(RegistryViolation::TicketHighWaterExhausted)?;
+        let ticket_id = TicketId::new(ticket_value).map_err(|_| RegistryViolation::TicketHighWaterExhausted)?;
         let incarnation = operation.incarnation();
         let entry = state
             .entries
             .get(&incarnation)
-            .ok_or(RegistryError::UnknownIncarnation { incarnation })?;
+            .ok_or(RegistryViolation::UnknownIncarnation { incarnation })?;
         validate_entry(entry, &operation, owner, queue_identity)?;
         if entry.phase != RegistryEntryPhase::Active {
-            return Err(RegistryError::IncarnationNotActive { incarnation });
+            return Err(RegistryViolation::IncarnationNotActive { incarnation });
         }
 
         let binding = RetirementIntentBinding { ticket_id, operation };
         state
             .entries
             .get_mut(&incarnation)
-            .ok_or(RegistryError::UnknownIncarnation { incarnation })?
+            .ok_or(RegistryViolation::UnknownIncarnation { incarnation })?
             .phase = RegistryEntryPhase::IntentReserved(ticket_id);
         state.pending = Some(binding.clone());
         drop(state);
@@ -372,50 +375,50 @@ impl<O> RetirementRegistry<O> {
         evidence: DurableIntentEvidence,
         owner: &Arc<O>,
         queue_identity: &QueueIdentity,
-    ) -> Result<DurableRetirementToken<O>, RegistryError> {
+    ) -> Result<DurableRetirementToken<O>, RegistryViolation> {
         if evidence.binding.incarnation().store_uuid() != self.authority.store_uuid {
-            return Err(RegistryError::StoreUuidMismatch);
+            return Err(RegistryViolation::StoreUuidMismatch);
         }
 
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         if evidence.source != DurableEvidenceSource::Replay {
-            return fence_consumed_evidence(&mut state, RegistryError::ReplayEvidenceRequired);
+            return fence_consumed_evidence(&mut state, RegistryViolation::ReplayEvidenceRequired);
         }
         if state.pending.is_some() {
-            return fence_consumed_evidence(&mut state, RegistryError::IntentReservationBusy);
+            return fence_consumed_evidence(&mut state, RegistryViolation::IntentReservationBusy);
         }
         let ticket_id = evidence.binding.ticket_id();
         if ticket_id.get() > state.ticket_high_water {
             let high_water = state.ticket_high_water;
             return fence_consumed_evidence(
                 &mut state,
-                RegistryError::ReplayedTicketAboveHighWater { ticket_id, high_water },
+                RegistryViolation::ReplayedTicketAboveHighWater { ticket_id, high_water },
             );
         }
         if state.incarnation_by_ticket.contains_key(&ticket_id) {
-            return fence_consumed_evidence(&mut state, RegistryError::DuplicateTicket { ticket_id });
+            return fence_consumed_evidence(&mut state, RegistryViolation::DuplicateTicket { ticket_id });
         }
         let incarnation = evidence.binding.incarnation();
         let validation = state
             .entries
             .get(&incarnation)
-            .ok_or(RegistryError::UnknownIncarnation { incarnation })
+            .ok_or(RegistryViolation::UnknownIncarnation { incarnation })
             .and_then(|entry| {
                 validate_entry(entry, &evidence.binding.operation, owner, queue_identity)?;
                 if entry.phase == RegistryEntryPhase::Active {
                     Ok(())
                 } else {
-                    Err(RegistryError::IncarnationNotActive { incarnation })
+                    Err(RegistryViolation::IncarnationNotActive { incarnation })
                 }
             });
         if let Err(error) = validation {
             return fence_consumed_evidence(&mut state, error);
         }
         let Some(entry) = state.entries.get(&incarnation) else {
-            return fence_consumed_evidence(&mut state, RegistryError::UnknownIncarnation { incarnation });
+            return fence_consumed_evidence(&mut state, RegistryViolation::UnknownIncarnation { incarnation });
         };
         let runtime_identity = active_runtime_identity(entry, incarnation);
         let (token_owner, token_queue) = match runtime_identity {
@@ -426,7 +429,7 @@ impl<O> RetirementRegistry<O> {
         let durability = evidence.durability;
 
         let Some(entry) = state.entries.get_mut(&incarnation) else {
-            return fence_consumed_evidence(&mut state, RegistryError::UnknownIncarnation { incarnation });
+            return fence_consumed_evidence(&mut state, RegistryViolation::UnknownIncarnation { incarnation });
         };
         entry.phase = RegistryEntryPhase::IntentDurable {
             binding: binding.clone(),
@@ -455,40 +458,40 @@ impl<O> RetirementRegistry<O> {
         queue_identity: &QueueIdentity,
     ) -> Result<PreparedQueueHandoff<'a, O>, HandoffPreparationFailure<O>> {
         if !Arc::ptr_eq(&self.authority, &token.authority) {
-            return Err(HandoffPreparationFailure::new(token, RegistryError::ForeignToken));
+            return Err(HandoffPreparationFailure::new(token, RegistryViolation::ForeignToken));
         }
         if token.binding != *expected {
             let ticket_id = token.binding.ticket_id();
             return Err(HandoffPreparationFailure::new(
                 token,
-                RegistryError::TokenBindingMismatch { ticket_id },
+                RegistryViolation::TokenBindingMismatch { ticket_id },
             ));
         }
         if !token.queue_identity.same_as(queue_identity) {
             let ticket_id = token.binding.ticket_id();
             return Err(HandoffPreparationFailure::new(
                 token,
-                RegistryError::TokenQueueIdentityMismatch { ticket_id },
+                RegistryViolation::TokenQueueIdentityMismatch { ticket_id },
             ));
         }
 
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(HandoffPreparationFailure::new(token, RegistryError::NeedsRecovery));
+            return Err(HandoffPreparationFailure::new(token, RegistryViolation::NeedsRecovery));
         }
         let ticket_id = token.binding.ticket_id();
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
             return Err(HandoffPreparationFailure::new(
                 token,
-                RegistryError::TokenNotIssued { ticket_id },
+                RegistryViolation::TokenNotIssued { ticket_id },
             ));
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
             return Err(HandoffPreparationFailure::new(
                 token,
-                RegistryError::TokenNotIssued { ticket_id },
+                RegistryViolation::TokenNotIssued { ticket_id },
             ));
         };
         let transitioned = match &mut entry.phase {
@@ -504,7 +507,7 @@ impl<O> RetirementRegistry<O> {
             state.needs_recovery = true;
             return Err(HandoffPreparationFailure::new(
                 token,
-                RegistryError::TokenNotIssued { ticket_id },
+                RegistryViolation::TokenNotIssued { ticket_id },
             ));
         }
         drop(state);
@@ -553,14 +556,14 @@ impl<O> RetirementRegistry<O> {
         &self,
         binding: &RetirementIntentBinding,
         evidence: DurableIntentEvidence,
-    ) -> Result<DurableRetirementToken<O>, RegistryError> {
+    ) -> Result<DurableRetirementToken<O>, RegistryViolation> {
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         if evidence.source != DurableEvidenceSource::Writer {
             state.needs_recovery = true;
-            return Err(RegistryError::WriterEvidenceRequired);
+            return Err(RegistryViolation::WriterEvidenceRequired);
         }
         let exact_pending = state.pending.as_ref() == Some(binding);
         let incarnation = binding.incarnation();
@@ -570,23 +573,23 @@ impl<O> RetirementRegistry<O> {
             .is_some_and(|entry| entry.phase == RegistryEntryPhase::IntentReserved(binding.ticket_id()));
         if !exact_pending || !exact_phase || evidence.binding != *binding {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableEvidenceMismatch {
+            return Err(RegistryViolation::DurableEvidenceMismatch {
                 ticket_id: binding.ticket_id(),
             });
         }
         let ticket_id = binding.ticket_id();
         let Some(expected_ticket) = state.ticket_high_water.checked_add(1) else {
             state.needs_recovery = true;
-            return Err(RegistryError::TicketHighWaterExhausted);
+            return Err(RegistryViolation::TicketHighWaterExhausted);
         };
         if expected_ticket != ticket_id.get() || state.incarnation_by_ticket.contains_key(&ticket_id) {
             state.needs_recovery = true;
-            return Err(RegistryError::DurableEvidenceMismatch { ticket_id });
+            return Err(RegistryViolation::DurableEvidenceMismatch { ticket_id });
         }
 
         let Some(entry) = state.entries.get(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::UnknownIncarnation { incarnation });
+            return Err(RegistryViolation::UnknownIncarnation { incarnation });
         };
         let runtime_identity = active_runtime_identity(entry, incarnation);
         let (token_owner, token_queue) = match runtime_identity {
@@ -602,7 +605,7 @@ impl<O> RetirementRegistry<O> {
         state.incarnation_by_ticket.insert(ticket_id, incarnation);
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::UnknownIncarnation { incarnation });
+            return Err(RegistryViolation::UnknownIncarnation { incarnation });
         };
         entry.phase = RegistryEntryPhase::IntentDurable {
             binding: binding.clone(),
@@ -642,19 +645,19 @@ impl<O> RetirementRegistry<O> {
         }
     }
 
-    fn rollback_handoff(&self, token: &DurableRetirementToken<O>) -> Result<(), RegistryError> {
+    fn rollback_handoff(&self, token: &DurableRetirementToken<O>) -> Result<(), RegistryViolation> {
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let ticket_id = token.binding.ticket_id();
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::HandoffPreparationLost { ticket_id });
+            return Err(RegistryViolation::HandoffPreparationLost { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::HandoffPreparationLost { ticket_id });
+            return Err(RegistryViolation::HandoffPreparationLost { ticket_id });
         };
         let transitioned = match &mut entry.phase {
             RegistryEntryPhase::IntentDurable { binding, handoff, .. }
@@ -669,26 +672,26 @@ impl<O> RetirementRegistry<O> {
             Ok(())
         } else {
             state.needs_recovery = true;
-            Err(RegistryError::HandoffPreparationLost { ticket_id })
+            Err(RegistryViolation::HandoffPreparationLost { ticket_id })
         }
     }
 
     fn commit_handoff(
         &self,
         mut token: DurableRetirementToken<O>,
-    ) -> Result<RetirementHandoffCapability<O>, RegistryError> {
+    ) -> Result<RetirementHandoffCapability<O>, RegistryViolation> {
         let mut state = self.authority.state.lock();
         if self.is_recovery_fenced(&state) {
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         }
         let ticket_id = token.binding.ticket_id();
         let Some(incarnation) = state.incarnation_by_ticket.get(&ticket_id).copied() else {
             state.needs_recovery = true;
-            return Err(RegistryError::HandoffPreparationLost { ticket_id });
+            return Err(RegistryViolation::HandoffPreparationLost { ticket_id });
         };
         let Some(entry) = state.entries.get_mut(&incarnation) else {
             state.needs_recovery = true;
-            return Err(RegistryError::HandoffPreparationLost { ticket_id });
+            return Err(RegistryViolation::HandoffPreparationLost { ticket_id });
         };
         let transitioned = match &mut entry.phase {
             RegistryEntryPhase::IntentDurable { binding, handoff, .. }
@@ -701,7 +704,7 @@ impl<O> RetirementRegistry<O> {
         };
         if !transitioned {
             state.needs_recovery = true;
-            return Err(RegistryError::HandoffPreparationLost { ticket_id });
+            return Err(RegistryViolation::HandoffPreparationLost { ticket_id });
         }
         let capability = RetirementHandoffCapability {
             authority: Arc::clone(&self.authority),
@@ -727,19 +730,19 @@ fn validate_entry<O>(
     operation: &RetirementOperation,
     owner: &Arc<O>,
     queue_identity: &QueueIdentity,
-) -> Result<(), RegistryError> {
+) -> Result<(), RegistryViolation> {
     let incarnation = operation.incarnation();
     if entry.physical_key != operation.target_key() {
-        return Err(RegistryError::PhysicalKeyMismatch { incarnation });
+        return Err(RegistryViolation::PhysicalKeyMismatch { incarnation });
     }
     if entry.segment_offset != operation.segment_offset() {
-        return Err(RegistryError::SegmentOffsetMismatch { incarnation });
+        return Err(RegistryViolation::SegmentOffsetMismatch { incarnation });
     }
     if entry.canonical_path != *operation.canonical_path() {
-        return Err(RegistryError::CanonicalPathMismatch { incarnation });
+        return Err(RegistryViolation::CanonicalPathMismatch { incarnation });
     }
     if entry.expected_length != operation.expected_length() {
-        return Err(RegistryError::ExpectedLengthMismatch { incarnation });
+        return Err(RegistryViolation::ExpectedLengthMismatch { incarnation });
     }
     match &entry.runtime_identity {
         RuntimeIdentity::Active {
@@ -747,13 +750,13 @@ fn validate_entry<O>(
             queue_identity: registered_queue,
         } => {
             if !Arc::ptr_eq(registered_owner, owner) {
-                return Err(RegistryError::OwnerIdentityMismatch { incarnation });
+                return Err(RegistryViolation::OwnerIdentityMismatch { incarnation });
             }
             if !registered_queue.same_as(queue_identity) {
-                return Err(RegistryError::QueueIdentityMismatch { incarnation });
+                return Err(RegistryViolation::QueueIdentityMismatch { incarnation });
             }
         }
-        RuntimeIdentity::Recovered => return Err(RegistryError::IncarnationNotActive { incarnation }),
+        RuntimeIdentity::Recovered => return Err(RegistryViolation::IncarnationNotActive { incarnation }),
     }
     Ok(())
 }
@@ -761,14 +764,17 @@ fn validate_entry<O>(
 fn active_runtime_identity<O>(
     entry: &StrongRegistryEntry<O>,
     incarnation: FileIncarnationId,
-) -> Result<(Arc<O>, QueueIdentity), RegistryError> {
+) -> Result<(Arc<O>, QueueIdentity), RegistryViolation> {
     match &entry.runtime_identity {
         RuntimeIdentity::Active { owner, queue_identity } => Ok((Arc::clone(owner), queue_identity.clone())),
-        RuntimeIdentity::Recovered => Err(RegistryError::IncarnationNotActive { incarnation }),
+        RuntimeIdentity::Recovered => Err(RegistryViolation::IncarnationNotActive { incarnation }),
     }
 }
 
-fn fence_consumed_evidence<O, T>(state: &mut RegistryState<O>, error: RegistryError) -> Result<T, RegistryError> {
+fn fence_consumed_evidence<O, T>(
+    state: &mut RegistryState<O>,
+    error: RegistryViolation,
+) -> Result<T, RegistryViolation> {
     state.needs_recovery = true;
     Err(error)
 }

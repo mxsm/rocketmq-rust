@@ -45,7 +45,6 @@ use tracing::warn;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::ha::HAConnectionError;
 use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
 use crate::store_error::StoreError;
 
@@ -1057,9 +1056,7 @@ pub enum HAClientError {
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
-    HAConnection(#[from] HAConnectionError),
-    #[error(transparent)]
-    Wire(#[from] rocketmq_store_local::ha::wire::HaWireError),
+    Wire(#[from] rocketmq_store_local::ha::wire::HaWireViolation),
     #[error("Connection error: {0}")]
     Connection(String),
     #[error("Service error: {0}")]

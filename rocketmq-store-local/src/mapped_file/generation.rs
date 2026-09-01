@@ -30,7 +30,7 @@ use super::lifecycle::MappedFileLease;
 use super::mapping::LazyMmapStats;
 use super::memory::checked_mmap_range;
 use super::memory::MappedMemory;
-use super::memory::MmapRangeError;
+use super::memory::MmapRangeViolation;
 use super::memory::ReadOnlyMappedMemory;
 use super::metrics::MappedFileMetrics;
 use super::metrics::MappingGenerationGaugeGuard;
@@ -161,7 +161,7 @@ impl<W: MappedMemory> WritableMappingGeneration<W> {
         self: &Arc<Self>,
         offset: usize,
         len: usize,
-    ) -> Result<GenerationRegion<W, WritableAccess>, MmapRangeError> {
+    ) -> Result<GenerationRegion<W, WritableAccess>, MmapRangeViolation> {
         GenerationRegion::try_new_writable(Arc::clone(self), offset, len)
     }
 }
@@ -190,7 +190,7 @@ impl<R: ReadOnlyMappedMemory> ReadOnlyMappingGeneration<R> {
         self: &Arc<Self>,
         offset: usize,
         len: usize,
-    ) -> Result<GenerationRegion<R, ReadOnlyAccess>, MmapRangeError> {
+    ) -> Result<GenerationRegion<R, ReadOnlyAccess>, MmapRangeViolation> {
         GenerationRegion::try_new_read_only(Arc::clone(self), offset, len)
     }
 
@@ -224,7 +224,7 @@ impl<R: ReadOnlyMappedMemory> GenerationRegion<R, ReadOnlyAccess> {
         generation: Arc<ReadOnlyMappingGeneration<R>>,
         offset: usize,
         len: usize,
-    ) -> Result<Self, MmapRangeError> {
+    ) -> Result<Self, MmapRangeViolation> {
         let range = checked_mmap_range(generation.mapped_bytes, offset, len)?;
         Ok(Self { generation, range })
     }
@@ -235,7 +235,7 @@ impl<W: MappedMemory> GenerationRegion<W, WritableAccess> {
         generation: Arc<WritableMappingGeneration<W>>,
         offset: usize,
         len: usize,
-    ) -> Result<Self, MmapRangeError> {
+    ) -> Result<Self, MmapRangeViolation> {
         let range = checked_mmap_range(generation.mapped_bytes, offset, len)?;
         Ok(Self { generation, range })
     }
@@ -308,7 +308,7 @@ impl<R: ReadOnlyMappedMemory> MappedReadLease<R> {
         operation: MappedFileLease,
         offset: usize,
         len: usize,
-    ) -> Result<Self, MmapRangeError> {
+    ) -> Result<Self, MmapRangeViolation> {
         let range = match checked_mmap_range(generation.mapped_bytes(), offset, len) {
             Ok(range) => range,
             Err(error) => {
@@ -422,7 +422,7 @@ impl<W, R> PublishedGeneration<W, R> {
 
 /// Failure to initialize or atomically publish a mapping generation.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum MappingPublicationError<E> {
+pub(crate) enum MappingPublicationError<E> {
     /// The concrete mapping initializer failed.
     #[error("mapping initialization failed: {0}")]
     Initialization(E),
@@ -903,7 +903,7 @@ mod tests {
     ) -> MappedReadLease<DropObservedReadOnlyMemory> {
         let operation = lifecycle
             .try_acquire(MappedFileOperation::Read)
-            .expect("read admission succeeds");
+            .expect_acquired("read admission succeeds");
         let len = bytes.len();
         let generation = Arc::new(ReadOnlyMappingGeneration::new(
             MappingGenerationId::FIRST,
@@ -1102,7 +1102,7 @@ mod tests {
         assert_eq!(generation.region(1, 2).expect("valid region").as_ref(), &[2, 3]);
         assert!(matches!(
             generation.region(4, 1),
-            Err(MmapRangeError::OutOfBounds {
+            Err(MmapRangeViolation::OutOfBounds {
                 offset: 4,
                 len: 1,
                 mapping_len: 4,
@@ -1110,7 +1110,7 @@ mod tests {
         ));
         assert!(matches!(
             generation.region(usize::MAX, 1),
-            Err(MmapRangeError::Overflow {
+            Err(MmapRangeViolation::Overflow {
                 offset: usize::MAX,
                 len: 1,
             })
@@ -1234,7 +1234,7 @@ mod tests {
         let dropped_before_operation = Arc::new(AtomicBool::new(false));
         let operation = lifecycle
             .try_acquire(MappedFileOperation::Read)
-            .expect("read admission succeeds");
+            .expect_acquired("read admission succeeds");
         let generation = Arc::new(ReadOnlyMappingGeneration::new(
             MappingGenerationId::FIRST,
             DropObservedReadOnlyMemory {
@@ -1249,7 +1249,7 @@ mod tests {
 
         assert!(matches!(
             MappedReadLease::try_new(generation, operation, 4, 1),
-            Err(MmapRangeError::OutOfBounds {
+            Err(MmapRangeViolation::OutOfBounds {
                 offset: 4,
                 len: 1,
                 mapping_len: 4,
@@ -1261,7 +1261,7 @@ mod tests {
 
         let operation = lifecycle
             .try_acquire(MappedFileOperation::Read)
-            .expect("second read admission succeeds");
+            .expect_acquired("second read admission succeeds");
         let generation = Arc::new(ReadOnlyMappingGeneration::new(
             MappingGenerationId::FIRST,
             DropObservedReadOnlyMemory {
@@ -1275,7 +1275,7 @@ mod tests {
         ));
         assert!(matches!(
             MappedReadLease::try_new(generation, operation, usize::MAX, 1),
-            Err(MmapRangeError::Overflow {
+            Err(MmapRangeViolation::Overflow {
                 offset: usize::MAX,
                 len: 1,
             })

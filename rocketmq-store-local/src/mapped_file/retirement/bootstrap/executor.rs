@@ -16,6 +16,9 @@ use std::error::Error;
 use std::fs::File;
 use std::io;
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use sha2::Digest;
 use sha2::Sha256;
 use thiserror::Error;
@@ -26,7 +29,7 @@ use super::proof::BootstrapFoundationEvidence;
 use super::proof::BootstrapInventoryEvidence;
 use super::types::BootstrapAction;
 use super::types::BootstrapDecision;
-use super::types::BootstrapPlanError;
+use super::types::BootstrapPlanViolation;
 use super::types::BootstrapRecord;
 use super::types::DurableUnitProgress;
 use super::types::DurableUnitStep;
@@ -43,7 +46,7 @@ use super::types::PlannedAcknowledgedUnit;
 use super::types::PlannedInitialMarker;
 use super::types::PlannedSnapshot;
 use super::types::ReconciliationPhase;
-use crate::mapped_file::retirement::identity::IdentityError;
+use crate::mapped_file::retirement::identity::IdentityViolation;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreUuid;
 use crate::mapped_file::retirement::platform::physical_file_key;
@@ -51,8 +54,8 @@ use crate::mapped_file::retirement::sidecar::StoreMeta;
 
 use super::inventory::preflight_bootstrap_namespace;
 use super::inventory::BootstrapInventoryError;
-use super::inventory::BootstrapInventoryErrorKind;
 use super::inventory::BootstrapInventoryLimits;
+use crate::mapped_file::retirement::replay::discovery::platform::PlatformError;
 
 mod durable_unit;
 mod platform;
@@ -66,28 +69,16 @@ pub(super) use platform::execute_prepared_initial_bootstrap;
 #[cfg(test)]
 pub(in crate::mapped_file::retirement::bootstrap) use platform::prepare_initial_bootstrap_foundation;
 #[cfg(all(test, not(any(target_os = "linux", windows))))]
-pub(in crate::mapped_file::retirement::bootstrap) use platform::InitialBootstrapFoundationErrorKind;
+pub(in crate::mapped_file::retirement::bootstrap) use platform::InitialBootstrapFoundationError;
 
 const MAX_BOOTSTRAP_ACTIONS: usize = 64;
-
-/// Stable category for an explicit managed-lifecycle bootstrap failure.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedLifecycleBootstrapErrorKind {
-    UnsupportedPlatform,
-    InvalidIdentity,
-    InvalidArtifact,
-    Inventory,
-    Io,
-    RecoveryRequired,
-}
 
 #[derive(Debug, Error)]
 enum ManagedLifecycleBootstrapSource {
     #[error("failed to identify the retained Store root")]
     RootIdentity(#[source] io::Error),
     #[error("failed to derive the managed Store identity")]
-    Identity(#[source] IdentityError),
+    Identity(#[source] IdentityViolation),
     #[error("legacy Store namespace is not eligible for managed bootstrap")]
     Inventory(#[source] BootstrapInventoryError),
     #[error("failed to prepare the managed lifecycle bootstrap")]
@@ -96,21 +87,70 @@ enum ManagedLifecycleBootstrapSource {
     Execution(#[source] InitialBootstrapExecutionError<platform::InitialBootstrapFoundationError>),
 }
 
-/// Typed failure from the explicit local Wave-B bootstrap entry point.
-#[doc(hidden)]
+/// Private bootstrap-orchestration leaf retained as the typed StoreError source.
 #[derive(Debug, Error)]
-#[error("managed lifecycle bootstrap failed ({kind:?}): {source}")]
-pub struct ManagedLifecycleBootstrapError {
-    kind: ManagedLifecycleBootstrapErrorKind,
+#[error("managed lifecycle bootstrap failed: {source}")]
+pub(crate) struct ManagedLifecycleBootstrapError {
     #[source]
     source: ManagedLifecycleBootstrapSource,
 }
 
 impl ManagedLifecycleBootstrapError {
-    /// Returns the stable failure category.
-    #[doc(hidden)]
-    pub const fn kind(&self) -> ManagedLifecycleBootstrapErrorKind {
-        self.kind
+    fn new(source: ManagedLifecycleBootstrapSource) -> Self {
+        Self { source }
+    }
+
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Descriptor selection preserves the reviewed bootstrap mapping: an
+    /// unsupported platform is unimplemented, filesystem faults are I/O
+    /// failures, inventory scans are read failures, identity/artifact
+    /// mismatches are corrupted state, and a required recovery is backend
+    /// unavailability. The complete leaf is preserved as the typed source.
+    fn into_store_error(self) -> StoreError {
+        let descriptor = match &self.source {
+            ManagedLifecycleBootstrapSource::RootIdentity(_) => &rocketmq_error::STORAGE_IO_FAILED,
+            ManagedLifecycleBootstrapSource::Identity(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+            ManagedLifecycleBootstrapSource::Inventory(source) => inventory_descriptor(source),
+            ManagedLifecycleBootstrapSource::Foundation(source) => foundation_descriptor(source),
+            ManagedLifecycleBootstrapSource::Execution(source) => match source {
+                InitialBootstrapExecutionError::Backend(source) => foundation_descriptor(source),
+                InitialBootstrapExecutionError::NeedsRecovery(_)
+                | InitialBootstrapExecutionError::ActionBoundExceeded => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                InitialBootstrapExecutionError::Plan(_) | InitialBootstrapExecutionError::InvalidPlanAction => {
+                    &rocketmq_error::STORAGE_STATE_CORRUPTED
+                }
+            },
+        };
+        StoreError::new(descriptor, StoreOperation::Load)
+            .in_component(StoreComponent::MappedFile)
+            .with_source(self)
+    }
+}
+
+const fn inventory_descriptor(source: &BootstrapInventoryError) -> &'static rocketmq_error::ErrorDescriptor {
+    match source {
+        BootstrapInventoryError::UnsupportedPlatform => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+        BootstrapInventoryError::Identity(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        BootstrapInventoryError::Platform(PlatformError::Unsupported) => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+        BootstrapInventoryError::Platform(_) => &rocketmq_error::STORAGE_READ_FAILED,
+        _ => &rocketmq_error::STORAGE_READ_FAILED,
+    }
+}
+
+const fn foundation_descriptor(
+    source: &platform::InitialBootstrapFoundationError,
+) -> &'static rocketmq_error::ErrorDescriptor {
+    match source {
+        platform::InitialBootstrapFoundationError::UnsupportedPlatform(_) => {
+            &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
+        }
+        platform::InitialBootstrapFoundationError::InvalidArtifact(_)
+        | platform::InitialBootstrapFoundationError::Sidecar(_)
+        | platform::InitialBootstrapFoundationError::Ledger(_)
+        | platform::InitialBootstrapFoundationError::DurableUnit(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        platform::InitialBootstrapFoundationError::Inventory(_) => &rocketmq_error::STORAGE_READ_FAILED,
+        platform::InitialBootstrapFoundationError::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
     }
 }
 
@@ -128,49 +168,35 @@ impl ManagedLifecycleBootstrapError {
 #[doc(hidden)]
 pub unsafe fn bootstrap_managed_lifecycle_under_exclusive_lock(
     store_root: &File,
-) -> Result<InitialBootstrapCompletion, ManagedLifecycleBootstrapError> {
-    let meta = derive_store_meta(store_root)?;
-    preflight_bootstrap_namespace(store_root, BootstrapInventoryLimits::default()).map_err(|source| {
-        ManagedLifecycleBootstrapError {
-            kind: map_inventory_kind(source.kind()),
-            source: ManagedLifecycleBootstrapSource::Inventory(source),
-        }
-    })?;
-    let cloned_root = store_root
-        .try_clone()
-        .map_err(|source| ManagedLifecycleBootstrapError {
-            kind: ManagedLifecycleBootstrapErrorKind::Io,
-            source: ManagedLifecycleBootstrapSource::RootIdentity(source),
-        })?;
-    let prepared = platform::prepare_initial_bootstrap_foundation(cloned_root, &meta).map_err(|source| {
-        ManagedLifecycleBootstrapError {
-            kind: map_foundation_kind(source.kind()),
-            source: ManagedLifecycleBootstrapSource::Foundation(source),
-        }
-    })?;
-    platform::execute_prepared_initial_bootstrap(prepared).map_err(|source| ManagedLifecycleBootstrapError {
-        kind: map_execution_kind(&source),
-        source: ManagedLifecycleBootstrapSource::Execution(source),
-    })
+) -> Result<InitialBootstrapCompletion, StoreError> {
+    // SAFETY: the exclusive Store-root lease contract is forwarded unchanged
+    // to the caller of this function.
+    unsafe { bootstrap_managed_lifecycle_leaf(store_root) }.map_err(ManagedLifecycleBootstrapError::into_store_error)
 }
 
-const fn map_inventory_kind(kind: BootstrapInventoryErrorKind) -> ManagedLifecycleBootstrapErrorKind {
-    match kind {
-        BootstrapInventoryErrorKind::UnsupportedPlatform => ManagedLifecycleBootstrapErrorKind::UnsupportedPlatform,
-        BootstrapInventoryErrorKind::InvalidIdentity => ManagedLifecycleBootstrapErrorKind::InvalidIdentity,
-        BootstrapInventoryErrorKind::InventoryChanged
-        | BootstrapInventoryErrorKind::LimitExceeded
-        | BootstrapInventoryErrorKind::UnsafeNamespace
-        | BootstrapInventoryErrorKind::InvalidSegment
-        | BootstrapInventoryErrorKind::InvalidSnapshot => ManagedLifecycleBootstrapErrorKind::Inventory,
-    }
+/// Typed bootstrap orchestration retained behind the public StoreError facade.
+///
+/// # Safety
+///
+/// See [`bootstrap_managed_lifecycle_under_exclusive_lock`].
+unsafe fn bootstrap_managed_lifecycle_leaf(
+    store_root: &File,
+) -> Result<InitialBootstrapCompletion, ManagedLifecycleBootstrapError> {
+    let meta = derive_store_meta(store_root)?;
+    preflight_bootstrap_namespace(store_root, BootstrapInventoryLimits::default())
+        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Inventory(source)))?;
+    let cloned_root = store_root
+        .try_clone()
+        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::RootIdentity(source)))?;
+    let prepared = platform::prepare_initial_bootstrap_foundation(cloned_root, &meta)
+        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Foundation(source)))?;
+    platform::execute_prepared_initial_bootstrap(prepared)
+        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Execution(source)))
 }
 
 fn derive_store_meta(store_root: &File) -> Result<StoreMeta, ManagedLifecycleBootstrapError> {
-    let key = physical_file_key(store_root).map_err(|source| ManagedLifecycleBootstrapError {
-        kind: ManagedLifecycleBootstrapErrorKind::Io,
-        source: ManagedLifecycleBootstrapSource::RootIdentity(source),
-    })?;
+    let key = physical_file_key(store_root)
+        .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::RootIdentity(source)))?;
     let mut store_uuid = derive_id(b"rocketmq-managed-store-uuid-v1\0", key);
     if store_uuid == [0; 16] {
         store_uuid[15] = 1;
@@ -180,10 +206,8 @@ fn derive_store_meta(store_root: &File) -> Result<StoreMeta, ManagedLifecycleBoo
         bootstrap_id[15] = 1;
     }
     Ok(StoreMeta {
-        store_uuid: StoreUuid::new(store_uuid).map_err(|source| ManagedLifecycleBootstrapError {
-            kind: ManagedLifecycleBootstrapErrorKind::InvalidIdentity,
-            source: ManagedLifecycleBootstrapSource::Identity(source),
-        })?,
+        store_uuid: StoreUuid::new(store_uuid)
+            .map_err(|source| ManagedLifecycleBootstrapError::new(ManagedLifecycleBootstrapSource::Identity(source)))?,
         creation_time_ns: 0,
         bootstrap_id,
     })
@@ -208,35 +232,6 @@ fn derive_id(domain: &[u8], key: PhysicalFileKey) -> [u8; 16] {
     let mut id = [0_u8; 16];
     id.copy_from_slice(&digest[..16]);
     id
-}
-
-const fn map_foundation_kind(
-    kind: platform::InitialBootstrapFoundationErrorKind,
-) -> ManagedLifecycleBootstrapErrorKind {
-    match kind {
-        platform::InitialBootstrapFoundationErrorKind::UnsupportedPlatform => {
-            ManagedLifecycleBootstrapErrorKind::UnsupportedPlatform
-        }
-        platform::InitialBootstrapFoundationErrorKind::InvalidArtifact => {
-            ManagedLifecycleBootstrapErrorKind::InvalidArtifact
-        }
-        platform::InitialBootstrapFoundationErrorKind::Inventory => ManagedLifecycleBootstrapErrorKind::Inventory,
-        platform::InitialBootstrapFoundationErrorKind::Io => ManagedLifecycleBootstrapErrorKind::Io,
-    }
-}
-
-fn map_execution_kind(
-    error: &InitialBootstrapExecutionError<platform::InitialBootstrapFoundationError>,
-) -> ManagedLifecycleBootstrapErrorKind {
-    match error {
-        InitialBootstrapExecutionError::Backend(source) => map_foundation_kind(source.kind()),
-        InitialBootstrapExecutionError::NeedsRecovery(_) | InitialBootstrapExecutionError::ActionBoundExceeded => {
-            ManagedLifecycleBootstrapErrorKind::RecoveryRequired
-        }
-        InitialBootstrapExecutionError::Plan(_) | InitialBootstrapExecutionError::InvalidPlanAction => {
-            ManagedLifecycleBootstrapErrorKind::InvalidArtifact
-        }
-    }
 }
 
 mod private {
@@ -287,7 +282,7 @@ where
     E: Error + Send + Sync + 'static,
 {
     #[error(transparent)]
-    Plan(#[from] BootstrapPlanError),
+    Plan(#[from] BootstrapPlanViolation),
     #[error("bootstrap backend operation failed")]
     Backend(#[source] E),
     #[error("bootstrap state requires replay/recovery: {0:?}")]
@@ -401,13 +396,6 @@ where
 }
 
 #[cfg(test)]
-#[derive(Debug, Error)]
-#[error("injected bootstrap failure after action {action:?}")]
-pub(super) struct ModelBootstrapError {
-    action: BootstrapAction,
-}
-
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ModelMarkerProgress {
     Missing,
@@ -518,11 +506,13 @@ impl ModelInitialBootstrapBackend {
         }
     }
 
-    fn record_action(&mut self, action: BootstrapAction) -> Result<(), ModelBootstrapError> {
+    fn record_action(&mut self, action: BootstrapAction) -> Result<(), io::Error> {
         let index = self.actions.len();
         self.actions.push(action);
         if self.fail_after == Some(index) {
-            return Err(ModelBootstrapError { action });
+            return Err(io::Error::other(format!(
+                "injected bootstrap failure after action {action:?}"
+            )));
         }
         Ok(())
     }
@@ -530,7 +520,7 @@ impl ModelInitialBootstrapBackend {
 
 #[cfg(test)]
 impl InitialBootstrapBackend for ModelInitialBootstrapBackend {
-    type Error = ModelBootstrapError;
+    type Error = io::Error;
 
     fn inspect_store_initialized(
         &mut self,

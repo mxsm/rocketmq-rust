@@ -17,22 +17,22 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
+use crate::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
+use crate::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time;
+use crate::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
+use crate::mapped_file::queue_lifecycle::destroy_last_mapped_file;
+use crate::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
+use crate::mapped_file::queue_lifecycle::is_expired;
+use crate::mapped_file::queue_lifecycle::mapped_files_after_removal;
+use crate::mapped_file::queue_lifecycle::retry_delete_first_mapped_file;
+use crate::mapped_file::queue_lifecycle::select_expired_mapped_files_by_offset;
+use crate::mapped_file::queue_lifecycle::select_expired_mapped_files_by_time_before;
+use crate::mapped_file::queue_lifecycle::shutdown_mapped_file_queue;
+use crate::mapped_file::queue_lifecycle::swap_mapped_file_queue;
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
 use cheetah_string::CheetahString;
-use rocketmq_store_local::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
-use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
-use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time;
-use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
-use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file;
-use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
-use rocketmq_store_local::mapped_file::queue_lifecycle::is_expired;
-use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
-use rocketmq_store_local::mapped_file::queue_lifecycle::retry_delete_first_mapped_file;
-use rocketmq_store_local::mapped_file::queue_lifecycle::select_expired_mapped_files_by_offset;
-use rocketmq_store_local::mapped_file::queue_lifecycle::select_expired_mapped_files_by_time_before;
-use rocketmq_store_local::mapped_file::queue_lifecycle::shutdown_mapped_file_queue;
-use rocketmq_store_local::mapped_file::queue_lifecycle::swap_mapped_file_queue;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
 use tempfile::TempDir;
 
 fn mapped_file(temp_dir: &TempDir, offset: u64, size: u64) -> Arc<DefaultMappedFile> {
@@ -377,7 +377,7 @@ fn drained_shutdown_marks_logical_cleanup_and_detaches_physical_mapping() {
 
     file.shutdown(u64::MAX);
 
-    assert!(rocketmq_store_local::mapped_file::kernel::ReferenceResource::is_logical_cleanup_marked(file.as_ref()));
+    assert!(crate::mapped_file::kernel::ReferenceResource::is_logical_cleanup_marked(file.as_ref()));
     assert!(!file.is_mapped());
     assert!(path.exists(), "normal shutdown must preserve the namespace");
     assert_eq!(metrics.mapped_generations_live(), 0);

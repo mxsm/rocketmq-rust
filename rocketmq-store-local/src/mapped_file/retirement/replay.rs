@@ -38,7 +38,7 @@ use super::sidecar::SnapshotMode;
 use super::sidecar::StoreMeta;
 use super::state::LedgerStateMachine;
 use super::state::NeedsReconciliation;
-use super::state::StateError;
+use super::state::StateViolation;
 use super::state::WriterRecoveryFrontier;
 
 mod acknowledgement;
@@ -51,11 +51,10 @@ mod validation;
 
 pub use discovery::{
     inspect_managed_lifecycle_read_only, inspect_managed_lifecycle_read_only_with_limits,
-    inspect_managed_lifecycle_under_exclusive_lock, LockedManagedLifecycleInspection, ManagedLifecycleReadError,
-    ManagedLifecycleReadErrorKind, ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome,
-    ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    inspect_managed_lifecycle_under_exclusive_lock, LockedManagedLifecycleInspection, ManagedLifecycleReadLimits,
+    ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
 };
-pub(crate) use error::ReplayError;
+pub(crate) use error::ReplayViolation;
 use model::*;
 
 /// Explicit work bounds for pure replay over caller-owned sidecar bytes.
@@ -211,20 +210,20 @@ impl CompleteMarkerWitnessDecision {
     clippy::too_many_lines,
     reason = "the recovery decision order mirrors the frozen crash-classification table"
 )]
-pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayError> {
+pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayViolation> {
     if input.generations.len() > input.limits.max_generations {
-        return Err(ReplayError::LimitExceeded {
+        return Err(ReplayViolation::LimitExceeded {
             limit: "generations",
             actual: input.generations.len(),
             maximum: input.limits.max_generations,
         });
     }
-    let marker = input.marker.selected_slot().map_err(ReplayError::Marker)?;
+    let marker = input.marker.selected_slot().map_err(ReplayViolation::Marker)?;
     let mut evidence = Vec::new();
     let mut parsed = BTreeMap::new();
     for generation in input.generations {
         if parsed.contains_key(&generation.generation) {
-            return Err(ReplayError::DuplicateGeneration {
+            return Err(ReplayViolation::DuplicateGeneration {
                 generation: generation.generation,
             });
         }
@@ -245,7 +244,7 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
     let mut semantic_states = semantic::replay_generations(&parsed, &evidence)?;
     let selected = parsed
         .get(&marker.log_generation)
-        .ok_or(ReplayError::MissingSelectedGeneration {
+        .ok_or(ReplayViolation::MissingSelectedGeneration {
             generation: marker.log_generation,
         })?;
     validation::validate_marker_binding(marker, input.store_meta, selected)?;
@@ -255,7 +254,7 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
     if authoritative.store_uuid != input.store_meta.store_uuid
         || authoritative.bootstrap_id != input.store_meta.bootstrap_id
     {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     if authoritative.log_generation != marker.log_generation {
         if authoritative.log_generation.checked_add(1) == Some(marker.log_generation) {
@@ -269,14 +268,14 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
                 &mut semantic_states,
             );
         }
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     if authoritative.frame_sequence < marker.anchor_sequence {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     let selected_evidence = evidence
         .get(selected.evidence_range.clone())
-        .ok_or(ReplayError::BrokenSealChain {
+        .ok_or(ReplayViolation::BrokenSealChain {
             generation: selected.bytes.generation,
         })?;
     let complete = selected_evidence
@@ -288,7 +287,7 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
         authoritative
             .frame_sequence
             .checked_sub(1)
-            .ok_or(ReplayError::AuthoritativeFrameMissing)?
+            .ok_or(ReplayViolation::AuthoritativeFrameMissing)?
     };
     let predecessor = marker
         .log_generation
@@ -305,33 +304,33 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
     let Some(authoritative_unit) = complete else {
         let pending = semantic_states
             .get_mut(&selected.bytes.generation)
-            .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+            .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
         if pending.sealed_through != committed_sequence {
-            return Err(ReplayError::AuthoritativeFrameMissing);
+            return Err(ReplayViolation::AuthoritativeFrameMissing);
         }
         let frame = selected
             .tail
             .as_ref()
             .and_then(|tail| tail.complete_frame.as_ref())
-            .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+            .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
         if pending.applied_through == committed_sequence {
             pending
                 .state
                 .apply(frame.sequence, frame.record.clone())
-                .map_err(ReplayError::State)?;
+                .map_err(ReplayViolation::State)?;
             pending.applied_through = frame.sequence;
         } else if pending.applied_through != frame.sequence {
-            return Err(ReplayError::AuthoritativeFrameMissing);
+            return Err(ReplayViolation::AuthoritativeFrameMissing);
         }
         if frame.sequence == marker.anchor_sequence {
             let witness_sequence = marker
                 .anchor_sequence
                 .checked_add(1)
-                .ok_or(ReplayError::State(StateError::SequenceOverflow))?;
+                .ok_or(ReplayViolation::State(StateViolation::SequenceOverflow))?;
             pending
                 .state
                 .apply(witness_sequence, Some(validation::expected_marker_record(marker)?))
-                .map_err(ReplayError::State)?;
+                .map_err(ReplayViolation::State)?;
             require_recovery_headroom(authoritative.frame_sequence, authoritative.acknowledgement_epoch, 2)?;
         } else if marker.anchor_sequence.checked_add(1) == Some(frame.sequence) {
             require_recovery_headroom(authoritative.frame_sequence, authoritative.acknowledgement_epoch, 1)?;
@@ -344,21 +343,21 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
     if authoritative_unit.sealed_log_length
         != authoritative
             .sealed_log_length()
-            .map_err(|source| ReplayError::InvalidAcknowledgementSlot {
+            .map_err(|source| ReplayViolation::InvalidAcknowledgementSlot {
                 slot_index: authoritative.slot_index,
                 source,
             })?
     {
-        return Err(ReplayError::AuthoritativeFrameMissing);
+        return Err(ReplayViolation::AuthoritativeFrameMissing);
     }
     validate_activation_binding(authoritative, marker)?;
     let selected_semantic = semantic_states
         .remove(&selected.bytes.generation)
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     if selected_semantic.sealed_through != authoritative.frame_sequence
         || selected_semantic.applied_through != authoritative.frame_sequence
     {
-        return Err(ReplayError::AuthoritativeFrameMissing);
+        return Err(ReplayViolation::AuthoritativeFrameMissing);
     }
     let mut selected_state = selected_semantic.state;
 
@@ -370,7 +369,7 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
             .tail
             .as_ref()
             .and_then(|tail| tail.complete_frame.as_ref())
-            .ok_or(ReplayError::AmbiguousGenerationSet)?;
+            .ok_or(ReplayViolation::AmbiguousGenerationSet)?;
     }
     if let Some(LedgerRecord::GenerationPrepared {
         store_uuid,
@@ -388,7 +387,7 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
             || selected.tail.is_some()
             || higher.is_some_and(|candidate| candidate.bytes.generation != *target_generation)
         {
-            return Err(ReplayError::GenerationBindingMismatch);
+            return Err(ReplayViolation::GenerationBindingMismatch);
         }
         require_recovery_headroom(authoritative.frame_sequence, authoritative.acknowledgement_epoch, 3)?;
         return Ok(RecoveryDecision::ResumeGeneration(ResumeGenerationDecision {
@@ -406,10 +405,10 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
             ..
         }) = candidate.tail.as_ref()
         else {
-            return Err(ReplayError::AmbiguousGenerationSet);
+            return Err(ReplayViolation::AmbiguousGenerationSet);
         };
         if *open_reason != OpenReason::TailRepair {
-            return Err(ReplayError::AmbiguousGenerationSet);
+            return Err(ReplayViolation::AmbiguousGenerationSet);
         }
         require_recovery_headroom(authoritative.frame_sequence, authoritative.acknowledgement_epoch, 3)?;
         return Ok(RecoveryDecision::ResumeGeneration(ResumeGenerationDecision {
@@ -422,10 +421,10 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
         let witness_sequence = marker
             .anchor_sequence
             .checked_add(1)
-            .ok_or(ReplayError::State(StateError::SequenceOverflow))?;
+            .ok_or(ReplayViolation::State(StateViolation::SequenceOverflow))?;
         selected_state
             .apply(witness_sequence, Some(validation::expected_marker_record(marker)?))
-            .map_err(ReplayError::State)?;
+            .map_err(ReplayViolation::State)?;
         require_recovery_headroom(authoritative.frame_sequence, authoritative.acknowledgement_epoch, 2)?;
         return complete_marker_witness(
             input.store_meta,
@@ -437,7 +436,7 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
     }
     if let Some(tail) = &selected.tail {
         if tail.offset != authoritative_unit.sealed_log_length {
-            return Err(ReplayError::AuthoritativeFrameMissing);
+            return Err(ReplayViolation::AuthoritativeFrameMissing);
         }
         let suffix_length = validate_unacknowledged_suffix_length(tail.bytes.len())?;
         return Ok(RecoveryDecision::TailRepair(TailRepairDecision {
@@ -454,15 +453,15 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
             authoritative.acknowledgement_epoch,
             marker.marker_epoch,
         )
-        .map_err(ReplayError::State)?;
+        .map_err(ReplayViolation::State)?;
     let next_sequence = authoritative
         .frame_sequence
         .checked_add(1)
-        .ok_or(ReplayError::State(StateError::SequenceOverflow))?;
+        .ok_or(ReplayViolation::State(StateViolation::SequenceOverflow))?;
     let next_acknowledgement_epoch = authoritative
         .acknowledgement_epoch
         .checked_add(1)
-        .ok_or(ReplayError::BrokenAcknowledgementChain)?;
+        .ok_or(ReplayViolation::BrokenAcknowledgementChain)?;
     let writer_frontier = WriterRecoveryFrontier::from_validated_replay(
         input.store_meta.store_uuid,
         input.store_meta.bootstrap_id,
@@ -481,11 +480,11 @@ pub(crate) fn replay(input: ReplayInput<'_>) -> Result<RecoveryDecision, ReplayE
 fn resolve_acknowledgement(
     raw_slots: [&[u8]; 2],
     seal_evidence: &[SealEvidence],
-) -> Result<ResolvedAcknowledgement, ReplayError> {
+) -> Result<ResolvedAcknowledgement, ReplayViolation> {
     acknowledgement::resolve_acknowledgement(raw_slots, seal_evidence)
 }
 
-fn validate_unacknowledged_suffix_length(length: usize) -> Result<u32, ReplayError> {
+fn validate_unacknowledged_suffix_length(length: usize) -> Result<u32, ReplayViolation> {
     acknowledgement::validate_unacknowledged_suffix_length(length)
 }
 
@@ -493,13 +492,13 @@ fn require_recovery_headroom(
     sequence: u64,
     acknowledgement_epoch: u64,
     remaining_steps: u64,
-) -> Result<(), ReplayError> {
+) -> Result<(), ReplayViolation> {
     sequence
         .checked_add(remaining_steps)
-        .ok_or(ReplayError::State(StateError::SequenceOverflow))?;
+        .ok_or(ReplayViolation::State(StateViolation::SequenceOverflow))?;
     acknowledgement_epoch
         .checked_add(remaining_steps)
-        .ok_or(ReplayError::BrokenAcknowledgementChain)?;
+        .ok_or(ReplayViolation::BrokenAcknowledgementChain)?;
     Ok(())
 }
 
@@ -511,31 +510,31 @@ fn acknowledge_selected_anchor(
     evidence: &[SealEvidence],
     resolved: &ResolvedAcknowledgement,
     semantic_states: &mut BTreeMap<u64, semantic::SemanticGeneration>,
-) -> Result<RecoveryDecision, ReplayError> {
+) -> Result<RecoveryDecision, ReplayViolation> {
     let source = parsed
         .get(&resolved.authoritative.log_generation)
-        .ok_or(ReplayError::AmbiguousGenerationSet)?;
+        .ok_or(ReplayViolation::AmbiguousGenerationSet)?;
     let selected = parsed
         .get(&marker.log_generation)
-        .ok_or(ReplayError::MissingSelectedGeneration {
+        .ok_or(ReplayViolation::MissingSelectedGeneration {
             generation: marker.log_generation,
         })?;
     validation::validate_higher_candidate(selected, source, evidence)?;
     let source_units = evidence
         .get(source.evidence_range.clone())
-        .ok_or(ReplayError::BrokenSealChain {
+        .ok_or(ReplayViolation::BrokenSealChain {
             generation: source.bytes.generation,
         })?;
     let terminal = source_units
         .iter()
         .find(|unit| unit.slot == resolved.authoritative && unit.encoded_slot == resolved.encoded_authoritative)
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     let source_marker = marker_file
         .slots
         .iter()
         .flatten()
         .find(|candidate| candidate.log_generation == source.bytes.generation)
-        .ok_or(ReplayError::GenerationBindingMismatch)?;
+        .ok_or(ReplayViolation::GenerationBindingMismatch)?;
     let source_predecessor = source
         .bytes
         .generation
@@ -553,9 +552,9 @@ fn acknowledge_selected_anchor(
         .tail
         .as_ref()
         .and_then(|tail| tail.complete_frame.as_ref())
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     let Some(LedgerRecord::LogOpened { open_reason, .. }) = anchor.record.as_ref() else {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     };
     match (open_reason, terminal.record.as_ref()) {
         (
@@ -575,35 +574,35 @@ fn acknowledge_selected_anchor(
             && source.tail.is_none() => {}
         (OpenReason::TailRepair, record)
             if source.tail.is_some() && !matches!(record, Some(LedgerRecord::GenerationPrepared { .. })) => {}
-        _ => return Err(ReplayError::GenerationBindingMismatch),
+        _ => return Err(ReplayViolation::GenerationBindingMismatch),
     }
     let target = semantic_states
         .get_mut(&selected.bytes.generation)
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     if target.sealed_through != selected.snapshot.base_sequence || target.applied_through != anchor.sequence {
-        return Err(ReplayError::AuthoritativeFrameMissing);
+        return Err(ReplayViolation::AuthoritativeFrameMissing);
     }
     let witness_sequence = anchor
         .sequence
         .checked_add(1)
-        .ok_or(ReplayError::State(StateError::SequenceOverflow))?;
+        .ok_or(ReplayViolation::State(StateViolation::SequenceOverflow))?;
     target
         .state
         .apply(witness_sequence, Some(validation::expected_marker_record(marker)?))
-        .map_err(ReplayError::State)?;
+        .map_err(ReplayViolation::State)?;
     require_recovery_headroom(
         resolved.authoritative.frame_sequence,
         resolved.authoritative.acknowledgement_epoch,
         3,
     )?;
     if marker.anchor_sequence != anchor.sequence || marker.anchor_frame_crc32 != crc32(&anchor.encoded_frame) {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     let acknowledgement_epoch = resolved
         .authoritative
         .acknowledgement_epoch
         .checked_add(1)
-        .ok_or(ReplayError::BrokenAcknowledgementChain)?;
+        .ok_or(ReplayViolation::BrokenAcknowledgementChain)?;
     let slot = AcknowledgementSlot {
         slot_index: ((acknowledgement_epoch - 1) & 1) as u8,
         activated: true,
@@ -617,17 +616,17 @@ fn acknowledge_selected_anchor(
         frame_crc32: crc32(&anchor.encoded_frame),
     };
     let expected_acknowledgement_slot =
-        encode_acknowledgement_slot(&slot).map_err(|source| ReplayError::InvalidAcknowledgementSlot {
+        encode_acknowledgement_slot(&slot).map_err(|source| ReplayViolation::InvalidAcknowledgementSlot {
             slot_index: slot.slot_index,
             source,
         })?;
     let seal = CommitSeal::from_acknowledgement_slot(&slot, &expected_acknowledgement_slot).map_err(|source| {
-        ReplayError::InvalidAcknowledgementSlot {
+        ReplayViolation::InvalidAcknowledgementSlot {
             slot_index: slot.slot_index,
             source,
         }
     })?;
-    let expected_seal = encode_commit_seal(&seal).map_err(|source| ReplayError::InvalidLog {
+    let expected_seal = encode_commit_seal(&seal).map_err(|source| ReplayViolation::InvalidLog {
         generation: selected.bytes.generation,
         offset: anchor.frame_end_offset,
         source,
@@ -649,40 +648,43 @@ fn classify_partial_seal(
     marker: &EnabledMarkerSlot,
     resolved: &ResolvedAcknowledgement,
     prior: Option<&SealEvidence>,
-) -> Result<RecoveryDecision, ReplayError> {
-    let tail = selected.tail.as_ref().ok_or(ReplayError::AuthoritativeFrameMissing)?;
+) -> Result<RecoveryDecision, ReplayViolation> {
+    let tail = selected
+        .tail
+        .as_ref()
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     let frame = tail
         .complete_frame
         .as_ref()
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     let slot = &resolved.authoritative;
     if let Some(prior) = prior {
         if prior.slot.acknowledgement_epoch.checked_add(1) != Some(slot.acknowledgement_epoch)
             || prior.slot.frame_sequence.checked_add(1) != Some(slot.frame_sequence)
         {
-            return Err(ReplayError::BrokenAcknowledgementChain);
+            return Err(ReplayViolation::BrokenAcknowledgementChain);
         }
     }
     if frame.sequence != slot.frame_sequence
         || frame.frame_end_offset != slot.frame_end_offset
         || crc32(&frame.encoded_frame) != slot.frame_crc32
     {
-        return Err(ReplayError::AuthoritativeFrameMissing);
+        return Err(ReplayViolation::AuthoritativeFrameMissing);
     }
     if marker.anchor_sequence.checked_add(1) == Some(frame.sequence) {
         let expected_frame = validation::expected_marker_frame(marker, frame.sequence)?;
         if frame.encoded_frame != expected_frame {
-            return Err(ReplayError::GenerationBindingMismatch);
+            return Err(ReplayViolation::GenerationBindingMismatch);
         }
     }
     validate_activation_binding(slot, marker)?;
     let seal = CommitSeal::from_acknowledgement_slot(slot, &resolved.encoded_authoritative).map_err(|source| {
-        ReplayError::InvalidAcknowledgementSlot {
+        ReplayViolation::InvalidAcknowledgementSlot {
             slot_index: slot.slot_index,
             source,
         }
     })?;
-    let expected_seal = encode_commit_seal(&seal).map_err(|source| ReplayError::InvalidLog {
+    let expected_seal = encode_commit_seal(&seal).map_err(|source| ReplayViolation::InvalidLog {
         generation: slot.log_generation,
         offset: slot.frame_end_offset,
         source,
@@ -690,7 +692,7 @@ fn classify_partial_seal(
     if frame.following_bytes.len() >= super::codec::COMMIT_SEAL_LENGTH
         || !expected_seal.starts_with(&frame.following_bytes)
     {
-        return Err(ReplayError::PartialSealMismatch);
+        return Err(ReplayViolation::PartialSealMismatch);
     }
     Ok(RecoveryDecision::CompleteSeal(CompleteSealDecision {
         generation: slot.log_generation,
@@ -707,26 +709,26 @@ fn complete_marker_witness(
     marker: &EnabledMarkerSlot,
     authoritative: &AcknowledgementSlot,
     acknowledged_prefix_length: u64,
-) -> Result<RecoveryDecision, ReplayError> {
+) -> Result<RecoveryDecision, ReplayViolation> {
     let witness_sequence = marker
         .anchor_sequence
         .checked_add(1)
-        .ok_or(ReplayError::GenerationBindingMismatch)?;
+        .ok_or(ReplayViolation::GenerationBindingMismatch)?;
     let expected_frame = validation::expected_marker_frame(marker, witness_sequence)?;
     let available = match &selected.tail {
         None => 0,
         Some(tail) if tail.offset == acknowledged_prefix_length && expected_frame.starts_with(&tail.bytes) => {
             tail.bytes.len()
         }
-        Some(_) => return Err(ReplayError::GenerationBindingMismatch),
+        Some(_) => return Err(ReplayViolation::GenerationBindingMismatch),
     };
     let frame_end_offset = acknowledged_prefix_length
-        .checked_add(u64::try_from(expected_frame.len()).map_err(|_| ReplayError::GenerationBindingMismatch)?)
-        .ok_or(ReplayError::GenerationBindingMismatch)?;
+        .checked_add(u64::try_from(expected_frame.len()).map_err(|_| ReplayViolation::GenerationBindingMismatch)?)
+        .ok_or(ReplayViolation::GenerationBindingMismatch)?;
     let acknowledgement_epoch = authoritative
         .acknowledgement_epoch
         .checked_add(1)
-        .ok_or(ReplayError::BrokenAcknowledgementChain)?;
+        .ok_or(ReplayViolation::BrokenAcknowledgementChain)?;
     let slot = AcknowledgementSlot {
         slot_index: ((acknowledgement_epoch - 1) & 1) as u8,
         activated: true,
@@ -740,17 +742,17 @@ fn complete_marker_witness(
         frame_crc32: crc32(&expected_frame),
     };
     let expected_acknowledgement_slot =
-        encode_acknowledgement_slot(&slot).map_err(|source| ReplayError::InvalidAcknowledgementSlot {
+        encode_acknowledgement_slot(&slot).map_err(|source| ReplayViolation::InvalidAcknowledgementSlot {
             slot_index: slot.slot_index,
             source,
         })?;
     let seal = CommitSeal::from_acknowledgement_slot(&slot, &expected_acknowledgement_slot).map_err(|source| {
-        ReplayError::InvalidAcknowledgementSlot {
+        ReplayViolation::InvalidAcknowledgementSlot {
             slot_index: slot.slot_index,
             source,
         }
     })?;
-    let expected_seal = encode_commit_seal(&seal).map_err(|source| ReplayError::InvalidLog {
+    let expected_seal = encode_commit_seal(&seal).map_err(|source| ReplayViolation::InvalidLog {
         generation: selected.bytes.generation,
         offset: frame_end_offset,
         source,
@@ -765,14 +767,14 @@ fn complete_marker_witness(
     }))
 }
 
-fn validate_activation_binding(slot: &AcknowledgementSlot, marker: &EnabledMarkerSlot) -> Result<(), ReplayError> {
+fn validate_activation_binding(slot: &AcknowledgementSlot, marker: &EnabledMarkerSlot) -> Result<(), ReplayViolation> {
     let valid = if slot.frame_sequence == marker.anchor_sequence && marker.log_generation == 0 {
         !slot.activated && slot.marker_epoch == 0
     } else {
         slot.activated && slot.marker_epoch == marker.marker_epoch
     };
     if !valid {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     Ok(())
 }

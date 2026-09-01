@@ -51,7 +51,9 @@ use crate::ha::transfer_engine::HaTransferEngine;
 use crate::ha::transfer_engine::TransferEngineAvailability;
 use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferEnginePreference;
-use crate::ha::HAConnectionError;
+use crate::store_error::StoreComponent;
+use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::batch::TransferKind;
 use crate::transfer::batch::TransferPlan;
@@ -64,7 +66,21 @@ pub(crate) use rocketmq_store_local::ha::wire::OffsetDecoder;
 pub(crate) use rocketmq_store_local::ha::wire::OffsetFrame;
 pub(crate) use rocketmq_store_local::ha::wire::TransferHeader;
 
-type HAConnectionResult<T> = Result<T, HAConnectionError>;
+type HAConnectionResult<T> = Result<T, StoreError>;
+
+/// Builds the backend-unavailable storage error for one HA lifecycle failure.
+fn ha_unavailable(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation)
+        .in_component(StoreComponent::HighAvailability)
+        .with_detail(detail)
+}
+
+/// Builds the replication I/O storage error preserving its typed source.
+fn ha_io(operation: StoreOperation, source: std::io::Error) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+        .in_component(StoreComponent::HighAvailability)
+        .with_source(source)
+}
 
 #[derive(Clone)]
 pub(crate) struct HAConnectionRuntimeHandle {
@@ -118,12 +134,12 @@ pub(crate) fn encode_transfer_header(
     .expect("HA transfer batches are bounded below i32::MAX by MessageStoreConfig")
 }
 
-pub(crate) fn decode_transfer_header(
-    src: &[u8],
-    enable_controller_mode: bool,
-) -> Result<TransferHeader, HAConnectionError> {
-    rocketmq_store_local::ha::wire::decode_transfer_header(src, enable_controller_mode)
-        .map_err(|error| HAConnectionError::Service(error.to_string()))
+pub(crate) fn decode_transfer_header(src: &[u8], enable_controller_mode: bool) -> Result<TransferHeader, StoreError> {
+    rocketmq_store_local::ha::wire::decode_transfer_header(src, enable_controller_mode).map_err(|error| {
+        StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Replicate)
+            .in_component(StoreComponent::HighAvailability)
+            .with_source(error)
+    })
 }
 
 pub struct DefaultHAConnection {
@@ -175,9 +191,11 @@ impl DefaultHAConnection {
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
         remote_addr: SocketAddr,
-    ) -> Result<Self, HAConnectionError> {
+    ) -> Result<Self, StoreError> {
         // Configure socket options early
-        socket_stream.set_nodelay(true).map_err(HAConnectionError::Io)?;
+        socket_stream
+            .set_nodelay(true)
+            .map_err(|error| ha_io(StoreOperation::Start, error))?;
 
         // Get client address
         let client_address = socket_stream
@@ -239,9 +257,10 @@ impl DefaultHAConnection {
 }
 
 impl HAConnection for DefaultHAConnection {
-    async fn start(&mut self) -> Result<(), HAConnectionError> {
+    async fn start(&mut self) -> Result<(), StoreError> {
         if self.lifecycle.lock().await.is_running() {
-            return Err(HAConnectionError::InvalidState(
+            return Err(ha_unavailable(
+                StoreOperation::Start,
                 "HA connection is already running".to_string(),
             ));
         }
@@ -251,16 +270,21 @@ impl HAConnection for DefaultHAConnection {
         self.flow_monitor
             .start()
             .await
-            .map_err(|error| HAConnectionError::Service(format!("failed to start flow monitor: {error}")))?;
+            .map_err(|error| ha_unavailable(StoreOperation::Start, format!("failed to start flow monitor: {error}")))?;
 
         let tcp_stream = self
             .socket_stream
             .take()
-            .ok_or_else(|| HAConnectionError::InvalidState("Socket already taken".into()))?;
-        let std_stream = tcp_stream.into_std().map_err(HAConnectionError::Io)?;
-        let retained_std_stream = std_stream.try_clone().map_err(HAConnectionError::Io)?;
-        let retained_stream = TcpStream::from_std(retained_std_stream).map_err(HAConnectionError::Io)?;
-        let split_stream = TcpStream::from_std(std_stream).map_err(HAConnectionError::Io)?;
+            .ok_or_else(|| ha_unavailable(StoreOperation::Start, "Socket already taken"))?;
+        let std_stream = tcp_stream
+            .into_std()
+            .map_err(|error| ha_io(StoreOperation::Start, error))?;
+        let retained_std_stream = std_stream
+            .try_clone()
+            .map_err(|error| ha_io(StoreOperation::Start, error))?;
+        let retained_stream =
+            TcpStream::from_std(retained_std_stream).map_err(|error| ha_io(StoreOperation::Start, error))?;
+        let split_stream = TcpStream::from_std(std_stream).map_err(|error| ha_io(StoreOperation::Start, error))?;
         self.socket_stream = Some(retained_stream);
         let (reader, write) = split_stream.into_split();
 
@@ -306,7 +330,7 @@ impl HAConnection for DefaultHAConnection {
             .spawn_service("ha-read-socket-service", async move {
                 read_service.run(read_shutdown_rx).await;
             })
-            .map_err(|error| HAConnectionError::Service(error.to_string()))?;
+            .map_err(|error| ha_unavailable(StoreOperation::Replicate, error.to_string()))?;
 
         if let Err(error) = task_group.spawn_service("ha-write-socket-service", async move {
             write_service.run(write_shutdown_rx).await;
@@ -318,7 +342,7 @@ impl HAConnection for DefaultHAConnection {
             {
                 warn!("DefaultHAConnection partial start cleanup reported an error: {shutdown_error}");
             }
-            return Err(HAConnectionError::Service(error.to_string()));
+            return Err(ha_unavailable(StoreOperation::Replicate, error.to_string()));
         }
 
         *self.lifecycle.lock().await = HAConnectionLifecycle::Running {
@@ -429,7 +453,7 @@ impl ReadSocketService {
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
         connection_runtime: HAConnectionRuntimeHandle,
-    ) -> Result<Self, HAConnectionError> {
+    ) -> Result<Self, StoreError> {
         Ok(Self {
             reader,
             client_address,
@@ -632,7 +656,7 @@ impl WriteSocketService {
         connection_runtime: HAConnectionRuntimeHandle,
         next_transfer_from_where: Arc<AtomicI64>,
         storage_io: BlockingExecutor,
-    ) -> Result<Self, HAConnectionError> {
+    ) -> Result<Self, StoreError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
         let preference = transfer_engine_preference(&message_store_config);
         let selection = select_transfer_engine_with_availability(
@@ -934,7 +958,8 @@ impl WriteSocketService {
                 .storage_io
                 .spawn_io("ha-materialize-file-ranges", move || batch.into_bytes_backed())
                 .await
-                .map_err(|error| HAConnectionError::Service(error.to_string()))??;
+                .map_err(|error| ha_unavailable(StoreOperation::Replicate, error.to_string()))?
+                .map_err(|error| ha_io(StoreOperation::Replicate, error))?;
         }
         let confirm_offset = self.connection_context.replica_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(

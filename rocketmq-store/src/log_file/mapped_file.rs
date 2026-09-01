@@ -30,21 +30,19 @@ mod builder;
 mod memory;
 
 pub use builder::MappedFileBuilder;
-pub use memory::MmapRangeError;
+pub use memory::MmapRangeViolation;
 pub use memory::MmapRegionSlice;
 pub use memory::StoreMappedMemory;
 pub use rocketmq_store_local::mapped_file::io_uring_backend_status;
 pub use rocketmq_store_local::mapped_file::io_uring_impl;
 pub use rocketmq_store_local::mapped_file::DirectIoBuffer;
 pub use rocketmq_store_local::mapped_file::DirectIoRequest;
-pub use rocketmq_store_local::mapped_file::DirectIoValidationError;
+pub use rocketmq_store_local::mapped_file::DirectIoValidationViolation;
 pub use rocketmq_store_local::mapped_file::FlushStrategy;
 pub use rocketmq_store_local::mapped_file::IoUringBackendStatus;
 pub use rocketmq_store_local::mapped_file::MappedBuffer;
 pub use rocketmq_store_local::mapped_file::MappedFile;
-pub use rocketmq_store_local::mapped_file::MappedFileError;
 pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
-pub use rocketmq_store_local::mapped_file::MappedFileResult;
 
 /// Store message adapter layered over the runtime-neutral Local mapped-file contract.
 pub trait MappedFileAppend: MappedFile {

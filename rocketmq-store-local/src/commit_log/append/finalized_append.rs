@@ -45,36 +45,35 @@ impl<'a> FinalizedAppend<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`FinalizeAppendError`] when queue or physical offset arithmetic overflows.
+    /// Returns [`FinalizeAppendViolation`] when queue or physical offset arithmetic overflows.
     pub fn try_new(
         prepared: &'a PreparedPayload,
         first_queue_offset: i64,
         first_physical_offset: i64,
         store_timestamp: i64,
-    ) -> Result<Self, FinalizeAppendError> {
+    ) -> Result<Self, FinalizeAppendViolation> {
         let mut frames = Vec::with_capacity(prepared.frame_count());
         for (index, prepared_frame) in prepared.frames().iter().copied().enumerate() {
             let relative_physical_offset =
-                i64::try_from(prepared_frame.start()).map_err(|_| FinalizeAppendError::PhysicalOffsetOverflow {
+                i64::try_from(prepared_frame.start()).map_err(|_| FinalizeAppendViolation::PhysicalOffsetOverflow {
                     first_physical_offset,
                     frame_start: prepared_frame.start(),
                 })?;
             let physical_offset = first_physical_offset.checked_add(relative_physical_offset).ok_or(
-                FinalizeAppendError::PhysicalOffsetOverflow {
+                FinalizeAppendViolation::PhysicalOffsetOverflow {
                     first_physical_offset,
                     frame_start: prepared_frame.start(),
                 },
             )?;
-            let queue_offset =
-                match prepared.kind() {
-                    PreparedPayloadKind::Single => first_queue_offset,
-                    PreparedPayloadKind::Batch => first_queue_offset.checked_add(index as i64).ok_or(
-                        FinalizeAppendError::QueueOffsetOverflow {
-                            first_queue_offset,
-                            frame_index: index,
-                        },
-                    )?,
-                };
+            let queue_offset = match prepared.kind() {
+                PreparedPayloadKind::Single => first_queue_offset,
+                PreparedPayloadKind::Batch => first_queue_offset.checked_add(index as i64).ok_or(
+                    FinalizeAppendViolation::QueueOffsetOverflow {
+                        first_queue_offset,
+                        frame_index: index,
+                    },
+                )?,
+            };
             frames.push(FinalizedFrame {
                 queue_offset,
                 physical_offset,
@@ -106,14 +105,14 @@ impl<'a> FinalizedAppend<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`FinalizeAppendError::DestinationTooSmall`] without modifying the destination when
+    /// Returns [`FinalizeAppendViolation::DestinationTooSmall`] without modifying the destination when
     /// it cannot hold the complete payload.
-    pub fn write_into<F>(&self, destination: &mut [u8], mut finalize_crc: F) -> Result<(), FinalizeAppendError>
+    pub fn write_into<F>(&self, destination: &mut [u8], mut finalize_crc: F) -> Result<(), FinalizeAppendViolation>
     where
         F: FnMut(&mut [u8], AppendFrameCrcPlan),
     {
         if destination.len() < self.required_bytes() {
-            return Err(FinalizeAppendError::DestinationTooSmall {
+            return Err(FinalizeAppendViolation::DestinationTooSmall {
                 required: self.required_bytes(),
                 available: destination.len(),
             });
@@ -140,7 +139,7 @@ impl<'a> FinalizedAppend<'a> {
 
 /// Failure to bind or copy final append fields.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum FinalizeAppendError {
+pub enum FinalizeAppendViolation {
     /// A batch queue offset cannot be represented.
     #[error("queue offset overflow: first offset {first_queue_offset}, frame index {frame_index}")]
     QueueOffsetOverflow {
@@ -215,7 +214,7 @@ mod tests {
 
         assert_eq!(
             error,
-            FinalizeAppendError::DestinationTooSmall {
+            FinalizeAppendViolation::DestinationTooSmall {
                 required: 80,
                 available: 79
             }

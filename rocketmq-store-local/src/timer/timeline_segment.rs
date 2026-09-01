@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -50,7 +52,12 @@ pub struct TimelinePartitionKey {
 
 impl TimelinePartitionKey {
     /// Derives the physical partition from a deadline and lane.
-    pub fn from_deadline(due_time_ms: i64, lane: u16) -> Result<Self, TimelineSegmentError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn from_deadline(due_time_ms: i64, lane: u16) -> Result<Self, StoreError> {
+        Self::from_deadline_typed(due_time_ms, lane).map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    fn from_deadline_typed(due_time_ms: i64, lane: u16) -> Result<Self, TimelineSegmentError> {
         if due_time_ms < 0 {
             return Err(TimelineSegmentError::InvalidDeadline(due_time_ms));
         }
@@ -86,8 +93,8 @@ pub struct TimelineSegmentKey {
 
 impl TimelineSegmentKey {
     /// Returns this key's physical partition.
-    pub fn partition(self) -> Result<TimelinePartitionKey, TimelineSegmentError> {
-        TimelinePartitionKey::from_deadline(self.due_time_ms, self.lane)
+    pub(crate) fn partition(self) -> Result<TimelinePartitionKey, TimelineSegmentError> {
+        TimelinePartitionKey::from_deadline_typed(self.due_time_ms, self.lane)
     }
 }
 
@@ -238,7 +245,7 @@ pub struct TimelineRunDescriptor {
 }
 
 /// Writes one sorted, sealed immutable run and synchronizes it before returning.
-pub fn write_timeline_run(
+pub(crate) fn write_timeline_run(
     root: &Path,
     relative_path: &str,
     kind: TimelineRunKind,
@@ -280,7 +287,10 @@ pub fn write_timeline_run(
 }
 
 /// Reads only the fixed header/footer and validates the sealed file shape.
-pub fn inspect_timeline_run(root: &Path, relative_path: &str) -> Result<TimelineRunDescriptor, TimelineSegmentError> {
+pub(crate) fn inspect_timeline_run(
+    root: &Path,
+    relative_path: &str,
+) -> Result<TimelineRunDescriptor, TimelineSegmentError> {
     let path = root.join(relative_path);
     let mut file = OpenOptions::new().read(true).open(path)?;
     let length = file.metadata()?.len();
@@ -320,7 +330,7 @@ pub struct TimelineRunReader {
 
 impl TimelineRunReader {
     /// Opens a sealed run without scanning its body.
-    pub fn open(root: &Path, descriptor: TimelineRunDescriptor) -> Result<Self, TimelineSegmentError> {
+    pub(crate) fn open(root: &Path, descriptor: TimelineRunDescriptor) -> Result<Self, TimelineSegmentError> {
         let inspected = inspect_timeline_run(root, &descriptor.relative_path)?;
         if inspected != descriptor {
             return Err(TimelineSegmentError::ManifestDescriptorMismatch);
@@ -339,7 +349,7 @@ impl TimelineRunReader {
     }
 
     /// Returns the next verified record, or `None` after validating the full body checksum.
-    pub fn read_next(&mut self) -> Result<Option<TimelineSegmentRecord>, TimelineSegmentError> {
+    pub(crate) fn read_next(&mut self) -> Result<Option<TimelineSegmentRecord>, TimelineSegmentError> {
         if self.next_record == self.descriptor.record_count {
             if self.verifies_full_body && self.body_crc.finish() != self.descriptor.body_checksum {
                 return Err(TimelineSegmentError::BodyChecksumMismatch);
@@ -358,7 +368,8 @@ impl TimelineRunReader {
     }
 
     /// Skips a bounded number of records while retaining checksum verification.
-    pub fn skip(&mut self, count: u64) -> Result<(), TimelineSegmentError> {
+    #[allow(dead_code, reason = "exercised by the in-crate timeline scenarios")]
+    pub(crate) fn skip(&mut self, count: u64) -> Result<(), TimelineSegmentError> {
         for _ in 0..count {
             if self.read_next()?.is_none() {
                 return Err(TimelineSegmentError::CursorPastEnd);
@@ -369,7 +380,7 @@ impl TimelineRunReader {
 
     /// Seeks to an exact fixed-record cursor. Subsequent records retain their individual CRC
     /// checks; the aggregate body CRC is checked only for scans that start at record zero.
-    pub fn seek_to(&mut self, position: u64) -> Result<(), TimelineSegmentError> {
+    pub(crate) fn seek_to(&mut self, position: u64) -> Result<(), TimelineSegmentError> {
         if position > self.descriptor.record_count {
             return Err(TimelineSegmentError::CursorPastEnd);
         }
@@ -609,7 +620,7 @@ fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, TimelineSegmentError> 
 
 /// Native Timeline run codec failure.
 #[derive(Debug, Error)]
-pub enum TimelineSegmentError {
+pub(crate) enum TimelineSegmentError {
     /// Underlying file operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -672,4 +683,25 @@ pub enum TimelineSegmentError {
     /// An encoded length cannot fit V1.
     #[error("native Timeline length overflow")]
     LengthOverflow,
+}
+
+impl TimelineSegmentError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Filesystem faults keep their typed I/O source, and the remaining
+    /// record/run evidence follows the owning operation as read or write
+    /// failure evidence. The complete leaf is preserved as the typed source.
+    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        let descriptor = match (&self, operation) {
+            (Self::Io(_), _) => &rocketmq_error::STORAGE_IO_FAILED,
+            (_, StoreOperation::Load | StoreOperation::Read | StoreOperation::QueryOffset) => {
+                &rocketmq_error::STORAGE_READ_FAILED
+            }
+            (_, StoreOperation::Append | StoreOperation::Flush | StoreOperation::AppendDerived) => {
+                &rocketmq_error::STORAGE_WRITE_FAILED
+            }
+            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+        };
+        StoreError::new(descriptor, operation).with_source(self)
+    }
 }

@@ -23,7 +23,7 @@ use super::codec::encode_ledger_frame;
 use super::codec::validate_commit_seal_against_slot;
 use super::codec::AcknowledgementSlot;
 use super::codec::AcknowledgementSlotState;
-use super::codec::CodecError;
+use super::codec::CodecViolation;
 use super::codec::CommitSeal;
 use super::codec::LedgerRecord;
 use super::codec::COMMIT_SEAL_LENGTH;
@@ -35,7 +35,7 @@ use super::registry::CompletedRetirementReceipt;
 use super::registry::DurableRetirementToken;
 use super::registry::LogicalRemovedCapability;
 use super::registry::NamespaceAbsentCapability;
-use super::registry::RegistryError;
+use super::registry::RegistryViolation;
 use super::registry::RetirementHandoffCapability;
 use super::registry::RetirementIntentAppend;
 use super::registry::TombstonedCapability;
@@ -177,17 +177,17 @@ impl WriterCursor {
 
 /// A post-write validation failure. The durable state is deliberately treated as ambiguous.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-enum WriterVerificationError {
+enum WriterVerificationViolation {
     #[error("acknowledgement slot reread differs from the bytes written")]
     AcknowledgementBytesMismatch,
     #[error("acknowledgement slot reread is not the expected populated slot")]
     AcknowledgementStateMismatch,
     #[error("acknowledgement slot reread is invalid: {0}")]
-    InvalidAcknowledgement(CodecError),
+    InvalidAcknowledgement(CodecViolation),
     #[error("commit seal reread differs from the bytes written")]
     CommitSealBytesMismatch,
     #[error("commit seal reread is invalid: {0}")]
-    InvalidCommitSeal(CodecError),
+    InvalidCommitSeal(CodecViolation),
     #[error("sealed log EOF mismatch: expected {expected}, found {actual}")]
     EofMismatch { expected: u64, actual: u64 },
 }
@@ -196,7 +196,7 @@ enum WriterVerificationError {
 #[derive(Debug, Error)]
 enum WriterError {
     #[error("record cannot be encoded before I/O: {0}")]
-    Codec(#[from] CodecError),
+    Codec(#[from] CodecViolation),
     #[error("invalid replay cursor: {reason}")]
     InvalidCursor { reason: &'static str },
     #[error("writer I/O failed during {stage:?}: {source}")]
@@ -209,7 +209,7 @@ enum WriterError {
     Verification {
         stage: WriterStage,
         #[source]
-        source: WriterVerificationError,
+        source: WriterVerificationViolation,
     },
     #[error("writer requires replay after failure during {failed_stage:?}")]
     NeedsRecovery { failed_stage: WriterStage },
@@ -339,7 +339,7 @@ impl<I: LedgerIo> LedgerWriter<I> {
         if reread_slot != encoded_slot {
             return Err(self.poison_verification(
                 WriterStage::ReadAcknowledgementSlot,
-                WriterVerificationError::AcknowledgementBytesMismatch,
+                WriterVerificationViolation::AcknowledgementBytesMismatch,
             ));
         }
         match decode_acknowledgement_slot(&reread_slot) {
@@ -347,13 +347,13 @@ impl<I: LedgerIo> LedgerWriter<I> {
             Ok(_) => {
                 return Err(self.poison_verification(
                     WriterStage::ReadAcknowledgementSlot,
-                    WriterVerificationError::AcknowledgementStateMismatch,
+                    WriterVerificationViolation::AcknowledgementStateMismatch,
                 ));
             }
             Err(source) => {
                 return Err(self.poison_verification(
                     WriterStage::ReadAcknowledgementSlot,
-                    WriterVerificationError::InvalidAcknowledgement(source),
+                    WriterVerificationViolation::InvalidAcknowledgement(source),
                 ));
             }
         }
@@ -369,23 +369,24 @@ impl<I: LedgerIo> LedgerWriter<I> {
             return Err(self.poison_io(WriterStage::ReadSeal, source));
         }
         if reread_seal != encoded_seal {
-            return Err(
-                self.poison_verification(WriterStage::ReadSeal, WriterVerificationError::CommitSealBytesMismatch)
-            );
+            return Err(self.poison_verification(
+                WriterStage::ReadSeal,
+                WriterVerificationViolation::CommitSealBytesMismatch,
+            ));
         }
         let decoded_seal = match decode_commit_seal(&reread_seal) {
             Ok(decoded) => decoded,
             Err(source) => {
                 return Err(self.poison_verification(
                     WriterStage::ReadSeal,
-                    WriterVerificationError::InvalidCommitSeal(source),
+                    WriterVerificationViolation::InvalidCommitSeal(source),
                 ));
             }
         };
         if let Err(source) = validate_commit_seal_against_slot(&decoded_seal, &slot, &encoded_slot) {
             return Err(self.poison_verification(
                 WriterStage::ReadSeal,
-                WriterVerificationError::InvalidCommitSeal(source),
+                WriterVerificationViolation::InvalidCommitSeal(source),
             ));
         }
         let actual_log_length = match self.io.log_len() {
@@ -395,7 +396,7 @@ impl<I: LedgerIo> LedgerWriter<I> {
         if actual_log_length != sealed_log_length {
             return Err(self.poison_verification(
                 WriterStage::VerifyEof,
-                WriterVerificationError::EofMismatch {
+                WriterVerificationViolation::EofMismatch {
                     expected: sealed_log_length,
                     actual: actual_log_length,
                 },
@@ -424,7 +425,7 @@ impl<I: LedgerIo> LedgerWriter<I> {
         WriterError::Io { stage, source }
     }
 
-    fn poison_verification(&mut self, stage: WriterStage, source: WriterVerificationError) -> WriterError {
+    fn poison_verification(&mut self, stage: WriterStage, source: WriterVerificationViolation) -> WriterError {
         self.status = WriterStatus::NeedsRecovery { failed_stage: stage };
         WriterError::Verification { stage, source }
     }
@@ -644,7 +645,7 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
     if actual_log_length != frontier.sealed_log_length() {
         return Err(WriterError::Verification {
             stage: WriterStage::VerifyEof,
-            source: WriterVerificationError::EofMismatch {
+            source: WriterVerificationViolation::EofMismatch {
                 expected: frontier.sealed_log_length(),
                 actual: actual_log_length,
             },
@@ -681,19 +682,19 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
         Ok(AcknowledgementSlotState::Unused) => {
             return Err(WriterError::Verification {
                 stage: WriterStage::ReadAcknowledgementSlot,
-                source: WriterVerificationError::AcknowledgementStateMismatch,
+                source: WriterVerificationViolation::AcknowledgementStateMismatch,
             });
         }
         Err(source) => {
             return Err(WriterError::Verification {
                 stage: WriterStage::ReadAcknowledgementSlot,
-                source: WriterVerificationError::InvalidAcknowledgement(source),
+                source: WriterVerificationViolation::InvalidAcknowledgement(source),
             });
         }
     };
     let slot_sealed_log_length = slot.sealed_log_length().map_err(|source| WriterError::Verification {
         stage: WriterStage::ReadAcknowledgementSlot,
-        source: WriterVerificationError::InvalidAcknowledgement(source),
+        source: WriterVerificationViolation::InvalidAcknowledgement(source),
     })?;
     let slot_matches = slot.slot_index == slot_index
         && slot.activated
@@ -707,7 +708,7 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
     if !slot_matches {
         return Err(WriterError::Verification {
             stage: WriterStage::ReadAcknowledgementSlot,
-            source: WriterVerificationError::AcknowledgementStateMismatch,
+            source: WriterVerificationViolation::AcknowledgementStateMismatch,
         });
     }
 
@@ -719,18 +720,18 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
         })?;
     let seal = decode_commit_seal(&encoded_seal).map_err(|source| WriterError::Verification {
         stage: WriterStage::ReadSeal,
-        source: WriterVerificationError::InvalidCommitSeal(source),
+        source: WriterVerificationViolation::InvalidCommitSeal(source),
     })?;
     validate_commit_seal_against_slot(&seal, &slot, &encoded_slot).map_err(|source| WriterError::Verification {
         stage: WriterStage::ReadSeal,
-        source: WriterVerificationError::InvalidCommitSeal(source),
+        source: WriterVerificationViolation::InvalidCommitSeal(source),
     })
 }
 
 /// Failure from the registry-integrated writer boundary.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(super) struct ManagedLedgerWriterError {
+pub(crate) struct ManagedLedgerWriterError {
     source: ManagedLedgerWriterErrorSource,
 }
 
@@ -739,7 +740,7 @@ enum ManagedLedgerWriterErrorSource {
     #[error(transparent)]
     Writer(WriterError),
     #[error(transparent)]
-    Registry(RegistryError),
+    Registry(RegistryViolation),
 }
 
 impl From<WriterError> for ManagedLedgerWriterError {
@@ -750,8 +751,8 @@ impl From<WriterError> for ManagedLedgerWriterError {
     }
 }
 
-impl From<RegistryError> for ManagedLedgerWriterError {
-    fn from(source: RegistryError) -> Self {
+impl From<RegistryViolation> for ManagedLedgerWriterError {
+    fn from(source: RegistryViolation) -> Self {
         Self {
             source: ManagedLedgerWriterErrorSource::Registry(source),
         }
@@ -827,7 +828,7 @@ mod tests {
             error.source,
             ManagedLedgerWriterErrorSource::Writer(WriterError::Verification {
                 stage: WriterStage::VerifyEof,
-                source: WriterVerificationError::EofMismatch {
+                source: WriterVerificationViolation::EofMismatch {
                     expected: 172,
                     actual: 173,
                 },
@@ -848,7 +849,7 @@ mod tests {
             error.source,
             ManagedLedgerWriterErrorSource::Writer(WriterError::Verification {
                 stage: WriterStage::ReadAcknowledgementSlot,
-                source: WriterVerificationError::InvalidAcknowledgement(_),
+                source: WriterVerificationViolation::InvalidAcknowledgement(_),
             })
         ));
     }
@@ -866,7 +867,7 @@ mod tests {
             error.source,
             ManagedLedgerWriterErrorSource::Writer(WriterError::Verification {
                 stage: WriterStage::ReadSeal,
-                source: WriterVerificationError::InvalidCommitSeal(_),
+                source: WriterVerificationViolation::InvalidCommitSeal(_),
             })
         ));
     }
@@ -1170,7 +1171,7 @@ mod tests {
             "enum WriterStage",
             "enum WriterStatus",
             "struct WriterCursor",
-            "enum WriterVerificationError",
+            "enum WriterVerificationViolation",
             "enum WriterError",
             "struct DurableAppendReceipt",
             "struct LedgerWriter",

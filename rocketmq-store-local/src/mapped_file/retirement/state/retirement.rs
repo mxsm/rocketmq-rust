@@ -31,11 +31,11 @@ impl LedgerStateMachine {
         retirement_nonce: [u8; 16],
         target_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         self.require_store(incarnation.store_uuid())?;
         if let Some(existing) = self.retirements.get(&ticket_id) {
             if existing.entry.stage != RetirementStage::IntentDurable {
-                return Err(StateError::InvalidRetirementTransition {
+                return Err(StateViolation::InvalidRetirementTransition {
                     from: Some(existing.entry.stage),
                     to: RetirementStage::IntentDurable,
                 });
@@ -51,7 +51,7 @@ impl LedgerStateMachine {
                 target_key,
                 &canonical_path,
             ) {
-                return Err(StateError::IdentityChangingDuplicate {
+                return Err(StateViolation::IdentityChangingDuplicate {
                     entity: "retirement ticket",
                 });
             }
@@ -60,11 +60,11 @@ impl LedgerStateMachine {
         let expected = self
             .ticket_high_water
             .checked_add(1)
-            .ok_or(StateError::HighWaterOverflow {
+            .ok_or(StateViolation::HighWaterOverflow {
                 field: "ticket_high_water",
             })?;
         if ticket_id.get() != expected {
-            return Err(StateError::HighWaterMismatch {
+            return Err(StateViolation::HighWaterMismatch {
                 field: "ticket_high_water",
                 previous: self.ticket_high_water,
                 expected,
@@ -72,10 +72,10 @@ impl LedgerStateMachine {
             });
         }
         let Some(published) = self.incarnations.get(&incarnation) else {
-            return Err(StateError::MissingIncarnation);
+            return Err(StateViolation::MissingIncarnation);
         };
         if published.phase != IncarnationPhase::Published {
-            return Err(StateError::InvalidIncarnationTransition {
+            return Err(StateViolation::InvalidIncarnationTransition {
                 from: Some(published.phase),
                 to: IncarnationPhase::Published,
             });
@@ -87,10 +87,10 @@ impl LedgerStateMachine {
             || mapping_generation == 0
             || retirement_nonce == [0; 16]
         {
-            return Err(StateError::RecordIdentityMismatch);
+            return Err(StateViolation::RecordIdentityMismatch);
         }
         if self.ticket_by_incarnation.contains_key(&incarnation) {
-            return Err(StateError::ConcurrentRetirementTicket);
+            return Err(StateViolation::ConcurrentRetirementTicket);
         }
         self.ticket_high_water = expected;
         let entry = RetirementTicketSnapshotEntry {
@@ -129,7 +129,7 @@ impl LedgerStateMachine {
         incarnation: FileIncarnationId,
         target_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         let state = self.retirement_mut(ticket_id, incarnation, target_key, &canonical_path)?;
         match state.entry.stage {
             RetirementStage::IntentDurable => {
@@ -140,7 +140,7 @@ impl LedgerStateMachine {
             RetirementStage::LogicalRemoved
                 if state.last_stage_payload == Some(RetirementStagePayload::LogicalRemoved) => {}
             from => {
-                return Err(StateError::InvalidRetirementTransition {
+                return Err(StateViolation::InvalidRetirementTransition {
                     from: Some(from),
                     to: RetirementStage::LogicalRemoved,
                 });
@@ -162,7 +162,7 @@ impl LedgerStateMachine {
         retirement_nonce: [u8; 16],
         canonical_path: StoreRelativePath,
         tombstone_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         let state = self.retirement_mut(ticket_id, incarnation, target_key, &canonical_path)?;
         if retirement_nonce != state.entry.retirement_nonce
             || state
@@ -178,7 +178,7 @@ impl LedgerStateMachine {
                 )
                 .is_err()
         {
-            return Err(StateError::RecordIdentityMismatch);
+            return Err(StateViolation::RecordIdentityMismatch);
         }
         match state.entry.stage {
             RetirementStage::LogicalRemoved => {
@@ -191,7 +191,7 @@ impl LedgerStateMachine {
                 if state.entry.tombstone_path.as_ref() == Some(&tombstone_path)
                     && state.last_stage_payload == Some(RetirementStagePayload::Tombstoned) => {}
             from => {
-                return Err(StateError::InvalidRetirementTransition {
+                return Err(StateViolation::InvalidRetirementTransition {
                     from: Some(from),
                     to: RetirementStage::Tombstoned,
                 });
@@ -214,7 +214,7 @@ impl LedgerStateMachine {
         target_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
         tombstone_path: Option<StoreRelativePath>,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         let state = self.retirement_mut(ticket_id, incarnation, target_key, &canonical_path)?;
         let payload = RetirementStagePayload::NamespaceAbsent {
             replacement_observed,
@@ -237,7 +237,7 @@ impl LedgerStateMachine {
                 if tombstone_path == state.entry.tombstone_path
                     && state.last_stage_payload.as_ref() == Some(&payload) => {}
             from => {
-                return Err(StateError::InvalidRetirementTransition {
+                return Err(StateViolation::InvalidRetirementTransition {
                     from: Some(from),
                     to: RetirementStage::NamespaceAbsent,
                 });
@@ -253,13 +253,13 @@ impl LedgerStateMachine {
         incarnation: FileIncarnationId,
         completion_time_ns: u64,
         namespace_absent_sequence: u64,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         self.require_store(incarnation.store_uuid())?;
         let Some(state) = self.retirements.get_mut(&ticket_id) else {
-            return Err(StateError::MissingRetirementTicket);
+            return Err(StateViolation::MissingRetirementTicket);
         };
         if state.entry.incarnation != incarnation {
-            return Err(StateError::RecordIdentityMismatch);
+            return Err(StateViolation::RecordIdentityMismatch);
         }
         let payload = RetirementStagePayload::Completed {
             completion_time_ns,
@@ -275,7 +275,7 @@ impl LedgerStateMachine {
             }
             RetirementStage::CompletedRetained if state.last_stage_payload.as_ref() == Some(&payload) => {}
             from => {
-                return Err(StateError::InvalidRetirementTransition {
+                return Err(StateViolation::InvalidRetirementTransition {
                     from: Some(from),
                     to: RetirementStage::CompletedRetained,
                 });
@@ -291,11 +291,11 @@ impl LedgerStateMachine {
         expected_target_key: PhysicalFileKey,
         observed_replacement_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         let state = self.retirement_mut(ticket_id, incarnation, expected_target_key, &canonical_path)?;
         if let Some(existing) = state.observed_replacement_key {
             if existing != observed_replacement_key {
-                return Err(StateError::IdentityChangingDuplicate {
+                return Err(StateViolation::IdentityChangingDuplicate {
                     entity: "superseded path",
                 });
             }
@@ -312,16 +312,16 @@ impl LedgerStateMachine {
         incarnation: FileIncarnationId,
         target_key: PhysicalFileKey,
         canonical_path: &StoreRelativePath,
-    ) -> Result<&mut RetirementState, StateError> {
+    ) -> Result<&mut RetirementState, StateViolation> {
         self.require_store(incarnation.store_uuid())?;
         let Some(state) = self.retirements.get_mut(&ticket_id) else {
-            return Err(StateError::MissingRetirementTicket);
+            return Err(StateViolation::MissingRetirementTicket);
         };
         if state.entry.incarnation != incarnation
             || state.entry.target_key != target_key
             || &state.entry.canonical_path != canonical_path
         {
-            return Err(StateError::RecordIdentityMismatch);
+            return Err(StateViolation::RecordIdentityMismatch);
         }
         Ok(state)
     }

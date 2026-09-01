@@ -13,6 +13,5 @@
 // limitations under the License.
 
 pub mod batch;
-pub mod error;
 pub mod planner;
 pub mod segment;

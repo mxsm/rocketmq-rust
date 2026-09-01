@@ -23,7 +23,7 @@ use super::types::NamespaceFailureClass;
 use super::types::NamespaceMutationAuthorization;
 use super::types::NamespaceOperation;
 use super::types::NamespacePolicyViolation;
-use super::types::NamespaceRequestError;
+use super::types::NamespaceRequestViolation;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTicketBinding;
 use super::types::NamespaceTombstoneProof;
@@ -223,7 +223,7 @@ fn zero_retirement_nonce_is_rejected_before_a_request_exists() {
 
     assert_eq!(
         NamespaceTicketBinding::new(ticket, incarnation, RetirementReason::TtlExpired, 0, 3, 1024, [0; 16],),
-        Err(NamespaceRequestError::ZeroRetirementNonce)
+        Err(NamespaceRequestViolation::ZeroRetirementNonce)
     );
 }
 
@@ -235,7 +235,7 @@ fn zero_expected_length_is_rejected_before_a_request_exists() {
 
     assert_eq!(
         NamespaceTicketBinding::new(ticket, incarnation, RetirementReason::TtlExpired, 0, 3, 0, [0x44; 16],),
-        Err(NamespaceRequestError::ZeroExpectedLength)
+        Err(NamespaceRequestViolation::ZeroExpectedLength)
     );
 }
 

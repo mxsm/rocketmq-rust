@@ -296,13 +296,13 @@ pub(super) struct LedgerStateMachine {
 }
 
 impl LedgerStateMachine {
-    pub(super) fn from_snapshot(snapshot: impl std::borrow::Borrow<LifecycleSnapshot>) -> Result<Self, StateError> {
+    pub(super) fn from_snapshot(snapshot: impl std::borrow::Borrow<LifecycleSnapshot>) -> Result<Self, StateViolation> {
         let snapshot = std::borrow::Borrow::borrow(&snapshot);
         validation::validate_snapshot_header(snapshot)?;
         let next_sequence = snapshot
             .base_sequence
             .checked_add(1)
-            .ok_or(StateError::SequenceOverflow)?;
+            .ok_or(StateViolation::SequenceOverflow)?;
         let mut state = Self {
             store_uuid: snapshot.store_uuid,
             generation: snapshot.generation,
@@ -342,14 +342,14 @@ impl LedgerStateMachine {
             .map(|prepared| (prepared.sequence, prepared.target_generation))
     }
 
-    pub(super) fn apply(&mut self, sequence: u64, record: Option<LedgerRecord>) -> Result<(), StateError> {
+    pub(super) fn apply(&mut self, sequence: u64, record: Option<LedgerRecord>) -> Result<(), StateViolation> {
         if sequence != self.next_sequence {
-            return Err(StateError::SequenceMismatch {
+            return Err(StateViolation::SequenceMismatch {
                 expected: self.next_sequence,
                 actual: sequence,
             });
         }
-        let following_sequence = sequence.checked_add(1).ok_or(StateError::SequenceOverflow)?;
+        let following_sequence = sequence.checked_add(1).ok_or(StateViolation::SequenceOverflow)?;
         self.validate_append_barrier(sequence, record.as_ref())?;
         self.apply_record(sequence, record)?;
         self.next_sequence = following_sequence;
@@ -361,16 +361,19 @@ impl LedgerStateMachine {
         last_sequence: u64,
         acknowledgement_epoch: u64,
         marker_epoch: u64,
-    ) -> Result<RecoveredLedgerState, StateError> {
+    ) -> Result<RecoveredLedgerState, StateViolation> {
         if acknowledgement_epoch == 0 || marker_epoch == 0 {
-            return Err(StateError::ZeroRecoveryEpoch);
+            return Err(StateViolation::ZeroRecoveryEpoch);
         }
         if self.prepared_generation.is_some() {
-            return Err(StateError::IllegalGenerationAdministration);
+            return Err(StateViolation::IllegalGenerationAdministration);
         }
-        let expected_last = self.next_sequence.checked_sub(1).ok_or(StateError::SequenceOverflow)?;
+        let expected_last = self
+            .next_sequence
+            .checked_sub(1)
+            .ok_or(StateViolation::SequenceOverflow)?;
         if last_sequence != expected_last {
-            return Err(StateError::SequenceMismatch {
+            return Err(StateViolation::SequenceMismatch {
                 expected: expected_last,
                 actual: last_sequence,
             });
@@ -391,7 +394,7 @@ impl LedgerStateMachine {
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum StateError {
+pub(crate) enum StateViolation {
     #[error("snapshot or record belongs to another store UUID")]
     StoreUuidMismatch,
     #[error("expected sequence {expected}, found {actual}")]

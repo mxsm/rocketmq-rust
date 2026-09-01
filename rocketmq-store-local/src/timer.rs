@@ -29,3 +29,12 @@ pub mod timeline_manifest;
 pub mod timeline_segment;
 pub mod timer_log;
 pub mod timer_wheel;
+
+#[cfg(test)]
+mod segmented_timeline_scenarios;
+
+#[cfg(test)]
+mod storage_v2_scenarios;
+
+#[cfg(test)]
+mod payload_store_scenarios;

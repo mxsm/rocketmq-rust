@@ -27,7 +27,6 @@ use super::io_error;
 use super::limit_error;
 use super::platform;
 use super::ManagedLifecycleReadError;
-use super::ManagedLifecycleReadErrorKind;
 use super::ManagedLifecycleReadSource;
 
 pub(super) fn validate_snapshot_prefix(
@@ -48,7 +47,6 @@ pub(super) fn validate_snapshot_prefix(
     let minor = u16::from_le_bytes(header[6..8].try_into().map_err(|_| corruption("snapshot version"))?);
     if (major, minor) != (1, 0) {
         return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadErrorKind::UnknownVersionCorruption,
             ManagedLifecycleReadSource::UnknownVersion(format!("snapshot {major}.{minor}")),
         ));
     }
@@ -111,7 +109,6 @@ pub(super) fn read_snapshot_file(
     let mut extra = [0_u8; 1];
     if entry.file.read(&mut extra).map_err(io_error)? != 0 {
         return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadErrorKind::InventoryChanged,
             ManagedLifecycleReadSource::InventoryChanged("snapshot grew while it was read".to_owned()),
         ));
     }
@@ -150,7 +147,6 @@ pub(super) fn read_exact_file(
     let mut extra = [0_u8; 1];
     if entry.file.read(&mut extra).map_err(io_error)? != 0 {
         return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadErrorKind::InventoryChanged,
             ManagedLifecycleReadSource::InventoryChanged("sidecar grew while it was read".to_owned()),
         ));
     }

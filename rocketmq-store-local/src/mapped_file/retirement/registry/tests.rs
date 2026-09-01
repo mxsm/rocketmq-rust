@@ -183,7 +183,7 @@ fn assert_replay_rejection_fences(
     evidence: DurableIntentEvidence,
     owner: &Arc<TestOwner>,
     queue: &QueueIdentity,
-    expected: RegistryError,
+    expected: RegistryViolation,
 ) {
     assert_eq!(
         registry

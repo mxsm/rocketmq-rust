@@ -264,7 +264,7 @@ mod windows_tests {
     use super::*;
     use crate::mapped_file::retirement::platform::NamespaceFailureClass;
     use crate::mapped_file::retirement::platform::NamespacePolicyViolation;
-    use crate::mapped_file::retirement::platform::NamespaceVerificationError;
+    use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 
     #[test]
     fn unique_tombstone_rename_and_removal_retry_idempotently() {
@@ -380,7 +380,7 @@ mod windows_tests {
             .reserve(request(original_key), NamespaceTransition::DirectUnlink);
         assert!(matches!(
             rejected,
-            Err(NamespaceVerificationError::Rejected(
+            Err(NamespaceTransitionOutcome::Rejected(
                 NamespacePolicyViolation::UnsupportedTransition {
                     transition: NamespaceTransition::DirectUnlink
                 }
@@ -486,6 +486,6 @@ fn unsupported_targets_fail_before_constructing_a_root_capability() {
 
     assert!(matches!(
         VerifiedNamespaceRoot::open(handle, store_uuid()),
-        Err(super::NamespaceVerificationError::Unsupported { .. })
+        Err(super::NamespaceTransitionOutcome::Unsupported { .. })
     ));
 }

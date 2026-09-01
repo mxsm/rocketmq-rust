@@ -222,7 +222,6 @@ use crate::timer::timeline::TimelineRecallService;
 use crate::timer::timeline::TimelineSnapshotManager;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::TimerStoreContext;
-use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 #[cfg(feature = "extended_timeline")]
@@ -349,7 +348,7 @@ impl HAReplicaStoreHandle {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> TransferResult<Vec<SegmentLease>> {
+    ) -> Result<Vec<SegmentLease>, StoreError> {
         self.commit_log.select_segments(offset, max_bytes, allow_cross_file)
     }
 

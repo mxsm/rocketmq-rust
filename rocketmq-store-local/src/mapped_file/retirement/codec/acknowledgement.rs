@@ -19,7 +19,7 @@ use super::read_array;
 use super::read_u16;
 use super::read_u32;
 use super::read_u64;
-use super::CodecError;
+use super::CodecViolation;
 use super::DecodeOutcome;
 use super::DecodedFrame;
 use super::ACKNOWLEDGEMENT_FILE_LENGTH;
@@ -48,19 +48,19 @@ pub(crate) struct AcknowledgementSlot {
 }
 
 impl AcknowledgementSlot {
-    pub(crate) fn next_acknowledgement_epoch(&self) -> Result<u64, CodecError> {
+    pub(crate) fn next_acknowledgement_epoch(&self) -> Result<u64, CodecViolation> {
         self.acknowledgement_epoch
             .checked_add(1)
-            .ok_or(CodecError::AcknowledgementEpochOverflow)
+            .ok_or(CodecViolation::AcknowledgementEpochOverflow)
     }
 
-    pub(crate) fn sealed_log_length(&self) -> Result<u64, CodecError> {
+    pub(crate) fn sealed_log_length(&self) -> Result<u64, CodecViolation> {
         self.frame_end_offset
             .checked_add(COMMIT_SEAL_LENGTH as u64)
-            .ok_or(CodecError::SealedLogLengthOverflow)
+            .ok_or(CodecViolation::SealedLogLengthOverflow)
     }
 
-    fn validate(&self) -> Result<(), CodecError> {
+    fn validate(&self) -> Result<(), CodecViolation> {
         validate_acknowledgement_identity(
             self.slot_index,
             self.activated,
@@ -69,7 +69,7 @@ impl AcknowledgementSlot {
             self.frame_sequence,
         )?;
         if self.bootstrap_id == [0; 16] {
-            return Err(CodecError::ZeroOpaqueIdentifier { field: "bootstrap_id" });
+            return Err(CodecViolation::ZeroOpaqueIdentifier { field: "bootstrap_id" });
         }
         self.sealed_log_length()?;
         Ok(())
@@ -127,12 +127,12 @@ impl CommitSeal {
     pub(crate) fn from_acknowledgement_slot(
         slot: &AcknowledgementSlot,
         encoded_slot: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-    ) -> Result<Self, CodecError> {
+    ) -> Result<Self, CodecViolation> {
         match decode_acknowledgement_slot(encoded_slot)? {
             AcknowledgementSlotState::Populated(decoded) if decoded == *slot => {}
-            _ => return Err(CodecError::CommitSealSlotMismatch),
+            _ => return Err(CodecViolation::CommitSealSlotMismatch),
         }
-        let acknowledgement_slot_crc32 = read_u32(encoded_slot, 100).ok_or(CodecError::FrameLengthOverflow)?;
+        let acknowledgement_slot_crc32 = read_u32(encoded_slot, 100).ok_or(CodecViolation::FrameLengthOverflow)?;
         Ok(Self {
             acknowledgement_slot_index: slot.slot_index,
             activated: slot.activated,
@@ -146,7 +146,7 @@ impl CommitSeal {
         })
     }
 
-    fn validate(&self) -> Result<(), CodecError> {
+    fn validate(&self) -> Result<(), CodecViolation> {
         validate_acknowledgement_identity(
             self.acknowledgement_slot_index,
             self.activated,
@@ -156,14 +156,14 @@ impl CommitSeal {
         )?;
         self.frame_end_offset
             .checked_add(COMMIT_SEAL_LENGTH as u64)
-            .ok_or(CodecError::SealedLogLengthOverflow)?;
+            .ok_or(CodecViolation::SealedLogLengthOverflow)?;
         Ok(())
     }
 }
 
 pub(crate) fn encode_acknowledgement_slot(
     slot: &AcknowledgementSlot,
-) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], CodecError> {
+) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], CodecViolation> {
     slot.validate()?;
     let mut encoded = [0_u8; ACKNOWLEDGEMENT_SLOT_LENGTH];
     encoded[0..4].copy_from_slice(&ACKNOWLEDGEMENT_MAGIC);
@@ -186,9 +186,9 @@ pub(crate) fn encode_acknowledgement_slot(
     Ok(encoded)
 }
 
-pub(crate) fn decode_acknowledgement_slot(encoded: &[u8]) -> Result<AcknowledgementSlotState, CodecError> {
+pub(crate) fn decode_acknowledgement_slot(encoded: &[u8]) -> Result<AcknowledgementSlotState, CodecViolation> {
     if encoded.len() != ACKNOWLEDGEMENT_SLOT_LENGTH {
-        return Err(CodecError::InvalidFixedStructureLength {
+        return Err(CodecViolation::InvalidFixedStructureLength {
             structure: "acknowledgement slot",
             expected: ACKNOWLEDGEMENT_SLOT_LENGTH,
             actual: encoded.len(),
@@ -197,49 +197,49 @@ pub(crate) fn decode_acknowledgement_slot(encoded: &[u8]) -> Result<Acknowledgem
     if encoded.iter().all(|byte| *byte == 0) {
         return Ok(AcknowledgementSlotState::Unused);
     }
-    let magic = read_array(encoded, 0).ok_or(CodecError::FrameLengthOverflow)?;
+    let magic = read_array(encoded, 0).ok_or(CodecViolation::FrameLengthOverflow)?;
     if magic != ACKNOWLEDGEMENT_MAGIC {
-        return Err(CodecError::InvalidAcknowledgementMagic { found: magic });
+        return Err(CodecViolation::InvalidAcknowledgementMagic { found: magic });
     }
     validate_version_and_length(encoded, ACKNOWLEDGEMENT_SLOT_LENGTH, "acknowledgement slot")?;
-    let flags = *encoded.get(11).ok_or(CodecError::FrameLengthOverflow)?;
+    let flags = *encoded.get(11).ok_or(CodecViolation::FrameLengthOverflow)?;
     if flags & !ACTIVATED_FLAG != 0 {
-        return Err(CodecError::InvalidAcknowledgementFlags { flags });
+        return Err(CodecViolation::InvalidAcknowledgementFlags { flags });
     }
     require_zero(encoded, 12..16, "acknowledgement_reserved")?;
     let store_uuid =
-        StoreUuid::new(read_array(encoded, 16).ok_or(CodecError::FrameLengthOverflow)?).map_err(|source| {
-            CodecError::InvalidIdentity {
+        StoreUuid::new(read_array(encoded, 16).ok_or(CodecViolation::FrameLengthOverflow)?).map_err(|source| {
+            CodecViolation::InvalidIdentity {
                 field: "acknowledgement_store_uuid",
                 source,
             }
         })?;
-    let bootstrap_id = read_array(encoded, 32).ok_or(CodecError::FrameLengthOverflow)?;
+    let bootstrap_id = read_array(encoded, 32).ok_or(CodecViolation::FrameLengthOverflow)?;
     let slot = AcknowledgementSlot {
-        slot_index: *encoded.get(10).ok_or(CodecError::FrameLengthOverflow)?,
+        slot_index: *encoded.get(10).ok_or(CodecViolation::FrameLengthOverflow)?,
         activated: flags & ACTIVATED_FLAG != 0,
         store_uuid,
         bootstrap_id,
-        acknowledgement_epoch: read_u64(encoded, 48).ok_or(CodecError::FrameLengthOverflow)?,
-        marker_epoch: read_u64(encoded, 56).ok_or(CodecError::FrameLengthOverflow)?,
-        log_generation: read_u64(encoded, 64).ok_or(CodecError::FrameLengthOverflow)?,
-        frame_sequence: read_u64(encoded, 72).ok_or(CodecError::FrameLengthOverflow)?,
-        frame_end_offset: read_u64(encoded, 80).ok_or(CodecError::FrameLengthOverflow)?,
-        frame_crc32: read_u32(encoded, 88).ok_or(CodecError::FrameLengthOverflow)?,
+        acknowledgement_epoch: read_u64(encoded, 48).ok_or(CodecViolation::FrameLengthOverflow)?,
+        marker_epoch: read_u64(encoded, 56).ok_or(CodecViolation::FrameLengthOverflow)?,
+        log_generation: read_u64(encoded, 64).ok_or(CodecViolation::FrameLengthOverflow)?,
+        frame_sequence: read_u64(encoded, 72).ok_or(CodecViolation::FrameLengthOverflow)?,
+        frame_end_offset: read_u64(encoded, 80).ok_or(CodecViolation::FrameLengthOverflow)?,
+        frame_crc32: read_u32(encoded, 88).ok_or(CodecViolation::FrameLengthOverflow)?,
     };
     slot.validate()?;
-    let stored_sealed_length = read_u64(encoded, 92).ok_or(CodecError::FrameLengthOverflow)?;
+    let stored_sealed_length = read_u64(encoded, 92).ok_or(CodecViolation::FrameLengthOverflow)?;
     let expected_sealed_length = slot.sealed_log_length()?;
     if stored_sealed_length != expected_sealed_length {
-        return Err(CodecError::SealedLogLengthMismatch {
+        return Err(CodecViolation::SealedLogLengthMismatch {
             expected: expected_sealed_length,
             actual: stored_sealed_length,
         });
     }
-    let expected_crc = read_u32(encoded, 100).ok_or(CodecError::FrameLengthOverflow)?;
+    let expected_crc = read_u32(encoded, 100).ok_or(CodecViolation::FrameLengthOverflow)?;
     let actual_crc = crc32(&encoded[..100]);
     if expected_crc != actual_crc {
-        return Err(CodecError::AcknowledgementSlotCrcMismatch {
+        return Err(CodecViolation::AcknowledgementSlotCrcMismatch {
             expected: expected_crc,
             actual: actual_crc,
         });
@@ -247,9 +247,9 @@ pub(crate) fn decode_acknowledgement_slot(encoded: &[u8]) -> Result<Acknowledgem
     Ok(AcknowledgementSlotState::Populated(slot))
 }
 
-pub(crate) fn decode_acknowledgement_file(encoded: &[u8]) -> Result<AcknowledgementFile, CodecError> {
+pub(crate) fn decode_acknowledgement_file(encoded: &[u8]) -> Result<AcknowledgementFile, CodecViolation> {
     if encoded.len() != ACKNOWLEDGEMENT_FILE_LENGTH {
-        return Err(CodecError::InvalidFixedStructureLength {
+        return Err(CodecViolation::InvalidFixedStructureLength {
             structure: "acknowledgement file",
             expected: ACKNOWLEDGEMENT_FILE_LENGTH,
             actual: encoded.len(),
@@ -269,7 +269,7 @@ pub(crate) fn decode_acknowledgement_file(encoded: &[u8]) -> Result<Acknowledgem
 
 pub(crate) fn encode_acknowledgement_file(
     slots: &[AcknowledgementSlotState; 2],
-) -> Result<[u8; ACKNOWLEDGEMENT_FILE_LENGTH], CodecError> {
+) -> Result<[u8; ACKNOWLEDGEMENT_FILE_LENGTH], CodecViolation> {
     let mut encoded = [0_u8; ACKNOWLEDGEMENT_FILE_LENGTH];
     for (physical_index, state) in slots.iter().enumerate() {
         validate_slot_position(state, physical_index)?;
@@ -284,7 +284,7 @@ pub(crate) fn encode_acknowledgement_file(
     Ok(encoded)
 }
 
-pub(crate) fn encode_commit_seal(seal: &CommitSeal) -> Result<[u8; COMMIT_SEAL_LENGTH], CodecError> {
+pub(crate) fn encode_commit_seal(seal: &CommitSeal) -> Result<[u8; COMMIT_SEAL_LENGTH], CodecViolation> {
     seal.validate()?;
     let mut encoded = [0_u8; COMMIT_SEAL_LENGTH];
     encoded[0..4].copy_from_slice(&COMMIT_SEAL_MAGIC);
@@ -305,41 +305,41 @@ pub(crate) fn encode_commit_seal(seal: &CommitSeal) -> Result<[u8; COMMIT_SEAL_L
     Ok(encoded)
 }
 
-pub(crate) fn decode_commit_seal(encoded: &[u8]) -> Result<CommitSeal, CodecError> {
+pub(crate) fn decode_commit_seal(encoded: &[u8]) -> Result<CommitSeal, CodecViolation> {
     if encoded.len() != COMMIT_SEAL_LENGTH {
-        return Err(CodecError::InvalidFixedStructureLength {
+        return Err(CodecViolation::InvalidFixedStructureLength {
             structure: "commit seal",
             expected: COMMIT_SEAL_LENGTH,
             actual: encoded.len(),
         });
     }
-    let magic = read_array(encoded, 0).ok_or(CodecError::FrameLengthOverflow)?;
+    let magic = read_array(encoded, 0).ok_or(CodecViolation::FrameLengthOverflow)?;
     if magic != COMMIT_SEAL_MAGIC {
-        return Err(CodecError::InvalidCommitSealMagic { found: magic });
+        return Err(CodecViolation::InvalidCommitSealMagic { found: magic });
     }
     validate_version_and_length(encoded, COMMIT_SEAL_LENGTH, "commit seal")?;
-    let flags = *encoded.get(11).ok_or(CodecError::FrameLengthOverflow)?;
+    let flags = *encoded.get(11).ok_or(CodecViolation::FrameLengthOverflow)?;
     if flags & !ACTIVATED_FLAG != 0 {
-        return Err(CodecError::InvalidAcknowledgementFlags { flags });
+        return Err(CodecViolation::InvalidAcknowledgementFlags { flags });
     }
     require_zero(encoded, 12..16, "commit_seal_reserved")?;
     require_zero(encoded, 64..68, "commit_seal_reserved")?;
     let seal = CommitSeal {
-        acknowledgement_slot_index: *encoded.get(10).ok_or(CodecError::FrameLengthOverflow)?,
+        acknowledgement_slot_index: *encoded.get(10).ok_or(CodecViolation::FrameLengthOverflow)?,
         activated: flags & ACTIVATED_FLAG != 0,
-        acknowledgement_epoch: read_u64(encoded, 16).ok_or(CodecError::FrameLengthOverflow)?,
-        marker_epoch: read_u64(encoded, 24).ok_or(CodecError::FrameLengthOverflow)?,
-        log_generation: read_u64(encoded, 32).ok_or(CodecError::FrameLengthOverflow)?,
-        frame_sequence: read_u64(encoded, 40).ok_or(CodecError::FrameLengthOverflow)?,
-        frame_end_offset: read_u64(encoded, 48).ok_or(CodecError::FrameLengthOverflow)?,
-        frame_crc32: read_u32(encoded, 56).ok_or(CodecError::FrameLengthOverflow)?,
-        acknowledgement_slot_crc32: read_u32(encoded, 60).ok_or(CodecError::FrameLengthOverflow)?,
+        acknowledgement_epoch: read_u64(encoded, 16).ok_or(CodecViolation::FrameLengthOverflow)?,
+        marker_epoch: read_u64(encoded, 24).ok_or(CodecViolation::FrameLengthOverflow)?,
+        log_generation: read_u64(encoded, 32).ok_or(CodecViolation::FrameLengthOverflow)?,
+        frame_sequence: read_u64(encoded, 40).ok_or(CodecViolation::FrameLengthOverflow)?,
+        frame_end_offset: read_u64(encoded, 48).ok_or(CodecViolation::FrameLengthOverflow)?,
+        frame_crc32: read_u32(encoded, 56).ok_or(CodecViolation::FrameLengthOverflow)?,
+        acknowledgement_slot_crc32: read_u32(encoded, 60).ok_or(CodecViolation::FrameLengthOverflow)?,
     };
     seal.validate()?;
-    let expected_crc = read_u32(encoded, 68).ok_or(CodecError::FrameLengthOverflow)?;
+    let expected_crc = read_u32(encoded, 68).ok_or(CodecViolation::FrameLengthOverflow)?;
     let actual_crc = crc32(&encoded[..68]);
     if expected_crc != actual_crc {
-        return Err(CodecError::CommitSealCrcMismatch {
+        return Err(CodecViolation::CommitSealCrcMismatch {
             expected: expected_crc,
             actual: actual_crc,
         });
@@ -351,10 +351,10 @@ pub(crate) fn validate_commit_seal_against_slot(
     seal: &CommitSeal,
     slot: &AcknowledgementSlot,
     encoded_slot: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-) -> Result<(), CodecError> {
+) -> Result<(), CodecViolation> {
     let expected = CommitSeal::from_acknowledgement_slot(slot, encoded_slot)?;
     if *seal != expected {
-        return Err(CodecError::CommitSealSlotMismatch);
+        return Err(CodecViolation::CommitSealSlotMismatch);
     }
     Ok(())
 }
@@ -366,15 +366,15 @@ pub(crate) fn validate_acknowledged_frame(
     slot: &AcknowledgementSlot,
     seal: &CommitSeal,
     encoded_slot: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-) -> Result<(), CodecError> {
+) -> Result<(), CodecViolation> {
     if encoded_frame.len() != frame.encoded_len() {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch {
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "encoded_frame_length",
         });
     }
     let DecodeOutcome::Frame(decoded) = decode_next_frame(encoded_frame, frame.sequence(), frame.log_generation())?
     else {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch {
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "encoded_frame_completeness",
         });
     };
@@ -382,41 +382,42 @@ pub(crate) fn validate_acknowledged_frame(
         || decoded.record_type() != frame.record_type()
         || decoded.payload() != frame.payload()
     {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch { field: "decoded_frame" });
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch { field: "decoded_frame" });
     }
     if slot.log_generation != frame.log_generation() {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch {
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "log_generation",
         });
     }
     if slot.frame_sequence != frame.sequence() {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch {
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "frame_sequence",
         });
     }
-    let encoded_length = u64::try_from(encoded_frame.len()).map_err(|_| CodecError::AcknowledgedFrameOffsetOverflow)?;
+    let encoded_length =
+        u64::try_from(encoded_frame.len()).map_err(|_| CodecViolation::AcknowledgedFrameOffsetOverflow)?;
     let expected_end = frame_start_offset
         .checked_add(encoded_length)
-        .ok_or(CodecError::AcknowledgedFrameOffsetOverflow)?;
+        .ok_or(CodecViolation::AcknowledgedFrameOffsetOverflow)?;
     if slot.frame_end_offset != expected_end {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch {
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "frame_end_offset",
         });
     }
     if slot.frame_crc32 != crc32(encoded_frame) {
-        return Err(CodecError::AcknowledgedFrameBindingMismatch { field: "frame_crc32" });
+        return Err(CodecViolation::AcknowledgedFrameBindingMismatch { field: "frame_crc32" });
     }
     validate_commit_seal_against_slot(seal, slot, encoded_slot)
 }
 
-fn validate_slot_position(state: &AcknowledgementSlotState, physical_index: usize) -> Result<(), CodecError> {
+fn validate_slot_position(state: &AcknowledgementSlotState, physical_index: usize) -> Result<(), CodecViolation> {
     let AcknowledgementSlotState::Populated(slot) = state else {
         return Ok(());
     };
     let physical_slot_index = u8::try_from(physical_index)
-        .map_err(|_| CodecError::InvalidAcknowledgementSlotIndex { slot_index: u8::MAX })?;
+        .map_err(|_| CodecViolation::InvalidAcknowledgementSlotIndex { slot_index: u8::MAX })?;
     if slot.slot_index != physical_slot_index {
-        return Err(CodecError::AcknowledgementSlotPositionMismatch {
+        return Err(CodecViolation::AcknowledgementSlotPositionMismatch {
             physical_slot_index,
             encoded_slot_index: slot.slot_index,
         });
@@ -424,14 +425,14 @@ fn validate_slot_position(state: &AcknowledgementSlotState, physical_index: usiz
     Ok(())
 }
 
-fn select_authoritative(slots: &[AcknowledgementSlotState; 2]) -> Result<Option<usize>, CodecError> {
+fn select_authoritative(slots: &[AcknowledgementSlotState; 2]) -> Result<Option<usize>, CodecViolation> {
     match (&slots[0], &slots[1]) {
         (AcknowledgementSlotState::Unused, AcknowledgementSlotState::Unused) => Ok(None),
         (AcknowledgementSlotState::Populated(slot), AcknowledgementSlotState::Unused) => select_single_slot(0, slot),
         (AcknowledgementSlotState::Unused, AcknowledgementSlotState::Populated(slot)) => select_single_slot(1, slot),
         (AcknowledgementSlotState::Populated(first), AcknowledgementSlotState::Populated(second)) => {
             if first.store_uuid != second.store_uuid || first.bootstrap_id != second.bootstrap_id {
-                return Err(CodecError::AcknowledgementStoreIdentityMismatch);
+                return Err(CodecViolation::AcknowledgementStoreIdentityMismatch);
             }
             let (older, newer, newer_index) = if first.acknowledgement_epoch < second.acknowledgement_epoch {
                 (first, second, 1)
@@ -439,22 +440,22 @@ fn select_authoritative(slots: &[AcknowledgementSlotState; 2]) -> Result<Option<
                 (second, first, 0)
             };
             if older.acknowledgement_epoch.checked_add(1) != Some(newer.acknowledgement_epoch) {
-                return Err(CodecError::NonConsecutiveAcknowledgementEpochs {
+                return Err(CodecViolation::NonConsecutiveAcknowledgementEpochs {
                     first_epoch: first.acknowledgement_epoch,
                     second_epoch: second.acknowledgement_epoch,
                 });
             }
             if older.activated && !newer.activated {
-                return Err(CodecError::AcknowledgementActivationRegressed);
+                return Err(CodecViolation::AcknowledgementActivationRegressed);
             }
             Ok(Some(newer_index))
         }
     }
 }
 
-fn select_single_slot(index: usize, slot: &AcknowledgementSlot) -> Result<Option<usize>, CodecError> {
+fn select_single_slot(index: usize, slot: &AcknowledgementSlot) -> Result<Option<usize>, CodecViolation> {
     if slot.acknowledgement_epoch != 1 {
-        return Err(CodecError::AcknowledgementHistoryMissing {
+        return Err(CodecViolation::AcknowledgementHistoryMissing {
             acknowledgement_epoch: slot.acknowledgement_epoch,
         });
     }
@@ -467,26 +468,26 @@ fn validate_acknowledgement_identity(
     acknowledgement_epoch: u64,
     marker_epoch: u64,
     frame_sequence: u64,
-) -> Result<(), CodecError> {
+) -> Result<(), CodecViolation> {
     if slot_index > 1 {
-        return Err(CodecError::InvalidAcknowledgementSlotIndex { slot_index });
+        return Err(CodecViolation::InvalidAcknowledgementSlotIndex { slot_index });
     }
     if acknowledgement_epoch == 0 {
-        return Err(CodecError::ZeroAcknowledgementEpoch);
+        return Err(CodecViolation::ZeroAcknowledgementEpoch);
     }
     let expected_slot_index = ((acknowledgement_epoch - 1) & 1) as u8;
     if slot_index != expected_slot_index {
-        return Err(CodecError::AcknowledgementSlotParityMismatch {
+        return Err(CodecViolation::AcknowledgementSlotParityMismatch {
             acknowledgement_epoch,
             expected_slot_index,
             actual_slot_index: slot_index,
         });
     }
     if activated != (marker_epoch != 0) {
-        return Err(CodecError::AcknowledgementActivationMarkerMismatch);
+        return Err(CodecViolation::AcknowledgementActivationMarkerMismatch);
     }
     if frame_sequence == 0 {
-        return Err(CodecError::ZeroSequence);
+        return Err(CodecViolation::ZeroSequence);
     }
     Ok(())
 }
@@ -495,15 +496,15 @@ fn validate_version_and_length(
     encoded: &[u8],
     expected_length: usize,
     structure: &'static str,
-) -> Result<(), CodecError> {
-    let major = read_u16(encoded, 4).ok_or(CodecError::FrameLengthOverflow)?;
-    let minor = read_u16(encoded, 6).ok_or(CodecError::FrameLengthOverflow)?;
+) -> Result<(), CodecViolation> {
+    let major = read_u16(encoded, 4).ok_or(CodecViolation::FrameLengthOverflow)?;
+    let minor = read_u16(encoded, 6).ok_or(CodecViolation::FrameLengthOverflow)?;
     if (major, minor) != (FORMAT_MAJOR, FORMAT_MINOR) {
-        return Err(CodecError::UnsupportedFormatVersion { major, minor });
+        return Err(CodecViolation::UnsupportedFormatVersion { major, minor });
     }
-    let actual_length = usize::from(read_u16(encoded, 8).ok_or(CodecError::FrameLengthOverflow)?);
+    let actual_length = usize::from(read_u16(encoded, 8).ok_or(CodecViolation::FrameLengthOverflow)?);
     if actual_length != expected_length {
-        return Err(CodecError::InvalidFixedStructureLength {
+        return Err(CodecViolation::InvalidFixedStructureLength {
             structure,
             expected: expected_length,
             actual: actual_length,
@@ -512,10 +513,10 @@ fn validate_version_and_length(
     Ok(())
 }
 
-fn require_zero(encoded: &[u8], range: std::ops::Range<usize>, field: &'static str) -> Result<(), CodecError> {
-    let bytes = encoded.get(range).ok_or(CodecError::FrameLengthOverflow)?;
+fn require_zero(encoded: &[u8], range: std::ops::Range<usize>, field: &'static str) -> Result<(), CodecViolation> {
+    let bytes = encoded.get(range).ok_or(CodecViolation::FrameLengthOverflow)?;
     if let Some(value) = bytes.iter().copied().find(|value| *value != 0) {
-        return Err(CodecError::NonZeroReserved {
+        return Err(CodecViolation::NonZeroReserved {
             field,
             value: u64::from(value),
         });

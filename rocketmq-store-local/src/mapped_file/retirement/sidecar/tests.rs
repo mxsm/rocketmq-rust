@@ -358,7 +358,7 @@ fn marker_selection_requires_consecutive_epochs_and_matching_identity() {
     };
     assert!(matches!(
         file.selected_slot(),
-        Err(SidecarError::NonConsecutiveMarkerEpochs { first: 1, second: 4 })
+        Err(SidecarViolation::NonConsecutiveMarkerEpochs { first: 1, second: 4 })
     ));
 
     let mut wrong_identity = newer;
@@ -368,7 +368,7 @@ fn marker_selection_requires_consecutive_epochs_and_matching_identity() {
     };
     assert!(matches!(
         file.selected_slot(),
-        Err(SidecarError::MarkerIdentityMismatch)
+        Err(SidecarViolation::MarkerIdentityMismatch)
     ));
 
     let mut skipped_generation = marker_slot_one();
@@ -379,7 +379,7 @@ fn marker_selection_requires_consecutive_epochs_and_matching_identity() {
     };
     assert!(matches!(
         file.selected_slot(),
-        Err(SidecarError::InvalidMarkerSlotHistory)
+        Err(SidecarViolation::InvalidMarkerSlotHistory)
     ));
 
     let mut repeated_anchor = marker_slot_one();
@@ -389,7 +389,7 @@ fn marker_selection_requires_consecutive_epochs_and_matching_identity() {
     };
     assert!(matches!(
         file.selected_slot(),
-        Err(SidecarError::NonIncreasingMarkerAnchorSequence { older: 2, newer: 2 })
+        Err(SidecarViolation::NonIncreasingMarkerAnchorSequence { older: 2, newer: 2 })
     ));
 }
 
@@ -400,14 +400,14 @@ fn marker_slots_bind_epoch_to_generation_and_bootstrap_anchor() {
     impossible_generation.log_generation = 7;
     assert_eq!(
         encode_enabled_marker_slot(&impossible_generation),
-        Err(SidecarError::InvalidMarkerSlotHistory)
+        Err(SidecarViolation::InvalidMarkerSlotHistory)
     );
 
     let mut impossible_anchor = marker_slot_zero();
     impossible_anchor.anchor_sequence = 3;
     assert_eq!(
         encode_enabled_marker_slot(&impossible_anchor),
-        Err(SidecarError::InvalidMarkerSlotHistory)
+        Err(SidecarViolation::InvalidMarkerSlotHistory)
     );
 
     let mut encoded_generation = MARKER_SLOT_ZERO_GOLDEN;
@@ -417,7 +417,7 @@ fn marker_slots_bind_epoch_to_generation_and_bootstrap_anchor() {
     encoded_generation[100..104].copy_from_slice(&checksum.to_le_bytes());
     assert_eq!(
         decode_enabled_marker_slot(&encoded_generation, 0),
-        Err(SidecarError::InvalidMarkerSlotHistory)
+        Err(SidecarViolation::InvalidMarkerSlotHistory)
     );
 
     let mut encoded_anchor = MARKER_SLOT_ZERO_GOLDEN;
@@ -426,7 +426,7 @@ fn marker_slots_bind_epoch_to_generation_and_bootstrap_anchor() {
     encoded_anchor[100..104].copy_from_slice(&checksum.to_le_bytes());
     assert_eq!(
         decode_enabled_marker_slot(&encoded_anchor, 0),
-        Err(SidecarError::InvalidMarkerSlotHistory)
+        Err(SidecarViolation::InvalidMarkerSlotHistory)
     );
 }
 
@@ -434,7 +434,7 @@ fn marker_slots_bind_epoch_to_generation_and_bootstrap_anchor() {
 fn fixed_sidecars_reject_wrong_lengths_magic_versions_flags_reserved_and_crc() {
     assert!(matches!(
         decode_store_meta(&STORE_META_GOLDEN[..63]),
-        Err(SidecarError::InvalidLength {
+        Err(SidecarViolation::InvalidLength {
             structure: "store.meta",
             expected: 64,
             actual: 63
@@ -456,7 +456,7 @@ fn fixed_sidecars_reject_wrong_lengths_magic_versions_flags_reserved_and_crc() {
 
     assert!(matches!(
         decode_enabled_marker_file(&[0; 207]),
-        Err(SidecarError::InvalidLength {
+        Err(SidecarViolation::InvalidLength {
             structure: "ENABLED.v1",
             expected: 208,
             actual: 207,
@@ -486,33 +486,36 @@ fn fixed_sidecars_reject_zero_ids_and_invalid_marker_relationships() {
     meta.bootstrap_id = [0; 16];
     assert!(matches!(
         encode_store_meta(&meta),
-        Err(SidecarError::ZeroOpaqueIdentifier { field: "bootstrap_id" })
+        Err(SidecarViolation::ZeroOpaqueIdentifier { field: "bootstrap_id" })
     ));
 
     let mut slot = marker_slot_zero();
     slot.marker_epoch = 0;
     assert!(matches!(
         encode_enabled_marker_slot(&slot),
-        Err(SidecarError::ZeroMarkerEpoch)
+        Err(SidecarViolation::ZeroMarkerEpoch)
     ));
     slot.marker_epoch = 1;
     slot.anchor_sequence = 0;
     assert!(matches!(
         encode_enabled_marker_slot(&slot),
-        Err(SidecarError::ZeroSnapshotAnchorSequence)
+        Err(SidecarViolation::ZeroSnapshotAnchorSequence)
     ));
     slot.anchor_sequence = 2;
     slot.log_generation = 1;
     assert!(matches!(
         encode_enabled_marker_slot(&slot),
-        Err(SidecarError::MarkerGenerationMismatch { snapshot: 0, log: 1 })
+        Err(SidecarViolation::MarkerGenerationMismatch { snapshot: 0, log: 1 })
     ));
 
     let empty = EnabledMarkerFile { slots: [None, None] };
-    assert!(matches!(empty.selected_slot(), Err(SidecarError::NoValidMarkerSlot)));
+    assert!(matches!(
+        empty.selected_slot(),
+        Err(SidecarViolation::NoValidMarkerSlot)
+    ));
     assert!(matches!(
         encode_enabled_marker_file(&empty),
-        Err(SidecarError::NoValidMarkerSlot)
+        Err(SidecarViolation::NoValidMarkerSlot)
     ));
 
     let impossible_single_slot = EnabledMarkerFile {
@@ -520,7 +523,7 @@ fn fixed_sidecars_reject_zero_ids_and_invalid_marker_relationships() {
     };
     assert!(matches!(
         impossible_single_slot.selected_slot(),
-        Err(SidecarError::InvalidMarkerSlotHistory)
+        Err(SidecarViolation::InvalidMarkerSlotHistory)
     ));
 }
 
@@ -571,7 +574,7 @@ fn snapshot_decoder_rejects_noncanonical_order_and_duplicate_keys() {
     let reordered = replace_snapshot_body(&FULL_SNAPSHOT_GOLDEN, &reordered_body, 3);
     assert!(matches!(
         decode_snapshot(&reordered),
-        Err(SidecarError::NonCanonicalSnapshotOrder)
+        Err(SidecarViolation::NonCanonicalSnapshotOrder)
     ));
 
     let mut duplicate_body = Vec::new();
@@ -580,7 +583,7 @@ fn snapshot_decoder_rejects_noncanonical_order_and_duplicate_keys() {
     let duplicate = replace_snapshot_body(&FULL_SNAPSHOT_GOLDEN, &duplicate_body, 2);
     assert!(matches!(
         decode_snapshot(&duplicate),
-        Err(SidecarError::DuplicateSnapshotEntry { kind: 1 })
+        Err(SidecarViolation::DuplicateSnapshotEntry { kind: 1 })
     ));
 
     let duplicate_model = full_snapshot(vec![
@@ -589,7 +592,7 @@ fn snapshot_decoder_rejects_noncanonical_order_and_duplicate_keys() {
     ]);
     assert!(matches!(
         encode_snapshot(&duplicate_model),
-        Err(SidecarError::DuplicateSnapshotEntry { kind: 1 })
+        Err(SidecarViolation::DuplicateSnapshotEntry { kind: 1 })
     ));
 }
 
@@ -601,7 +604,7 @@ fn snapshot_decoder_checks_global_bounds_before_body_or_entry_allocation() {
     rewrite_snapshot_header_crc(&mut oversized_body);
     assert!(matches!(
         decode_snapshot(&oversized_body),
-        Err(SidecarError::SnapshotBodyTooLarge { length, maximum })
+        Err(SidecarViolation::SnapshotBodyTooLarge { length, maximum })
             if length == MAX_SNAPSHOT_BODY_LENGTH as u64 + 1
                 && maximum == MAX_SNAPSHOT_BODY_LENGTH as u64
     ));
@@ -611,7 +614,7 @@ fn snapshot_decoder_checks_global_bounds_before_body_or_entry_allocation() {
     rewrite_snapshot_header_crc(&mut too_many_entries);
     assert!(matches!(
         decode_snapshot(&too_many_entries),
-        Err(SidecarError::SnapshotEntryCountTooLarge { count, maximum })
+        Err(SidecarViolation::SnapshotEntryCountTooLarge { count, maximum })
             if count == u64::from(MAX_SNAPSHOT_ENTRY_COUNT + 1)
                 && maximum == u64::from(MAX_SNAPSHOT_ENTRY_COUNT)
     ));
@@ -625,7 +628,7 @@ fn snapshot_decoder_checks_global_bounds_before_body_or_entry_allocation() {
     assert!(
         matches!(
             error,
-            SidecarError::SnapshotEntryPayloadTooLarge {
+            SidecarViolation::SnapshotEntryPayloadTooLarge {
                 kind: 1,
                 length: 16_385,
                 maximum: MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH,
@@ -657,7 +660,7 @@ fn snapshot_rejects_header_body_entry_and_payload_corruption() {
     rewrite_snapshot_body_crc(&mut unknown_kind);
     assert!(matches!(
         decode_snapshot(&unknown_kind),
-        Err(SidecarError::InvalidSnapshotEntryKind { kind: 4 })
+        Err(SidecarViolation::InvalidSnapshotEntryKind { kind: 4 })
     ));
 
     let mut bad_version = FULL_SNAPSHOT_GOLDEN.to_vec();
@@ -665,7 +668,7 @@ fn snapshot_rejects_header_body_entry_and_payload_corruption() {
     rewrite_snapshot_body_crc(&mut bad_version);
     assert!(matches!(
         decode_snapshot(&bad_version),
-        Err(SidecarError::UnsupportedSnapshotEntryVersion { kind: 1, version: 2 })
+        Err(SidecarViolation::UnsupportedSnapshotEntryVersion { kind: 1, version: 2 })
     ));
 
     let mut bad_entry_crc = FULL_SNAPSHOT_GOLDEN.to_vec();
@@ -673,7 +676,7 @@ fn snapshot_rejects_header_body_entry_and_payload_corruption() {
     rewrite_snapshot_body_crc(&mut bad_entry_crc);
     assert!(matches!(
         decode_snapshot(&bad_entry_crc),
-        Err(SidecarError::SnapshotEntryChecksumMismatch { kind: 1, .. })
+        Err(SidecarViolation::SnapshotEntryChecksumMismatch { kind: 1, .. })
     ));
 
     let mut bad_phase = FULL_SNAPSHOT_GOLDEN.to_vec();
@@ -682,7 +685,7 @@ fn snapshot_rejects_header_body_entry_and_payload_corruption() {
     rewrite_snapshot_body_crc(&mut bad_phase);
     assert!(matches!(
         decode_snapshot(&bad_phase),
-        Err(SidecarError::InvalidEnumValue {
+        Err(SidecarViolation::InvalidEnumValue {
             field: "incarnation_phase",
             value: 4
         })
@@ -695,14 +698,14 @@ fn snapshot_enforces_generation_high_water_stage_and_phase_relationships() {
     snapshot.log_generation = 2;
     assert!(matches!(
         encode_snapshot(&snapshot),
-        Err(SidecarError::SnapshotGenerationMismatch { snapshot: 1, log: 2 })
+        Err(SidecarViolation::SnapshotGenerationMismatch { snapshot: 1, log: 2 })
     ));
 
     snapshot.log_generation = 1;
     snapshot.create_high_water = 6;
     assert!(matches!(
         encode_snapshot(&snapshot),
-        Err(SidecarError::HighWaterBelowRepresented {
+        Err(SidecarViolation::HighWaterBelowRepresented {
             field: "create_high_water",
             high_water: 6,
             represented: 7,
@@ -714,7 +717,7 @@ fn snapshot_enforces_generation_high_water_stage_and_phase_relationships() {
     let snapshot = full_snapshot(vec![SnapshotEntry::RetirementTicket(retirement)]);
     assert!(matches!(
         encode_snapshot(&snapshot),
-        Err(SidecarError::StageSequenceOutOfRange {
+        Err(SidecarViolation::StageSequenceOutOfRange {
             sequence: 101,
             base_sequence: 100
         })
@@ -724,7 +727,7 @@ fn snapshot_enforces_generation_high_water_stage_and_phase_relationships() {
     allocated.phase = IncarnationPhase::Allocated;
     assert!(matches!(
         encode_snapshot(&full_snapshot(vec![SnapshotEntry::Incarnation(allocated)])),
-        Err(SidecarError::IncarnationPhaseKeyMismatch)
+        Err(SidecarViolation::IncarnationPhaseKeyMismatch)
     ));
 }
 

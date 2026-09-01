@@ -99,7 +99,7 @@ impl TimerLogV2Record {
         bytes
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, SegmentedTimerLogError> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, SegmentedTimerLogError> {
         if bytes.len() != TIMER_LOG_V2_PHYSICAL_RECORD_SIZE {
             return Err(SegmentedTimerLogError::InvalidRecordLength(bytes.len()));
         }
@@ -172,7 +172,7 @@ struct SegmentState {
 }
 
 impl SegmentedTimerLog {
-    pub fn new(
+    pub(crate) fn new(
         directory: impl AsRef<Path>,
         segment_size: usize,
         handle_limit: usize,
@@ -196,7 +196,7 @@ impl SegmentedTimerLog {
         })
     }
 
-    pub fn load(&self) -> Result<(), SegmentedTimerLogError> {
+    pub(crate) fn load(&self) -> Result<(), SegmentedTimerLogError> {
         std::fs::create_dir_all(&self.directory)?;
         let manifest = self.read_manifest()?;
         let mut segment_starts = Vec::new();
@@ -278,12 +278,15 @@ impl SegmentedTimerLog {
         Ok(())
     }
 
-    pub fn append(&self, record: TimerLogV2Record) -> Result<TimerLogOffset, SegmentedTimerLogError> {
+    pub(crate) fn append(&self, record: TimerLogV2Record) -> Result<TimerLogOffset, SegmentedTimerLogError> {
         let offsets = self.append_batch(&[record])?;
         Ok(offsets[0])
     }
 
-    pub fn append_batch(&self, records: &[TimerLogV2Record]) -> Result<Vec<TimerLogOffset>, SegmentedTimerLogError> {
+    pub(crate) fn append_batch(
+        &self,
+        records: &[TimerLogV2Record],
+    ) -> Result<Vec<TimerLogOffset>, SegmentedTimerLogError> {
         let mut state = self.state.lock();
         let mut offsets = Vec::with_capacity(records.len());
         let mut index = 0usize;
@@ -319,12 +322,12 @@ impl SegmentedTimerLog {
         Ok(offsets)
     }
 
-    pub fn read(&self, offset: TimerLogOffset) -> Result<TimerLogV2Record, SegmentedTimerLogError> {
+    pub(crate) fn read(&self, offset: TimerLogOffset) -> Result<TimerLogV2Record, SegmentedTimerLogError> {
         let mut state = self.state.lock();
         self.read_locked(&mut state, offset)
     }
 
-    pub fn read_batch(
+    pub(crate) fn read_batch(
         &self,
         cursor: TimerLogOffset,
         max_messages: usize,
@@ -352,7 +355,7 @@ impl SegmentedTimerLog {
         })
     }
 
-    pub fn flush_up_to(&self, offset: TimerLogOffset) -> Result<(), SegmentedTimerLogError> {
+    pub(crate) fn flush_up_to(&self, offset: TimerLogOffset) -> Result<(), SegmentedTimerLogError> {
         let mut state = self.state.lock();
         if offset.get() > state.next_offset {
             return Err(SegmentedTimerLogError::FlushBeyondEnd {
@@ -368,7 +371,7 @@ impl SegmentedTimerLog {
         Ok(())
     }
 
-    pub fn flush(&self) -> Result<(), SegmentedTimerLogError> {
+    pub(crate) fn flush(&self) -> Result<(), SegmentedTimerLogError> {
         self.flush_up_to(TimerLogOffset::new(self.len()))
     }
 
@@ -398,7 +401,7 @@ impl SegmentedTimerLog {
             .collect()
     }
 
-    pub fn truncate(&self, length: TimerLogOffset) -> Result<(), SegmentedTimerLogError> {
+    pub(crate) fn truncate(&self, length: TimerLogOffset) -> Result<(), SegmentedTimerLogError> {
         if !length.get().is_multiple_of(TIMER_LOG_V2_LOGICAL_RECORD_SIZE) {
             return Err(SegmentedTimerLogError::UnalignedOffset(length.get()));
         }
@@ -447,7 +450,7 @@ impl SegmentedTimerLog {
         Ok(())
     }
 
-    pub fn gc(
+    pub(crate) fn gc(
         &self,
         min_live_offset: TimerLogOffset,
         checkpoint_watermark: TimerLogOffset,
@@ -692,7 +695,7 @@ impl Manifest {
 }
 
 #[derive(Debug, Error)]
-pub enum SegmentedTimerLogError {
+pub(crate) enum SegmentedTimerLogError {
     #[error("timer log I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("timer log segment size {0} is invalid")]

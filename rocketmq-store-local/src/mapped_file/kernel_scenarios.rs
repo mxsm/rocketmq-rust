@@ -20,17 +20,17 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::thread;
 
-use rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency;
-use rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule;
-use rocketmq_store_local::mapped_file::kernel::MappedFileCacheResidencyPlan;
-use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
-use rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation;
-use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
-use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
-use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter;
-use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;
-use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
-use rocketmq_store_local::mapped_file::MappedFileOperation;
+use crate::mapped_file::kernel::plan_mapped_file_cache_residency;
+use crate::mapped_file::kernel::visit_mapped_file_warmup_schedule;
+use crate::mapped_file::kernel::MappedFileCacheResidencyPlan;
+use crate::mapped_file::kernel::MappedFileProgress;
+use crate::mapped_file::kernel::MappedFileWarmupOperation;
+use crate::mapped_file::kernel::ReferenceResource;
+use crate::mapped_file::kernel::ReferenceResourceBase;
+use crate::mapped_file::kernel::ReferenceResourceCounter;
+use crate::mapped_file::kernel::OS_PAGE_SIZE;
+use crate::mapped_file::MappedFileAdmissionState;
+use crate::mapped_file::MappedFileOperation;
 
 fn warmup_schedule(
     file_size: usize,

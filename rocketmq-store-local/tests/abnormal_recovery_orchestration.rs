@@ -20,7 +20,7 @@ use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObserva
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryOffsetError;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 
@@ -69,7 +69,7 @@ fn segment_state_error_skips_started_and_preserves_adapter_error_identity() {
     );
     assert_eq!(
         outcome,
-        AbnormalRecoverySegmentOutcome::StateFailed(AbnormalRecoveryOffsetError::OffsetExceedsI64 {
+        AbnormalRecoverySegmentOutcome::StateFailed(AbnormalRecoveryOffsetViolation::OffsetExceedsI64 {
             offset: i64::MAX as u64 + 1,
         })
     );
@@ -234,7 +234,7 @@ fn message_state_failure_drops_unobserved_payload_and_stops_reading() {
     );
     assert_eq!(
         outcome,
-        AbnormalRecoverySegmentOutcome::StateFailed(AbnormalRecoveryOffsetError::BaseRelativeOverflow {
+        AbnormalRecoverySegmentOutcome::StateFailed(AbnormalRecoveryOffsetViolation::BaseRelativeOverflow {
             base_offset: u64::MAX,
             relative_start: 1,
         })

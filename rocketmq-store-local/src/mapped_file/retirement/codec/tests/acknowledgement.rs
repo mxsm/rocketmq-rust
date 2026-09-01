@@ -103,7 +103,7 @@ fn acknowledgement_file_selects_only_a_consecutive_non_regressing_history() {
         .copy_from_slice(&encode_acknowledgement_slot(&regressed).expect("standalone slot encodes"));
     assert_eq!(
         decode_acknowledgement_file(&file),
-        Err(CodecError::AcknowledgementActivationRegressed)
+        Err(CodecViolation::AcknowledgementActivationRegressed)
     );
 }
 
@@ -136,7 +136,7 @@ fn acknowledgement_file_codec_enforces_position_history_and_torn_slot_rules() {
     swapped[ACKNOWLEDGEMENT_SLOT_LENGTH..].copy_from_slice(&encode_acknowledgement_slot(&first).expect("slot encodes"));
     assert_eq!(
         decode_acknowledgement_file(&swapped),
-        Err(CodecError::AcknowledgementSlotPositionMismatch {
+        Err(CodecViolation::AcknowledgementSlotPositionMismatch {
             physical_slot_index: 0,
             encoded_slot_index: 1,
         })
@@ -147,7 +147,7 @@ fn acknowledgement_file_codec_enforces_position_history_and_torn_slot_rules() {
         .copy_from_slice(&encode_acknowledgement_slot(&second).expect("slot encodes"));
     assert_eq!(
         decode_acknowledgement_file(&missing_history),
-        Err(CodecError::AcknowledgementHistoryMissing {
+        Err(CodecViolation::AcknowledgementHistoryMissing {
             acknowledgement_epoch: 2,
         })
     );
@@ -160,14 +160,14 @@ fn acknowledgement_file_codec_enforces_position_history_and_torn_slot_rules() {
     ];
     assert!(matches!(
         encode_acknowledgement_file(&gap_states),
-        Err(CodecError::NonConsecutiveAcknowledgementEpochs { .. })
+        Err(CodecViolation::NonConsecutiveAcknowledgementEpochs { .. })
     ));
 
     let mut torn = encoded;
     torn[ACKNOWLEDGEMENT_SLOT_LENGTH + 88] ^= 1;
     assert!(matches!(
         decode_acknowledgement_file(&torn),
-        Err(CodecError::AcknowledgementSlotCrcMismatch { .. })
+        Err(CodecViolation::AcknowledgementSlotCrcMismatch { .. })
     ));
 }
 
@@ -175,7 +175,7 @@ fn acknowledgement_file_codec_enforces_position_history_and_torn_slot_rules() {
 fn acknowledgement_slot_and_seal_reject_structural_and_crc_corruption() {
     assert!(matches!(
         decode_acknowledgement_slot(&ACKNOWLEDGEMENT_SLOT[..103]),
-        Err(CodecError::InvalidFixedStructureLength {
+        Err(CodecViolation::InvalidFixedStructureLength {
             structure: "acknowledgement slot",
             expected: ACKNOWLEDGEMENT_SLOT_LENGTH,
             actual: 103,
@@ -186,21 +186,21 @@ fn acknowledgement_slot_and_seal_reject_structural_and_crc_corruption() {
     bad_slot_magic[0] ^= 1;
     assert!(matches!(
         decode_acknowledgement_slot(&bad_slot_magic),
-        Err(CodecError::InvalidAcknowledgementMagic { .. })
+        Err(CodecViolation::InvalidAcknowledgementMagic { .. })
     ));
 
     let mut bad_slot_flags = ACKNOWLEDGEMENT_SLOT;
     bad_slot_flags[11] |= 0x80;
     assert_eq!(
         decode_acknowledgement_slot(&bad_slot_flags),
-        Err(CodecError::InvalidAcknowledgementFlags { flags: 0x81 })
+        Err(CodecViolation::InvalidAcknowledgementFlags { flags: 0x81 })
     );
 
     let mut bad_sealed_length = ACKNOWLEDGEMENT_SLOT;
     bad_sealed_length[92..100].copy_from_slice(&173_u64.to_le_bytes());
     assert_eq!(
         decode_acknowledgement_slot(&bad_sealed_length),
-        Err(CodecError::SealedLogLengthMismatch {
+        Err(CodecViolation::SealedLogLengthMismatch {
             expected: 172,
             actual: 173,
         })
@@ -210,12 +210,12 @@ fn acknowledgement_slot_and_seal_reject_structural_and_crc_corruption() {
     bad_slot_crc[100] ^= 1;
     assert!(matches!(
         decode_acknowledgement_slot(&bad_slot_crc),
-        Err(CodecError::AcknowledgementSlotCrcMismatch { .. })
+        Err(CodecViolation::AcknowledgementSlotCrcMismatch { .. })
     ));
 
     assert!(matches!(
         decode_commit_seal(&COMMIT_SEAL[..71]),
-        Err(CodecError::InvalidFixedStructureLength {
+        Err(CodecViolation::InvalidFixedStructureLength {
             structure: "commit seal",
             expected: COMMIT_SEAL_LENGTH,
             actual: 71,
@@ -226,7 +226,7 @@ fn acknowledgement_slot_and_seal_reject_structural_and_crc_corruption() {
     bad_seal_reserved[64] = 1;
     assert!(matches!(
         decode_commit_seal(&bad_seal_reserved),
-        Err(CodecError::NonZeroReserved {
+        Err(CodecViolation::NonZeroReserved {
             field: "commit_seal_reserved",
             value: 1,
         })
@@ -236,7 +236,7 @@ fn acknowledgement_slot_and_seal_reject_structural_and_crc_corruption() {
     bad_seal_crc[68] ^= 1;
     assert!(matches!(
         decode_commit_seal(&bad_seal_crc),
-        Err(CodecError::CommitSealCrcMismatch { .. })
+        Err(CodecViolation::CommitSealCrcMismatch { .. })
     ));
 }
 
@@ -261,13 +261,13 @@ fn acknowledged_frame_slot_and_seal_bind_byte_exactly() {
     wrong_end.frame_end_offset += 1;
     assert_eq!(
         validate_acknowledged_frame(&frame, &COMPLETED_FRAME, 0, &wrong_end, &seal, &ACKNOWLEDGEMENT_SLOT,),
-        Err(CodecError::AcknowledgedFrameBindingMismatch {
+        Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "frame_end_offset",
         })
     );
     assert_eq!(
         validate_acknowledged_frame(&frame, &COMPLETED_FRAME, u64::MAX, &slot, &seal, &ACKNOWLEDGEMENT_SLOT,),
-        Err(CodecError::AcknowledgedFrameOffsetOverflow)
+        Err(CodecViolation::AcknowledgedFrameOffsetOverflow)
     );
 }
 
@@ -277,35 +277,35 @@ fn acknowledgement_encoder_rejects_invalid_identity_bounds_and_epoch_overflow() 
     slot.acknowledgement_epoch = 0;
     assert_eq!(
         encode_acknowledgement_slot(&slot),
-        Err(CodecError::ZeroAcknowledgementEpoch)
+        Err(CodecViolation::ZeroAcknowledgementEpoch)
     );
 
     slot.acknowledgement_epoch = 77;
     slot.slot_index = 2;
     assert_eq!(
         encode_acknowledgement_slot(&slot),
-        Err(CodecError::InvalidAcknowledgementSlotIndex { slot_index: 2 })
+        Err(CodecViolation::InvalidAcknowledgementSlotIndex { slot_index: 2 })
     );
 
     slot.slot_index = 0;
     slot.activated = false;
     assert_eq!(
         encode_acknowledgement_slot(&slot),
-        Err(CodecError::AcknowledgementActivationMarkerMismatch)
+        Err(CodecViolation::AcknowledgementActivationMarkerMismatch)
     );
 
     slot.activated = true;
     slot.frame_end_offset = u64::MAX;
     assert_eq!(
         encode_acknowledgement_slot(&slot),
-        Err(CodecError::SealedLogLengthOverflow)
+        Err(CodecViolation::SealedLogLengthOverflow)
     );
 
     slot.frame_end_offset = 100;
     slot.acknowledgement_epoch = u64::MAX;
     assert_eq!(
         slot.next_acknowledgement_epoch(),
-        Err(CodecError::AcknowledgementEpochOverflow)
+        Err(CodecViolation::AcknowledgementEpochOverflow)
     );
 }
 

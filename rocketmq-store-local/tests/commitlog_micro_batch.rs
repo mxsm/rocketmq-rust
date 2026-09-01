@@ -23,6 +23,7 @@ use rocketmq_runtime::resource_budget::BudgetedItem;
 use rocketmq_store_local::commit_log::append::finalized_append::FinalizedAppend;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
 use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
+use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionOutcome;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencer;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan;
@@ -66,7 +67,7 @@ async fn enabled_micro_batch_preserves_fifo_and_both_drain_limits() {
     let policy = MicroBatchPolicy::try_new(3, 240, Duration::ZERO).expect("policy");
     let (sender, mut receiver) = AppendSequencer::bounded(sequencer_config(policy)).expect("sequencer");
     for id in 0..5 {
-        sender.try_submit(id, 80).expect("admit request");
+        assert!(matches!(sender.try_submit(id, 80), AppendAdmissionOutcome::Accepted));
     }
     let cancellation = CancellationToken::new();
 
@@ -91,8 +92,14 @@ async fn enabled_micro_batch_preserves_fifo_and_both_drain_limits() {
 async fn disabled_micro_batch_keeps_single_writer_and_one_result_per_drain() {
     let policy = MicroBatchPolicy::disabled(4096).expect("policy");
     let (sender, mut receiver) = AppendSequencer::bounded(sequencer_config(policy)).expect("sequencer");
-    sender.try_submit("first", 80).expect("first");
-    sender.try_submit("second", 80).expect("second");
+    assert!(matches!(
+        sender.try_submit("first", 80),
+        AppendAdmissionOutcome::Accepted
+    ));
+    assert!(matches!(
+        sender.try_submit("second", 80),
+        AppendAdmissionOutcome::Accepted
+    ));
     let cancellation = CancellationToken::new();
 
     let first = receiver.next_batch(&cancellation).await.expect("first drain");

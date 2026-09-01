@@ -15,6 +15,9 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use super::NeedsReconciliation;
@@ -113,10 +116,10 @@ impl StableNamespaceInventory {
         }
     }
 
-    fn observe(&self, path: &StoreRelativePath) -> Result<Option<&NamespaceObject>, ReconciliationError> {
+    fn observe(&self, path: &StoreRelativePath) -> Result<Option<&NamespaceObject>, ReconciliationViolation> {
         let directory = parent_directory(path);
         if !self.complete_directories.contains(directory) {
-            return Err(ReconciliationError::IncompleteDirectoryInventory {
+            return Err(ReconciliationViolation::IncompleteDirectoryInventory {
                 directory: directory.into(),
             });
         }
@@ -199,12 +202,13 @@ impl ReconciledLedgerState {
         &mut self,
         directory: &str,
         configured_file_size: u64,
-    ) -> Result<Vec<ReconciledSegmentFile>, ManagedSegmentClaimError> {
-        let directory = StoreRelativePath::new(directory).map_err(|_| ManagedSegmentClaimError::InvalidDirectory)?;
+    ) -> Result<Vec<ReconciledSegmentFile>, ManagedSegmentClaimViolation> {
+        let directory =
+            StoreRelativePath::new(directory).map_err(|_| ManagedSegmentClaimViolation::InvalidDirectory)?;
         let mut paths = Vec::new();
         paths
             .try_reserve_exact(self.active.len())
-            .map_err(|_| ManagedSegmentClaimError::AllocationFailed)?;
+            .map_err(|_| ManagedSegmentClaimViolation::AllocationFailed)?;
 
         // Validate the complete claim before consuming either map. Queue loading must never observe
         // a partial generation merely because a later binding or retained handle is inconsistent.
@@ -213,13 +217,13 @@ impl ReconciledLedgerState {
                 continue;
             }
             if binding.expected_length != configured_file_size {
-                return Err(ManagedSegmentClaimError::ConfiguredLengthMismatch {
+                return Err(ManagedSegmentClaimViolation::ConfiguredLengthMismatch {
                     expected: binding.expected_length,
                     configured: configured_file_size,
                 });
             }
             if !self.retained_files.contains_key(path) {
-                return Err(ManagedSegmentClaimError::MissingRetainedHandle);
+                return Err(ManagedSegmentClaimViolation::MissingRetainedHandle);
             }
             paths.push(path.clone());
         }
@@ -227,7 +231,7 @@ impl ReconciledLedgerState {
         let mut claimed = Vec::new();
         claimed
             .try_reserve_exact(paths.len())
-            .map_err(|_| ManagedSegmentClaimError::AllocationFailed)?;
+            .map_err(|_| ManagedSegmentClaimViolation::AllocationFailed)?;
         for path in paths {
             // INVARIANT: both maps were preflighted above while this method holds exclusive access
             // to the state; no intervening operation can remove either entry.
@@ -338,7 +342,7 @@ impl ReconciledLifecycleSession {
         &mut self,
         directory: &str,
         configured_file_size: u64,
-    ) -> Result<Vec<ReconciledSegmentFile>, ManagedSegmentClaimError> {
+    ) -> Result<Vec<ReconciledSegmentFile>, ManagedSegmentClaimViolation> {
         self.state
             .take_active_segments_in_directory(directory, configured_file_size)
     }
@@ -461,7 +465,7 @@ impl ReconciledSegmentFile {
 
 #[doc(hidden)]
 #[derive(Debug, Error, PartialEq, Eq)]
-pub enum ManagedSegmentClaimError {
+pub enum ManagedSegmentClaimViolation {
     #[error("managed queue directory is not a canonical store-relative path")]
     InvalidDirectory,
     #[error("managed segment claim allocation failed")]
@@ -474,46 +478,35 @@ pub enum ManagedSegmentClaimError {
     ConfiguredLengthMismatch { expected: u64, configured: u64 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum ManagedReconciliationErrorKind {
+/// Private reconciliation leaf retained as the typed StoreError source.
+#[derive(Debug, Error)]
+pub(crate) enum ManagedReconciliationError {
     #[error("managed session still requires ledger or marker recovery")]
     ReplayRecoveryRequired,
     #[error("managed session is missing its Store UUID")]
     MissingStoreUuid,
     #[error("managed namespace inventory failed")]
-    Inventory,
+    Inventory(#[source] inventory::ReconciliationInventoryError),
     #[error("managed replay and namespace state disagree")]
-    State,
-}
-
-/// Opaque reconciliation failure with a stable category and preserved typed source chain.
-#[doc(hidden)]
-#[derive(Debug, Error)]
-#[error("{kind}")]
-pub struct ManagedReconciliationError {
-    kind: ManagedReconciliationErrorKind,
-    #[source]
-    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    State(#[source] ReconciliationViolation),
 }
 
 impl ManagedReconciliationError {
-    fn without_source(kind: ManagedReconciliationErrorKind) -> Self {
-        Self { kind, source: None }
-    }
-
-    fn with_source(
-        kind: ManagedReconciliationErrorKind,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            kind,
-            source: Some(Box::new(source)),
-        }
-    }
-
-    #[doc(hidden)]
-    pub const fn kind(&self) -> ManagedReconciliationErrorKind {
-        self.kind
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Inventory scans that cannot complete are backend unavailability, while
+    /// recovery preconditions and replay/namespace disagreement are corrupted
+    /// state. The complete leaf is preserved as the typed source.
+    fn into_store_error(self) -> StoreError {
+        let descriptor = match &self {
+            Self::Inventory(_) => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            Self::ReplayRecoveryRequired | Self::MissingStoreUuid | Self::State(_) => {
+                &rocketmq_error::STORAGE_STATE_CORRUPTED
+            }
+        };
+        StoreError::new(descriptor, StoreOperation::Load)
+            .in_component(StoreComponent::MappedFile)
+            .with_source(self)
     }
 }
 
@@ -523,13 +516,11 @@ fn reconcile_managed_session(
 ) -> Result<ManagedReconciliationDisposition, ManagedReconciliationError> {
     let store_uuid = session
         .store_uuid()
-        .ok_or_else(|| ManagedReconciliationError::without_source(ManagedReconciliationErrorKind::MissingStoreUuid))?;
+        .ok_or(ManagedReconciliationError::MissingStoreUuid)?;
     let needs_reconciliation = match session.decision() {
         Some(crate::mapped_file::retirement::replay::RecoveryDecision::NeedsReconciliation(needs)) => needs.clone(),
         _ => {
-            return Err(ManagedReconciliationError::without_source(
-                ManagedReconciliationErrorKind::ReplayRecoveryRequired,
-            ));
+            return Err(ManagedReconciliationError::ReplayRecoveryRequired);
         }
     };
     let inventory = inventory::scan(
@@ -538,10 +529,8 @@ fn reconcile_managed_session(
         needs_reconciliation.recovered(),
         limits,
     )
-    .map_err(|error| ManagedReconciliationError::with_source(ManagedReconciliationErrorKind::Inventory, error))?;
-    match reconcile(needs_reconciliation, inventory)
-        .map_err(|error| ManagedReconciliationError::with_source(ManagedReconciliationErrorKind::State, error))?
-    {
+    .map_err(ManagedReconciliationError::Inventory)?;
+    match reconcile(needs_reconciliation, inventory).map_err(ManagedReconciliationError::State)? {
         ReconciliationDisposition::Ready(state) => {
             Ok(ManagedReconciliationDisposition::Ready(ReconciledLifecycleSession {
                 session,
@@ -560,13 +549,13 @@ impl crate::mapped_file::retirement::replay::ManagedLifecycleSession {
     pub fn reconcile(
         self: Box<Self>,
         limits: ManagedReconciliationLimits,
-    ) -> Result<ManagedReconciliationDisposition, ManagedReconciliationError> {
-        reconcile_managed_session(self, limits.into())
+    ) -> Result<ManagedReconciliationDisposition, StoreError> {
+        reconcile_managed_session(self, limits.into()).map_err(ManagedReconciliationError::into_store_error)
     }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub(crate) enum ReconciliationError {
+pub(crate) enum ReconciliationViolation {
     #[error("namespace inventory belongs to another Store UUID")]
     StoreUuidMismatch,
     #[error("directory {directory:?} was not included in the stable inventory")]

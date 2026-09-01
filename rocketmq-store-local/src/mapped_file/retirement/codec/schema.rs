@@ -14,7 +14,7 @@
 
 use std::mem::size_of;
 
-use super::CodecError;
+use super::CodecViolation;
 use super::RecordType;
 
 mod prefix;
@@ -72,15 +72,15 @@ impl PayloadSchema {
         }
     }
 
-    fn validate(self, record_type: RecordType, actual: usize) -> Result<(), CodecError> {
+    fn validate(self, record_type: RecordType, actual: usize) -> Result<(), CodecViolation> {
         match self {
-            Self::Exact(expected) if actual != expected => Err(CodecError::InvalidPayloadLength {
+            Self::Exact(expected) if actual != expected => Err(CodecViolation::InvalidPayloadLength {
                 record_type: record_type.wire_value(),
                 expected,
                 actual,
             }),
             Self::Range { minimum, maximum } if !(minimum..=maximum).contains(&actual) => {
-                Err(CodecError::InvalidVariablePayloadLength {
+                Err(CodecViolation::InvalidVariablePayloadLength {
                     record_type: record_type.wire_value(),
                     minimum,
                     maximum,
@@ -102,21 +102,24 @@ impl PayloadSchema {
     }
 }
 
-pub(super) fn validate_known_payload_length(record_type: RecordType, actual: usize) -> Result<(), CodecError> {
+pub(super) fn validate_known_payload_length(record_type: RecordType, actual: usize) -> Result<(), CodecViolation> {
     match PayloadSchema::for_record(record_type) {
         Some(schema) => schema.validate(record_type, actual),
         None => Ok(()),
     }
 }
 
-pub(super) fn validate_known_payload_length_prefix(record_type: RecordType, prefix: &[u8]) -> Result<(), CodecError> {
+pub(super) fn validate_known_payload_length_prefix(
+    record_type: RecordType,
+    prefix: &[u8],
+) -> Result<(), CodecViolation> {
     let Some(schema) = PayloadSchema::for_record(record_type) else {
         return Ok(());
     };
     if schema.accepts_length_prefix(prefix) {
         return Ok(());
     }
-    Err(CodecError::InvalidFieldPrefix {
+    Err(CodecViolation::InvalidFieldPrefix {
         field: "payload_length",
         offset: 16 + prefix.len().saturating_sub(1),
     })

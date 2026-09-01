@@ -14,22 +14,22 @@
 
 use thiserror::Error;
 
-use super::super::codec::CodecError;
+use super::super::codec::CodecViolation;
 use super::super::codec::LedgerRecord;
 use super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 use super::super::codec::COMMIT_SEAL_LENGTH;
 use super::super::identity::StoreUuid;
 use super::super::sidecar::EnabledMarkerSlot;
-use super::super::sidecar::SidecarError;
+use super::super::sidecar::SidecarViolation;
 use super::super::sidecar::ENABLED_MARKER_FILE_LENGTH;
 use super::super::sidecar::ENABLED_MARKER_SLOT_LENGTH;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(super) enum BootstrapPlanError {
+pub(super) enum BootstrapPlanViolation {
     #[error("bootstrap codec validation failed: {0}")]
-    Codec(#[from] CodecError),
+    Codec(#[from] CodecViolation),
     #[error("bootstrap sidecar validation failed: {0}")]
-    Sidecar(#[from] SidecarError),
+    Sidecar(#[from] SidecarViolation),
     #[error("bootstrap snapshot is invalid: {reason}")]
     InvalidSnapshot { reason: &'static str },
     #[error("canonical store.meta proof differs from the expected StoreMeta")]

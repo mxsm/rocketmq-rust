@@ -20,6 +20,16 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::rc::Rc;
 
+use super::owner::DerivedCursorOwnerError;
+use super::replay::replay_derived;
+use super::replay::DerivedReplayError;
+use crate::commit_log::record::CommitLogFrameSource;
+use crate::commit_log::record::MESSAGE_MAGIC_CODE;
+use crate::derived::CheckpointPersistence;
+use crate::derived::DerivedCursorOwner;
+use crate::derived::DerivedReplayApply;
+use crate::derived::DerivedReplaySink;
+use crate::derived::DerivedReplayStop;
 use bytes::Bytes;
 use rocketmq_store_api::DerivedCheckpoint;
 use rocketmq_store_api::DerivedCursor;
@@ -28,16 +38,6 @@ use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::LegacyDerivedCursorV0;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::DERIVED_CHECKPOINT_ENCODED_LEN;
-use rocketmq_store_local::commit_log::record::CommitLogFrameSource;
-use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
-use rocketmq_store_local::derived::replay_derived;
-use rocketmq_store_local::derived::CheckpointPersistence;
-use rocketmq_store_local::derived::DerivedCursorOwner;
-use rocketmq_store_local::derived::DerivedCursorOwnerError;
-use rocketmq_store_local::derived::DerivedReplayApply;
-use rocketmq_store_local::derived::DerivedReplayError;
-use rocketmq_store_local::derived::DerivedReplaySink;
-use rocketmq_store_local::derived::DerivedReplayStop;
 
 const SOURCE_EPOCH: u64 = 41;
 

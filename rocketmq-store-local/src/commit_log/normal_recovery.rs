@@ -16,7 +16,7 @@
 
 use super::recovery::NormalRecoveryAction;
 use super::recovery::NormalRecoveryEvent;
-use super::recovery::NormalRecoveryOffsetError;
+use super::recovery::NormalRecoveryOffsetViolation;
 use super::recovery::NormalRecoveryState;
 
 /// One adapter-produced record consumed by normal segment recovery.
@@ -71,7 +71,7 @@ pub enum NormalRecoverySegmentOutcome<E> {
     /// The record adapter failed with its original error.
     AdapterFailed(E),
     /// The offset state machine rejected an event.
-    StateFailed(NormalRecoveryOffsetError),
+    StateFailed(NormalRecoveryOffsetViolation),
 }
 
 impl NormalRecoveryState {

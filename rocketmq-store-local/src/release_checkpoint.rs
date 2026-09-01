@@ -658,7 +658,7 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> LocalRel
 
 /// Local release-checkpoint failure.
 #[derive(Debug, Error)]
-pub enum LocalReleaseCheckpointError {
+pub(crate) enum LocalReleaseCheckpointError {
     #[error("release checkpoint authorization has expired")]
     AuthorizationExpired,
     #[error("authorization does not grant release_checkpoint")]

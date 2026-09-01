@@ -21,7 +21,7 @@ mod normal_window;
 
 pub use completion::CommitLogRecoveryCompletion;
 pub use confirm_candidate::abnormal_confirm_candidate_end;
-pub use confirm_candidate::AbnormalRecoveryConfirmCandidateError;
+pub use confirm_candidate::AbnormalRecoveryConfirmCandidateViolation;
 pub use consume_queue::should_truncate_recovery_consume_queue;
 pub use normal_window::plan_normal_recovery_file_window;
 pub use normal_window::NormalRecoveryFileWindow;
@@ -92,7 +92,7 @@ pub enum AbnormalRecoveryAction {
 
 /// Checked offset failure while applying an abnormal recovery event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AbnormalRecoveryOffsetError {
+pub enum AbnormalRecoveryOffsetViolation {
     /// Segment base plus relative frame start overflowed `u64`.
     #[error("segment base {base_offset} plus relative start {relative_start} overflowed")]
     BaseRelativeOverflow {
@@ -148,14 +148,14 @@ impl AbnormalRecoveryState {
     ///
     /// # Errors
     ///
-    /// Returns [`AbnormalRecoveryOffsetError::OffsetExceedsI64`] when the seed cannot be
+    /// Returns [`AbnormalRecoveryOffsetViolation::OffsetExceedsI64`] when the seed cannot be
     /// represented by Store's signed offsets.
     pub const fn try_new(
         initial_offset: u64,
         policy: AbnormalRecoveryPolicy,
-    ) -> Result<Self, AbnormalRecoveryOffsetError> {
+    ) -> Result<Self, AbnormalRecoveryOffsetViolation> {
         if initial_offset > MAX_SIGNED_OFFSET {
-            return Err(AbnormalRecoveryOffsetError::OffsetExceedsI64 { offset: initial_offset });
+            return Err(AbnormalRecoveryOffsetViolation::OffsetExceedsI64 { offset: initial_offset });
         }
         Ok(Self {
             last_valid_offset: initial_offset,
@@ -169,12 +169,12 @@ impl AbnormalRecoveryState {
     ///
     /// # Errors
     ///
-    /// Returns [`AbnormalRecoveryOffsetError`] when checked arithmetic fails, a confirm candidate
+    /// Returns [`AbnormalRecoveryOffsetViolation`] when checked arithmetic fails, a confirm candidate
     /// is negative, or a resulting watermark exceeds `i64::MAX`. State is unchanged on error.
     pub fn apply(
         &mut self,
         event: AbnormalRecoveryEvent,
-    ) -> Result<AbnormalRecoveryAction, AbnormalRecoveryOffsetError> {
+    ) -> Result<AbnormalRecoveryAction, AbnormalRecoveryOffsetViolation> {
         let (action, next_last_valid, next_confirm_valid, next_truncate) = match event {
             AbnormalRecoveryEvent::SegmentStarted { base_offset } => match self.policy {
                 AbnormalRecoveryPolicy::Standard => (
@@ -198,7 +198,7 @@ impl AbnormalRecoveryState {
                 dispatch_gate,
             } => {
                 let confirm_candidate = u64::try_from(confirm_candidate_end).map_err(|_| {
-                    AbnormalRecoveryOffsetError::NegativeConfirmCandidate {
+                    AbnormalRecoveryOffsetViolation::NegativeConfirmCandidate {
                         candidate: confirm_candidate_end,
                     }
                 })?;
@@ -206,7 +206,7 @@ impl AbnormalRecoveryState {
                     AbnormalRecoveryPolicy::Standard => {
                         let message_start = self.truncate_offset;
                         let message_end = message_start.checked_add(validated_size).ok_or(
-                            AbnormalRecoveryOffsetError::MessageEndOverflow {
+                            AbnormalRecoveryOffsetViolation::MessageEndOverflow {
                                 start_offset: message_start,
                                 validated_size,
                             },
@@ -215,13 +215,13 @@ impl AbnormalRecoveryState {
                     }
                     AbnormalRecoveryPolicy::Optimized => {
                         let message_start = segment_base.checked_add(relative_start).ok_or(
-                            AbnormalRecoveryOffsetError::BaseRelativeOverflow {
+                            AbnormalRecoveryOffsetViolation::BaseRelativeOverflow {
                                 base_offset: segment_base,
                                 relative_start,
                             },
                         )?;
                         let message_end = message_start.checked_add(validated_size).ok_or(
-                            AbnormalRecoveryOffsetError::MessageEndOverflow {
+                            AbnormalRecoveryOffsetViolation::MessageEndOverflow {
                                 start_offset: message_start,
                                 validated_size,
                             },
@@ -272,7 +272,7 @@ impl AbnormalRecoveryState {
 
         for offset in [next_last_valid, next_confirm_valid, next_truncate] {
             if offset > MAX_SIGNED_OFFSET {
-                return Err(AbnormalRecoveryOffsetError::OffsetExceedsI64 { offset });
+                return Err(AbnormalRecoveryOffsetViolation::OffsetExceedsI64 { offset });
             }
         }
 
@@ -337,7 +337,7 @@ pub enum NormalRecoveryAction {
 
 /// Checked offset failure while applying a normal recovery event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum NormalRecoveryOffsetError {
+pub enum NormalRecoveryOffsetViolation {
     /// Segment base plus relative frame start overflowed `u64`.
     #[error("segment base {base_offset} plus relative start {relative_start} overflowed")]
     BaseRelativeOverflow {
@@ -384,11 +384,14 @@ impl NormalRecoveryState {
     ///
     /// # Errors
     ///
-    /// Returns [`NormalRecoveryOffsetError::OffsetExceedsI64`] when the initial offset cannot be
+    /// Returns [`NormalRecoveryOffsetViolation::OffsetExceedsI64`] when the initial offset cannot be
     /// represented by Store's signed offsets.
-    pub const fn try_new(initial_offset: u64, policy: NormalRecoveryPolicy) -> Result<Self, NormalRecoveryOffsetError> {
+    pub const fn try_new(
+        initial_offset: u64,
+        policy: NormalRecoveryPolicy,
+    ) -> Result<Self, NormalRecoveryOffsetViolation> {
         if initial_offset > MAX_SIGNED_OFFSET {
-            return Err(NormalRecoveryOffsetError::OffsetExceedsI64 { offset: initial_offset });
+            return Err(NormalRecoveryOffsetViolation::OffsetExceedsI64 { offset: initial_offset });
         }
         Ok(Self {
             last_valid_offset: initial_offset,
@@ -401,9 +404,9 @@ impl NormalRecoveryState {
     ///
     /// # Errors
     ///
-    /// Returns [`NormalRecoveryOffsetError`] when checked offset arithmetic fails or a resulting
+    /// Returns [`NormalRecoveryOffsetViolation`] when checked offset arithmetic fails or a resulting
     /// watermark exceeds `i64::MAX`. The state is unchanged on error.
-    pub fn apply(&mut self, event: NormalRecoveryEvent) -> Result<NormalRecoveryAction, NormalRecoveryOffsetError> {
+    pub fn apply(&mut self, event: NormalRecoveryEvent) -> Result<NormalRecoveryAction, NormalRecoveryOffsetViolation> {
         let (action, next_last_valid, next_truncate) = match event {
             NormalRecoveryEvent::SegmentStarted { base_offset } => match self.policy {
                 NormalRecoveryPolicy::Standard => (
@@ -423,14 +426,14 @@ impl NormalRecoveryState {
                 size,
             } => {
                 let start_offset = segment_base.checked_add(relative_start).ok_or(
-                    NormalRecoveryOffsetError::BaseRelativeOverflow {
+                    NormalRecoveryOffsetViolation::BaseRelativeOverflow {
                         base_offset: segment_base,
                         relative_start,
                     },
                 )?;
                 let end_offset = start_offset
                     .checked_add(size)
-                    .ok_or(NormalRecoveryOffsetError::MessageEndOverflow { start_offset, size })?;
+                    .ok_or(NormalRecoveryOffsetViolation::MessageEndOverflow { start_offset, size })?;
                 match self.policy {
                     NormalRecoveryPolicy::Standard => (NormalRecoveryAction::ContinueRecord, start_offset, end_offset),
                     NormalRecoveryPolicy::Optimized => (NormalRecoveryAction::ContinueRecord, end_offset, end_offset),
@@ -452,7 +455,7 @@ impl NormalRecoveryState {
 
         for offset in [next_last_valid, next_truncate] {
             if offset > MAX_SIGNED_OFFSET {
-                return Err(NormalRecoveryOffsetError::OffsetExceedsI64 { offset });
+                return Err(NormalRecoveryOffsetViolation::OffsetExceedsI64 { offset });
             }
         }
 

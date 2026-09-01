@@ -188,24 +188,27 @@ impl From<HAConnectionState> for i32 {
     }
 }
 
-impl TryFrom<i32> for HAConnectionState {
-    type Error = HAConnectionStateError;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
+impl HAConnectionState {
+    /// Decodes the wire representation into a typed state.
+    #[allow(
+        dead_code,
+        reason = "wire-format decoding helper exercised by the in-crate state-machine tests"
+    )]
+    pub(crate) fn from_wire_value(value: i32) -> Result<Self, HAConnectionStateViolation> {
         match value {
             0 => Ok(HAConnectionState::Ready),
             1 => Ok(HAConnectionState::Handshake),
             2 => Ok(HAConnectionState::Transfer),
             3 => Ok(HAConnectionState::Suspend),
             4 => Ok(HAConnectionState::Shutdown),
-            _ => Err(HAConnectionStateError::InvalidValue(value)),
+            _ => Err(HAConnectionStateViolation::InvalidValue(value)),
         }
     }
 }
 
 /// Error type for HAConnectionState operations
 #[derive(Debug, thiserror::Error)]
-pub enum HAConnectionStateError {
+pub enum HAConnectionStateViolation {
     #[error("Invalid state transition from {from:?} to {to:?}")]
     InvalidTransition {
         from: HAConnectionState,
@@ -262,9 +265,9 @@ impl HAConnectionStateMachine {
     }
 
     /// Attempt to transition to a new state
-    pub fn transition_to(&mut self, new_state: HAConnectionState) -> Result<(), HAConnectionStateError> {
+    pub fn transition_to(&mut self, new_state: HAConnectionState) -> Result<(), HAConnectionStateViolation> {
         if !self.current_state.can_transition_to(new_state) {
-            return Err(HAConnectionStateError::InvalidTransition {
+            return Err(HAConnectionStateViolation::InvalidTransition {
                 from: self.current_state,
                 to: new_state,
             });
@@ -402,10 +405,10 @@ mod tests {
         let numeric: i32 = state.into();
         assert_eq!(numeric, 2);
 
-        let converted = HAConnectionState::try_from(2).unwrap();
+        let converted = HAConnectionState::from_wire_value(2).unwrap();
         assert_eq!(converted, HAConnectionState::Transfer);
 
-        assert!(HAConnectionState::try_from(99).is_err());
+        assert!(HAConnectionState::from_wire_value(99).is_err());
     }
 
     #[test]

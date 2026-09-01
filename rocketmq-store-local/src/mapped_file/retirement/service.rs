@@ -22,6 +22,9 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use super::activation::ActiveManagedLifecycle;
@@ -38,7 +41,7 @@ use super::registry::LogicalRemovedCapability;
 use super::registry::ManagedMappedFileQueueGeneration;
 use super::registry::NamespaceAbsentCapability;
 use super::registry::RecoveredRetirementWork;
-use super::registry::RegistryError;
+use super::registry::RegistryViolation;
 use super::registry::RetirementHandoffCapability;
 use super::registry::RetirementIntentBinding;
 use super::registry::RetirementRegistry;
@@ -48,10 +51,8 @@ use super::writer::ManagedLedgerWriterError;
 use crate::mapped_file::DefaultMappedFile;
 
 mod creation;
-pub use creation::{
-    ManagedIncarnationCreateRequest, ManagedIncarnationCreation, ManagedIncarnationCreationError,
-    ManagedIncarnationCreationErrorKind,
-};
+pub(crate) use creation::ManagedIncarnationCreationError;
+pub use creation::{ManagedIncarnationCreateRequest, ManagedIncarnationCreation};
 
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
@@ -121,30 +122,11 @@ impl ManagedRetirementSubmission {
     }
 }
 
-/// Stable category for submission failures.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedRetirementSubmissionErrorKind {
-    Registry,
-    Writer,
-    AdmissionClosed,
-    RecoveryRequired,
-}
-
-/// Typed failure from the durable intent and queue-handoff boundary.
-#[doc(hidden)]
+/// Private retirement-submission leaf with its former kind folded in.
 #[derive(Debug, Error)]
-#[error("managed retirement submission failed ({kind:?}): {source}")]
-pub struct ManagedRetirementSubmissionError {
-    kind: ManagedRetirementSubmissionErrorKind,
-    #[source]
-    source: ManagedRetirementSubmissionErrorSource,
-}
-
-#[derive(Debug, Error)]
-enum ManagedRetirementSubmissionErrorSource {
+pub(crate) enum ManagedRetirementSubmissionError {
     #[error(transparent)]
-    Registry(#[from] RegistryError),
+    Registry(#[from] RegistryViolation),
     #[error(transparent)]
     Writer(#[from] ManagedLedgerWriterError),
     #[error("managed retirement state requires replay")]
@@ -154,36 +136,31 @@ enum ManagedRetirementSubmissionErrorSource {
 }
 
 impl ManagedRetirementSubmissionError {
-    pub const fn kind(&self) -> ManagedRetirementSubmissionErrorKind {
-        self.kind
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Every rejected or failed durable retirement submission is reported as
+    /// an administrative write failure of the mapped-file component with the
+    /// complete leaf preserved as the typed source.
+    fn into_store_error(self) -> StoreError {
+        StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
+            .in_component(StoreComponent::MappedFile)
+            .with_source(self)
     }
 
-    fn registry(source: RegistryError) -> Self {
-        Self {
-            kind: ManagedRetirementSubmissionErrorKind::Registry,
-            source: source.into(),
-        }
+    fn registry(source: RegistryViolation) -> Self {
+        Self::Registry(source)
     }
 
     fn writer(source: ManagedLedgerWriterError) -> Self {
-        Self {
-            kind: ManagedRetirementSubmissionErrorKind::Writer,
-            source: source.into(),
-        }
+        Self::Writer(source)
     }
 
     fn recovery_required() -> Self {
-        Self {
-            kind: ManagedRetirementSubmissionErrorKind::RecoveryRequired,
-            source: ManagedRetirementSubmissionErrorSource::RecoveryRequired,
-        }
+        Self::RecoveryRequired
     }
 
     fn admission_closed() -> Self {
-        Self {
-            kind: ManagedRetirementSubmissionErrorKind::AdmissionClosed,
-            source: ManagedRetirementSubmissionErrorSource::AdmissionClosed,
-        }
+        Self::AdmissionClosed
     }
 }
 
@@ -367,7 +344,17 @@ impl ManagedLifecycleRuntime {
     /// The simple lifecycle gate permits only `Shutdown -> StoreDestroy`; retries remain in
     /// `StoreDestroy`. This function performs blocking ledger I/O and must run inside one Store
     /// storage-IO operation.
-    pub fn submit_store_destroy_retirements(&self) -> Result<usize, ManagedRetirementSubmissionError> {
+    /// Submits every remaining owner for Store-destroy retirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_WRITE_FAILED` when the durable submission fails closed.
+    pub fn submit_store_destroy_retirements(&self) -> Result<usize, StoreError> {
+        self.submit_store_destroy_retirements_typed()
+            .map_err(ManagedRetirementSubmissionError::into_store_error)
+    }
+
+    fn submit_store_destroy_retirements_typed(&self) -> Result<usize, ManagedRetirementSubmissionError> {
         let mut inner = self.inner.lock();
         if !inner.admission.enter_store_destroy() {
             return Err(ManagedRetirementSubmissionError::admission_closed());
@@ -411,6 +398,17 @@ impl ManagedLifecycleRuntime {
     /// Like [`Self::drive_batch`], this performs blocking ledger I/O and must run inside one Store
     /// storage-IO operation. The nonce must be independently generated and nonzero.
     pub fn submit_retirement(
+        &self,
+        queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        owner: &Arc<DefaultMappedFile>,
+        reason: ManagedRetirementReason,
+        retirement_nonce: [u8; 16],
+    ) -> Result<ManagedRetirementSubmission, StoreError> {
+        self.submit_retirement_typed(queue, owner, reason, retirement_nonce)
+            .map_err(ManagedRetirementSubmissionError::into_store_error)
+    }
+
+    fn submit_retirement_typed(
         &self,
         queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
         owner: &Arc<DefaultMappedFile>,

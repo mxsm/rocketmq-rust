@@ -93,28 +93,27 @@ impl<T> fmt::Debug for AppendSequencerSender<T> {
 impl<T> AppendSequencerSender<T> {
     /// Attempts to admit one request without waiting for capacity.
     ///
-    /// # Errors
-    ///
-    /// Returns the original request when the byte/count budget is saturated or the sequencer is
-    /// closed.
-    pub fn try_submit(&self, request: T, retained_bytes: usize) -> Result<(), AppendAdmissionError<T>> {
-        self.queue
-            .try_push_data(request, retained_bytes)
-            .map(|_| ())
-            .map_err(|error| {
-                let kind = match error.kind() {
+    /// Admission is a caller-owned outcome, not an operational error: a
+    /// rejection returns the original request together with its source-free
+    /// `Saturated` or `Closed` disposition.
+    pub fn try_submit(&self, request: T, retained_bytes: usize) -> AppendAdmissionOutcome<T> {
+        match self.queue.try_push_data(request, retained_bytes) {
+            Ok(_) => AppendAdmissionOutcome::Accepted,
+            Err(error) => {
+                let reason = match error.kind() {
                     QueuePushErrorKind::BudgetExhausted(_) | QueuePushErrorKind::DeadlineExceeded => {
-                        AppendAdmissionErrorKind::Saturated
+                        AppendAdmissionRejection::Saturated
                     }
                     QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => {
-                        AppendAdmissionErrorKind::Closed
+                        AppendAdmissionRejection::Closed
                     }
                 };
-                AppendAdmissionError {
-                    kind,
+                AppendAdmissionOutcome::Rejected {
                     request: error.into_item(),
+                    reason,
                 }
-            })
+            }
+        }
     }
 
     /// Stops new admission and wakes the drain owner. Already admitted requests remain queued.
@@ -244,52 +243,57 @@ impl<T> AppendSequencerReceiver<T> {
 
 /// Admission rejection category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppendAdmissionErrorKind {
+pub enum AppendAdmissionRejection {
     /// Count or byte capacity is exhausted.
     Saturated,
     /// The sequencer no longer accepts requests.
     Closed,
 }
 
-/// Rejected append request, retaining ownership for caller-side error projection.
-pub struct AppendAdmissionError<T> {
-    kind: AppendAdmissionErrorKind,
-    request: T,
+/// Caller-owned admission outcome that retains a rejected request.
+///
+/// Neither rejection carries a causal source; saturation and closure are
+/// expected admission dispositions rather than operational errors.
+#[must_use]
+pub enum AppendAdmissionOutcome<T> {
+    /// The request was admitted into the sequencer queue.
+    Accepted,
+    /// The request was rejected and its ownership is returned to the caller.
+    Rejected {
+        /// The rejected request.
+        request: T,
+        /// The source-free rejection disposition.
+        reason: AppendAdmissionRejection,
+    },
 }
 
-impl<T> AppendAdmissionError<T> {
-    /// Returns the rejection category.
-    #[must_use]
-    pub const fn kind(&self) -> AppendAdmissionErrorKind {
-        self.kind
-    }
-
-    /// Recovers the rejected request.
-    #[must_use]
-    pub fn into_request(self) -> T {
-        self.request
-    }
-}
-
-impl<T> fmt::Debug for AppendAdmissionError<T> {
+impl<T> fmt::Debug for AppendAdmissionOutcome<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AppendAdmissionError")
-            .field("kind", &self.kind)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T> fmt::Display for AppendAdmissionError<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
-            AppendAdmissionErrorKind::Saturated => formatter.write_str("CommitLog append sequencer is saturated"),
-            AppendAdmissionErrorKind::Closed => formatter.write_str("CommitLog append sequencer is closed"),
+        match self {
+            Self::Accepted => formatter.write_str("Accepted"),
+            Self::Rejected { reason, .. } => formatter
+                .debug_struct("Rejected")
+                .field("reason", reason)
+                .finish_non_exhaustive(),
         }
     }
 }
 
-impl<T: fmt::Debug> std::error::Error for AppendAdmissionError<T> {}
+#[cfg(test)]
+impl<T> AppendAdmissionOutcome<T> {
+    #[track_caller]
+    fn assert_accepted(self, context: &str) {
+        assert!(matches!(self, Self::Accepted), "expected admission: {context}");
+    }
+
+    #[track_caller]
+    fn expect_rejected(self, context: &str) -> (T, AppendAdmissionRejection) {
+        match self {
+            Self::Rejected { request, reason } => (request, reason),
+            Self::Accepted => panic!("expected rejection: {context}"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -312,9 +316,9 @@ mod tests {
     async fn drains_fifo_by_item_and_byte_limits() {
         let policy = MicroBatchPolicy::try_new(3, 5, Duration::ZERO).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        sender.try_submit(1, 2).expect("first");
-        sender.try_submit(2, 2).expect("second");
-        sender.try_submit(3, 2).expect("third");
+        sender.try_submit(1, 2).assert_accepted("first");
+        sender.try_submit(2, 2).assert_accepted("second");
+        sender.try_submit(3, 2).assert_accepted("third");
         let cancellation = CancellationToken::new();
 
         let first = receiver.next_batch(&cancellation).await.expect("first batch");
@@ -338,8 +342,8 @@ mod tests {
     async fn disabled_policy_preserves_single_request_batches() {
         let policy = MicroBatchPolicy::disabled(1024).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        sender.try_submit(1, 1).expect("first");
-        sender.try_submit(2, 1).expect("second");
+        sender.try_submit(1, 1).assert_accepted("first");
+        sender.try_submit(2, 1).assert_accepted("second");
         let cancellation = CancellationToken::new();
 
         assert_eq!(receiver.next_batch(&cancellation).await.expect("first").len(), 1);
@@ -350,8 +354,10 @@ mod tests {
     async fn request_larger_than_batch_target_is_processed_as_a_singleton() {
         let policy = MicroBatchPolicy::try_new(4, 5, std::time::Duration::ZERO).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        sender.try_submit("oversized", 8).expect("oversized request fits queue");
-        sender.try_submit("next", 1).expect("next");
+        sender
+            .try_submit("oversized", 8)
+            .assert_accepted("oversized request fits queue");
+        sender.try_submit("next", 1).assert_accepted("next");
         let cancellation = CancellationToken::new();
 
         let first = receiver.next_batch(&cancellation).await.expect("first");
@@ -372,7 +378,7 @@ mod tests {
     async fn partial_batch_is_released_at_its_configured_deadline() {
         let policy = MicroBatchPolicy::try_new(4, 1024, Duration::from_millis(10)).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        sender.try_submit("first", 1).expect("first");
+        sender.try_submit("first", 1).assert_accepted("first");
         let cancellation = CancellationToken::new();
         let mut next_batch = Box::pin(receiver.next_batch(&cancellation));
 
@@ -393,8 +399,8 @@ mod tests {
     async fn cancellation_closes_admission_but_drains_existing_fifo() {
         let policy = MicroBatchPolicy::try_new(8, 1024, Duration::from_millis(10)).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        sender.try_submit(1, 1).expect("first");
-        sender.try_submit(2, 1).expect("second");
+        sender.try_submit(1, 1).assert_accepted("first");
+        sender.try_submit(2, 1).assert_accepted("second");
         let cancellation = CancellationToken::new();
         cancellation.cancel();
 
@@ -406,10 +412,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(items, vec![1, 2]);
-        assert_eq!(
-            sender.try_submit(3, 1).expect_err("closed").kind(),
-            AppendAdmissionErrorKind::Closed
-        );
+        let (_, reason) = sender.try_submit(3, 1).expect_rejected("closed");
+        assert_eq!(reason, AppendAdmissionRejection::Closed);
         assert!(receiver.next_batch(&cancellation).await.is_none());
     }
 
@@ -422,20 +426,20 @@ mod tests {
             micro_batch: policy,
         };
         let (sender, _receiver) = AppendSequencer::bounded(config).expect("sequencer");
-        sender.try_submit("first", 4).expect("first");
+        sender.try_submit("first", 4).assert_accepted("first");
 
-        let error = sender.try_submit("second", 1).expect_err("count saturated");
+        let (request, reason) = sender.try_submit("second", 1).expect_rejected("count saturated");
 
-        assert_eq!(error.kind(), AppendAdmissionErrorKind::Saturated);
-        assert_eq!(error.into_request(), "second");
+        assert_eq!(reason, AppendAdmissionRejection::Saturated);
+        assert_eq!(request, "second");
     }
 
     #[test]
     fn terminal_consumer_failure_releases_pending_queue_budget() {
         let policy = MicroBatchPolicy::disabled(1024).expect("policy");
         let (sender, _receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        sender.try_submit("first", 4).expect("first");
-        sender.try_submit("second", 8).expect("second");
+        sender.try_submit("first", 4).assert_accepted("first");
+        sender.try_submit("second", 8).assert_accepted("second");
 
         assert_eq!(sender.close_and_discard_pending(), 2);
 

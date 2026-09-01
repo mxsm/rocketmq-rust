@@ -18,7 +18,6 @@ use std::io;
 use std::path::Path;
 
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadErrorKind;
 use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
 
 #[test]
@@ -44,7 +43,7 @@ fn unknown_lifecycle_evidence_fails_closed_without_mutation() {
 
     let error = inspect_managed_lifecycle_read_only(&handle).expect_err("unknown evidence must fail closed");
 
-    assert_eq!(error.kind(), ManagedLifecycleReadErrorKind::Corruption);
+    assert_eq!(error.code().as_str(), "storage.state.corrupted");
     assert_eq!(
         fs::read(&unknown).expect("unknown evidence remains"),
         b"preserve-for-forensics"

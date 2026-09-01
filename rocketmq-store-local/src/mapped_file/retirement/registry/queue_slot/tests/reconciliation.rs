@@ -88,7 +88,7 @@ fn reconciled_queue_registration_failure_does_not_publish_a_partial_batch() {
 
     assert!(matches!(
         candidate.register_reconciled_members(&registry),
-        Err(RegistryError::CanonicalPathReserved { .. })
+        Err(RegistryViolation::CanonicalPathReserved { .. })
     ));
     assert!(registry.contains_incarnation(incarnation(1)));
     assert!(!registry.contains_incarnation(incarnation(2)));

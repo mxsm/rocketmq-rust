@@ -195,9 +195,9 @@ pub(crate) enum TimelineGcError {
     #[error(transparent)]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
-    Payload(#[from] rocketmq_store_local::timer::payload_store::TimerPayloadStoreError),
+    Payload(#[from] crate::store_error::StoreError),
     #[error(transparent)]
-    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordError),
+    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordViolation),
 }
 
 #[cfg(test)]

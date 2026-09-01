@@ -33,8 +33,6 @@ pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
 pub(crate) mod write_lease;
 
-pub use rocketmq_store_local::ha::error::HAConnectionError;
-
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::Path;

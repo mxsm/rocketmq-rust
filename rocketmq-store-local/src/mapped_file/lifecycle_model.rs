@@ -70,8 +70,17 @@ impl fmt::Display for MappedFileOperation {
     }
 }
 
+/// Caller-owned admission outcome from one packed-word acquire attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AcquireTransitionError {
+#[must_use]
+pub(crate) enum AcquireTransitionOutcome {
+    Acquired,
+    Rejected(AcquireTransitionRejection),
+}
+
+/// Source-free semantic rejection data for a refused acquire transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AcquireTransitionRejection {
     Unavailable(MappedFileAdmissionState),
     LeaseCountOverflow,
 }
@@ -253,27 +262,27 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
     }
 
     #[inline]
-    pub(crate) fn try_acquire(&self, operation: MappedFileOperation) -> Result<(), AcquireTransitionError> {
+    pub(crate) fn try_acquire(&self, operation: MappedFileOperation) -> AcquireTransitionOutcome {
         let mut current = self.word.load_acquire();
         loop {
             let state = decode_state(current);
             if !state.allows(operation) {
-                return Err(AcquireTransitionError::Unavailable(state));
+                return AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::Unavailable(state));
             }
 
             let active_leases = current & ACTIVE_LEASE_MASK;
             if active_leases == ACTIVE_LEASE_MASK {
-                return Err(AcquireTransitionError::LeaseCountOverflow);
+                return AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::LeaseCountOverflow);
             }
 
             let active_writers = decode_active_writers(current);
             if operation == MappedFileOperation::Write && active_writers == ACTIVE_LEASE_MASK {
-                return Err(AcquireTransitionError::LeaseCountOverflow);
+                return AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::LeaseCountOverflow);
             }
 
             let next = current + 1 + usize::from(operation == MappedFileOperation::Write) * ACTIVE_WRITER_UNIT;
             match self.word.compare_exchange_weak_acquire(current, next) {
-                Ok(_) => return Ok(()),
+                Ok(_) => return AcquireTransitionOutcome::Acquired,
                 Err(observed) => current = observed,
             }
         }

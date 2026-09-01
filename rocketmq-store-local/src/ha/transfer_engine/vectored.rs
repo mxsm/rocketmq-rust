@@ -25,7 +25,8 @@ use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferStats;
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::error::TransferError;
-use crate::transfer::error::TransferResult;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 pub struct VectoredTransferEngine<W> {
     writer: W,
@@ -45,7 +46,19 @@ impl<W> VectoredTransferEngine<W>
 where
     W: AsyncWrite + Unpin,
 {
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+    /// Sends one framed batch, reporting failures through the storage facade.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_IO_FAILED` for replication write failures and
+    /// `STORAGE_REQUEST_INVALID` for malformed batches.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
+        self.send_batch_typed(batch)
+            .await
+            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+    }
+
+    pub(crate) async fn send_batch_typed(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
         let chunks = transfer_chunks(batch)?;
         let total_len = chunks.iter().map(Bytes::len).sum::<usize>();
         let mut bytes_written = 0;
@@ -88,15 +101,15 @@ where
         })
     }
 
-    async fn send_with_bytes_fallback(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+    async fn send_with_bytes_fallback(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
         let mut fallback = BytesTransferEngine::new(&mut self.writer);
-        let mut stats = fallback.send_batch(batch).await?;
+        let mut stats = fallback.send_batch_typed(batch).await?;
         stats.fallback_bytes = stats.body_bytes;
         Ok(stats)
     }
 }
 
-fn transfer_chunks(batch: &TransferBatch) -> TransferResult<Vec<Bytes>> {
+fn transfer_chunks(batch: &TransferBatch) -> Result<Vec<Bytes>, TransferError> {
     let body_chunks = batch_body_chunks(batch)?;
     let mut chunks = Vec::with_capacity(1 + body_chunks.len());
     if !batch.frame_header.is_empty() {

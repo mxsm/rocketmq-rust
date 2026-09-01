@@ -940,7 +940,7 @@ mod tests {
         let lifecycle = SegmentLifecycle::shared();
         let lease = lifecycle
             .try_acquire(MappedFileOperation::Maintenance)
-            .expect("maintenance lease");
+            .expect_acquired("maintenance lease");
         assert!(lifecycle.install_physical_detach_hook(Arc::new(OperationDropHook {
             events: Arc::clone(events),
         })));

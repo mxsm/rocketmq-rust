@@ -18,9 +18,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use memmap2::MmapMut;
 use parking_lot::RwLock;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use super::MappedFileError;
-use super::MappedFileResult;
 
 /// Safe abstraction over a memory-mapped file region.
 ///
@@ -74,10 +75,12 @@ impl MappedBuffer {
     ///
     /// # Errors
     ///
-    /// Returns [`MappedFileError::OutOfBounds`] when `offset..offset + len` is not fully contained
-    /// in the mapping.
-    pub fn from_mmap(mmap: MmapMut, offset: usize, len: usize) -> MappedFileResult<Self> {
-        Self::from_shared_mmap(Arc::new(RwLock::new(mmap)), offset, len)
+    /// Returns `STORAGE_REQUEST_INVALID` when `offset..offset + len` is not fully contained in
+    /// the mapping.
+    pub fn from_mmap(mmap: MmapMut, offset: usize, len: usize) -> Result<Self, StoreError> {
+        let typed =
+            || -> Result<Self, MappedFileError> { Self::from_shared_mmap(Arc::new(RwLock::new(mmap)), offset, len) };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Load))
     }
 
     /// Creates a new `MappedBuffer` over the specified region.
@@ -96,11 +99,12 @@ impl MappedBuffer {
     ///
     /// Returns `MappedFileError::OutOfBounds` if `offset + len` exceeds mmap size
     #[deprecated(note = "use from_mmap and region so mutable mapping ownership stays encapsulated; removal in 2.0.0")]
-    pub fn new(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> MappedFileResult<Self> {
+    #[allow(dead_code, reason = "exercised by the in-crate mapped-buffer scenarios")]
+    pub(crate) fn new(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> Result<Self, MappedFileError> {
         Self::from_shared_mmap(mmap, offset, len)
     }
 
-    fn from_shared_mmap(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> MappedFileResult<Self> {
+    fn from_shared_mmap(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> Result<Self, MappedFileError> {
         // Validate bounds
         let mmap_guard = mmap.read();
         let mmap_len = mmap_guard.len();
@@ -117,14 +121,17 @@ impl MappedBuffer {
     ///
     /// # Errors
     ///
-    /// Returns [`MappedFileError::OutOfBounds`] for reversed or out-of-range bounds.
-    pub fn region(&self, range: Range<usize>) -> MappedFileResult<Self> {
-        let absolute = self.checked_range(range)?;
-        Ok(Self {
-            mmap: Arc::clone(&self.mmap),
-            offset: absolute.start,
-            len: absolute.len(),
-        })
+    /// Returns `STORAGE_REQUEST_INVALID` for reversed or out-of-range bounds.
+    pub fn region(&self, range: Range<usize>) -> Result<Self, StoreError> {
+        let typed = || -> Result<Self, MappedFileError> {
+            let absolute = self.checked_range(range)?;
+            Ok(Self {
+                mmap: Arc::clone(&self.mmap),
+                offset: absolute.start,
+                len: absolute.len(),
+            })
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 
     /// Runs a read operation against a checked range while keeping the lock guard private.
@@ -134,8 +141,12 @@ impl MappedBuffer {
     ///
     /// # Errors
     ///
-    /// Returns [`MappedFileError::OutOfBounds`] for reversed or out-of-range bounds.
-    pub fn with_read_range<T>(&self, range: Range<usize>, read: impl FnOnce(&[u8]) -> T) -> MappedFileResult<T> {
+    /// Returns `STORAGE_REQUEST_INVALID` for reversed or out-of-range bounds.
+    pub(crate) fn with_read_range<T>(
+        &self,
+        range: Range<usize>,
+        read: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, MappedFileError> {
         let absolute = self.checked_range(range)?;
         let mmap = self.mmap.read_recursive();
         Ok(read(&mmap[absolute]))
@@ -148,8 +159,12 @@ impl MappedBuffer {
     ///
     /// # Errors
     ///
-    /// Returns [`MappedFileError::OutOfBounds`] for reversed or out-of-range bounds.
-    pub fn with_write_range<T>(&self, range: Range<usize>, write: impl FnOnce(&mut [u8]) -> T) -> MappedFileResult<T> {
+    /// Returns `STORAGE_REQUEST_INVALID` for reversed or out-of-range bounds.
+    pub(crate) fn with_write_range<T>(
+        &self,
+        range: Range<usize>,
+        write: impl FnOnce(&mut [u8]) -> T,
+    ) -> Result<T, MappedFileError> {
         let absolute = self.checked_range(range)?;
         let mut mmap = self.mmap.write();
         Ok(write(&mut mmap[absolute]))
@@ -176,16 +191,19 @@ impl MappedBuffer {
     /// buffer.write(0, b"Hello")?;
     /// buffer.write(5, b" World")?;
     /// ```
-    pub fn write(&self, offset: usize, data: &[u8]) -> MappedFileResult<()> {
-        let Some(end) = offset.checked_add(data.len()) else {
-            return Err(MappedFileError::out_of_bounds(
-                self.offset.saturating_add(offset),
-                data.len(),
-                (self.offset + self.len) as u64,
-            ));
-        };
+    pub fn write(&self, offset: usize, data: &[u8]) -> Result<(), StoreError> {
+        let typed = || -> Result<(), MappedFileError> {
+            let Some(end) = offset.checked_add(data.len()) else {
+                return Err(MappedFileError::out_of_bounds(
+                    self.offset.saturating_add(offset),
+                    data.len(),
+                    (self.offset + self.len) as u64,
+                ));
+            };
 
-        self.with_write_range(offset..end, |destination| destination.copy_from_slice(data))
+            self.with_write_range(offset..end, |destination| destination.copy_from_slice(data))
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Append))
     }
 
     /// Reads data from the specified range into owning bytes.
@@ -207,8 +225,9 @@ impl MappedBuffer {
     /// This method performs one allocation and copy. Use the mapped-file
     /// selection and transfer APIs when an owning lease or file range is
     /// required.
-    pub fn read_copy(&self, range: Range<usize>) -> MappedFileResult<Bytes> {
-        self.with_read_range(range, Bytes::copy_from_slice)
+    pub fn read_copy(&self, range: Range<usize>) -> Result<Bytes, StoreError> {
+        let typed = || -> Result<Bytes, MappedFileError> { self.with_read_range(range, Bytes::copy_from_slice) };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Read))
     }
 
     /// Batch writes multiple data slices with single lock acquisition.
@@ -239,7 +258,15 @@ impl MappedBuffer {
     /// ];
     /// let total = buffer.batch_write(writes)?;
     /// ```
-    pub fn batch_write<'a, I>(&self, writes: I) -> MappedFileResult<usize>
+    pub fn batch_write<'a, I>(&self, writes: I) -> Result<usize, StoreError>
+    where
+        I: IntoIterator<Item = (usize, &'a [u8])>,
+    {
+        self.batch_write_typed(writes)
+            .map_err(|error| error.into_store_error(StoreOperation::Append))
+    }
+
+    fn batch_write_typed<'a, I>(&self, writes: I) -> Result<usize, MappedFileError>
     where
         I: IntoIterator<Item = (usize, &'a [u8])>,
     {
@@ -256,7 +283,7 @@ impl MappedBuffer {
                 let absolute = self.checked_range(offset..end)?;
                 Ok((absolute, data))
             })
-            .collect::<MappedFileResult<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, MappedFileError>>()?;
         let mut mmap = self.mmap.write();
         let mut total_written = 0;
 
@@ -295,13 +322,16 @@ impl MappedBuffer {
     /// # Errors
     ///
     /// Returns `MappedFileError::FlushFailed` if msync fails
-    pub fn flush(&self) -> MappedFileResult<()> {
-        if self.len == 0 {
-            return Ok(());
-        }
-        let mmap = self.mmap.read_recursive();
-        mmap.flush_range(self.offset, self.len)
-            .map_err(MappedFileError::FlushFailed)
+    pub fn flush(&self) -> Result<(), StoreError> {
+        let typed = || -> Result<(), MappedFileError> {
+            if self.len == 0 {
+                return Ok(());
+            }
+            let mmap = self.mmap.read_recursive();
+            mmap.flush_range(self.offset, self.len)
+                .map_err(MappedFileError::FlushFailed)
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Flush))
     }
 
     /// Flushes a specific range to disk.
@@ -317,18 +347,21 @@ impl MappedBuffer {
     /// # Errors
     ///
     /// Returns error if range is invalid or flush fails
-    pub fn flush_range(&self, range: Range<usize>) -> MappedFileResult<()> {
-        let absolute = self.checked_range(range)?;
-        if absolute.is_empty() {
-            return Ok(());
-        }
-        let mmap = self.mmap.read_recursive();
+    pub fn flush_range(&self, range: Range<usize>) -> Result<(), StoreError> {
+        let typed = || -> Result<(), MappedFileError> {
+            let absolute = self.checked_range(range)?;
+            if absolute.is_empty() {
+                return Ok(());
+            }
+            let mmap = self.mmap.read_recursive();
 
-        mmap.flush_range(absolute.start, absolute.len())
-            .map_err(MappedFileError::FlushFailed)
+            mmap.flush_range(absolute.start, absolute.len())
+                .map_err(MappedFileError::FlushFailed)
+        };
+        typed().map_err(|error| error.into_store_error(StoreOperation::Flush))
     }
 
-    fn checked_range(&self, range: Range<usize>) -> MappedFileResult<Range<usize>> {
+    fn checked_range(&self, range: Range<usize>) -> Result<Range<usize>, MappedFileError> {
         if range.start > range.end || range.end > self.len {
             return Err(MappedFileError::out_of_bounds(
                 self.offset.saturating_add(range.start),

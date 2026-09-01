@@ -18,6 +18,9 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+
 use thiserror::Error;
 
 pub const TIMER_STORAGE_FORMAT_VERSION: u16 = 2;
@@ -74,7 +77,18 @@ pub struct TimerStorageFingerprint {
 }
 
 impl TimerStorageFingerprint {
-    pub fn validate(self, physical_record_size: usize) -> Result<Self, TimerStorageFormatError> {
+    /// Validates the configured fingerprint against the physical record size.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_STATE_CORRUPTED` when the configured policy cannot
+    /// describe the durable timer format.
+    pub fn validate(self, physical_record_size: usize) -> Result<Self, StoreError> {
+        self.validate_typed(physical_record_size)
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    pub(crate) fn validate_typed(self, physical_record_size: usize) -> Result<Self, TimerStorageFormatError> {
         if self.precision_ms == 0 || self.wheel_slots == 0 || self.page_size == 0 {
             return Err(TimerStorageFormatError::InvalidPolicy(
                 "precision, wheel slots, and page size must be non-zero".into(),
@@ -130,7 +144,7 @@ impl TimerStorageFingerprint {
         bytes
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, TimerStorageFormatError> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, TimerStorageFormatError> {
         if bytes.len() != TIMER_STORAGE_FORMAT_SIZE {
             return Err(TimerStorageFormatError::InvalidLength(bytes.len()));
         }
@@ -161,7 +175,18 @@ impl TimerStorageFingerprint {
         Ok(fingerprint)
     }
 
-    pub fn load_or_create(self, path: &Path) -> Result<(), TimerStorageFormatError> {
+    /// Loads or creates the durable FORMAT fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_IO_FAILED` for filesystem faults and
+    /// `STORAGE_STATE_CORRUPTED` for fingerprint mismatches.
+    pub fn load_or_create(self, path: &Path) -> Result<(), StoreError> {
+        self.load_or_create_typed(path)
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    pub(crate) fn load_or_create_typed(self, path: &Path) -> Result<(), TimerStorageFormatError> {
         if path.exists() {
             let mut bytes = Vec::new();
             OpenOptions::new().read(true).open(path)?.read_to_end(&mut bytes)?;
@@ -186,7 +211,7 @@ impl TimerStorageFingerprint {
 }
 
 #[derive(Debug, Error)]
-pub enum TimerStorageFormatError {
+pub(crate) enum TimerStorageFormatError {
     #[error("timer storage I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("timer storage format has invalid length {0}")]
@@ -231,6 +256,20 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
     u64::from_be_bytes(bytes[offset..offset + 8].try_into().expect("fixed u64 field"))
+}
+
+impl TimerStorageFormatError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Filesystem faults keep their typed I/O source; format, version,
+    /// checksum, and policy evidence is corrupted-state evidence.
+    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        let descriptor = match &self {
+            Self::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
+            _ => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        };
+        StoreError::new(descriptor, operation).with_source(self)
+    }
 }
 
 #[cfg(test)]

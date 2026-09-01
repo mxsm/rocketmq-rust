@@ -65,7 +65,8 @@ impl<P: CheckpointPersistence> DerivedCursorOwner<P> {
     /// # Errors
     ///
     /// Fails closed on persistence or checkpoint validation errors.
-    pub fn open(
+    #[allow(dead_code, reason = "exercised by the in-crate replay harness")]
+    pub(crate) fn open(
         engine: DerivedEngine,
         source_epoch: u64,
         persistence: P,
@@ -81,7 +82,8 @@ impl<P: CheckpointPersistence> DerivedCursorOwner<P> {
     ///
     /// Fails closed on persistence or checkpoint validation errors. The upgraded cursor is not
     /// published until the current checkpoint bytes have been durably persisted.
-    pub fn open_or_upgrade(
+    #[allow(dead_code, reason = "exercised by the in-crate replay harness")]
+    pub(crate) fn open_or_upgrade(
         engine: DerivedEngine,
         source_epoch: u64,
         mut persistence: P,
@@ -143,7 +145,8 @@ impl<P: CheckpointPersistence> DerivedCursorOwner<P> {
     ///
     /// Fails for a cursor invariant or persistence error. On failure the in-memory cursor remains
     /// unchanged; an uncertain persistence outcome is resolved by reloading on restart.
-    pub fn commit(
+    #[allow(dead_code, reason = "exercised by the in-crate replay harness")]
+    pub(crate) fn commit(
         &mut self,
         record: DerivedRecordId,
     ) -> Result<DerivedCommitOutcome, DerivedCursorOwnerError<P::Error>> {
@@ -171,7 +174,8 @@ pub enum DerivedCommitOutcome {
 
 /// Failure while loading, validating, or committing a derived cursor.
 #[derive(Debug)]
-pub enum DerivedCursorOwnerError<E> {
+#[allow(dead_code, reason = "exercised by the in-crate replay harness")]
+pub(crate) enum DerivedCursorOwnerError<E> {
     Persistence(E),
     Checkpoint(StoreContractViolation),
     Cursor(StoreContractViolation),

@@ -34,7 +34,7 @@ use crate::mapped_file::retirement::platform::NamespaceTransition;
 use crate::mapped_file::retirement::registry::DurableIntentEvidence;
 use crate::mapped_file::retirement::registry::DurableRetirementToken;
 use crate::mapped_file::retirement::registry::PublishedFileRegistration;
-use crate::mapped_file::retirement::registry::RegistryError;
+use crate::mapped_file::retirement::registry::RegistryViolation;
 use crate::mapped_file::retirement::registry::RetirementIntentBinding;
 use crate::mapped_file::retirement::registry::RetirementOperation;
 use crate::mapped_file::retirement::registry::RetirementRegistry;
@@ -189,7 +189,7 @@ fn wrong_queue_binding_owner_and_mapping_generation_return_the_original_token() 
         .expect("queue mismatch preserves the token");
     assert!(matches!(
         reason,
-        QueueHandoffFailureReason::Registry(RegistryError::TokenQueueIdentityMismatch { .. })
+        QueueHandoffFailureReason::Registry(RegistryViolation::TokenQueueIdentityMismatch { .. })
     ));
 
     let failure = slot
@@ -200,7 +200,7 @@ fn wrong_queue_binding_owner_and_mapping_generation_return_the_original_token() 
         .expect("binding mismatch preserves the token");
     assert!(matches!(
         reason,
-        QueueHandoffFailureReason::Registry(RegistryError::TokenBindingMismatch { .. })
+        QueueHandoffFailureReason::Registry(RegistryViolation::TokenBindingMismatch { .. })
     ));
 
     slot.remove_member_for_conflict_test(&owner_a);
@@ -355,7 +355,7 @@ fn replay_evidence_cannot_bypass_the_queue_slot_identity() {
         registry
             .restore_replayed_intent(evidence, &owner, &foreign_slot.queue_identity())
             .expect_err("the replay token is bound to the owning queue slot"),
-        RegistryError::QueueIdentityMismatch {
+        RegistryViolation::QueueIdentityMismatch {
             incarnation: incarnation(1),
         }
     );

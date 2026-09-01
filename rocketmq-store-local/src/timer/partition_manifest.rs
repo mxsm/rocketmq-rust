@@ -100,7 +100,7 @@ impl TimerPayloadPartitionManifest {
     }
 
     /// Loads the newest valid A/B copy, or returns an empty manifest when neither exists.
-    pub fn load(directory: &Path, key: TimerPayloadPartitionKey) -> Result<Self, PartitionManifestError> {
+    pub(crate) fn load(directory: &Path, key: TimerPayloadPartitionKey) -> Result<Self, PartitionManifestError> {
         let mut candidates = Vec::with_capacity(2);
         for name in [MANIFEST_A, MANIFEST_B] {
             match std::fs::read(directory.join(name)) {
@@ -120,7 +120,7 @@ impl TimerPayloadPartitionManifest {
     }
 
     /// Persists the next generation to the alternate manifest copy and synchronizes it.
-    pub fn persist(&mut self, directory: &Path) -> Result<(), PartitionManifestError> {
+    pub(crate) fn persist(&mut self, directory: &Path) -> Result<(), PartitionManifestError> {
         std::fs::create_dir_all(directory)?;
         self.generation = self.generation.saturating_add(1);
         let name = if self.generation.is_multiple_of(2) {
@@ -210,7 +210,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, PartitionManifestError> 
 
 /// Partition manifest error.
 #[derive(Debug, Error)]
-pub enum PartitionManifestError {
+pub(crate) enum PartitionManifestError {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),

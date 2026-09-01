@@ -78,8 +78,9 @@ fn missing_generation_half_and_unexplained_higher_pair_fail_closed() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("half pair must fail")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 
     let higher = DiskFixture::new();
@@ -97,8 +98,9 @@ fn missing_generation_half_and_unexplained_higher_pair_fail_closed() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("unexplained higher pair must fail")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -113,8 +115,9 @@ fn unknown_version_truncation_and_crc_corruption_are_distinct() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("unknown version must fail")
-            .kind(),
-        ManagedLifecycleReadErrorKind::UnknownVersionCorruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 
     for corrupt in [Corruption::Truncated, Corruption::Checksum] {
@@ -130,8 +133,9 @@ fn unknown_version_truncation_and_crc_corruption_are_distinct() {
         assert_eq!(
             inspect_managed_lifecycle_read_only(&handle)
                 .expect_err("snapshot corruption must fail")
-                .kind(),
-            ManagedLifecycleReadErrorKind::Corruption
+                .code()
+                .as_str(),
+            "storage.state.corrupted"
         );
     }
 }
@@ -146,7 +150,7 @@ fn mutation_between_complete_enumerations_invalidates_inventory_proof() {
         fs::write(lifecycle.join("appeared-during-enumeration"), b"race").expect("inject inventory mutation");
     })
     .expect_err("changed inventory must not mint a proof");
-    assert_eq!(error.kind(), ManagedLifecycleReadErrorKind::InventoryChanged);
+    assert_eq!(error.into_store_error().code().as_str(), "storage.backend.unavailable");
 }
 
 #[test]
@@ -161,7 +165,7 @@ fn lifecycle_directory_rebinding_after_first_inventory_is_rejected() {
         fs::create_dir(&lifecycle).expect("install replacement lifecycle directory");
     })
     .expect_err("stable old handle must not prove a replaced parent binding");
-    assert_eq!(error.kind(), ManagedLifecycleReadErrorKind::InventoryChanged);
+    assert_eq!(error.into_store_error().code().as_str(), "storage.backend.unavailable");
 }
 
 #[test]
@@ -178,7 +182,7 @@ fn mutation_before_third_enumeration_invalidates_inventory_proof() {
         },
     )
     .expect_err("late inventory change must not mint a proof");
-    assert_eq!(error.kind(), ManagedLifecycleReadErrorKind::InventoryChanged);
+    assert_eq!(error.into_store_error().code().as_str(), "storage.backend.unavailable");
 }
 
 #[test]
@@ -214,8 +218,10 @@ fn case_fold_collisions_and_unknown_artifacts_fail_closed() {
     assert_eq!(
         InventoryPlan::parse(&inventory, ManagedLifecycleReadLimits::default())
             .expect_err("case-fold aliases are corrupt")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .into_store_error()
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 
     let fixture = DiskFixture::new();
@@ -224,8 +230,9 @@ fn case_fold_collisions_and_unknown_artifacts_fail_closed() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("unknown artifact must fail closed")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -249,8 +256,9 @@ fn hard_link_aliases_between_durable_roles_are_rejected() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("hard-link aliases must fail closed")
-            .kind(),
-        ManagedLifecycleReadErrorKind::UnsafeNamespace
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -273,8 +281,9 @@ fn durable_sidecar_with_an_external_hard_link_is_rejected() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("every durable sidecar must be singly linked")
-            .kind(),
-        ManagedLifecycleReadErrorKind::UnsafeNamespace
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -330,8 +339,9 @@ fn temporary_artifact_cannot_mask_authoritative_log_corruption() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("temporary file must not mask authoritative corruption")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -354,8 +364,9 @@ fn symlink_or_reparse_generation_is_rejected_without_following() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("symlink must fail closed")
-            .kind(),
-        ManagedLifecycleReadErrorKind::UnsafeNamespace
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -372,8 +383,9 @@ fn oversized_log_is_rejected_before_file_sized_allocation() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("oversized log must fail before allocation")
-            .kind(),
-        ManagedLifecycleReadErrorKind::LimitExceeded
+            .code()
+            .as_str(),
+        "storage.capacity.exhausted"
     );
 }
 
@@ -412,8 +424,9 @@ fn explicit_limits_accept_exact_boundaries_and_reject_one_less() {
     assert_eq!(
         inspect_managed_lifecycle_read_only_with_limits(&handle, too_short_log)
             .expect_err("one-byte-short log limit fails")
-            .kind(),
-        ManagedLifecycleReadErrorKind::LimitExceeded
+            .code()
+            .as_str(),
+        "storage.capacity.exhausted"
     );
     let too_small_total = ManagedLifecycleReadLimits {
         max_total_read_bytes: total_length - 1,
@@ -422,8 +435,9 @@ fn explicit_limits_accept_exact_boundaries_and_reject_one_less() {
     assert_eq!(
         inspect_managed_lifecycle_read_only_with_limits(&handle, too_small_total)
             .expect_err("one-byte-short total limit fails")
-            .kind(),
-        ManagedLifecycleReadErrorKind::LimitExceeded
+            .code()
+            .as_str(),
+        "storage.capacity.exhausted"
     );
     let invalid = ManagedLifecycleReadLimits {
         max_generations: 0,
@@ -432,8 +446,9 @@ fn explicit_limits_accept_exact_boundaries_and_reject_one_less() {
     assert_eq!(
         inspect_managed_lifecycle_read_only_with_limits(&handle, invalid)
             .expect_err("zero limit is rejected")
-            .kind(),
-        ManagedLifecycleReadErrorKind::LimitExceeded
+            .code()
+            .as_str(),
+        "storage.capacity.exhausted"
     );
 }
 

@@ -37,7 +37,6 @@ use rocketmq_store::SendfileWriteTarget;
 use rocketmq_store::TransferBatch;
 use rocketmq_store::TransferCacheState;
 use rocketmq_store::TransferEngineKind;
-use rocketmq_store::TransferError;
 use rocketmq_store::TransferKind;
 use rocketmq_store::VectoredTransferEngine;
 use tempfile::NamedTempFile;
@@ -251,10 +250,7 @@ async fn sendfile_transfer_engine_reports_write_zero_when_connection_closes() {
         .await
         .expect_err("zero-byte sendfile should report connection close");
 
-    match error {
-        TransferError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::WriteZero),
-        other => panic!("expected WriteZero I/O error, got {other:?}"),
-    }
+    assert_eq!(error.code().as_str(), "storage.io.failed");
 }
 
 fn temp_file_with_bytes(bytes: &[u8]) -> File {

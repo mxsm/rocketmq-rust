@@ -52,7 +52,7 @@ fn known_headers_are_exactly_40_and_unknown_headers_are_at_most_256() {
     rewrite_header_crc(&mut known_with_extension);
     assert_eq!(
         decode_next_frame(&known_with_extension, 100, 2),
-        Err(CodecError::InvalidHeaderLength {
+        Err(CodecViolation::InvalidHeaderLength {
             length: 48,
             minimum: MIN_HEADER_LENGTH,
             maximum: MIN_HEADER_LENGTH,
@@ -62,7 +62,7 @@ fn known_headers_are_exactly_40_and_unknown_headers_are_at_most_256() {
     let overlong = encode_unknown_noncritical(&[0; MAX_HEADER_LENGTH - MIN_HEADER_LENGTH + 1], &[], 100, 2);
     assert_eq!(
         decode_next_frame(&overlong, 100, 2),
-        Err(CodecError::InvalidHeaderLength {
+        Err(CodecViolation::InvalidHeaderLength {
             length: MAX_HEADER_LENGTH + 1,
             minimum: MIN_HEADER_LENGTH,
             maximum: MAX_HEADER_LENGTH,
@@ -88,28 +88,28 @@ fn every_golden_cut_is_partial_but_impossible_partial_fields_are_corruption() {
     bad_record_version[10] = 2;
     assert_eq!(
         decode_next_frame(&bad_record_version, 100, 2),
-        Err(CodecError::InvalidHeaderPrefix { offset: 10 })
+        Err(CodecViolation::InvalidHeaderPrefix { offset: 10 })
     );
 
     let mut bad_flags = COMPLETED_FRAME[..13].to_vec();
     bad_flags[12] = 0;
     assert_eq!(
         decode_next_frame(&bad_flags, 100, 2),
-        Err(CodecError::InvalidHeaderPrefix { offset: 12 })
+        Err(CodecViolation::InvalidHeaderPrefix { offset: 12 })
     );
 
     let mut bad_header_length = COMPLETED_FRAME[..15].to_vec();
     bad_header_length[14] = 39;
     assert_eq!(
         decode_next_frame(&bad_header_length, 100, 2),
-        Err(CodecError::InvalidHeaderPrefix { offset: 14 })
+        Err(CodecViolation::InvalidHeaderPrefix { offset: 14 })
     );
 
     let mut oversized_partial_payload = COMPLETED_FRAME[..18].to_vec();
     oversized_partial_payload[16..18].copy_from_slice(&16_385_u16.to_le_bytes());
     assert_eq!(
         decode_next_frame(&oversized_partial_payload, 100, 2),
-        Err(CodecError::PayloadTooLarge {
+        Err(CodecViolation::PayloadTooLarge {
             length: MAX_PAYLOAD_LENGTH + 1,
             maximum: MAX_PAYLOAD_LENGTH,
         })
@@ -123,7 +123,7 @@ fn known_declared_payload_lengths_are_rejected_before_payload_arrives() {
     rewrite_header_crc(&mut completed);
     assert_eq!(
         decode_next_frame(&completed, 100, 2),
-        Err(CodecError::InvalidPayloadLength {
+        Err(CodecViolation::InvalidPayloadLength {
             record_type: RecordType::Completed.wire_value(),
             expected: 56,
             actual: 57,
@@ -137,7 +137,7 @@ fn known_declared_payload_lengths_are_rejected_before_payload_arrives() {
         rewrite_header_crc(&mut allocate);
         assert_eq!(
             decode_next_frame(&allocate, 100, 3),
-            Err(CodecError::InvalidVariablePayloadLength {
+            Err(CodecViolation::InvalidVariablePayloadLength {
                 record_type: RecordType::AllocateIncarnation.wire_value(),
                 minimum: 62,
                 maximum: 8_252,
@@ -154,7 +154,7 @@ fn impossible_known_payload_prefix_fields_are_corruption_not_partial() {
     invalid_enum.truncate(MIN_HEADER_LENGTH + 34);
     assert_eq!(
         decode_next_frame(&invalid_enum, 100, 3),
-        Err(CodecError::InvalidEnumValue {
+        Err(CodecViolation::InvalidEnumValue {
             field: "retirement_reason",
             value: 10,
         })
@@ -165,7 +165,7 @@ fn impossible_known_payload_prefix_fields_are_corruption_not_partial() {
     nonzero_reserved.truncate(MIN_HEADER_LENGTH + 36);
     assert_eq!(
         decode_next_frame(&nonzero_reserved, 100, 3),
-        Err(CodecError::NonZeroReserved {
+        Err(CodecViolation::NonZeroReserved {
             field: "retirement_intent_flags",
             value: 1,
         })
@@ -176,7 +176,7 @@ fn impossible_known_payload_prefix_fields_are_corruption_not_partial() {
     zero_ticket.truncate(MIN_HEADER_LENGTH + 8);
     assert!(matches!(
         decode_next_frame(&zero_ticket, 100, 2),
-        Err(CodecError::InvalidIdentity { field: "ticket_id", .. })
+        Err(CodecViolation::InvalidIdentity { field: "ticket_id", .. })
     ));
 
     let mut impossible_path_length = encoded_sample(RecordType::AllocateIncarnation);
@@ -184,7 +184,7 @@ fn impossible_known_payload_prefix_fields_are_corruption_not_partial() {
     impossible_path_length.truncate(MIN_HEADER_LENGTH + 58);
     assert_eq!(
         decode_next_frame(&impossible_path_length, 100, 3),
-        Err(CodecError::PayloadTooLarge {
+        Err(CodecViolation::PayloadTooLarge {
             length: 4_097,
             maximum: 4_096,
         })
@@ -229,7 +229,7 @@ fn partial_admin_records_reject_impossible_envelope_bindings() {
 
         assert_eq!(
             decode_next_frame(&partial, sequence, generation),
-            Err(CodecError::InvalidEnvelopeRelationship { detail }),
+            Err(CodecViolation::InvalidEnvelopeRelationship { detail }),
             "record_type={record_type:?}",
         );
     }
@@ -262,7 +262,7 @@ fn partial_admin_records_reject_impossible_envelope_bindings() {
     complete_prefix.truncate(MIN_HEADER_LENGTH + 48);
     assert_eq!(
         decode_next_frame(&complete_prefix, 2, 0),
-        Err(CodecError::InvalidEnvelopeRelationship { detail }),
+        Err(CodecViolation::InvalidEnvelopeRelationship { detail }),
     );
 }
 
@@ -289,7 +289,7 @@ fn partial_admin_headers_reject_impossible_envelopes_as_fields_become_available(
 
             assert_eq!(
                 decode_next_frame(&partial, invalid_sequence, 0),
-                Err(CodecError::InvalidEnvelopeRelationship { detail }),
+                Err(CodecViolation::InvalidEnvelopeRelationship { detail }),
                 "record_type={record_type:?}, cut={cut}, field=sequence",
             );
 
@@ -298,7 +298,7 @@ fn partial_admin_headers_reject_impossible_envelopes_as_fields_become_available(
 
             assert_eq!(
                 decode_next_frame(&partial, required_sequence, 1),
-                Err(CodecError::InvalidEnvelopeRelationship { detail }),
+                Err(CodecViolation::InvalidEnvelopeRelationship { detail }),
                 "record_type={record_type:?}, cut={cut}, field=log_generation",
             );
         }
@@ -313,8 +313,8 @@ fn partial_admin_headers_reject_impossible_envelopes_as_fields_become_available(
             assert!(
                 matches!(
                     decode_next_frame(&partial, required_sequence, 0),
-                    Err(CodecError::InvalidFieldPrefix { field: "sequence", .. })
-                        | Err(CodecError::SequenceMismatch { .. })
+                    Err(CodecViolation::InvalidFieldPrefix { field: "sequence", .. })
+                        | Err(CodecViolation::SequenceMismatch { .. })
                 ),
                 "record_type={record_type:?}, cut={cut}, field=encoded_sequence",
             );
@@ -330,10 +330,10 @@ fn partial_admin_headers_reject_impossible_envelopes_as_fields_become_available(
             assert!(
                 matches!(
                     decode_next_frame(&partial, required_sequence, 0),
-                    Err(CodecError::InvalidFieldPrefix {
+                    Err(CodecViolation::InvalidFieldPrefix {
                         field: "log_generation",
                         ..
-                    }) | Err(CodecError::LogGenerationMismatch { .. })
+                    }) | Err(CodecViolation::LogGenerationMismatch { .. })
                 ),
                 "record_type={record_type:?}, cut={cut}, field=encoded_log_generation",
             );
@@ -370,14 +370,14 @@ fn record_type_version_flags_and_sequence_fail_closed() {
     zero_type[8..10].copy_from_slice(&0_u16.to_le_bytes());
     assert_eq!(
         decode_next_frame(&zero_type, 100, 2),
-        Err(CodecError::InvalidRecordTypeZero)
+        Err(CodecViolation::InvalidRecordTypeZero)
     );
 
     let mut unsupported_known_version = COMPLETED_FRAME;
     unsupported_known_version[10..12].copy_from_slice(&2_u16.to_le_bytes());
     assert_eq!(
         decode_next_frame(&unsupported_known_version, 100, 2),
-        Err(CodecError::UnsupportedRecordVersion {
+        Err(CodecViolation::UnsupportedRecordVersion {
             record_type: RecordType::Completed.wire_value(),
             version: 2,
         })
@@ -388,7 +388,7 @@ fn record_type_version_flags_and_sequence_fail_closed() {
     invalid_unknown_flags[12..14].copy_from_slice(&2_u16.to_le_bytes());
     assert_eq!(
         decode_next_frame(&invalid_unknown_flags, 100, 2),
-        Err(CodecError::InvalidRecordFlags {
+        Err(CodecViolation::InvalidRecordFlags {
             record_type: 0x7777,
             flags: 2,
         })
@@ -396,21 +396,21 @@ fn record_type_version_flags_and_sequence_fail_closed() {
 
     assert_eq!(
         decode_next_frame(&COMPLETED_FRAME, 99, 2),
-        Err(CodecError::SequenceMismatch {
+        Err(CodecViolation::SequenceMismatch {
             expected: 99,
             actual: 100,
         })
     );
     assert_eq!(
         decode_next_frame(&COMPLETED_FRAME, 101, 2),
-        Err(CodecError::SequenceMismatch {
+        Err(CodecViolation::SequenceMismatch {
             expected: 101,
             actual: 100,
         })
     );
     assert_eq!(
         decode_next_frame(&COMPLETED_FRAME, 0, 2),
-        Err(CodecError::ZeroExpectedSequence)
+        Err(CodecViolation::ZeroExpectedSequence)
     );
 
     let maximum_sequence = encode_frame(
@@ -425,7 +425,7 @@ fn record_type_version_flags_and_sequence_fail_closed() {
     else {
         panic!("maximum sequence frame must be complete");
     };
-    assert_eq!(frame.next_sequence(), Err(CodecError::SequenceOverflow));
+    assert_eq!(frame.next_sequence(), Err(CodecViolation::SequenceOverflow));
 }
 
 fn encode_unknown_noncritical(header_extension: &[u8], payload: &[u8], sequence: u64, log_generation: u64) -> Vec<u8> {

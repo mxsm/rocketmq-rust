@@ -19,17 +19,17 @@ use std::sync::Arc;
 use super::replay;
 use super::GenerationBytes;
 use super::RecoveryDecision;
-use super::ReplayError;
 use super::ReplayInput;
 use super::ReplayLimits;
-use crate::mapped_file::retirement::codec::CodecError;
+use super::ReplayViolation;
+use crate::mapped_file::retirement::codec::CodecViolation;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_FILE_LENGTH;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 use crate::mapped_file::retirement::sidecar::decode_enabled_marker_file;
 use crate::mapped_file::retirement::sidecar::decode_snapshot;
 use crate::mapped_file::retirement::sidecar::decode_store_meta;
 use crate::mapped_file::retirement::sidecar::EnabledMarkerFile;
-use crate::mapped_file::retirement::sidecar::SidecarError;
+use crate::mapped_file::retirement::sidecar::SidecarViolation;
 use crate::mapped_file::retirement::sidecar::StoreMeta;
 use crate::mapped_file::retirement::sidecar::ENABLED_MARKER_FILE_LENGTH;
 use crate::mapped_file::retirement::sidecar::STORE_META_LENGTH;
@@ -49,10 +49,12 @@ use quarantine::QuarantineRead;
 use reading::read_exact_file;
 use reading::read_snapshot_file;
 use reading::validate_snapshot_prefix;
+use rocketmq_store_api::StoreError;
+pub(crate) use types::ManagedLifecycleReadError;
 use types::{corruption, io_error, limit_error, ManagedLifecycleReadSource};
 pub use types::{
-    LockedManagedLifecycleInspection, ManagedLifecycleReadError, ManagedLifecycleReadErrorKind,
-    ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    LockedManagedLifecycleInspection, ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome,
+    ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
 };
 
 const LIFECYCLE_DIRECTORY: &str = ".rocketmq-lifecycle";
@@ -75,10 +77,8 @@ const MAX_TOTAL_READ_BYTES: u64 = 1024 * 1024 * 1024;
 ///
 /// Returns a typed failure if containment, complete inventory, bounded decoding, or replay cannot be proven.
 #[doc(hidden)]
-pub fn inspect_managed_lifecycle_read_only(
-    store_root: &File,
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadError> {
-    inspect_with_hook(store_root, || {})
+pub fn inspect_managed_lifecycle_read_only(store_root: &File) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+    inspect_with_hook(store_root, || {}).map_err(ManagedLifecycleReadError::into_store_error)
 }
 
 /// Inspects lifecycle artifacts with caller-selected work bounds.
@@ -91,8 +91,8 @@ pub fn inspect_managed_lifecycle_read_only(
 pub fn inspect_managed_lifecycle_read_only_with_limits(
     store_root: &File,
     limits: ManagedLifecycleReadLimits,
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadError> {
-    inspect_with_limits_and_hooks(store_root, limits, || {}, || {})
+) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+    inspect_with_limits_and_hooks(store_root, limits, || {}, || {}).map_err(ManagedLifecycleReadError::into_store_error)
 }
 
 /// Inspects managed lifecycle evidence while the caller retains the exclusive Store-root lease.
@@ -115,6 +115,14 @@ pub fn inspect_managed_lifecycle_read_only_with_limits(
 /// proven, or if the retained root handle cannot be duplicated.
 #[doc(hidden)]
 pub unsafe fn inspect_managed_lifecycle_under_exclusive_lock(
+    store_root: &File,
+    exclusive_lease: Arc<dyn Send + Sync>,
+) -> Result<LockedManagedLifecycleInspection, StoreError> {
+    inspect_managed_lifecycle_under_exclusive_lock_leaf(store_root, exclusive_lease)
+        .map_err(ManagedLifecycleReadError::into_store_error)
+}
+
+fn inspect_managed_lifecycle_under_exclusive_lock_leaf(
     store_root: &File,
     exclusive_lease: Arc<dyn Send + Sync>,
 ) -> Result<LockedManagedLifecycleInspection, ManagedLifecycleReadError> {
@@ -213,7 +221,6 @@ fn inspect_stable_with_limits_and_hooks(
         let quarantine_second = opened[index].enumerate(remaining).map_err(map_platform_error)?;
         if quarantine_second != quarantine_first {
             return Err(ManagedLifecycleReadError::new(
-                ManagedLifecycleReadErrorKind::InventoryChanged,
                 ManagedLifecycleReadSource::InventoryChanged(
                     "quarantine inventory changed while entries were opened".to_owned(),
                 ),
@@ -233,7 +240,6 @@ fn inspect_stable_with_limits_and_hooks(
         .map_err(map_platform_error)?;
     if second != first {
         return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadErrorKind::InventoryChanged,
             ManagedLifecycleReadSource::InventoryChanged(
                 "lifecycle inventory changed while entries were opened".to_owned(),
             ),
@@ -268,7 +274,6 @@ fn inspect_stable_with_limits_and_hooks(
             .is_none_or(|expected| quarantine_third != expected.first)
         {
             return Err(ManagedLifecycleReadError::new(
-                ManagedLifecycleReadErrorKind::InventoryChanged,
                 ManagedLifecycleReadSource::InventoryChanged(
                     "quarantine inventory changed while evidence was read".to_owned(),
                 ),
@@ -280,7 +285,6 @@ fn inspect_stable_with_limits_and_hooks(
         .map_err(map_platform_error)?;
     if third != first {
         return Err(ManagedLifecycleReadError::new(
-            ManagedLifecycleReadErrorKind::InventoryChanged,
             ManagedLifecycleReadSource::InventoryChanged(
                 "lifecycle inventory changed while sidecars were read".to_owned(),
             ),
@@ -359,7 +363,6 @@ impl InventoryPlan {
         for (index, entry) in inventory.entries.iter().enumerate() {
             if entry.kind == platform::EntryKind::Reparse {
                 return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadErrorKind::UnsafeNamespace,
                     ManagedLifecycleReadSource::UnsafeNamespace(format!(
                         "lifecycle entry {:?} is a symlink or reparse point",
                         entry.name
@@ -376,7 +379,6 @@ impl InventoryPlan {
             if entry.kind == platform::EntryKind::File {
                 if entry.stamp.link_count != 1 {
                     return Err(ManagedLifecycleReadError::new(
-                        ManagedLifecycleReadErrorKind::UnsafeNamespace,
                         ManagedLifecycleReadSource::UnsafeNamespace(format!(
                             "lifecycle file {:?} has {} hard links; exactly one is required",
                             entry.name, entry.stamp.link_count
@@ -386,7 +388,6 @@ impl InventoryPlan {
                 let physical_id = (entry.stamp.volume, entry.stamp.file_id);
                 if let Some(previous) = physical_files.insert(physical_id, &entry.name) {
                     return Err(ManagedLifecycleReadError::new(
-                        ManagedLifecycleReadErrorKind::UnsafeNamespace,
                         ManagedLifecycleReadSource::UnsafeNamespace(format!(
                             "lifecycle files {previous:?} and {:?} are hard-link aliases",
                             entry.name
@@ -728,56 +729,19 @@ impl DecodedInventory {
 }
 
 fn map_platform_error(error: platform::PlatformError) -> ManagedLifecycleReadError {
-    let kind = match error.kind() {
-        platform::PlatformErrorKind::Io => ManagedLifecycleReadErrorKind::Io,
-        platform::PlatformErrorKind::UnsafeNamespace => ManagedLifecycleReadErrorKind::UnsafeNamespace,
-        platform::PlatformErrorKind::Changed => ManagedLifecycleReadErrorKind::InventoryChanged,
-        platform::PlatformErrorKind::Limit => ManagedLifecycleReadErrorKind::LimitExceeded,
-        platform::PlatformErrorKind::Unsupported => ManagedLifecycleReadErrorKind::UnsupportedPlatform,
-    };
-    ManagedLifecycleReadError::new(kind, ManagedLifecycleReadSource::Platform(error))
+    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Platform(error))
 }
 
-fn map_sidecar_error(error: SidecarError) -> ManagedLifecycleReadError {
-    let kind = if matches!(
-        error,
-        SidecarError::UnsupportedVersion { .. } | SidecarError::UnsupportedSnapshotEntryVersion { .. }
-    ) {
-        ManagedLifecycleReadErrorKind::UnknownVersionCorruption
-    } else {
-        ManagedLifecycleReadErrorKind::Corruption
-    };
-    ManagedLifecycleReadError::new(kind, ManagedLifecycleReadSource::Sidecar(error))
+fn map_sidecar_error(error: SidecarViolation) -> ManagedLifecycleReadError {
+    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Sidecar(error))
 }
 
-fn map_codec_error(error: CodecError) -> ManagedLifecycleReadError {
-    let kind = if matches!(
-        error,
-        CodecError::UnsupportedFormatVersion { .. } | CodecError::UnsupportedRecordVersion { .. }
-    ) {
-        ManagedLifecycleReadErrorKind::UnknownVersionCorruption
-    } else {
-        ManagedLifecycleReadErrorKind::Corruption
-    };
-    ManagedLifecycleReadError::new(kind, ManagedLifecycleReadSource::Codec(error))
+fn map_codec_error(error: CodecViolation) -> ManagedLifecycleReadError {
+    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Codec(error))
 }
 
-fn map_replay_error(error: ReplayError) -> ManagedLifecycleReadError {
-    let kind = match &error {
-        ReplayError::LimitExceeded { .. } => ManagedLifecycleReadErrorKind::LimitExceeded,
-        ReplayError::Snapshot(
-            SidecarError::UnsupportedVersion { .. } | SidecarError::UnsupportedSnapshotEntryVersion { .. },
-        )
-        | ReplayError::Marker(
-            SidecarError::UnsupportedVersion { .. } | SidecarError::UnsupportedSnapshotEntryVersion { .. },
-        )
-        | ReplayError::InvalidLog {
-            source: CodecError::UnsupportedFormatVersion { .. } | CodecError::UnsupportedRecordVersion { .. },
-            ..
-        } => ManagedLifecycleReadErrorKind::UnknownVersionCorruption,
-        _ => ManagedLifecycleReadErrorKind::Corruption,
-    };
-    ManagedLifecycleReadError::new(kind, ManagedLifecycleReadSource::Replay(error))
+fn map_replay_error(error: ReplayViolation) -> ManagedLifecycleReadError {
+    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Replay(error))
 }
 
 #[cfg(test)]

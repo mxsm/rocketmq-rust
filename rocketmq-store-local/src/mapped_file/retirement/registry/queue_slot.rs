@@ -32,7 +32,7 @@ use super::DurableRetirementToken;
 use super::PreparedQueueHandoff;
 use super::PublishedFileRegistration;
 use super::QueueIdentity;
-use super::RegistryError;
+use super::RegistryViolation;
 use super::RetirementHandoffCapability;
 use super::RetirementIntentBinding;
 use super::RetirementOperation;
@@ -376,7 +376,7 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
             return Err(CreationPublicationFailure::new(
                 receipt,
                 owner,
-                RegistryError::ZeroMappingGeneration,
+                RegistryViolation::ZeroMappingGeneration,
             ));
         }
 
@@ -386,7 +386,7 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
             return Err(CreationPublicationFailure::new(
                 receipt,
                 owner,
-                RegistryError::OwnerAlreadyRegistered {
+                RegistryViolation::OwnerAlreadyRegistered {
                     incumbent: incumbent.incarnation,
                 },
             ));
@@ -401,7 +401,7 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
             return Err(CreationPublicationFailure::new(
                 receipt,
                 owner,
-                RegistryError::ManagedQueueBindingMissing,
+                RegistryViolation::ManagedQueueBindingMissing,
             ));
         }
 
@@ -439,14 +439,14 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
         owner: &Arc<T>,
         reason: RetirementReason,
         retirement_nonce: [u8; 16],
-    ) -> Result<(RetirementOperation, QueueIdentity), RegistryError> {
+    ) -> Result<(RetirementOperation, QueueIdentity), RegistryViolation> {
         let binding = self
             .slot
             .managed_members
             .lock()
             .get(&owner_identity(owner))
             .cloned()
-            .ok_or(RegistryError::ManagedQueueBindingMissing)?;
+            .ok_or(RegistryViolation::ManagedQueueBindingMissing)?;
         let operation = RetirementOperation::new(
             binding.incarnation,
             reason,
@@ -464,17 +464,17 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
     pub(in crate::mapped_file::retirement) fn register_reconciled_members(
         &self,
         registry: &RetirementRegistry<T>,
-    ) -> Result<(), RegistryError> {
+    ) -> Result<(), RegistryViolation> {
         let files = self.slot.files.load_full();
         let bindings = self.slot.managed_members.lock();
         let mut registrations = Vec::new();
         registrations
             .try_reserve_exact(files.len())
-            .map_err(|_| RegistryError::RegistrationAllocationFailed)?;
+            .map_err(|_| RegistryViolation::RegistrationAllocationFailed)?;
         for owner in files.iter() {
             let binding = bindings
                 .get(&owner_identity(owner))
-                .ok_or(RegistryError::ManagedQueueBindingMissing)?;
+                .ok_or(RegistryViolation::ManagedQueueBindingMissing)?;
             registrations.push(PublishedFileRegistration::new(
                 binding.incarnation,
                 binding.physical_key,
@@ -519,7 +519,7 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
             })?;
         let Some(owner) = prepared.owner().cloned() else {
             drop(prepared);
-            return Err(QueueHandoffFailure::Fenced(RegistryError::NeedsRecovery));
+            return Err(QueueHandoffFailure::Fenced(RegistryViolation::NeedsRecovery));
         };
         let current = self.slot.files.load_full();
         let mut matching = current
@@ -588,14 +588,16 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
         segment_offset: u64,
         expected_length: u64,
         mapping_generation: u64,
-    ) -> Result<(), ManagedMemberInstallError> {
+    ) -> Result<(), RegistryViolation> {
         if mapping_generation == 0 {
-            return Err(ManagedMemberInstallError::ZeroMappingGeneration);
+            return Err(RegistryViolation::ZeroMappingGeneration);
         }
         let owner_identity = owner_identity(&owner);
         let mut managed_members = self.slot.managed_members.lock();
-        if managed_members.contains_key(&owner_identity) {
-            return Err(ManagedMemberInstallError::DuplicateOwner);
+        if let Some(incumbent) = managed_members.get(&owner_identity) {
+            return Err(RegistryViolation::OwnerAlreadyRegistered {
+                incumbent: incumbent.incarnation,
+            });
         }
         managed_members.insert(
             owner_identity,
@@ -660,11 +662,11 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
 pub(in crate::mapped_file::retirement) struct CreationPublicationFailure<T> {
     receipt: Box<PublishedIncarnationReceipt>,
     owner: Arc<T>,
-    error: RegistryError,
+    error: RegistryViolation,
 }
 
 impl<T> CreationPublicationFailure<T> {
-    fn new(receipt: PublishedIncarnationReceipt, owner: Arc<T>, error: RegistryError) -> Self {
+    fn new(receipt: PublishedIncarnationReceipt, owner: Arc<T>, error: RegistryViolation) -> Self {
         Self {
             receipt: Box::new(receipt),
             owner,
@@ -672,21 +674,16 @@ impl<T> CreationPublicationFailure<T> {
         }
     }
 
-    pub(in crate::mapped_file::retirement) fn into_parts(self) -> (PublishedIncarnationReceipt, Arc<T>, RegistryError) {
+    pub(in crate::mapped_file::retirement) fn into_parts(
+        self,
+    ) -> (PublishedIncarnationReceipt, Arc<T>, RegistryViolation) {
         (*self.receipt, self.owner, self.error)
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::mapped_file::retirement::registry) enum ManagedMemberInstallError {
-    ZeroMappingGeneration,
-    DuplicateOwner,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::mapped_file::retirement) enum QueueHandoffFailureReason {
-    Registry(RegistryError),
+    Registry(RegistryViolation),
     CandidateMissing,
     CandidateDuplicated,
     CandidateBindingMissing,
@@ -701,13 +698,13 @@ pub(in crate::mapped_file::retirement) enum QueueHandoffFailure<T> {
         token: Box<DurableRetirementToken<T>>,
         reason: QueueHandoffFailureReason,
     },
-    Fenced(RegistryError),
+    Fenced(RegistryViolation),
 }
 
 impl<T> QueueHandoffFailure<T> {
     pub(in crate::mapped_file::retirement) fn into_retryable_parts(
         self,
-    ) -> Result<(DurableRetirementToken<T>, QueueHandoffFailureReason), RegistryError> {
+    ) -> Result<(DurableRetirementToken<T>, QueueHandoffFailureReason), RegistryViolation> {
         match self {
             Self::Retryable { token, reason } => Ok((*token, reason)),
             Self::Fenced(error) => Err(error),

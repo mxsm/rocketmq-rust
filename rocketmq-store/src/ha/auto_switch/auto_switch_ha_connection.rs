@@ -23,7 +23,7 @@ use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::ha::HAConnectionError;
+use crate::store_error::StoreError;
 
 pub struct AutoSwitchHAConnection {
     delegate: DefaultHAConnection,
@@ -58,7 +58,7 @@ impl AutoSwitchHAConnection {
 }
 
 impl HAConnection for AutoSwitchHAConnection {
-    async fn start(&mut self) -> Result<(), HAConnectionError> {
+    async fn start(&mut self) -> Result<(), StoreError> {
         self.delegate.start().await
     }
 

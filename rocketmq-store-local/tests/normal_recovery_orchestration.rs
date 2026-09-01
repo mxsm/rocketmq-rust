@@ -19,7 +19,7 @@ use std::rc::Rc;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryOffsetError;
+use rocketmq_store_local::commit_log::recovery::NormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 
@@ -70,7 +70,7 @@ fn segment_started_state_error_skips_started_and_next() {
 
     assert_eq!(
         outcome,
-        NormalRecoverySegmentOutcome::StateFailed(NormalRecoveryOffsetError::OffsetExceedsI64 {
+        NormalRecoverySegmentOutcome::StateFailed(NormalRecoveryOffsetViolation::OffsetExceedsI64 {
             offset: i64::MAX as u64 + 1,
         })
     );
@@ -266,7 +266,7 @@ fn message_state_overflow_skips_observe_drops_payload_and_stops_reading() {
 
     assert_eq!(
         outcome,
-        NormalRecoverySegmentOutcome::StateFailed(NormalRecoveryOffsetError::BaseRelativeOverflow {
+        NormalRecoverySegmentOutcome::StateFailed(NormalRecoveryOffsetViolation::BaseRelativeOverflow {
             base_offset: u64::MAX,
             relative_start: 1,
         })

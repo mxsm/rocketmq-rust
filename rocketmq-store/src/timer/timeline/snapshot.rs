@@ -288,8 +288,6 @@ pub(crate) enum TimelineSnapshotError {
     #[error(transparent)]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
-    Payload(#[from] rocketmq_store_local::timer::payload_store::TimerPayloadStoreError),
-    #[error(transparent)]
     Materializer(#[from] super::TimelineMaterializerError),
     #[error(transparent)]
     Completion(#[from] super::TimelineCompletionError),
@@ -307,8 +305,6 @@ pub(crate) enum TimelineSnapshotError {
     GenerationExhausted,
     #[error("Extended snapshot artifact generation {0} already exists")]
     ArtifactExists(u64),
-    #[error(transparent)]
-    Native(#[from] rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError),
     #[error("segmented snapshot manifest is missing its native binding")]
     MissingNativeBinding,
 }
