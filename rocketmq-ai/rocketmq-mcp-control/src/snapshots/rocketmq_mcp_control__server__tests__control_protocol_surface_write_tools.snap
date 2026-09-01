@@ -1,0 +1,22 @@
+---
+source: src/server.rs
+expression: surface
+---
+{
+  "capabilities": {
+    "authentication": "oauth_rs256_jwks",
+    "max_request_bytes": 1048576,
+    "mutation_supported": false,
+    "mutations_runtime_enabled": true,
+    "registered_operations": 0,
+    "request_timeout_seconds": 30,
+    "schema_version": "rocketmq-mcp-control.capability.v1",
+    "transport": "streamable_https",
+    "write_tools_compiled": true
+  },
+  "protocol_version": "2025-11-25",
+  "resources": [
+    "rocketmq-control://capabilities"
+  ],
+  "tools": []
+}

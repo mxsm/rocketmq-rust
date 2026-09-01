@@ -18,6 +18,7 @@
 | `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
 | `rocketmq-macros/tests/fixtures/renamed-consumer/` | Standalone compile fixture for renamed codec dependencies | Its local `AGENTS.md` |
 | `rocketmq-ai/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
+| `rocketmq-ai/rocketmq-mcp-control/` | Standalone isolated MCP control foundation | Its local `AGENTS.md` |
 | `rocketmq-ai/rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
 | `rocketmq-ai/rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
 | `rocketmq-ai/rocketmq-sre/sdk/typescript/` | Standalone read-only AI SRE TypeScript SDK | Its local `AGENTS.md` |
@@ -212,6 +213,13 @@ run the mandatory profile in `rocketmq-ai/rocketmq-mcp/AGENTS.md` from the MCP p
 Preserve the MCP deny-by-default boundary: default tools remain read-only/diagnostic; `dangerous-tools` requires
 compile-time and runtime opt-in, confirmation, and audit; Streamable HTTP remains authenticated by default;
 stdio writes protocol frames only to stdout; and sensitive output remains sanitized.
+
+### RocketMQ MCP control
+
+If changes touch `rocketmq-ai/rocketmq-mcp-control/`, run the mandatory profile in its local `AGENTS.md` from
+the standalone project root. Preserve the isolated control boundary: HTTPS and OAuth are mandatory, the default
+build has no mutation adapter, `write-tools` contains only the mutation adapter, and no production mutation tool
+is registered until a separately reviewed operation implementation exists.
 
 ## Testing policy
 

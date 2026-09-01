@@ -1,0 +1,28 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[server]
+bind = "127.0.0.1:8090"
+endpoint = "/mcp"
+public_base_url = "https://control.example.test"
+
+[server.tls]
+cert_path = "secrets/control-cert.pem"
+key_path = "secrets/control-key.pem"
+
+[oauth]
+issuer = "https://identity.example.test"
+audience = "rocketmq-mcp-control"
+jwks_url = "https://identity.example.test/.well-known/jwks.json"
+
+[mutations]
+mutations_enabled = false
+dry_run = true
+allowed_operations = []
+allowed_clusters = []
+operation_timeout_seconds = 24
+
+[audit]
+path = "var/audit/rocketmq-mcp-control.jsonl"
+capacity = 4096
+max_record_bytes = 4096

@@ -1,0 +1,15 @@
+---
+source: src/server.rs
+expression: server.capabilities()
+---
+{
+  "schema_version": "rocketmq-mcp-control.capability.v1",
+  "write_tools_compiled": true,
+  "mutations_runtime_enabled": true,
+  "registered_operations": 0,
+  "mutation_supported": false,
+  "transport": "streamable_https",
+  "authentication": "oauth_rs256_jwks",
+  "max_request_bytes": 1048576,
+  "request_timeout_seconds": 30
+}

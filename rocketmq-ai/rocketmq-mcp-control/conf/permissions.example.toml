@@ -1,0 +1,14 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+# Configure these as closed OAuth claims at the identity provider. They do not grant access by themselves;
+# the server intersects them with its own allowlists and always requires rocketmq:write.
+scope = ["rocketmq:write"]
+rocketmq_operations = [
+  "topic_upsert",
+  "consumer_group_upsert",
+  "consumer_offset_reset",
+  "broker_config_patch",
+  "consumer_request_mode",
+]
+rocketmq_clusters = ["production-a"]

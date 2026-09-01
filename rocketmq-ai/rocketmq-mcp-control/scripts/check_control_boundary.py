@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+
+PROJECT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def fail(message: str) -> None:
+    print(f"control boundary violation: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def metadata(features: list[str]) -> dict:
+    command = ["cargo", "metadata", "--locked", "--format-version", "1"]
+    if features:
+        command.extend(["--features", ",".join(features)])
+    completed = subprocess.run(command, cwd=PROJECT, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        fail(f"cargo metadata failed: {completed.stderr.strip()}")
+    return json.loads(completed.stdout)
+
+
+def package_names(document: dict) -> set[str]:
+    package_by_id = {package["id"]: package["name"] for package in document["packages"]}
+    return {package_by_id[node["id"]] for node in document["resolve"]["nodes"]}
+
+
+def node_features(document: dict, package_name: str) -> set[str]:
+    package_by_id = {package["id"]: package["name"] for package in document["packages"]}
+    for node in document["resolve"]["nodes"]:
+        if package_by_id[node["id"]] == package_name:
+            return set(node["features"])
+    fail(f"missing metadata node for {package_name}")
+    return set()
+
+
+def run_query_contract(command: list[str]) -> None:
+    query_project = PROJECT.parent / "rocketmq-mcp"
+    environment = os.environ.copy()
+    environment["INSTA_UPDATE"] = "no"
+    environment.pop("RUST_MIN_STACK", None)
+    completed = subprocess.run(
+        command,
+        cwd=query_project,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        fail(f"query MCP contract command failed: {' '.join(command)}\n{completed.stderr.strip()}")
+
+
+manifest = (PROJECT / "Cargo.toml").read_text(encoding="utf-8")
+if 'default = []' not in manifest:
+    fail("default feature set must be empty")
+if 'write-tools = ["dep:rocketmq-admin-core"]' not in manifest:
+    fail("write-tools must contain only the optional Admin Core dependency")
+if 'features = ["mutation-client-adapter"]' not in manifest:
+    fail("Admin Core dependency must select mutation-client-adapter")
+
+default_metadata = metadata([])
+default_names = package_names(default_metadata)
+for forbidden in ("rocketmq-admin-core", "rocketmq-client-rust"):
+    if forbidden in default_names:
+        fail(f"default dependency closure contains {forbidden}")
+
+write_metadata = metadata(["write-tools"])
+write_names = package_names(write_metadata)
+for required in ("rocketmq-admin-core", "rocketmq-client-rust"):
+    if required not in write_names:
+        fail(f"write-tools dependency closure is missing {required}")
+
+admin_features = node_features(write_metadata, "rocketmq-admin-core")
+client_features = node_features(write_metadata, "rocketmq-client-rust")
+if "mutation-client-adapter" not in admin_features or "admin-mutation" not in client_features:
+    fail("write-tools did not select the mutation-only feature chain")
+for forbidden in ("read-client-adapter", "client-adapter"):
+    if forbidden in admin_features:
+        fail(f"write-tools enabled forbidden Admin Core feature {forbidden}")
+for forbidden in ("admin-read", "admin-full"):
+    if forbidden in client_features:
+        fail(f"write-tools enabled forbidden client feature {forbidden}")
+
+source = "\n".join(path.read_text(encoding="utf-8") for path in sorted((PROJECT / "src").glob("**/*.rs")))
+for forbidden in (
+    "transport-io",
+    "std::process",
+    "tokio::process",
+    "Command::new",
+    "println!",
+    "print!",
+    "read_client_adapter",
+    "ReadOnlyQuery",
+):
+    if forbidden in source:
+        fail(f"production source contains prohibited surface {forbidden}")
+
+if "registered_operations(&self) -> u32 {\n        0" not in source:
+    fail("foundation catalog is not visibly empty")
+
+run_query_contract([sys.executable, "scripts/check_read_only_boundary.py"])
+for arguments in (
+    ["cargo", "test", "--locked", "complete_tool_contract_snapshot"],
+    ["cargo", "test", "--locked", "--all-features", "complete_tool_contract_snapshot"],
+    ["cargo", "test", "--locked", "mcp_protocol_surface_snapshot"],
+    ["cargo", "test", "--locked", "--all-features", "mcp_protocol_surface_snapshot"],
+):
+    run_query_contract(arguments)
+
+print("rocketmq-mcp-control boundary checks passed")
