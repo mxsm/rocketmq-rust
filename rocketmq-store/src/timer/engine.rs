@@ -31,11 +31,11 @@ pub(crate) struct WorkBudget {
 }
 
 impl WorkBudget {
-    pub(crate) fn try_new(max_messages: usize, max_bytes: usize, deadline: Instant) -> Result<Self, TimerEngineError> {
+    pub(crate) fn try_new(max_messages: usize, max_bytes: usize, deadline: Instant) -> Option<Self> {
         if max_messages == 0 || max_bytes == 0 {
-            return Err(TimerEngineError::InvalidBudget);
+            return None;
         }
-        Ok(Self {
+        Some(Self {
             max_messages,
             max_bytes,
             deadline,
@@ -92,18 +92,15 @@ pub(crate) fn select_engine_owner(
     requested_delay_ms: u64,
     java_compat_horizon_ms: u64,
     extended_available: bool,
-) -> Result<TimerEngineId, TimerEngineError> {
+) -> Option<TimerEngineId> {
     if let Some(owner) = persisted_owner {
-        return Ok(owner);
+        return Some(owner);
     }
     if requested_delay_ms <= java_compat_horizon_ms && mode == TimerStoreMode::JavaCompat {
-        return Ok(TimerEngineId::JavaCompat);
+        return Some(TimerEngineId::JavaCompat);
     }
     if mode == TimerStoreMode::ExtendedTimeline && extended_available {
-        return Ok(TimerEngineId::ExtendedTimeline);
+        return Some(TimerEngineId::ExtendedTimeline);
     }
-    Err(TimerEngineError::UnsupportedMode(match mode {
-        TimerStoreMode::JavaCompat => "requested delay exceeds the Java-compatible horizon",
-        TimerStoreMode::ExtendedTimeline => "extended timeline capability is unavailable",
-    }))
+    None
 }

@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::timer::error::TimerEngineError;
 use crate::timer::timer_message_store::TimerMessageStore;
 
-pub(super) fn ensure_loaded(store: &TimerMessageStore) -> Result<(), TimerEngineError> {
-    if store.is_storage_loaded() {
-        Ok(())
-    } else {
-        Err(TimerEngineError::NotLoaded)
-    }
+pub(super) fn is_loaded(store: &TimerMessageStore) -> bool {
+    store.is_storage_loaded()
 }

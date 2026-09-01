@@ -33,26 +33,122 @@ pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
 pub(crate) mod write_lease;
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum HAServiceFailure {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Store(#[from] rocketmq_store_api::StoreError),
-    #[error(transparent)]
-    Runtime(#[from] rocketmq_runtime::RuntimeError),
-    #[error("Connection error: {0}")]
-    Connection(String),
-    #[error("Service error: {0}")]
-    Service(String),
-    #[error("Invalid state: {0}")]
-    InvalidState(String),
+use std::error::Error as StdError;
+use std::fmt;
+
+pub(crate) enum HAError {
+    Io(std::io::Error),
+    StartIo(std::io::Error),
+    Store(rocketmq_store_api::StoreError),
+    Runtime(rocketmq_runtime::RuntimeError),
+    InvalidWire,
+    Operation {
+        operation: &'static str,
+        source: Box<dyn StdError + Send + Sync>,
+    },
+    Budget(Box<dyn StdError + Send + Sync>),
+    InvalidState(&'static str),
 }
 
-impl From<HAServiceFailure> for rocketmq_store_api::StoreError {
-    fn from(error: HAServiceFailure) -> Self {
+impl fmt::Debug for HAError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Io(_) => "HAError::Io",
+            Self::StartIo(_) => "HAError::StartIo",
+            Self::Store(_) => "HAError::Store",
+            Self::Runtime(_) => "HAError::Runtime",
+            Self::InvalidWire => "HAError::InvalidWire",
+            Self::Operation { .. } => "HAError::Operation",
+            Self::Budget(_) => "HAError::Budget",
+            Self::InvalidState(_) => "HAError::InvalidState",
+        })
+    }
+}
+
+impl fmt::Display for HAError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Io(_) => "HA I/O operation failed",
+            Self::StartIo(_) => "HA startup I/O failed",
+            Self::Store(_) => "HA Store operation failed",
+            Self::Runtime(_) => "HA runtime operation failed",
+            Self::InvalidWire => "invalid HA wire frame",
+            Self::Operation { .. } => "HA operation failed",
+            Self::Budget(_) => "HA resource budget is exhausted",
+            Self::InvalidState(_) => "invalid HA state",
+        })
+    }
+}
+
+impl StdError for HAError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(source) | Self::StartIo(source) => Some(source),
+            Self::Store(source) => Some(source),
+            Self::Runtime(source) => Some(source),
+            Self::Operation { source, .. } | Self::Budget(source) => Some(source.as_ref()),
+            Self::InvalidWire | Self::InvalidState(_) => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for HAError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
+impl From<rocketmq_store_api::StoreError> for HAError {
+    fn from(source: rocketmq_store_api::StoreError) -> Self {
+        Self::Store(source)
+    }
+}
+
+impl HAError {
+    pub(crate) fn operation(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::Operation {
+            operation,
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn invalid_state(detail: &'static str) -> Self {
+        Self::InvalidState(detail)
+    }
+
+    pub(crate) fn budget(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::Budget(Box::new(source))
+    }
+}
+
+impl From<HAError> for rocketmq_store_api::StoreError {
+    fn from(error: HAError) -> Self {
         match error {
-            HAServiceFailure::Store(error) => error,
+            HAError::Store(error) => error,
+            error @ HAError::Io(_) => rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_IO_FAILED,
+                rocketmq_store_api::StoreOperation::Replicate,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
+            .with_source(error),
+            error @ HAError::InvalidWire => rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_STATE_CORRUPTED,
+                rocketmq_store_api::StoreOperation::Replicate,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
+            .with_source(error),
+            error @ HAError::Runtime(_) => rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Replicate,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
+            .with_source(error),
+            error @ HAError::Budget(_) => rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+                rocketmq_store_api::StoreOperation::Start,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
+            .with_source(error),
             error => rocketmq_store_api::StoreError::new(
                 &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
                 rocketmq_store_api::StoreOperation::Start,
@@ -67,25 +163,26 @@ impl From<HAServiceFailure> for rocketmq_store_api::StoreError {
 mod failure_mapping_tests {
     use std::error::Error;
 
+    use rocketmq_error::ViewValueRef;
     use rocketmq_runtime::RuntimeError;
     use rocketmq_store_api::StoreComponent;
     use rocketmq_store_api::StoreError;
     use rocketmq_store_api::StoreOperation;
 
-    use super::HAServiceFailure;
+    use super::HAError;
 
     #[test]
     fn connection_start_failure_maps_once_with_typed_source() {
-        let error: StoreError = HAServiceFailure::Io(std::io::Error::other("connection start failed")).into();
+        let error: StoreError = HAError::Io(std::io::Error::other("connection start failed")).into();
 
-        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
-        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        assert_eq!(error.operation(), StoreOperation::Replicate);
         assert_eq!(error.component(), StoreComponent::HighAvailability);
         let source = error
             .source()
-            .and_then(|source| source.downcast_ref::<HAServiceFailure>())
+            .and_then(|source| source.downcast_ref::<HAError>())
             .expect("HA service source remains typed");
-        assert!(matches!(source, HAServiceFailure::Io(_)));
+        assert!(matches!(source, HAError::Io(_)));
         assert!(source
             .source()
             .and_then(|source| source.downcast_ref::<std::io::Error>())
@@ -98,7 +195,7 @@ mod failure_mapping_tests {
             .in_component(StoreComponent::CommitLog)
             .with_source(std::io::Error::other("replication read failed"));
 
-        let error: StoreError = HAServiceFailure::Store(nested).into();
+        let error: StoreError = HAError::Store(nested).into();
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
         assert_eq!(error.operation(), StoreOperation::Replicate);
@@ -111,20 +208,125 @@ mod failure_mapping_tests {
 
     #[test]
     fn runtime_failure_maps_once_with_its_typed_cause() {
-        let error: StoreError = HAServiceFailure::Runtime(RuntimeError::NoCurrentRuntime).into();
+        let error: StoreError = HAError::Runtime(RuntimeError::NoCurrentRuntime).into();
 
-        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
-        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+        assert_eq!(error.operation(), StoreOperation::Replicate);
         assert_eq!(error.component(), StoreComponent::HighAvailability);
         let source = error
             .source()
-            .and_then(|source| source.downcast_ref::<HAServiceFailure>())
+            .and_then(|source| source.downcast_ref::<HAError>())
             .expect("HA service source remains typed");
-        assert!(matches!(source, HAServiceFailure::Runtime(_)));
+        assert!(matches!(source, HAError::Runtime(_)));
         assert!(source
             .source()
             .and_then(|source| source.downcast_ref::<RuntimeError>())
             .is_some());
+    }
+
+    #[test]
+    fn startup_wire_budget_and_boxed_operation_follow_the_owner_table() {
+        let startup: StoreError = HAError::StartIo(std::io::Error::other("bind failed")).into();
+        assert_eq!(startup.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(startup.operation(), StoreOperation::Start);
+        assert_eq!(startup.component(), StoreComponent::HighAvailability);
+        let startup_source = startup
+            .source()
+            .and_then(|source| source.downcast_ref::<HAError>())
+            .expect("startup failure remains typed");
+        assert!(matches!(startup_source, HAError::StartIo(_)));
+        assert!(startup_source
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+
+        let wire: StoreError = HAError::InvalidWire.into();
+        assert_eq!(wire.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+        assert_eq!(wire.operation(), StoreOperation::Replicate);
+        assert_eq!(wire.component(), StoreComponent::HighAvailability);
+        assert!(matches!(
+            wire.source().and_then(|source| source.downcast_ref::<HAError>()),
+            Some(HAError::InvalidWire)
+        ));
+
+        let budget: StoreError = HAError::budget(std::io::Error::other("budget exhausted")).into();
+        assert_eq!(budget.descriptor(), &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED);
+        assert_eq!(budget.operation(), StoreOperation::Start);
+        assert_eq!(budget.component(), StoreComponent::HighAvailability);
+        let budget_source = budget
+            .source()
+            .and_then(|source| source.downcast_ref::<HAError>())
+            .expect("budget failure remains typed");
+        assert!(matches!(budget_source, HAError::Budget(_)));
+        assert!(budget_source
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+
+        let operation: StoreError =
+            HAError::operation("start sensitive operation", std::io::Error::other("operation failed")).into();
+        assert_eq!(operation.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(operation.operation(), StoreOperation::Start);
+        assert_eq!(operation.component(), StoreComponent::HighAvailability);
+        let operation_source = operation
+            .source()
+            .and_then(|source| source.downcast_ref::<HAError>())
+            .expect("boxed operation failure remains typed");
+        assert!(matches!(operation_source, HAError::Operation { .. }));
+        assert!(operation_source
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+    }
+
+    #[test]
+    fn ha_leaf_display_and_debug_redact_every_typed_source_and_detail() {
+        const SENTINEL: &str = "sensitive-ha-source-9967";
+        let nested_store = StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Replicate)
+            .in_component(StoreComponent::CommitLog)
+            .with_source(std::io::Error::other(SENTINEL));
+        let errors = [
+            HAError::Io(std::io::Error::other(SENTINEL)),
+            HAError::StartIo(std::io::Error::other(SENTINEL)),
+            HAError::Store(nested_store),
+            HAError::Runtime(RuntimeError::InvalidConfig(SENTINEL.to_owned())),
+            HAError::operation(SENTINEL, std::io::Error::other(SENTINEL)),
+            HAError::budget(std::io::Error::other(SENTINEL)),
+            HAError::invalid_state(SENTINEL),
+        ];
+
+        for error in errors {
+            assert!(!error.to_string().contains(SENTINEL));
+            assert!(!format!("{error:?}").contains(SENTINEL));
+        }
+
+        let source = HAError::Io(std::io::Error::other(SENTINEL));
+        assert_eq!(
+            source
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(SENTINEL)
+        );
+
+        let mapped: StoreError = HAError::Io(std::io::Error::other(SENTINEL)).into();
+        assert!(mapped
+            .public_view()
+            .expect("valid HA public view")
+            .fields()
+            .next()
+            .is_none());
+        let diagnostic_fields = mapped
+            .diagnostic_view()
+            .expect("valid HA diagnostic view")
+            .fields()
+            .map(|field| (field.name(), field.value()))
+            .collect::<Vec<_>>();
+        assert!(diagnostic_fields
+            .iter()
+            .any(|(name, value)| *name == "source_present" && *value == ViewValueRef::Redacted));
+        assert!(!format!("{diagnostic_fields:?}").contains(SENTINEL));
     }
 }
 
@@ -166,7 +368,9 @@ pub(crate) mod test_support {
             None,
             false,
             crate::runtime::test_service_context("ha-message-store-test"),
-        );
+        )
+        .expect("create HA test message Store")
+        .expect("test Timer Store configuration is valid");
         store
             .wire_owned_root_dependencies()
             .expect("wire owned HA test message store");

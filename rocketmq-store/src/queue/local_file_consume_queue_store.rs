@@ -2172,7 +2172,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("consume-queue-namespace-load-test"),
-        );
+        )
+        .expect("create consume queue namespace test Store")
+        .expect("test Timer Store configuration is valid");
         let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
         let store = ConsumeQueueStore::new(
             crate::runtime::test_scope("consume-queue-namespace-load-test"),
@@ -2248,7 +2250,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("consume-queue-load-test"),
-        );
+        )
+        .expect("create consume queue load test Store")
+        .expect("test Timer Store configuration is valid");
 
         let batch_store_path = get_store_path_batch_consume_queue(message_store_config.store_path_root_dir.as_str());
         fs::create_dir_all(Path::new(&batch_store_path).join(topic.as_str()).join("0"))
@@ -2315,7 +2319,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("consume-queue-rocks-compat-test"),
-        );
+        )
+        .expect("create consume queue compatibility test Store")
+        .expect("test Timer Store configuration is valid");
 
         let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
         fs::create_dir_all(Path::new(&simple_store_path).join(topic.as_str()).join("0"))
@@ -2354,7 +2360,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("consume-queue-create-type-test"),
-        );
+        )
+        .expect("create consume queue type test Store")
+        .expect("test Timer Store configuration is valid");
         let store = ConsumeQueueStore::new(
             crate::runtime::test_scope("consume-queue-create-type-test"),
             message_store_config,

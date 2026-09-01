@@ -88,7 +88,9 @@ fn new_test_store(temp_dir: &TempDir) -> LocalFileMessageStore {
         None,
         false,
         test_service_context(),
-    );
+    )
+    .expect("create Timer recovery Store")
+    .expect("test Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("Timer recovery tests should wire owned Store capabilities");

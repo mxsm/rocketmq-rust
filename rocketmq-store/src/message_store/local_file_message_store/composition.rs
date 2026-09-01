@@ -14,6 +14,8 @@
 
 use super::*;
 
+use crate::config::timer_store_config::ValidatedTimerStoreConfig;
+
 const EXTENDED_TIMER_OWNER_MARKER: &str = "config/timer-store-owner.meta";
 const EXTENDED_TIMER_OWNER_PREFIX: &str = "extended_timeline:v1:";
 
@@ -147,6 +149,14 @@ impl LocalFileMessageStore {
         message_store_config.enable_dledger_commit_log || message_store_config.enable_dleger_commit_log
     }
 
+    /// Creates a local-file Store after validating caller-owned Timer limits.
+    ///
+    /// Returns `Ok(None)` before any Store-root I/O when the Timer configuration
+    /// is inconsistent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] only when operational Store composition fails.
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
@@ -155,7 +165,7 @@ impl LocalFileMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
         service_context: ChildServiceContext,
-    ) -> Self {
+    ) -> Result<Option<Self>, StoreError> {
         Self::try_new(
             message_store_config,
             micro_batch_policy,
@@ -165,9 +175,16 @@ impl LocalFileMessageStore {
             notify_message_arrive_in_batch,
             service_context,
         )
-        .unwrap_or_else(|error| panic!("failed to create local file message store: {error}"))
     }
 
+    /// Creates a local-file Store after validating caller-owned Timer limits.
+    ///
+    /// Returns `Ok(None)` before any Store-root I/O when the Timer configuration
+    /// is inconsistent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] only when operational Store composition fails.
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
@@ -176,7 +193,7 @@ impl LocalFileMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
         service_context: ChildServiceContext,
-    ) -> Result<Self, StoreError> {
+    ) -> Result<Option<Self>, StoreError> {
         Self::try_new_with_telemetry(
             message_store_config,
             micro_batch_policy,
@@ -189,9 +206,45 @@ impl LocalFileMessageStore {
         )
     }
 
+    /// Creates a local-file Store with telemetry after validating caller-owned Timer limits.
+    ///
+    /// Returns `Ok(None)` before any Store-root I/O when the Timer configuration
+    /// is inconsistent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] only when operational Store composition fails.
     pub fn try_new_with_telemetry(
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
+        broker_config: Arc<StoreRuntimeConfig>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+        broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+        notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
+        telemetry: crate::telemetry::StoreTelemetry,
+    ) -> Result<Option<Self>, StoreError> {
+        let Some(timer_store_config) = message_store_config.timer_store_config.validated() else {
+            return Ok(None);
+        };
+        Self::try_new_with_telemetry_validated(
+            message_store_config,
+            micro_batch_policy,
+            timer_store_config,
+            broker_config,
+            topic_config_table,
+            broker_stats_manager,
+            notify_message_arrive_in_batch,
+            service_context,
+            telemetry,
+        )
+        .map(Some)
+    }
+
+    pub(crate) fn try_new_with_telemetry_validated(
+        message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
+        _timer_store_config: ValidatedTimerStoreConfig,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -796,13 +849,7 @@ impl LocalFileMessageStore {
                         error,
                     )
                 })? {
-                    promotion_gate.mark_snapshot_installed(manifest).map_err(|error| {
-                        store_config_source_error(
-                            StoreOperation::Load,
-                            "latest Extended Timeline snapshot is not promotable",
-                            error,
-                        )
-                    })?;
+                    let _ = promotion_gate.mark_snapshot_installed(manifest);
                 }
                 let admission = Arc::new(TimelineAdmissionController::new(
                     self.message_store_config.timer_store_config.clone(),
@@ -973,17 +1020,6 @@ impl LocalFileMessageStore {
                 "timer_extended_shadow_enable requires the rocketmq-store/extended_timeline feature".to_string(),
             ));
         }
-        if self.message_store_config.timer_extended_shadow_enable
-            || self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline
-        {
-            self.message_store_config
-                .timer_store_config
-                .validate()
-                .map_err(|error| {
-                    store_config_error(StoreOperation::Load, "invalid Timer Store configuration").with_source(error)
-                })?;
-        }
-
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
         if !self.message_store_config.is_enable_rocksdb_store() && !enabled_rocksdb_options.is_empty() {
             return Err(store_config_error(
@@ -1087,9 +1123,9 @@ impl LocalFileMessageStore {
         previous_role: BrokerRole,
         target_role: BrokerRole,
         external_term: u64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         if self.message_store_config.timer_store_mode != TimerStoreMode::ExtendedTimeline {
-            return Ok(());
+            return Ok(true);
         }
         if target_role == BrokerRole::Slave {
             self.extended_timeline_role
@@ -1098,10 +1134,10 @@ impl LocalFileMessageStore {
                     store_write_error(StoreOperation::Admin, "failed to persist Extended demotion fence")
                         .with_source(error)
                 })?;
-            return Ok(());
+            return Ok(true);
         }
-        if previous_role == BrokerRole::Slave {
-            self.validate_extended_timeline_promotion(external_term)?;
+        if previous_role == BrokerRole::Slave && !self.validate_extended_timeline_promotion(external_term)? {
+            return Ok(false);
         }
         self.extended_timeline_role
             .transition_with_term(true, external_term)
@@ -1109,23 +1145,20 @@ impl LocalFileMessageStore {
                 store_write_error(StoreOperation::Admin, "failed to persist Extended promotion epoch")
                     .with_source(error)
             })?;
-        Ok(())
+        Ok(true)
     }
 
     #[cfg(feature = "extended_timeline")]
-    fn validate_extended_timeline_promotion(&self, external_term: u64) -> Result<(), StoreError> {
-        let gate = self
-            .extended_timeline_promotion_gate
-            .as_ref()
-            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended promotion gate is not wired"))?;
-        let materializer = self
-            .extended_timeline_materializer
-            .as_ref()
-            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended materializer is not wired"))?;
-        let completion = self
-            .extended_timeline_completion_reconciler
-            .as_ref()
-            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended completion replay is not wired"))?;
+    fn validate_extended_timeline_promotion(&self, external_term: u64) -> Result<bool, StoreError> {
+        let Some(gate) = self.extended_timeline_promotion_gate.as_ref() else {
+            return Ok(false);
+        };
+        let Some(materializer) = self.extended_timeline_materializer.as_ref() else {
+            return Ok(false);
+        };
+        let Some(completion) = self.extended_timeline_completion_reconciler.as_ref() else {
+            return Ok(false);
+        };
         let (source_cq_cursor, source_physical_cursor, format_fingerprint) =
             materializer.snapshot_source_cursors().map_err(|error| {
                 store_read_error(StoreOperation::Read, "failed to read Extended Timeline source cursors")
@@ -1146,7 +1179,7 @@ impl LocalFileMessageStore {
             .min(self.commit_log.get_max_offset())
             .max(0);
         let prospective_epoch = self.extended_timeline_role.epoch().saturating_add(1).max(external_term);
-        gate.evaluate(TimelinePromotionObservation {
+        let outcome = gate.evaluate(TimelinePromotionObservation {
             source_retention_start: self.commit_log.get_min_offset().max(0),
             source_replay_cursor: source_physical_cursor,
             replicated_source_end: source_physical_cursor,
@@ -1161,34 +1194,37 @@ impl LocalFileMessageStore {
             activation_epoch: self.message_store_config.timer_extended_activation_epoch,
             format_fingerprint,
             capability_version: 1,
-        })
-        .map_err(|error| {
-            store_internal_source_error(
-                StoreOperation::Admin,
-                format!("Extended promotion rejected at source CQ cursor {source_cq_cursor}"),
-                error,
-            )
-        })
+        });
+        let _ = source_cq_cursor;
+        Ok(matches!(
+            outcome,
+            crate::timer::timeline::TimelinePromotionOutcome::Promotable
+        ))
     }
 
     /// Creates one consistent Extended Timeline snapshot and publishes it to the promotion gate.
+    ///
+    /// Returns `Ok(None)` when snapshot support is not loaded or the resulting manifest is not
+    /// promotable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when snapshot creation fails operationally.
     #[cfg(feature = "extended_timeline")]
-    pub fn create_extended_timer_snapshot(&self) -> Result<rocketmq_store_api::TimerSnapshotManifest, StoreError> {
-        let snapshot = self.extended_timeline_snapshot.as_ref().ok_or_else(|| {
-            store_unsupported_error(StoreOperation::Admin, "Extended Timeline snapshot is not enabled")
-        })?;
+    pub fn create_extended_timer_snapshot(
+        &self,
+    ) -> Result<Option<rocketmq_store_api::TimerSnapshotManifest>, StoreError> {
+        let Some(snapshot) = self.extended_timeline_snapshot.as_ref() else {
+            return Ok(None);
+        };
         let manifest = snapshot.create().map_err(|error| {
             store_write_error(StoreOperation::Admin, "failed to create Extended Timeline snapshot").with_source(error)
         })?;
-        self.extended_timeline_promotion_gate
-            .as_ref()
-            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended promotion gate is not wired"))?
-            .mark_snapshot_installed(manifest.clone())
-            .map_err(|error| {
-                store_internal_error(StoreOperation::Admin, "failed to publish Extended Timeline snapshot")
-                    .with_source(error)
-            })?;
-        Ok(manifest)
+        let Some(promotion_gate) = self.extended_timeline_promotion_gate.as_ref() else {
+            return Ok(None);
+        };
+        let outcome = promotion_gate.mark_snapshot_installed(manifest.clone());
+        Ok(matches!(outcome, crate::timer::timeline::TimelinePromotionOutcome::Promotable).then_some(manifest))
     }
 
     /// Releases snapshot GC pins after the artifact has been durably installed elsewhere.

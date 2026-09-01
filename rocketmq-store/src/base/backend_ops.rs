@@ -36,6 +36,8 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store_api::FlushBacklog;
+use rocketmq_store_api::StoreHealthSnapshot;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
@@ -69,7 +71,6 @@ use crate::log_file::mapped_file::MappedFile;
 use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
-use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::timer::timer_message_store::TimerMessageStore;
 
@@ -168,9 +169,9 @@ impl PutMessagePreflight {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoreHealthSnapshot {
+pub(crate) struct BackendHealthSnapshot {
     pub writeable: bool,
-    pub last_flush_error: Option<StoreHealthError>,
+    pub last_flush_error: Option<&'static rocketmq_error::ErrorDescriptor>,
     pub os_page_cache_busy: bool,
     pub transient_store_pool_deficient: bool,
     pub sync_flush: SyncFlushRuntimeInfo,
@@ -180,7 +181,7 @@ pub struct StoreHealthSnapshot {
     pub ha_pending_oldest_wait_millis: u64,
 }
 
-impl Default for StoreHealthSnapshot {
+impl Default for BackendHealthSnapshot {
     fn default() -> Self {
         Self {
             writeable: true,
@@ -196,17 +197,33 @@ impl Default for StoreHealthSnapshot {
     }
 }
 
-/// Typed, cloneable projection of the most recent canonical flush failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StoreHealthError {
-    pub descriptor: &'static rocketmq_error::ErrorDescriptor,
-    pub component: StoreComponent,
+pub(crate) fn canonical_health_snapshot(
+    backend: BackendHealthSnapshot,
+    appended_watermark: i64,
+    durable_watermark: i64,
+) -> StoreHealthSnapshot {
+    StoreHealthSnapshot {
+        writable: backend.writeable,
+        last_error: backend.last_flush_error,
+        page_cache_busy: backend.os_page_cache_busy,
+        transient_pool_deficient: backend.transient_store_pool_deficient,
+        flush_backlog: FlushBacklog {
+            queue_depth: backend.sync_flush.queue_depth,
+            oldest_wait_millis: backend.sync_flush.oldest_wait_millis,
+        },
+        dispatch_behind_bytes: backend.dispatch_behind_bytes,
+        shutdown: backend.shutdown,
+        replication_pending_count: backend.ha_pending_request_count,
+        replication_oldest_wait_millis: backend.ha_pending_oldest_wait_millis,
+        appended_watermark,
+        durable_watermark,
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct StoreHealthRecorder {
     running_flags: Arc<RunningFlags>,
-    last_flush_error: Arc<StdMutex<Option<StoreHealthError>>>,
+    last_flush_error: Arc<StdMutex<Option<&'static rocketmq_error::ErrorDescriptor>>>,
 }
 
 impl StoreHealthRecorder {
@@ -222,14 +239,14 @@ impl StoreHealthRecorder {
         *self
             .last_flush_error
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(StoreHealthError::from(error));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.descriptor());
     }
 
     pub(crate) fn writeable(&self) -> bool {
         self.running_flags.is_writeable()
     }
 
-    pub(crate) fn last_flush_error(&self) -> Option<StoreHealthError> {
+    pub(crate) fn last_flush_error(&self) -> Option<&'static rocketmq_error::ErrorDescriptor> {
         *self
             .last_flush_error
             .lock()
@@ -257,15 +274,6 @@ pub struct MessageStoreShutdownReport {
     pub mapped_file_retirement_last_failure_stage: Option<ManagedRetirementStage>,
     /// Whether further lifecycle transitions require replay before restart.
     pub mapped_file_retirement_recovery_required: bool,
-}
-
-impl From<&StoreError> for StoreHealthError {
-    fn from(error: &StoreError) -> Self {
-        Self {
-            descriptor: error.descriptor(),
-            component: error.component(),
-        }
-    }
 }
 
 /// Internal implementation adapter for concrete Store backends.
@@ -630,7 +638,7 @@ pub trait BackendOps: Send + Sync + 'static {
     /// Get a compact send-path health snapshot for broker backpressure decisions.
     fn health_snapshot(&self) -> StoreHealthSnapshot {
         let ha_runtime_info = self.get_ha_runtime_info();
-        StoreHealthSnapshot {
+        let backend = BackendHealthSnapshot {
             writeable: self.get_running_flags().is_writeable(),
             last_flush_error: None,
             os_page_cache_busy: self.is_os_page_cache_busy(),
@@ -644,7 +652,8 @@ pub trait BackendOps: Send + Sync + 'static {
             ha_pending_oldest_wait_millis: ha_runtime_info
                 .as_ref()
                 .map_or(0, |info| info.pending_group_transfer_oldest_wait_millis),
-        }
+        };
+        canonical_health_snapshot(backend, self.get_max_phy_offset(), self.get_flushed_where())
     }
 
     /// Get lock time in milliseconds of the store.
@@ -810,9 +819,9 @@ pub trait BackendOps: Send + Sync + 'static {
     /// Synchronizes a controller-owned Broker role and its fencing term.
     ///
     /// Backends without a separate derived delivery owner may use the ordinary role update.
-    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, _external_term: u64) -> Result<(), StoreError> {
+    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, _external_term: u64) -> Result<bool, StoreError> {
         self.sync_broker_role(broker_role);
-        Ok(())
+        Ok(true)
     }
 
     /// Installs a Controller lease using a Broker-computed monotonic lifetime.

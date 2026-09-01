@@ -60,6 +60,8 @@ fn store(root: &std::path::Path, mode: TimerStoreMode, epoch: u64) -> LocalFileM
         false,
         service_context(),
     )
+    .expect("create formal Timer cutover Store")
+    .expect("test Timer Store configuration is valid")
 }
 
 fn shadow_store(root: &std::path::Path) -> LocalFileMessageStore {
@@ -82,6 +84,8 @@ fn shadow_store(root: &std::path::Path) -> LocalFileMessageStore {
         false,
         service_context(),
     )
+    .expect("create shadow Timer cutover Store")
+    .expect("test Timer Store configuration is valid")
 }
 
 #[tokio::test]

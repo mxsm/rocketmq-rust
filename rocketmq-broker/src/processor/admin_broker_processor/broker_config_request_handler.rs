@@ -112,7 +112,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         self.broker_runtime_inner
             .clone()
             .apply_controller_role_change(
@@ -652,7 +652,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         );
         runtime_info.insert(
             "brokerReady".to_string(),
-            (broker_active && !broker_shutdown && store_health.writeable && !store_health.shutdown).to_string(),
+            (broker_active && !broker_shutdown && store_health.writable && !store_health.shutdown).to_string(),
         );
         runtime_info.insert(
             "brokerRole".to_string(),
@@ -677,18 +677,18 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         );
         #[cfg(not(feature = "tieredstore"))]
         runtime_info.insert("tieredStoreConfigured".to_string(), "false".to_string());
-        runtime_info.insert("storeWriteable".to_string(), store_health.writeable.to_string());
+        runtime_info.insert("storeWriteable".to_string(), store_health.writable.to_string());
         runtime_info.insert(
             "storeLastFlushError".to_string(),
-            store_health.last_flush_error.is_some().to_string(),
+            store_health.last_error.is_some().to_string(),
         );
         runtime_info.insert(
             "storeOsPageCacheBusy".to_string(),
-            store_health.os_page_cache_busy.to_string(),
+            store_health.page_cache_busy.to_string(),
         );
         runtime_info.insert(
             "storeTransientPoolDeficient".to_string(),
-            store_health.transient_store_pool_deficient.to_string(),
+            store_health.transient_pool_deficient.to_string(),
         );
         runtime_info.insert("storeShutdown".to_string(), store_health.shutdown.to_string());
         runtime_info.insert(
@@ -697,23 +697,19 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         );
         runtime_info.insert(
             "storeHaPendingRequestCount".to_string(),
-            store_health.ha_pending_request_count.to_string(),
+            store_health.replication_pending_count.to_string(),
         );
         runtime_info.insert(
             "storeHaPendingOldestWaitMillis".to_string(),
-            store_health.ha_pending_oldest_wait_millis.to_string(),
+            store_health.replication_oldest_wait_millis.to_string(),
         );
         runtime_info.insert(
             "storeSyncFlushQueueDepth".to_string(),
-            store_health.sync_flush.queue_depth.to_string(),
-        );
-        runtime_info.insert(
-            "storeSyncFlushTimeoutTotal".to_string(),
-            store_health.sync_flush.timeout_total.to_string(),
+            store_health.flush_backlog.queue_depth.to_string(),
         );
         runtime_info.insert(
             "storeSyncFlushOldestWaitMillis".to_string(),
-            store_health.sync_flush.oldest_wait_millis.to_string(),
+            store_health.flush_backlog.oldest_wait_millis.to_string(),
         );
         if let Some(ha) = message_store.get_ha_runtime_info() {
             runtime_info.insert("haDiagnosticsSupported".to_string(), "true".to_string());

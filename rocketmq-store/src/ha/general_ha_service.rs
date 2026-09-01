@@ -20,6 +20,7 @@ use std::sync::Weak;
 
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::WriteAuthority;
 use tokio::sync::Notify;
 
@@ -31,9 +32,8 @@ use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
+use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::store_error::HAError;
-use crate::store_error::HAResult;
 
 #[derive(Clone, Default)]
 pub(crate) struct GeneralHAServiceReference {
@@ -50,7 +50,7 @@ impl GeneralHAServiceReference {
         Self::default()
     }
 
-    pub(crate) fn bind(&self, service: &GeneralHAService) -> HAResult<()> {
+    pub(crate) fn bind(&self, service: &GeneralHAService) -> Result<(), HAError> {
         let target = match service {
             GeneralHAService::DefaultHAService(service) => GeneralHAServiceWeak::Default(Arc::downgrade(service)),
             GeneralHAService::AutoSwitchHAService(service) => GeneralHAServiceWeak::AutoSwitch(Arc::downgrade(service)),
@@ -83,7 +83,7 @@ impl GeneralHAService {
         GeneralHAService::AutoSwitchHAService(Arc::new(auto_switch_ha_service))
     }
 
-    pub(crate) fn init(&mut self) -> HAResult<()> {
+    pub(crate) fn init(&mut self) -> Result<(), HAError> {
         let reference = GeneralHAServiceReference::new();
         match self {
             GeneralHAService::DefaultHAService(service) => Arc::get_mut(service)
@@ -174,7 +174,7 @@ impl GeneralHAService {
 }
 
 impl HAService for GeneralHAService {
-    async fn start(&self) -> HAResult<()> {
+    async fn start(&self) -> Result<(), StoreError> {
         match self {
             GeneralHAService::DefaultHAService(service) => service.start().await,
             GeneralHAService::AutoSwitchHAService(service) => service.start().await,
@@ -188,14 +188,14 @@ impl HAService for GeneralHAService {
         }
     }
 
-    async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
+    async fn change_to_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
         match self {
             GeneralHAService::DefaultHAService(service) => service.change_to_master(master_epoch).await,
             GeneralHAService::AutoSwitchHAService(service) => service.change_to_master(master_epoch).await,
         }
     }
 
-    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
+    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
         match self {
             GeneralHAService::DefaultHAService(service) => {
                 service.change_to_master_when_last_role_is_master(master_epoch).await
@@ -211,7 +211,7 @@ impl HAService for GeneralHAService {
         new_master_addr: &str,
         new_master_epoch: i32,
         slave_id: Option<i64>,
-    ) -> HAResult<bool> {
+    ) -> Result<bool, StoreError> {
         match self {
             GeneralHAService::DefaultHAService(service) => {
                 service
@@ -230,7 +230,7 @@ impl HAService for GeneralHAService {
         &self,
         new_master_addr: &str,
         new_master_epoch: i32,
-    ) -> HAResult<bool> {
+    ) -> Result<bool, StoreError> {
         match self {
             GeneralHAService::DefaultHAService(service) => {
                 service

@@ -147,6 +147,8 @@ use rocketmq_store::HAService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMessageStore;
+#[cfg(feature = "extended_timeline")]
+use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
@@ -2666,7 +2668,8 @@ async fn bootstrap_broker_against_controller(
                 Some(pre_elect_body.get_sync_state_set_epoch()),
                 pre_elect_body.get_sync_state_set().cloned().unwrap_or_default(),
             )
-            .await;
+            .await
+            .expect("controller replica preflight should remain operational");
         assert!(applied, "apply controller replica info before elect should succeed");
         return;
     }
@@ -5974,7 +5977,7 @@ async fn apply_message_store_role_change_promotes_store_to_master() {
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
     assert!(runtime.initialize_message_store().await, "initialize message store");
 
-    runtime
+    let applied = runtime
         .composition
         .data_plane
         .escape_bridge_owner
@@ -5982,6 +5985,7 @@ async fn apply_message_store_role_change_promotes_store_to_master() {
         .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 2)
         .await
         .expect("promote store to master");
+    assert!(applied, "store promotion should pass every fail-closed preflight");
 
     let store = runtime
         .composition
@@ -6015,7 +6019,7 @@ async fn apply_message_store_role_change_demotes_store_to_slave() {
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
     assert!(runtime.initialize_message_store().await, "initialize message store");
 
-    runtime
+    let applied = runtime
         .composition
         .data_plane
         .escape_bridge_owner
@@ -6029,6 +6033,7 @@ async fn apply_message_store_role_change_demotes_store_to_slave() {
         )
         .await
         .expect("demote store to slave");
+    assert!(applied, "store demotion should pass every fail-closed preflight");
 
     let store = runtime
         .composition
@@ -6041,6 +6046,128 @@ async fn apply_message_store_role_change_demotes_store_to_slave() {
     assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "127.0.0.1:10911");
     assert_eq!(store.current_broker_role(), BrokerRole::Slave);
 
+    let _ = std::fs::remove_dir_all(temp_root);
+}
+
+#[cfg(feature = "extended_timeline")]
+#[tokio::test]
+async fn rejected_controller_promotion_does_not_publish_role_or_start_special_services() {
+    let temp_root = std::env::temp_dir().join(format!(
+        "rocketmq-rust-broker-runtime-rejected-promotion-{}",
+        current_millis()
+    ));
+    let broker_config = Arc::new(BrokerConfig {
+        enable_controller_mode: true,
+        controller_addr: CheetahString::from_static_str("127.0.0.1:19876"),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        enable_controller_mode: true,
+        broker_role: BrokerRole::Slave,
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        timer_wheel_enable: false,
+        timer_store_mode: TimerStoreMode::ExtendedTimeline,
+        timer_extended_admission_enable: true,
+        timer_extended_activation_epoch: 7,
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+    assert!(runtime.initialize_message_store().await, "initialize message store");
+    runtime.composition.state.initialize_controller_mode();
+    let controller = runtime.composition.state.build_controller_runtime();
+
+    let applied = controller
+        .apply_controller_role_change(None, Some(MASTER_ID), None, Some(1), None, HashSet::new())
+        .await
+        .expect("promotion rejection is not an operational failure");
+
+    assert!(
+        !applied,
+        "promotion without an installed Extended snapshot must fail closed"
+    );
+    assert_eq!(
+        runtime.composition.state.message_store_config().broker_role,
+        BrokerRole::Slave
+    );
+    assert!(!runtime
+        .composition
+        .state
+        .is_schedule_service_start
+        .load(Ordering::Acquire));
+    assert_eq!(
+        runtime
+            .composition
+            .state
+            .message_store()
+            .expect("message store")
+            .current_broker_role(),
+        BrokerRole::Slave
+    );
+
+    drop(runtime);
+    let _ = std::fs::remove_dir_all(temp_root);
+}
+
+#[cfg(feature = "extended_timeline")]
+#[tokio::test]
+async fn rejected_controller_demotion_does_not_publish_role_or_start_special_services() {
+    let temp_root = std::env::temp_dir().join(format!(
+        "rocketmq-rust-broker-runtime-rejected-demotion-{}",
+        current_millis()
+    ));
+    let broker_config = Arc::new(BrokerConfig {
+        enable_controller_mode: true,
+        controller_addr: CheetahString::from_static_str("127.0.0.1:19876"),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        enable_controller_mode: true,
+        broker_role: BrokerRole::SyncMaster,
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        timer_wheel_enable: false,
+        timer_store_mode: TimerStoreMode::ExtendedTimeline,
+        timer_extended_admission_enable: true,
+        timer_extended_activation_epoch: 7,
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+    assert!(runtime.initialize_message_store().await, "initialize message store");
+    runtime.composition.state.initialize_controller_mode();
+    let controller = runtime.composition.state.build_controller_runtime();
+
+    let applied = controller
+        .apply_controller_role_change(
+            None,
+            Some(MASTER_ID + 1),
+            Some(CheetahString::new()),
+            Some(1),
+            None,
+            HashSet::new(),
+        )
+        .await
+        .expect("demotion rejection is not an operational failure");
+
+    assert!(!applied, "demotion with an empty master endpoint must fail closed");
+    assert_eq!(
+        runtime.composition.state.message_store_config().broker_role,
+        BrokerRole::SyncMaster
+    );
+    assert!(!runtime
+        .composition
+        .state
+        .is_schedule_service_start
+        .load(Ordering::Acquire));
+    assert_eq!(
+        runtime
+            .composition
+            .state
+            .message_store()
+            .expect("message store")
+            .current_broker_role(),
+        BrokerRole::SyncMaster
+    );
+
+    drop(runtime);
     let _ = std::fs::remove_dir_all(temp_root);
 }
 

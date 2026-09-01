@@ -16,7 +16,6 @@ use rocketmq_store::LocalFileMessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::StoreError;
 use rocketmq_store::StoreFactory;
-use rocketmq_store::StoreFactoryError;
 
 #[test]
 fn store_consumers_use_only_intentional_root_exports() {
@@ -66,6 +65,5 @@ fn store_consumers_use_only_intentional_root_exports() {
     let _ = MessageStoreConfig::default();
     let _: Option<LocalFileMessageStore> = None;
     let _: Option<StoreError> = None;
-    let _: Option<StoreFactoryError> = None;
     let _ = std::mem::size_of::<StoreFactory>();
 }

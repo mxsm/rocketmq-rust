@@ -255,7 +255,9 @@ mod tests {
             None,
             false,
             crate::test_service_context("message-store"),
-        );
+        )
+        .expect("create expression-filter test Store")
+        .expect("test Timer Store configuration is valid");
         store
             .wire_owned_root_dependencies()
             .expect("expression filter tests should wire owned Store capabilities");

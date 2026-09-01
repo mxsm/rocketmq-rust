@@ -36,8 +36,6 @@ use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::HAConnectionStateNotificationRequest;
-use rocketmq_store::HAError;
-use rocketmq_store::HAResult;
 use rocketmq_store::HAService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreHealthCapability;
@@ -436,17 +434,17 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         controller_broker_id: u64,
         master_address: Option<&CheetahString>,
         master_epoch: i32,
-    ) -> HAResult<()>
+    ) -> Result<bool, StoreError>
     where
         MS: BrokerReplicationStore,
     {
         let store = match self.store() {
             Ok(store) => store,
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(false),
         };
         store.fence_controller_writes();
         let Some(ha_service) = store.get_ha_service().cloned() else {
-            return Ok(());
+            return Ok(false);
         };
         let result = match target_role {
             BrokerReplicaRole::Master => {
@@ -457,9 +455,12 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
                 }
             }
             BrokerReplicaRole::Slave => {
-                let master_address = master_address.ok_or_else(|| {
-                    HAError::invalid_state("controller role change missing master address for store transition")
-                })?;
+                let Some(master_address) = master_address.filter(|address| !address.is_empty()) else {
+                    return Ok(false);
+                };
+                let Ok(controller_broker_id) = i64::try_from(controller_broker_id) else {
+                    return Ok(false);
+                };
                 let current_master_address = ha_service.get_runtime_info(0).ha_client_runtime_info.master_addr;
                 if previous_store_role == BrokerRole::Slave && current_master_address == master_address.as_str() {
                     ha_service
@@ -467,22 +468,22 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
                         .await
                 } else {
                     ha_service
-                        .change_to_slave(master_address.as_str(), master_epoch, Some(controller_broker_id as i64))
+                        .change_to_slave(master_address.as_str(), master_epoch, Some(controller_broker_id))
                         .await
                 }
             }
         };
-        result?;
-        store
-            .sync_broker_role_with_term(
-                match target_role {
-                    BrokerReplicaRole::Master => BrokerRole::SyncMaster,
-                    BrokerReplicaRole::Slave => BrokerRole::Slave,
-                },
-                u64::try_from(master_epoch).unwrap_or_default(),
-            )
-            .map_err(|error| HAError::invalid_state(format!("timer role fencing failed: {error}")))?;
-        Ok(())
+        if !result? {
+            return Ok(false);
+        }
+        let timer_role_applied = store.sync_broker_role_with_term(
+            match target_role {
+                BrokerReplicaRole::Master => BrokerRole::SyncMaster,
+                BrokerReplicaRole::Slave => BrokerRole::Slave,
+            },
+            u64::try_from(master_epoch).unwrap_or_default(),
+        )?;
+        Ok(timer_role_applied)
     }
 
     pub(crate) fn install_controller_write_lease(
@@ -775,10 +776,12 @@ mod tests {
     async fn controller_role_change_is_a_noop_before_store_binding() {
         let store = EscapeBridgeStoreCapability::<StorePorts>::default();
 
-        assert!(store
-            .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
-            .await
-            .is_ok());
+        assert!(matches!(
+            store
+                .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
+                .await,
+            Ok(false)
+        ));
     }
 
     #[test]

@@ -86,7 +86,9 @@ fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConf
         None,
         false,
         test_service_context(),
-    );
+    )
+    .expect("create CommitLog recovery Store")
+    .expect("test Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("CommitLog recovery tests should wire owned Store capabilities");

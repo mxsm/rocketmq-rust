@@ -97,7 +97,9 @@ fn new_store(root: &std::path::Path, topics: Arc<DashMap<CheetahString, Arc<Topi
         None,
         false,
         service_context(),
-    );
+    )
+    .expect("create compaction lifecycle Store")
+    .expect("test Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("wire compaction test store dependencies");

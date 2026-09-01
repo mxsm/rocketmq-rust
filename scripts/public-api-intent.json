@@ -4002,8 +4002,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::capability::StoreFlushBacklog",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::capability::StoreFlushBacklog",
+          "declaration": "pub use rocketmq_store_api::FlushBacklog",
+          "identity": "rocketmq-store/src/public_api.rs:pub use rocketmq_store_api::FlushBacklog",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -4011,17 +4011,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::capability::StoreHealthError",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::capability::StoreHealthError",
-          "owner": "store",
-          "path": "rocketmq-store/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::capability::StoreHealthSnapshot",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::capability::StoreHealthSnapshot",
+          "declaration": "pub use rocketmq_store_api::StoreHealthSnapshot",
+          "identity": "rocketmq-store/src/public_api.rs:pub use rocketmq_store_api::StoreHealthSnapshot",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -4137,15 +4128,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::config::timer_store_config::TimerStoreConfigError",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::config::timer_store_config::TimerStoreConfigError",
-          "owner": "store",
-          "path": "rocketmq-store/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::consume_queue::cq_ext_unit::CqExtUnit",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::consume_queue::cq_ext_unit::CqExtUnit",
           "owner": "store",
@@ -4202,15 +4184,6 @@
           "category": "stable",
           "declaration": "pub use crate::factory::StoreFactoryConfig",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::factory::StoreFactoryConfig",
-          "owner": "store",
-          "path": "rocketmq-store/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::factory::StoreFactoryError",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::factory::StoreFactoryError",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -4794,15 +4767,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::message_store::StoreReleaseCheckpointError",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::message_store::StoreReleaseCheckpointError",
-          "owner": "store",
-          "path": "rocketmq-store/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::message_store::StoreReleaseCheckpointService",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::message_store::StoreReleaseCheckpointService",
           "owner": "store",
@@ -4976,24 +4940,6 @@
           "category": "stable",
           "declaration": "pub use crate::stats::stats_type::StatsType",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::stats::stats_type::StatsType",
-          "owner": "store",
-          "path": "rocketmq-store/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::store_error::HAError",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::store_error::HAError",
-          "owner": "store",
-          "path": "rocketmq-store/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::store_error::HAResult",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::store_error::HAResult",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -5181,6 +5127,24 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::timer::timeline::TimelineAdmissionOutcome",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timeline::TimelineAdmissionOutcome",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "preserve source-free timer admission decisions at the Store boundary",
+          "removal_condition": "retain while timeline admission remains a public Store contract"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::timer::timeline::TimelinePromotionOutcome",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timeline::TimelinePromotionOutcome",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "preserve source-free timeline promotion decisions at the Store boundary",
+          "removal_condition": "retain while timeline promotion remains a public Store contract"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::timer::timer_checkpoint::TimerCheckpoint",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timer_checkpoint::TimerCheckpoint",
           "owner": "store",
@@ -5349,6 +5313,15 @@
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::timer::timer_message_store::TimerPayloadReadOutcome",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timer_message_store::TimerPayloadReadOutcome",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "preserve source-free timer payload read decisions at the Store boundary",
+          "removal_condition": "retain while timer payload reads expose contract outcomes"
         },
         {
           "category": "stable",

@@ -92,6 +92,7 @@ fn new_owned_test_store(temp_dir: &TempDir) -> RocksDBMessageStore {
         rocksdb_service_context("rocksdb-semantics-test-store"),
     )
     .expect("create RocksDB message store")
+    .expect("test Timer Store configuration is valid")
 }
 
 fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessageStore {
@@ -109,6 +110,7 @@ fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessag
         rocksdb_service_context("rocksdb-semantics-configured-test-store"),
     )
     .expect("create RocksDB message store")
+    .expect("test Timer Store configuration is valid")
 }
 
 fn new_test_store(store: RocksDBMessageStore) -> StorePorts {
@@ -548,8 +550,7 @@ fn rocksdb_time_lookup_and_failure_mapping_stay_on_the_legacy_contract() {
     assert_eq!(flush_error.component(), StoreComponent::RocksDb);
     let health_error = store
         .health_snapshot()
-        .last_flush_error
+        .last_error
         .expect("flush failure must be reflected in health");
-    assert_eq!(health_error.descriptor, &rocketmq_error::STORAGE_WRITE_FAILED);
-    assert_eq!(health_error.component, StoreComponent::RocksDb);
+    assert_eq!(health_error, &rocketmq_error::STORAGE_WRITE_FAILED);
 }

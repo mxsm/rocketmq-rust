@@ -30,12 +30,14 @@ mod snapshot;
 
 pub(crate) use admission::usage_summary_keys;
 pub(crate) use admission::TimelineAdmissionController;
-pub(crate) use admission::TimelineAdmissionError;
+pub use admission::TimelineAdmissionOutcome;
 pub(crate) use due_scanner::TimelineDueScanner;
+pub(crate) use due_scanner::TimelineDueScannerError;
 pub(crate) use engine::ExtendedTimelineEngine;
 pub(crate) use gc::TimelineGcService;
 pub(crate) use ha::TimelinePromotionGate;
 pub(crate) use ha::TimelinePromotionObservation;
+pub use ha::TimelinePromotionOutcome;
 pub(crate) use index_migration::TimelineIndexMigrationManager;
 pub(crate) use materializer::ShadowTimelineMaterializer;
 pub(crate) use materializer::TimelineMaterializerError;

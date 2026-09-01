@@ -89,7 +89,9 @@ fn new_store(root: &Path, flush_disk_type: FlushDiskType) -> LocalFileMessageSto
         None,
         false,
         test_service_context(),
-    );
+    )
+    .expect("create architecture correctness Store")
+    .expect("test Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("architecture correctness store must wire owned dependencies");

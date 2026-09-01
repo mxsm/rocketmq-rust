@@ -441,8 +441,11 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
     }
 
     pub(crate) async fn change_special_service_status(&self, should_start: bool) {
-        if let Err(error) = self.special_services.change_status(should_start).await {
-            warn!(?error, should_start, "failed to change role-sensitive Admin services");
+        if let Err(_error) = self.special_services.change_status(should_start).await {
+            warn!(
+                source_present = true,
+                should_start, "failed to change role-sensitive Admin services"
+            );
         }
     }
 
@@ -454,7 +457,7 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         self.controller
             .apply_controller_role_change(
                 controller_leader_address,

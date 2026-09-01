@@ -215,7 +215,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: std::collections::HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         let _operation_guard = self.controller.lock_operation().await;
         // Revoke the old authority before publishing any new role metadata.
         // Store remains fail-closed until a quorum-committed heartbeat installs
@@ -247,11 +247,28 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             .store
             .sync_controller_sync_state_set(outcome.local_broker_id as i64, &outcome.sync_state_set);
         let Some(role) = outcome.role else {
-            return Ok(());
+            return Ok(true);
         };
 
         let previous_store_role = self.config.store_snapshot().broker_role;
         let target_store_role = outcome.target_broker_role().unwrap_or(previous_store_role);
+        let role_applied = self
+            .store
+            .apply_controller_role(
+                previous_store_role,
+                role,
+                outcome.local_broker_id,
+                outcome.slave_master_address(),
+                outcome.master_epoch,
+            )
+            .await
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::internal("apply controller role to message store", error)
+            })?;
+        if !role_applied {
+            return Ok(false);
+        }
+
         let generation = self
             .config
             .apply_role(outcome.local_broker_id, target_store_role)
@@ -271,20 +288,6 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
 
         match role {
             BrokerReplicaRole::Master => {
-                self.store
-                    .apply_controller_role(
-                        previous_store_role,
-                        BrokerReplicaRole::Master,
-                        outcome.local_broker_id,
-                        None,
-                        outcome.master_epoch,
-                    )
-                    .await
-                    .map_err(|error| {
-                        rocketmq_error::RocketMQError::illegal_argument(format!(
-                            "apply controller role change to message store failed: {error}"
-                        ))
-                    })?;
                 self.special_services
                     .change_status(outcome.should_start_special_service)
                     .await?;
@@ -294,20 +297,6 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 self.special_services
                     .change_status(outcome.should_start_special_service)
                     .await?;
-                self.store
-                    .apply_controller_role(
-                        previous_store_role,
-                        BrokerReplicaRole::Slave,
-                        outcome.local_broker_id,
-                        outcome.slave_master_address(),
-                        outcome.master_epoch,
-                    )
-                    .await
-                    .map_err(|error| {
-                        rocketmq_error::RocketMQError::illegal_argument(format!(
-                            "apply controller role change to message store failed: {error}"
-                        ))
-                    })?;
                 if let Some(master_address) = outcome.slave_master_address() {
                     self.slave_master_addr.store(Some(master_address));
                     if outcome.should_sync_master_online() {
@@ -320,11 +309,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         self.escape_policy.update_controller_role(role, outcome.master_epoch);
         self.role_state.set_isolated(false);
         if outcome.should_register_to_namesrv {
-            if let Err(error) = self.registration.register().await {
-                tracing::warn!(?error, "failed to register broker after controller role transition");
+            if self.registration.register().await.is_err() {
+                tracing::warn!("failed to register broker after controller role transition");
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) async fn update_min_broker(&self, min_broker_id: u64, min_broker_addr: Option<CheetahString>) {
@@ -353,17 +342,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         offline_broker_addr: Option<CheetahString>,
         master_ha_addr: Option<CheetahString>,
     ) {
-        let (old_id, old_addr) = self
+        let _ = self
             .role_state
             .replace_min_broker(min_broker_id, min_broker_addr.clone())
             .await;
-        tracing::info!(
-            old_id,
-            ?old_addr,
-            min_broker_id,
-            ?min_broker_addr,
-            "minimum broker changed"
-        );
+        tracing::info!("minimum broker changed");
         let _ = self
             .special_services
             .change_status(self.role_state.local_broker_id() == min_broker_id)
@@ -399,7 +382,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         }
                     }
                 }
-                Err(error) => tracing::error!(?error, "failed to retrieve broker HA info"),
+                Err(_) => tracing::error!("failed to retrieve broker HA info"),
             }
         }
         if let Some(master_ha_addr) = master_ha_addr {

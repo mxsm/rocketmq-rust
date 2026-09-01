@@ -1319,7 +1319,8 @@ fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext)
             false,
             service_context,
         )
-        .context("create RocksDB store performance sample")?;
+        .context("create RocksDB store performance sample")?
+        .context("RocksDB performance sample Timer Store configuration is valid")?;
         return Ok(CollectorStore {
             backend: CollectorBackend::Rocks(Box::new(store)),
             _temp_dir: temp_dir,
@@ -1335,7 +1336,9 @@ fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext)
         None,
         false,
         service_context,
-    );
+    )
+    .context("create local-file Store performance sample")?
+    .context("local-file performance sample Timer Store configuration is valid")?;
     store
         .wire_owned_root_dependencies()
         .context("wire owned store performance sample dependencies")?;

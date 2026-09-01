@@ -869,10 +869,7 @@ mod tests {
         assert!(Arc::ptr_eq(&second_error, &error));
         assert!(!store_health_recorder.writeable());
         assert_eq!(
-            store_health_recorder
-                .last_flush_error()
-                .as_ref()
-                .map(|error| error.descriptor),
+            store_health_recorder.last_flush_error().as_ref().copied(),
             Some(&rocketmq_error::STORAGE_INTERNAL_FAILURE)
         );
     }
@@ -1047,10 +1044,7 @@ mod tests {
         assert!(Arc::ptr_eq(&error, &forced_error));
         assert!(!store_health_recorder.writeable());
         assert_eq!(
-            store_health_recorder
-                .last_flush_error()
-                .as_ref()
-                .map(|error| error.descriptor),
+            store_health_recorder.last_flush_error().as_ref().copied(),
             Some(&rocketmq_error::STORAGE_IO_FAILED)
         );
 

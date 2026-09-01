@@ -38,7 +38,6 @@ use crate::timer::completion::OrderedCompletionTracker;
 use crate::timer::engine::TimerEngine;
 use crate::timer::engine::WorkBudget;
 use crate::timer::error::RetryPolicy;
-use crate::timer::error::TimerEngineError;
 
 const PUMP_RETAINED_BYTES: usize = std::mem::size_of::<PumpRequest>();
 const COMPLETION_RETAINED_BYTES: usize = std::mem::size_of::<CompletionEvent>();
@@ -154,10 +153,7 @@ pub(crate) struct TimerPipeline {
 }
 
 impl TimerPipeline {
-    pub(crate) fn new(
-        runtime_scope: &StoreRuntimeScope,
-        config: &MessageStoreConfig,
-    ) -> Result<Arc<Self>, TimerEngineError> {
+    pub(crate) fn new(runtime_scope: &StoreRuntimeScope, config: &MessageStoreConfig) -> Option<Arc<Self>> {
         let minimum_queue_bytes = PUMP_RETAINED_BYTES.max(COMPLETION_RETAINED_BYTES);
         if config.timer_pipeline_queue_messages == 0
             || config.timer_pipeline_queue_bytes < minimum_queue_bytes
@@ -170,7 +166,7 @@ impl TimerPipeline {
             || config.timer_retry_initial_backoff_ms == 0
             || config.timer_retry_max_backoff_ms < config.timer_retry_initial_backoff_ms
         {
-            return Err(TimerEngineError::InvalidBudget);
+            return None;
         }
         let queue_limit = BudgetLimit::new(
             config.timer_pipeline_queue_messages,
@@ -178,12 +174,8 @@ impl TimerPipeline {
             FullPolicy::Reject,
         );
         let parent = runtime_scope.resource_budget();
-        let source_budget = parent
-            .child("timer-source-pipeline", queue_limit)
-            .map_err(|_| TimerEngineError::InvalidBudget)?;
-        let due_budget = parent
-            .child("timer-due-pipeline", queue_limit)
-            .map_err(|_| TimerEngineError::InvalidBudget)?;
+        let source_budget = parent.child("timer-source-pipeline", queue_limit).ok()?;
+        let due_budget = parent.child("timer-due-pipeline", queue_limit).ok()?;
         let completion_budget = parent
             .child(
                 "timer-completion-pipeline",
@@ -193,9 +185,9 @@ impl TimerPipeline {
                     FullPolicy::WaitUntilDeadline,
                 ),
             )
-            .map_err(|_| TimerEngineError::InvalidBudget)?;
+            .ok()?;
 
-        Ok(Arc::new(Self {
+        Some(Arc::new(Self {
             source_queue: BudgetedQueue::new(source_budget),
             due_queue: BudgetedQueue::new(due_budget),
             completion_queue: BudgetedQueue::new(completion_budget),
@@ -224,7 +216,7 @@ impl TimerPipeline {
         source_workers: usize,
         due_workers: usize,
         completion_gap_limit: usize,
-    ) -> Result<(), TimerEngineError>
+    ) -> bool
     where
         E: TimerEngine + Clone + Send + Sync + 'static,
     {
@@ -252,7 +244,7 @@ impl TimerPipeline {
                 .is_err()
             {
                 self.abandon_unspawned(total_workers.saturating_sub(attempted_workers));
-                return Err(TimerEngineError::PipelineClosed);
+                return false;
             }
         }
         for worker_id in 0..due_workers {
@@ -270,16 +262,19 @@ impl TimerPipeline {
                 .is_err()
             {
                 self.abandon_unspawned(total_workers.saturating_sub(attempted_workers));
-                return Err(TimerEngineError::PipelineClosed);
+                return false;
             }
         }
         let pipeline = Arc::clone(self);
-        task_group
+        if task_group
             .spawn("timer-completion-coordinator", TaskKind::Worker, async move {
                 pipeline.run_completion_coordinator(completion_gap_limit).await;
             })
-            .map_err(|_| TimerEngineError::PipelineClosed)?;
-        Ok(())
+            .is_err()
+        {
+            return false;
+        }
+        true
     }
 
     /// Submits due work before source work. Both calls are non-blocking, so a saturated stage
@@ -390,8 +385,8 @@ impl TimerPipeline {
                 PipelineStage::Due => self.due_batch_messages,
             };
             let budget = match WorkBudget::try_new(max_messages, self.work_bytes, Instant::now() + self.work_timeout) {
-                Ok(budget) => budget,
-                Err(_) => {
+                Some(budget) => budget,
+                None => {
                     return crate::timer::request::EngineBatchProgress {
                         durable: false,
                         ..crate::timer::request::EngineBatchProgress::empty()
@@ -404,13 +399,6 @@ impl TimerPipeline {
             };
             match result {
                 Ok(progress) => return progress,
-                Err(TimerEngineError::UnsupportedMode(_)) | Err(TimerEngineError::NotLoaded) => {
-                    self.metrics.quarantined.fetch_add(1, Ordering::Relaxed);
-                    return crate::timer::request::EngineBatchProgress {
-                        durable: false,
-                        ..crate::timer::request::EngineBatchProgress::empty()
-                    };
-                }
                 Err(_) if attempt < self.retry_policy.max_attempts() => {
                     self.metrics.retries.fetch_add(1, Ordering::Relaxed);
                     tokio::time::sleep(self.retry_policy.delay(attempt, epoch ^ u64::from(attempt))).await;

@@ -1222,7 +1222,9 @@ pub async fn run_store_local_file_scheduled_lifecycle_probe(
         None,
         false,
         service_context,
-    );
+    )
+    .expect("create local file store benchmark")
+    .expect("benchmark Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("local file store benchmark should wire owned dependencies");

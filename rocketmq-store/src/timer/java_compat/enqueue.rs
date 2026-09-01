@@ -21,8 +21,11 @@ pub(super) async fn process(
     store: &std::sync::Arc<TimerMessageStore>,
     budget: WorkBudget,
 ) -> Result<EngineBatchProgress, TimerEngineError> {
-    if budget.is_exhausted(0, 0) {
-        return Err(TimerEngineError::InvalidBudget);
+    if !super::recovery::is_loaded(store) || budget.is_exhausted(0, 0) {
+        return Ok(EngineBatchProgress {
+            durable: false,
+            ..EngineBatchProgress::empty()
+        });
     }
     let (messages, durable) = store.process_pipeline_enqueue_stage(budget.max_messages).await?;
     Ok(EngineBatchProgress {

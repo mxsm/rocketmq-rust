@@ -18,9 +18,8 @@ use std::sync::Arc;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::{StoreComponent, StoreError, StoreOperation, TimerEngineId};
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
-use thiserror::Error;
 
 use super::ShadowTimelineMaterializer;
 use crate::config::timer_store_config::TimerStoreConfig;
@@ -58,41 +57,49 @@ impl TimelineAdmissionController {
     }
 
     /// Validates a canonical Extended Timer before the source CommitLog append is acknowledged.
-    pub(crate) fn check(&self, message: &MessageExtBrokerInner, now_ms: i64) -> Result<(), TimelineAdmissionError> {
+    pub(crate) fn check(
+        &self,
+        message: &MessageExtBrokerInner,
+        now_ms: i64,
+    ) -> Result<TimelineAdmissionOutcome, StoreError> {
         if message.property(MessageConst::TIMER_ENGINE_TYPE).as_deref()
             != Some(TimerEngineId::ExtendedTimeline.as_str())
         {
-            return Ok(());
+            return Ok(TimelineAdmissionOutcome::Accepted);
         }
         if !self.role.accepts_admission() {
-            return Err(TimelineAdmissionError::RoleInactive);
+            return Ok(TimelineAdmissionOutcome::RoleInactive);
         }
-        let due_time_ms = message
+        let Some(due_time_ms) = message
             .property(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS)
             .or_else(|| message.property(MessageConst::PROPERTY_TIMER_DELIVER_MS))
             .and_then(|value| value.parse::<i64>().ok())
-            .ok_or(TimelineAdmissionError::MalformedTimer)?;
+        else {
+            return Ok(TimelineAdmissionOutcome::MalformedTimer);
+        };
         // The storage format supports the full configured horizon, while the admission
         // horizon is the independently controlled canary boundary for new work.
         let horizon_days = self.admission_horizon_days.min(self.config.horizon_days);
-        let horizon_ms = i64::from(horizon_days)
-            .checked_mul(86_400_000)
-            .ok_or(TimelineAdmissionError::HorizonOverflow)?;
+        let Some(horizon_ms) = i64::from(horizon_days).checked_mul(86_400_000) else {
+            return Ok(TimelineAdmissionOutcome::HorizonOverflow);
+        };
         if due_time_ms <= now_ms || due_time_ms.saturating_sub(now_ms) > horizon_ms {
-            return Err(TimelineAdmissionError::HorizonExceeded);
+            return Ok(TimelineAdmissionOutcome::HorizonExceeded);
         }
-        let real_topic = message
+        let Some(real_topic) = message
             .property(MessageConst::PROPERTY_REAL_TOPIC)
             .filter(|topic| !topic.is_empty())
-            .ok_or(TimelineAdmissionError::MalformedTimer)?;
+        else {
+            return Ok(TimelineAdmissionOutcome::MalformedTimer);
+        };
         let encoded_bytes = estimated_payload_bytes(message, &real_topic);
         if encoded_bytes > self.config.payload_record_bytes as u64 {
-            return Err(TimelineAdmissionError::RecordTooLarge);
+            return Ok(TimelineAdmissionOutcome::RecordTooLarge);
         }
 
         let metrics = self.materializer.metrics();
         if metrics.materialization_lag > self.config.materialization_lag_reject_messages {
-            return Err(TimelineAdmissionError::MaterializationLag);
+            return Ok(TimelineAdmissionOutcome::MaterializationLag);
         }
         // Unmaterialized source sizes are not yet in PayloadStore. Charging every one at the
         // configured record ceiling is intentionally conservative and prevents admission races.
@@ -108,7 +115,7 @@ impl TimelineAdmissionController {
             .saturating_add(unmaterialized_bytes)
             .saturating_add(encoded_bytes);
         if pending_messages > self.config.max_pending_messages || pending_bytes > self.config.max_pending_bytes {
-            return Err(TimelineAdmissionError::GlobalCapacity);
+            return Ok(TimelineAdmissionOutcome::GlobalCapacity);
         }
 
         let keys = usage_summary_keys(&real_topic, due_time_ms);
@@ -121,7 +128,7 @@ impl TimelineAdmissionController {
             .saturating_add(encoded_bytes)
             > self.config.max_topic_pending_bytes
         {
-            return Err(TimelineAdmissionError::TopicQuota);
+            return Ok(TimelineAdmissionOutcome::TopicQuota);
         }
         if tenant
             .1
@@ -129,7 +136,7 @@ impl TimelineAdmissionController {
             .saturating_add(encoded_bytes)
             > self.config.max_tenant_pending_bytes
         {
-            return Err(TimelineAdmissionError::TenantQuota);
+            return Ok(TimelineAdmissionOutcome::TenantQuota);
         }
         if bucket.0.saturating_add(metrics.materialization_lag).saturating_add(1) > self.config.max_bucket_messages
             || bucket
@@ -138,11 +145,11 @@ impl TimelineAdmissionController {
                 .saturating_add(encoded_bytes)
                 > self.config.max_bucket_bytes
         {
-            return Err(TimelineAdmissionError::HotBucket);
+            return Ok(TimelineAdmissionOutcome::HotBucket);
         }
 
-        let free = fs2::available_space(&self.store_root)?;
-        let total = fs2::total_space(&self.store_root)?;
+        let free = fs2::available_space(&self.store_root).map_err(admission_io_error)?;
+        let total = fs2::total_space(&self.store_root).map_err(admission_io_error)?;
         let minimum_ratio_bytes = total
             .saturating_mul(u64::from(self.config.minimum_free_ratio_basis_points))
             .div_ceil(10_000);
@@ -153,14 +160,27 @@ impl TimelineAdmissionController {
                 .max(minimum_ratio_bytes)
                 .saturating_add(encoded_bytes)
         {
-            return Err(TimelineAdmissionError::DiskHeadroom);
+            return Ok(TimelineAdmissionOutcome::DiskHeadroom);
         }
-        Ok(())
+        Ok(TimelineAdmissionOutcome::Accepted)
     }
 
-    fn summary(&self, key: &[u8]) -> Result<(u64, u64), TimelineAdmissionError> {
-        Ok(self.timeline.bucket_summary(key)?.unwrap_or_default())
+    fn summary(&self, key: &[u8]) -> Result<(u64, u64), StoreError> {
+        self.timeline
+            .bucket_summary(key)
+            .map(|summary| summary.unwrap_or_default())
+            .map_err(|source| {
+                StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Append)
+                    .in_component(StoreComponent::RocksDb)
+                    .with_source(source)
+            })
     }
+}
+
+fn admission_io_error(source: std::io::Error) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Append)
+        .in_component(StoreComponent::Store)
+        .with_source(source)
 }
 
 fn estimated_payload_bytes(message: &MessageExtBrokerInner, real_topic: &str) -> u64 {
@@ -197,32 +217,33 @@ fn prefixed_key(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
     key
 }
 
-#[derive(Debug, Error)]
-pub(crate) enum TimelineAdmissionError {
-    #[error("Extended Timer admission lease is inactive")]
+/// Source-free result of evaluating whether a Timer message may enter the timeline.
+///
+/// Operational filesystem and timeline failures are returned separately as [`StoreError`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimelineAdmissionOutcome {
+    /// The message may proceed to the source CommitLog append.
+    Accepted,
+    /// The current role cannot accept Timer work.
     RoleInactive,
-    #[error("malformed Extended Timer metadata")]
+    /// Required Timer metadata is absent or malformed.
     MalformedTimer,
-    #[error("Extended Timer deadline arithmetic overflow")]
+    /// Timer deadline arithmetic overflowed.
     HorizonOverflow,
-    #[error("Extended Timer deadline is outside the configured horizon")]
+    /// The deadline is outside the configured horizon.
     HorizonExceeded,
-    #[error("Extended Timer payload exceeds the record limit")]
+    /// The encoded payload exceeds the configured record limit.
     RecordTooLarge,
-    #[error("Extended Timer materialization lag exceeds the admission limit")]
+    /// Materialization lag exceeds the admission limit.
     MaterializationLag,
-    #[error("Extended Timer global pending capacity is exhausted")]
+    /// Global pending capacity is exhausted.
     GlobalCapacity,
-    #[error("Extended Timer topic quota is exhausted")]
+    /// Per-topic capacity is exhausted.
     TopicQuota,
-    #[error("Extended Timer tenant quota is exhausted")]
+    /// Per-tenant capacity is exhausted.
     TenantQuota,
-    #[error("Extended Timer due-second bucket is full")]
+    /// The due-second bucket is full.
     HotBucket,
-    #[error("Extended Timer filesystem headroom is insufficient")]
+    /// Filesystem headroom is insufficient.
     DiskHeadroom,
-    #[error(transparent)]
-    Timeline(#[from] rocketmq_error::RocketMQError),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
 }

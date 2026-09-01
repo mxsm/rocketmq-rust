@@ -58,7 +58,9 @@ async fn extended_modes_fail_before_startup_without_the_feature() {
             None,
             false,
             service_context(),
-        );
+        )
+        .expect("create Timer mode feature-gate Store")
+        .expect("test Timer Store configuration is valid");
         let error = store.init().await.expect_err("unsupported mode must fail closed");
         assert!(error.to_string().contains("extended_timeline feature"), "{error}");
     }

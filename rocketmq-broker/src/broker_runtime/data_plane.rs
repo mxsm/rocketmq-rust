@@ -100,7 +100,7 @@ impl BrokerRuntime {
             false,
             self.composition.state.store_telemetry.clone(),
         ) else {
-            error!("Invalid CommitLog micro-batch policy");
+            error!("store factory configuration is invalid");
             return false;
         };
         let opened = match StoreFactory::open(factory_config, service_context.component("broker.store")) {

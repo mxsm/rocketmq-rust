@@ -52,7 +52,7 @@ use crate::ha::transfer_engine::HaTransferEngine;
 use crate::ha::transfer_engine::TransferEngineAvailability;
 use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferEnginePreference;
-use crate::ha::HAServiceFailure;
+use crate::ha::HAError;
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::batch::TransferKind;
 use crate::transfer::batch::TransferPlan;
@@ -65,7 +65,7 @@ pub(crate) use rocketmq_store_local::ha::wire::OffsetDecoder;
 pub(crate) use rocketmq_store_local::ha::wire::OffsetFrame;
 pub(crate) use rocketmq_store_local::ha::wire::TransferHeader;
 
-type HAConnectionResult<T> = Result<T, HAServiceFailure>;
+type HAConnectionResult<T> = Result<T, HAError>;
 
 #[derive(Clone)]
 pub(crate) struct HAConnectionRuntimeHandle {
@@ -119,12 +119,8 @@ pub(crate) fn encode_transfer_header(
     .expect("HA transfer batches are bounded below i32::MAX by MessageStoreConfig")
 }
 
-pub(crate) fn decode_transfer_header(
-    src: &[u8],
-    enable_controller_mode: bool,
-) -> Result<TransferHeader, HAServiceFailure> {
-    rocketmq_store_local::ha::wire::decode_transfer_header(src, enable_controller_mode)
-        .ok_or_else(|| HAServiceFailure::Service("invalid HA transfer header".to_owned()))
+pub(crate) fn decode_transfer_header(src: &[u8], enable_controller_mode: bool) -> Result<TransferHeader, HAError> {
+    rocketmq_store_local::ha::wire::decode_transfer_header(src, enable_controller_mode).ok_or(HAError::InvalidWire)
 }
 
 pub struct DefaultHAConnection {
@@ -176,9 +172,9 @@ impl DefaultHAConnection {
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
         remote_addr: SocketAddr,
-    ) -> Result<Self, HAServiceFailure> {
+    ) -> Result<Self, HAError> {
         // Configure socket options early
-        socket_stream.set_nodelay(true).map_err(HAServiceFailure::Io)?;
+        socket_stream.set_nodelay(true).map_err(HAError::Io)?;
 
         // Get client address
         let client_address = socket_stream
@@ -187,8 +183,8 @@ impl DefaultHAConnection {
             .unwrap_or_else(|_| "unknown".to_string());
 
         // Configure socket options
-        if let Err(e) = socket_stream.set_nodelay(true) {
-            warn!("Failed to set TCP_NODELAY: {}", e);
+        if socket_stream.set_nodelay(true).is_err() {
+            warn!(source_present = true, "Failed to set HA connection TCP_NODELAY");
         }
 
         let socket_stream = Some(socket_stream);
@@ -242,21 +238,21 @@ impl DefaultHAConnection {
 impl HAConnection for DefaultHAConnection {
     async fn start(&mut self) -> Result<(), StoreError> {
         if self.lifecycle.lock().await.is_running() {
-            return Err(HAServiceFailure::InvalidState("HA connection is already running".to_string()).into());
+            return Err(HAError::InvalidState("HA connection is already running").into());
         }
         let connection_runtime = self.runtime_handle();
         self.change_current_state(HAConnectionState::Transfer).await;
 
-        self.flow_monitor.start().await.map_err(HAServiceFailure::Runtime)?;
+        self.flow_monitor.start().await.map_err(HAError::Runtime)?;
 
         let tcp_stream = self
             .socket_stream
             .take()
-            .ok_or_else(|| HAServiceFailure::InvalidState("Socket already taken".into()))?;
-        let std_stream = tcp_stream.into_std().map_err(HAServiceFailure::Io)?;
-        let retained_std_stream = std_stream.try_clone().map_err(HAServiceFailure::Io)?;
-        let retained_stream = TcpStream::from_std(retained_std_stream).map_err(HAServiceFailure::Io)?;
-        let split_stream = TcpStream::from_std(std_stream).map_err(HAServiceFailure::Io)?;
+            .ok_or(HAError::InvalidState("Socket already taken"))?;
+        let std_stream = tcp_stream.into_std().map_err(HAError::Io)?;
+        let retained_std_stream = std_stream.try_clone().map_err(HAError::Io)?;
+        let retained_stream = TcpStream::from_std(retained_std_stream).map_err(HAError::Io)?;
+        let split_stream = TcpStream::from_std(std_stream).map_err(HAError::Io)?;
         self.socket_stream = Some(retained_stream);
         let (reader, write) = split_stream.into_split();
 
@@ -302,19 +298,22 @@ impl HAConnection for DefaultHAConnection {
             .spawn_service("ha-read-socket-service", async move {
                 read_service.run(read_shutdown_rx).await;
             })
-            .map_err(HAServiceFailure::Runtime)?;
+            .map_err(HAError::Runtime)?;
 
         if let Err(error) = task_group.spawn_service("ha-write-socket-service", async move {
             write_service.run(write_shutdown_rx).await;
         }) {
             let _ = shutdown_tx.send(());
             let report = task_group.shutdown(Duration::from_secs(3)).await;
-            if let Err(shutdown_error) =
+            if let Err(_shutdown_error) =
                 crate::runtime::shutdown_report_result("DefaultHAConnection partial start", report)
             {
-                warn!("DefaultHAConnection partial start cleanup reported an error: {shutdown_error}");
+                warn!(
+                    source_present = true,
+                    "DefaultHAConnection partial start cleanup failed"
+                );
             }
-            return Err(HAServiceFailure::Runtime(error).into());
+            return Err(HAError::Runtime(error).into());
         }
 
         *self.lifecycle.lock().await = HAConnectionLifecycle::Running {
@@ -322,7 +321,7 @@ impl HAConnection for DefaultHAConnection {
             task_group,
         };
 
-        info!("HAConnection started for {}", self.client_address);
+        info!("HAConnection started");
         Ok(())
     }
 
@@ -337,8 +336,11 @@ impl HAConnection for DefaultHAConnection {
         if let Some((shutdown_tx, task_group)) = running {
             let _ = shutdown_tx.send(());
             let report = task_group.shutdown(Duration::from_secs(3)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("DefaultHAConnection", report) {
-                warn!("DefaultHAConnection task shutdown reported an error: {error}");
+            if crate::runtime::shutdown_report_result("DefaultHAConnection", report).is_err() {
+                warn!(
+                    source_present = true,
+                    "DefaultHAConnection task shutdown reported an error"
+                );
             }
         }
 
@@ -425,7 +427,7 @@ impl ReadSocketService {
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
         connection_runtime: HAConnectionRuntimeHandle,
-    ) -> Result<Self, HAServiceFailure> {
+    ) -> Result<Self, HAError> {
         Ok(Self {
             reader,
             client_address,
@@ -442,7 +444,7 @@ impl ReadSocketService {
     }
 
     pub async fn run(mut self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
-        info!("{} service started", self.get_service_name());
+        info!("HA read service started");
 
         loop {
             //let select_result = timeout(SELECT_TIMEOUT, self.reader.next()).await;
@@ -469,7 +471,7 @@ impl ReadSocketService {
                         .compare_exchange(-1, offset, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
                     {
-                        info!("slave[{}] request offset {}", self.client_address, offset);
+                        info!("HA replica published its initial request offset");
                         self.connection_context.notify_append_progress();
                     }
                     if let Some(broker_id) = broker_id.filter(|broker_id| *broker_id >= 0) {
@@ -479,8 +481,8 @@ impl ReadSocketService {
                         .handle_runtime_connection_ack(&self.connection_runtime, offset);
                     self.connection_context.notify_transfer_some(offset).await;
                 }
-                Some(Err(e)) => {
-                    error!("Stream error: {}", e);
+                Some(Err(_error)) => {
+                    error!(source_present = true, "HA replica stream read failed");
                     break;
                 }
             }
@@ -490,10 +492,7 @@ impl ReadSocketService {
             let interval = current_time - last_read;
 
             if interval > self.message_store_config.ha_housekeeping_interval {
-                warn!(
-                    "ha housekeeping, found this connection[{}] expired, {}",
-                    self.client_address, interval
-                );
+                warn!("HA housekeeping expired a replica connection");
                 break;
             }
 
@@ -503,7 +502,7 @@ impl ReadSocketService {
         }
 
         self.cleanup().await;
-        info!("{} service end", self.get_service_name());
+        info!("HA read service ended");
     }
 
     async fn process_incoming_data(&mut self, data: BytesMut) -> HAConnectionResult<()> {
@@ -554,7 +553,7 @@ impl ReadSocketService {
                     .compare_exchange(-1, read_offset, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok()
                 {
-                    info!("slave[{}] request offset {}", self.client_address, read_offset);
+                    info!("HA replica published its initial request offset");
                     self.connection_context.notify_append_progress();
                 }
 
@@ -628,7 +627,7 @@ impl WriteSocketService {
         connection_runtime: HAConnectionRuntimeHandle,
         next_transfer_from_where: Arc<AtomicI64>,
         storage_io: BlockingExecutor,
-    ) -> Result<Self, HAServiceFailure> {
+    ) -> Result<Self, HAError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
         let preference = transfer_engine_preference(&message_store_config);
         let selection = select_transfer_engine_with_availability(
@@ -643,20 +642,14 @@ impl WriteSocketService {
             },
         );
         if let Some(reason) = selection.fallback_reason {
-            info!(
-                "HA transfer engine fallback to {:?} for slave[{}]: {}",
-                selection.engine, client_address, reason
-            );
+            info!("HA transfer engine selected its configured fallback");
             connection_context.ha_transfer_metrics().record_fallback(
                 transfer_engine_kind(preference),
                 selection.engine,
                 reason,
             );
         } else {
-            info!(
-                "HA transfer engine selected {:?} for slave[{}]",
-                selection.engine, client_address
-            );
+            info!("HA transfer engine selected a transfer strategy");
         }
         let writer = HaTransferEngine::from_selection(writer, selection.engine);
         Ok(Self {
@@ -678,13 +671,13 @@ impl WriteSocketService {
     }
 
     pub async fn run(mut self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
-        info!("{} service started", self.get_service_name());
+        info!("HA write service started");
 
         loop {
             let step = match self.process_transfer().await {
                 Ok(step) => step,
-                Err(error) => {
-                    error!("Transfer error: {}", error);
+                Err(_error) => {
+                    error!(source_present = true, "HA transfer operation failed");
                     break;
                 }
             };
@@ -701,7 +694,7 @@ impl WriteSocketService {
         }
 
         self.cleanup().await;
-        info!("{} service end", self.get_service_name());
+        info!("HA write service ended");
     }
 
     async fn process_transfer(&mut self) -> HAConnectionResult<TransferStep> {
@@ -725,10 +718,7 @@ impl WriteSocketService {
             };
             //set next_transfer_from_where to the next_offset
             self.next_transfer_from_where.store(next_offset, Ordering::Relaxed);
-            info!(
-                "master transfer data from {} to slave[{}], and slave request {}",
-                next_offset, self.client_address, slave_request_offset
-            );
+            info!("HA master transferred data to a replica");
         }
 
         if self.last_write_over.load(Ordering::Relaxed) {
@@ -935,7 +925,7 @@ impl WriteSocketService {
                 .storage_io
                 .spawn_io("ha-materialize-file-ranges", move || batch.into_bytes_backed())
                 .await
-                .map_err(HAServiceFailure::Runtime)??;
+                .map_err(HAError::Runtime)??;
         }
         let confirm_offset = self.connection_context.replica_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(

@@ -204,6 +204,23 @@ impl MaintenanceRequestProcessor {
             .storage_identity(grant)
             .await
             .map_err(checkpoint_error)?;
+        let Some(storage_identity) = storage_identity else {
+            let response = MaintenanceCapabilitiesResponse {
+                schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
+                policy_id: self.authorizer.policy().policy_id.clone(),
+                policy_version: grant.policy_version(),
+                operations: Vec::new(),
+                max_checkpoint_bytes: grant.resource_budget().max_checkpoint_bytes,
+                max_store_members: grant.resource_budget().max_store_members,
+                max_concurrent_operations: grant.resource_budget().max_concurrent_operations,
+                store: None,
+            };
+            return encode_success(
+                &self.command_factory,
+                &response,
+                "encode expired Broker maintenance capabilities",
+            );
+        };
         let backend = self.checkpoint_service.backend().map_err(checkpoint_error)?;
         let response = MaintenanceCapabilitiesResponse {
             schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
@@ -640,19 +657,23 @@ mod tests {
         ));
         let root = tempfile::tempdir().expect("maintenance checkpoint root");
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let store = Arc::new(StorePorts::local_file(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
-                timer_wheel_enable: false,
-                ..MessageStoreConfig::default()
-            }),
-            rocketmq_store::MicroBatchPolicy::disabled(1).expect("valid test policy"),
-            Arc::new(StoreRuntimeConfig::default()),
-            topic_table,
-            None,
-            false,
-            service_context.component("store"),
-        )));
+        let store = Arc::new(StorePorts::local_file(
+            LocalFileMessageStore::new(
+                Arc::new(MessageStoreConfig {
+                    store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
+                    timer_wheel_enable: false,
+                    ..MessageStoreConfig::default()
+                }),
+                rocketmq_store::MicroBatchPolicy::disabled(1).expect("valid test policy"),
+                Arc::new(StoreRuntimeConfig::default()),
+                topic_table,
+                None,
+                false,
+                service_context.component("store"),
+            )
+            .expect("create maintenance test Store")
+            .expect("test Timer Store configuration is valid"),
+        ));
         let checkpoint_service = Arc::new(StoreReleaseCheckpointService::new(
             Arc::downgrade(&store),
             root.path().join("checkpoints"),

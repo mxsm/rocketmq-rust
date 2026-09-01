@@ -110,7 +110,9 @@ fn new_store(root: &TempDir) -> LocalFileMessageStore {
         None,
         false,
         service_context(),
-    );
+    )
+    .expect("create Extended Timeline integration Store")
+    .expect("test Timer Store configuration is valid");
     store.wire_owned_root_dependencies().expect("wire timeline shadow");
     store
 }

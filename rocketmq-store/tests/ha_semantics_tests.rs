@@ -71,7 +71,9 @@ fn new_test_store_with_broker_config(
         None,
         false,
         test_service_context(),
-    );
+    )
+    .expect("create HA semantics Store")
+    .expect("test Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("HA semantics tests should wire owned Store capabilities");

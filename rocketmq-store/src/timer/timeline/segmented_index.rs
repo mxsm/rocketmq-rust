@@ -278,7 +278,9 @@ impl TimerIndex for SegmentedTimelineIndex {
         let coordinator = Arc::clone(&self.coordinator);
         self.storage_io
             .spawn_io("timer.segmented.put_batch", move || {
-                let entries = selected.iter().map(source_to_entry).collect::<Result<Vec<_>, _>>()?;
+                let Some(entries) = selected.iter().map(source_to_entry).collect::<Option<Vec<_>>>() else {
+                    return Ok(0);
+                };
                 let mut batch = RocksDbWriteBatch::with_capacity(entries.len().saturating_mul(2));
                 for (source, entry) in selected.iter().zip(&entries) {
                     RocksDbTimelineStateIndex::append_state(
@@ -300,7 +302,9 @@ impl TimerIndex for SegmentedTimelineIndex {
                     )
                     .map_err(storage_error)?;
                 }
-                let last = entries.last().ok_or(TimerEngineError::InvalidBudget)?;
+                let Some(last) = entries.last() else {
+                    return Ok(0);
+                };
                 coordinator
                     .commit(
                         &entries,
@@ -364,7 +368,9 @@ impl TimerIndex for SegmentedTimelineIndex {
                         last_consumed = Some(native_record.key);
                         continue;
                     }
-                    let due = native_to_due(native_record)?;
+                    let Some(due) = native_to_due(native_record) else {
+                        return Ok(TimerIndexPage::default());
+                    };
                     let next_bytes = retained_bytes.saturating_add(due.source.estimated_bytes);
                     if !budget.allows(records.len().saturating_add(1), next_bytes) {
                         budget_exhausted = true;
@@ -519,9 +525,9 @@ impl TimerIndex for SegmentedTimelineIndex {
     }
 }
 
-fn source_to_entry(source: &TimerSourceRecord) -> Result<TimelineIndexEntry, TimerEngineError> {
+fn source_to_entry(source: &TimerSourceRecord) -> Option<TimelineIndexEntry> {
     let lane = 0u16;
-    Ok(TimelineIndexEntry {
+    Some(TimelineIndexEntry {
         key: TimelineKeyV1 {
             due_time_ms: source.due_time_ms,
             lane,
@@ -530,15 +536,14 @@ fn source_to_entry(source: &TimerSourceRecord) -> Result<TimelineIndexEntry, Tim
         },
         record: TimelineRecordV1 {
             payload: TimerPayloadStoreLocator::try_new(
-                i32::try_from(source.due_time_ms.div_euclid(86_400_000))
-                    .map_err(|_| TimerEngineError::InvalidBudget)?,
+                i32::try_from(source.due_time_ms.div_euclid(86_400_000)).ok()?,
                 lane,
                 0,
-                u64::try_from(source.payload.commit_log_offset()).map_err(|_| TimerEngineError::InvalidBudget)?,
+                u64::try_from(source.payload.commit_log_offset()).ok()?,
                 source.payload.size(),
                 1,
             )
-            .map_err(|_| TimerEngineError::InvalidBudget)?,
+            .ok()?,
             source_cq_offset: source.source_offset,
             source_physical_offset: source.payload.commit_log_offset(),
             source_size: source.payload.size(),
@@ -567,7 +572,7 @@ pub(crate) fn entry_to_native(entry: TimelineIndexEntry) -> Result<TimelineSegme
     })
 }
 
-fn native_to_due(record: TimelineSegmentRecord) -> Result<DueTimerRecord, TimerEngineError> {
+fn native_to_due(record: TimelineSegmentRecord) -> Option<DueTimerRecord> {
     let route = PersistedTimerRoute::try_new(
         record.owner_engine,
         1,
@@ -575,14 +580,13 @@ fn native_to_due(record: TimelineSegmentRecord) -> Result<DueTimerRecord, TimerE
         record.key.generation,
         format!("native:{}:{}", record.key.timer_id.get(), record.key.generation.get()),
     )
-    .map_err(|_| TimerEngineError::InvalidBudget)?;
-    Ok(DueTimerRecord {
+    .ok()?;
+    Some(DueTimerRecord {
         source: TimerSourceRecord {
             id: record.key.timer_id,
             source_offset: record.source_cq_offset,
             due_time_ms: record.key.due_time_ms,
-            payload: TimerPayloadLocator::try_new(record.source_physical_offset, record.source_size)
-                .map_err(|_| TimerEngineError::InvalidBudget)?,
+            payload: TimerPayloadLocator::try_new(record.source_physical_offset, record.source_size).ok()?,
             route,
             estimated_bytes: record.source_size as usize,
         },

@@ -238,4 +238,17 @@ pub enum StoreContractViolation {
     /// A persisted timer route is incomplete.
     #[error("timer route requires a non-zero format version and non-empty delivery token")]
     TimerInvalidRoute,
+
+    /// A native Timer resource limit is outside its supported range.
+    #[error("timer configuration field {field} is {actual}, outside {minimum}..={maximum}")]
+    TimerConfigurationOutOfRange {
+        /// Stable configuration field name.
+        field: &'static str,
+        /// Observed value.
+        actual: i128,
+        /// Inclusive lower bound.
+        minimum: i128,
+        /// Inclusive upper bound.
+        maximum: i128,
+    },
 }

@@ -59,10 +59,10 @@ impl LocalFileMessageStore {
                             max_bytes,
                             Instant::now() + Duration::from_millis(interval_ms.max(100).saturating_mul(4)),
                         );
-                        if let Err(error) = match budget {
-                            Ok(budget) => engine.enqueue_source(budget).await.map(|_| ()),
-                            Err(error) => Err(error),
-                        } {
+                        let Some(budget) = budget else {
+                            return;
+                        };
+                        if let Err(error) = engine.enqueue_source(budget).await.map(|_| ()) {
                             warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
                         }
                     }
@@ -97,10 +97,10 @@ impl LocalFileMessageStore {
                             max_bytes,
                             Instant::now() + Duration::from_millis(interval_ms.max(100).saturating_mul(4)),
                         );
-                        if let Err(error) = match budget {
-                            Ok(budget) => engine.roll_due(TimerEngineEpoch::new(epoch), budget).await.map(|_| ()),
-                            Err(error) => Err(error),
-                        } {
+                        let Some(budget) = budget else {
+                            return;
+                        };
+                        if let Err(error) = engine.roll_due(TimerEngineEpoch::new(epoch), budget).await.map(|_| ()) {
                             warn!("Extended Timeline due scan will retry: {error}");
                         }
                     }
@@ -609,12 +609,7 @@ impl LocalFileMessageStore {
             self.sync_extended_timeline_role();
 
             if let Some(ha_service) = self.ha_service.as_mut() {
-                ha_service.start().await.map_err(|e| {
-                    error!("HA service start failed: {:?}", e);
-                    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
-                        .in_component(StoreComponent::HighAvailability)
-                        .with_source(e)
-                })?;
+                ha_service.start().await?;
             }
             if let Some(service) = self.mapped_file_retirement_service.as_mut() {
                 service.start()?;
@@ -691,7 +686,7 @@ impl LocalFileMessageStore {
                 PendingHAService::Default(service) => GeneralHAService::new_with_default_ha_service(*service),
                 PendingHAService::AutoSwitch(service) => GeneralHAService::new_with_auto_switch_ha_service(service),
             };
-            let _ = ha_service.init();
+            ha_service.init().map_err(StoreError::from)?;
             self.ha_service = Some(ha_service);
         }
         if let Some(ha_service) = self.ha_service.as_ref() {

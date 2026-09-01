@@ -37,7 +37,6 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_store_api::AppendReceipt;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
-use rocketmq_store_api::FlushBacklog as ApiFlushBacklog;
 use rocketmq_store_api::GetResult;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::LeasedBytes;
@@ -45,11 +44,10 @@ use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::QueryResult;
 use rocketmq_store_api::ReadCacheState;
 use rocketmq_store_api::SelectResult;
-use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
+use rocketmq_store_api::StoreHealthSnapshot;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
@@ -58,7 +56,6 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
-use crate::base::backend_ops::StoreHealthSnapshot as BackendStoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
@@ -423,7 +420,7 @@ pub trait BrokerReadStore: BackendAccess {
         BackendOps::put_message_preflight(self.backend())
     }
 
-    fn backend_health_snapshot(&self) -> BackendStoreHealthSnapshot {
+    fn health_snapshot(&self) -> StoreHealthSnapshot {
         BackendOps::health_snapshot(self.backend())
     }
 
@@ -580,10 +577,6 @@ pub trait BrokerMasterAddressStore: BrokerReadStore {
 
 /// Broker administrative and configuration capability set.
 pub trait BrokerAdminStore: BrokerReplicationStore {
-    fn health_snapshot(&self) -> BackendStoreHealthSnapshot {
-        BackendOps::health_snapshot(self.backend())
-    }
-
     fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
         BackendOps::delete_topics(self.backend(), delete_topics)
     }
@@ -672,7 +665,7 @@ pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStor
         &self,
         broker_role: BrokerRole,
         external_term: u64,
-    ) -> Result<(), crate::store_error::StoreError> {
+    ) -> Result<bool, crate::store_error::StoreError> {
         BackendOps::sync_broker_role_with_term(self.backend(), broker_role, external_term)
     }
 
@@ -799,109 +792,6 @@ pub const fn get_status_to_api(status: GetMessageStatus) -> GetStatus {
         GetMessageStatus::NoMatchedLogicQueue => GetStatus::NoMatchedLogicQueue,
         GetMessageStatus::NoMessageInQueue => GetStatus::NoMessageInQueue,
         GetMessageStatus::OffsetReset => GetStatus::OffsetReset,
-    }
-}
-
-/// Exact backend health error retained by the Broker admission projection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StoreHealthError {
-    descriptor: &'static rocketmq_error::ErrorDescriptor,
-    component: StoreComponent,
-}
-
-impl StoreHealthError {
-    /// Creates a health projection from a canonical descriptor.
-    pub const fn new(descriptor: &'static rocketmq_error::ErrorDescriptor) -> Self {
-        Self {
-            descriptor,
-            component: StoreComponent::Store,
-        }
-    }
-
-    /// Creates a health projection with diagnostic component context.
-    pub const fn in_component(descriptor: &'static rocketmq_error::ErrorDescriptor, component: StoreComponent) -> Self {
-        Self { descriptor, component }
-    }
-
-    /// Creates an exact projection from one canonical store error.
-    pub const fn from_error(error: &crate::base::backend_ops::StoreHealthError) -> Self {
-        Self {
-            descriptor: error.descriptor,
-            component: error.component,
-        }
-    }
-
-    /// Returns the canonical dotted health code.
-    pub const fn code(self) -> &'static str {
-        self.descriptor.code().as_str()
-    }
-
-    /// Returns diagnostic-only component context.
-    pub const fn component(self) -> StoreComponent {
-        self.component
-    }
-}
-
-/// Compact sync-flush pressure retained by the Broker admission projection.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct StoreFlushBacklog {
-    pub queue_depth: u64,
-    pub oldest_wait_millis: u64,
-}
-
-/// Exact health data consumed by Broker admission behavior.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoreHealthSnapshot {
-    pub writable: bool,
-    pub last_error: Option<StoreHealthError>,
-    pub page_cache_busy: bool,
-    pub transient_pool_deficient: bool,
-    pub flush_backlog: StoreFlushBacklog,
-    pub dispatch_behind_bytes: i64,
-    pub shutdown: bool,
-    pub replication_pending_count: u64,
-    pub replication_oldest_wait_millis: u64,
-    pub appended_watermark: i64,
-    pub durable_watermark: i64,
-}
-
-impl Default for StoreHealthSnapshot {
-    fn default() -> Self {
-        Self {
-            writable: true,
-            last_error: None,
-            page_cache_busy: false,
-            transient_pool_deficient: false,
-            flush_backlog: StoreFlushBacklog::default(),
-            dispatch_behind_bytes: 0,
-            shutdown: false,
-            replication_pending_count: 0,
-            replication_oldest_wait_millis: 0,
-            appended_watermark: 0,
-            durable_watermark: 0,
-        }
-    }
-}
-
-impl StoreHealthSnapshot {
-    /// Returns the backend-neutral health result while retaining exact backend data in this value.
-    pub fn canonical(&self) -> ApiStoreHealthSnapshot {
-        ApiStoreHealthSnapshot {
-            writable: self.writable,
-            last_error: self.last_error.map(|error| error.descriptor),
-            page_cache_busy: self.page_cache_busy,
-            transient_pool_deficient: self.transient_pool_deficient,
-            flush_backlog: ApiFlushBacklog {
-                queue_depth: self.flush_backlog.queue_depth,
-                oldest_wait_millis: self.flush_backlog.oldest_wait_millis,
-            },
-            dispatch_behind_bytes: self.dispatch_behind_bytes,
-            shutdown: self.shutdown,
-            replication_pending_count: self.replication_pending_count,
-            replication_oldest_wait_millis: self.replication_oldest_wait_millis,
-            appended_watermark: self.appended_watermark,
-            durable_watermark: self.durable_watermark,
-        }
     }
 }
 
@@ -1184,28 +1074,12 @@ impl<MS: BrokerReadStore> StoreHealth for MessageStoreHealthCapability<'_, MS> {
     type Snapshot = StoreHealthSnapshot;
 
     fn health_snapshot(&self) -> Self::Snapshot {
-        store_health_snapshot(self.store)
+        BrokerReadStore::health_snapshot(self.store)
     }
 }
 
 pub fn store_health_snapshot<MS: BrokerReadStore>(store: &MS) -> StoreHealthSnapshot {
-    let backend = store.backend_health_snapshot();
-    StoreHealthSnapshot {
-        writable: backend.writeable,
-        last_error: backend.last_flush_error.as_ref().map(StoreHealthError::from_error),
-        page_cache_busy: backend.os_page_cache_busy,
-        transient_pool_deficient: backend.transient_store_pool_deficient,
-        flush_backlog: StoreFlushBacklog {
-            queue_depth: backend.sync_flush.queue_depth,
-            oldest_wait_millis: backend.sync_flush.oldest_wait_millis,
-        },
-        dispatch_behind_bytes: backend.dispatch_behind_bytes,
-        shutdown: backend.shutdown,
-        replication_pending_count: backend.ha_pending_request_count,
-        replication_oldest_wait_millis: backend.ha_pending_oldest_wait_millis,
-        appended_watermark: store.get_max_phy_offset(),
-        durable_watermark: store.get_flushed_where(),
-    }
+    BrokerReadStore::health_snapshot(store)
 }
 
 #[cfg(test)]
