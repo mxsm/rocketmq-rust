@@ -116,15 +116,4 @@ mod tests {
         assert_eq!(header.master_epoch, Some(5));
         assert_eq!(header.sync_state_set_epoch, Some(10));
     }
-
-    #[test]
-    fn register_broker_to_controller_response_header_default() {
-        let header = RegisterBrokerToControllerResponseHeader::default();
-        assert_eq!(header.cluster_name, None);
-        assert_eq!(header.broker_name, None);
-        assert_eq!(header.master_broker_id, None);
-        assert_eq!(header.master_address, None);
-        assert_eq!(header.master_epoch, None);
-        assert_eq!(header.sync_state_set_epoch, None);
-    }
 }

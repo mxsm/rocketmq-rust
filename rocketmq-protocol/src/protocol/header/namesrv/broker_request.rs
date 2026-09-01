@@ -124,18 +124,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_creates_instance_with_correct_values() {
-        let header = GetBrokerMemberGroupRequestHeader::new("testCluster", "testBroker");
-        assert_eq!(header.cluster_name, CheetahString::from("testCluster"));
-        assert_eq!(header.broker_name, CheetahString::from("testBroker"));
-    }
-
-    #[test]
     fn unregister_broker_request_header_display() {
         let header = UnRegisterBrokerRequestHeader::new("name", "addr", "cluster", 1);
         let display = format!("{}", header);
         let expected =
             "UnRegisterBrokerRequestHeader { brokerName: name, brokerAddr: addr, clusterName: cluster, brokerId: 1 }";
         assert_eq!(display, expected);
+    }
+
+    #[test]
+    fn get_broker_member_group_request_uses_java_wire_names() {
+        let header = GetBrokerMemberGroupRequestHeader::new("cluster-a", "broker-a");
+
+        assert_eq!(
+            serde_json::to_string(&header).unwrap(),
+            r#"{"clusterName":"cluster-a","brokerName":"broker-a"}"#
+        );
     }
 }

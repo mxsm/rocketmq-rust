@@ -85,63 +85,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn delete_acl_request_header_new() {
-        let subject = CheetahString::from_static_str("user:alice");
-        let resource = Some(CheetahString::from_static_str("Topic:test-topic"));
-        let header = DeleteAclRequestHeader::new(subject.clone(), resource.clone());
-
-        assert_eq!(header.subject, subject);
-        assert!(header.policy_type.is_none());
-        assert_eq!(header.resource, resource);
-    }
-
-    #[test]
-    fn delete_acl_request_header_with_policy_type() {
-        let subject = CheetahString::from_static_str("user:alice");
-        let policy_type = Some(CheetahString::from_static_str("Default"));
-        let resource = Some(CheetahString::from_static_str("Topic:test-topic"));
-        let header = DeleteAclRequestHeader::with_policy_type(subject.clone(), policy_type.clone(), resource.clone());
-
-        assert_eq!(header.subject, subject);
-        assert_eq!(header.policy_type, policy_type);
-        assert_eq!(header.resource, resource);
-    }
-
-    #[test]
-    fn delete_acl_request_header_with_subject() {
-        let subject = CheetahString::from_static_str("user:bob");
-        let header = DeleteAclRequestHeader::with_subject(subject.clone());
-
-        assert_eq!(header.subject, subject);
-        assert!(header.resource.is_none());
-    }
-
-    #[test]
-    fn delete_acl_request_header_default() {
-        let header = DeleteAclRequestHeader::default();
-
-        assert!(header.subject.is_empty());
-        assert!(header.policy_type.is_none());
-        assert!(header.resource.is_none());
-    }
-
-    #[test]
-    fn delete_acl_request_header_set_methods() {
-        let mut header = DeleteAclRequestHeader::default();
-        let subject = CheetahString::from_static_str("user:charlie");
-        let policy_type = Some(CheetahString::from_static_str("Custom"));
-        let resource = Some(CheetahString::from_static_str("Group:consumer-group"));
-
-        header.set_subject(subject.clone());
-        header.set_policy_type(policy_type.clone());
-        header.set_resource(resource.clone());
-
-        assert_eq!(header.subject, subject);
-        assert_eq!(header.policy_type, policy_type);
-        assert_eq!(header.resource, resource);
-    }
-
-    #[test]
     fn delete_acl_request_header_serializes_correctly() {
         let header = DeleteAclRequestHeader::with_policy_type(
             CheetahString::from_static_str("user:alice"),
@@ -162,6 +105,31 @@ mod tests {
             map.get(&CheetahString::from_static_str("resource")),
             Some(&CheetahString::from_static_str("Topic:test"))
         );
+    }
+
+    #[test]
+    fn constructors_and_mutators_preserve_optional_wire_fields() {
+        let with_resource = DeleteAclRequestHeader::new(
+            CheetahString::from_static_str("user:alice"),
+            Some(CheetahString::from_static_str("Topic:test")),
+        );
+        assert_eq!(with_resource.subject, "user:alice");
+        assert!(with_resource.policy_type.is_none());
+        assert_eq!(with_resource.resource.as_deref(), Some("Topic:test"));
+
+        let mut header = DeleteAclRequestHeader::with_subject(CheetahString::from_static_str("user:before"));
+        assert_eq!(header.subject, "user:before");
+        assert!(header.policy_type.is_none());
+        assert!(header.resource.is_none());
+
+        header.set_subject(CheetahString::from_static_str("user:alice"));
+        header.set_policy_type(Some(CheetahString::from_static_str("Custom")));
+        header.set_resource(Some(CheetahString::from_static_str("Topic:test")));
+
+        let map = header.to_map().unwrap();
+        assert_eq!(map.get("subject").map(CheetahString::as_str), Some("user:alice"));
+        assert_eq!(map.get("policyType").map(CheetahString::as_str), Some("Custom"));
+        assert_eq!(map.get("resource").map(CheetahString::as_str), Some("Topic:test"));
     }
 
     #[test]

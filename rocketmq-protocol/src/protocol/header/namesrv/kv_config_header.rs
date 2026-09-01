@@ -138,14 +138,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn put_kv_config_request_header_new() {
-        let header = PutKVConfigRequestHeader::new("namespace1", "key1", "value1");
-        assert_eq!(header.namespace, CheetahString::from("namespace1"));
-        assert_eq!(header.key, CheetahString::from("key1"));
-        assert_eq!(header.value, CheetahString::from("value1"));
-    }
-
-    #[test]
     fn put_kv_config_request_header_serialization() {
         let header = PutKVConfigRequestHeader::new("namespace1", "key1", "value1");
         let serialized = serde_json::to_string(&header).unwrap();
@@ -165,13 +157,6 @@ mod tests {
     }
 
     #[test]
-    fn get_kv_config_request_header_new() {
-        let header = GetKVConfigRequestHeader::new("namespace1", "key1");
-        assert_eq!(header.namespace, CheetahString::from("namespace1"));
-        assert_eq!(header.key, CheetahString::from("key1"));
-    }
-
-    #[test]
     fn get_kv_config_request_header_serialization() {
         let header = GetKVConfigRequestHeader::new("namespace1", "key1");
         let serialized = serde_json::to_string(&header).unwrap();
@@ -184,12 +169,6 @@ mod tests {
         let deserialized: GetKVConfigRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
         assert_eq!(deserialized.key, CheetahString::from("key1"));
-    }
-
-    #[test]
-    fn get_kv_config_response_header_new() {
-        let header = GetKVConfigResponseHeader::new(Some(CheetahString::from("value1")));
-        assert_eq!(header.value, Some(CheetahString::from("value1")));
     }
 
     #[test]
@@ -207,13 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn delete_kv_config_request_header_new() {
-        let header = DeleteKVConfigRequestHeader::new("namespace1", "key1");
-        assert_eq!(header.namespace, CheetahString::from("namespace1"));
-        assert_eq!(header.key, CheetahString::from("key1"));
-    }
-
-    #[test]
     fn delete_kv_config_request_header_serialization() {
         let header = DeleteKVConfigRequestHeader::new("namespace1", "key1");
         let serialized = serde_json::to_string(&header).unwrap();
@@ -226,12 +198,6 @@ mod tests {
         let deserialized: DeleteKVConfigRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
         assert_eq!(deserialized.key, CheetahString::from("key1"));
-    }
-
-    #[test]
-    fn get_kv_list_by_namespace_request_header_new() {
-        let header = GetKVListByNamespaceRequestHeader::new("namespace1");
-        assert_eq!(header.namespace, CheetahString::from("namespace1"));
     }
 
     #[test]

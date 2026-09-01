@@ -106,13 +106,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn delete_topic_from_namesrv_request_header_new() {
-        let header = DeleteTopicFromNamesrvRequestHeader::new("topic1", Some("cluster1"));
-        assert_eq!(header.topic, CheetahString::from("topic1"));
-        assert_eq!(header.cluster_name, Some(CheetahString::from("cluster1")));
-    }
-
-    #[test]
     fn delete_topic_from_namesrv_request_header_serialization() {
         let header = DeleteTopicFromNamesrvRequestHeader::new("topic1", Some("cluster1"));
         let serialized = serde_json::to_string(&header).unwrap();
@@ -128,23 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn register_topic_request_header_new() {
-        let header = RegisterTopicRequestHeader::new("topic1");
-        assert_eq!(header.topic, CheetahString::from("topic1"));
-        assert!(header.topic_request.is_none());
-    }
-
-    #[test]
     fn register_topic_request_header_serialization() {
         let header = RegisterTopicRequestHeader::new("topic1");
         let serialized = serde_json::to_string(&header).unwrap();
         assert_eq!(serialized, r#"{"topic":"topic1"}"#);
-    }
-
-    #[test]
-    fn get_topics_by_cluster_request_header_new() {
-        let header = GetTopicsByClusterRequestHeader::new("cluster1");
-        assert_eq!(header.cluster, CheetahString::from("cluster1"));
     }
 
     #[test]

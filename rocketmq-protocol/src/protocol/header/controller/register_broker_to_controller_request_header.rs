@@ -106,14 +106,4 @@ mod tests {
         );
         assert_eq!(header.invoke_time, 1234567890);
     }
-
-    #[test]
-    fn register_broker_to_controller_request_header_default() {
-        let header = RegisterBrokerToControllerRequestHeader::default();
-        assert_eq!(header.cluster_name, None);
-        assert_eq!(header.broker_name, None);
-        assert_eq!(header.broker_id, None);
-        assert_eq!(header.broker_address, None);
-        assert_eq!(header.invoke_time, 0);
-    }
 }

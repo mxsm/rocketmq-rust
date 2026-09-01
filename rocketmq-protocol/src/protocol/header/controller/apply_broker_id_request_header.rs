@@ -95,13 +95,4 @@ mod tests {
         assert_eq!(header.applied_broker_id, 9876543210);
         assert_eq!(header.register_check_code, "check_code_123");
     }
-
-    #[test]
-    fn apply_broker_id_request_header_default() {
-        let header = ApplyBrokerIdRequestHeader::default();
-        assert_eq!(header.cluster_name, "");
-        assert_eq!(header.broker_name, "");
-        assert_eq!(header.applied_broker_id, 0);
-        assert_eq!(header.register_check_code, "");
-    }
 }

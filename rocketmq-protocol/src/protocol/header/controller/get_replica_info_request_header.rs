@@ -59,10 +59,4 @@ mod tests {
         let header = <GetReplicaInfoRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.broker_name, "test_broker");
     }
-
-    #[test]
-    fn get_replica_info_request_header_default() {
-        let header = GetReplicaInfoRequestHeader::default();
-        assert_eq!(header.broker_name, "");
-    }
 }

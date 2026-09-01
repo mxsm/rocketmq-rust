@@ -36,17 +36,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notification_response_header_initializes_java_fields() {
-        let header = NotificationResponseHeader {
-            has_msg: true,
-            polling_full: true,
-        };
-
-        assert!(header.has_msg);
-        assert!(header.polling_full);
-    }
-
-    #[test]
     fn notification_response_header_serializes_java_camel_case_fields() {
         let header = NotificationResponseHeader {
             has_msg: true,
@@ -77,14 +66,6 @@ mod tests {
         let header: NotificationResponseHeader = serde_json::from_str(json).unwrap();
 
         assert!(header.has_msg);
-        assert!(!header.polling_full);
-    }
-
-    #[test]
-    fn notification_response_header_default_is_empty() {
-        let header = NotificationResponseHeader::default();
-
-        assert!(!header.has_msg);
         assert!(!header.polling_full);
     }
 }

@@ -73,31 +73,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn getters_and_setters() {
-        let mut header = GetConsumeStatsRequestHeader {
-            consumer_group: CheetahString::from("testGroup"),
-            topic: CheetahString::from("testTopic"),
-            topic_list: None,
-            topic_request_header: None,
-        };
-
-        assert_eq!(header.get_consumer_group(), "testGroup");
-        assert_eq!(header.get_topic(), "testTopic");
-
-        header.set_consumer_group(CheetahString::from("newGroup"));
-        header.set_topic(CheetahString::from("newTopic"));
-
-        assert_eq!(header.get_consumer_group(), "newGroup");
-        assert_eq!(header.get_topic(), "newTopic");
-    }
-    #[test]
     fn get_consume_stats_request_header_serde() {
-        let header = GetConsumeStatsRequestHeader {
-            consumer_group: CheetahString::from("testGroup"),
-            topic: CheetahString::from("testTopic"),
+        let mut header = GetConsumeStatsRequestHeader {
+            consumer_group: CheetahString::new(),
+            topic: CheetahString::new(),
             topic_list: None,
             topic_request_header: None,
         };
+        header.set_consumer_group(CheetahString::from("testGroup"));
+        header.set_topic(CheetahString::from("testTopic"));
 
         let json = serde_json::to_string(&header).unwrap();
 

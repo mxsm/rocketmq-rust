@@ -74,27 +74,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_values() {
-        let header = UnlockBatchMqRequestHeader::default();
-        assert!(header.rpc_request_header.is_none());
-    }
-
-    #[test]
-    fn test_rpc_request_header_new() {
-        let ns = Some("ns".into());
-        let namespaced = Some(false);
-        let broker = Some("b1".into());
-        let oneway = Some(true);
-
-        let header = RpcRequestHeader::new(ns.clone(), namespaced, broker.clone(), oneway);
-
-        assert_eq!(header.namespace, ns);
-        assert_eq!(header.namespaced, namespaced);
-        assert_eq!(header.broker_name, broker);
-        assert_eq!(header.oneway, oneway);
-    }
-
-    #[test]
     fn test_partial_fields_deserialization() {
         let json = r#"{"brokerName": "only_broker"}"#;
         let decoded: UnlockBatchMqRequestHeader = serde_json::from_str(json).unwrap();

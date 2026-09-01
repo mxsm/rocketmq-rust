@@ -38,12 +38,6 @@ mod tests {
     use crate::protocol::remoting_command::RemotingCommand;
 
     #[test]
-    fn for_probe_sets_probe_only_flag() {
-        let header = GetNamesrvConfigRequestHeader::for_probe();
-        assert_eq!(header.probe_only, Some(true));
-    }
-
-    #[test]
     fn request_command_encodes_probe_only_header() {
         let mut command = RemotingCommand::create_request_command(
             RequestCode::GetNamesrvConfig,

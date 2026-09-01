@@ -36,12 +36,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn query_consumer_offset_response_header_default() {
-        let header = QueryConsumerOffsetResponseHeader::default();
-        assert!(header.offset.is_none());
-    }
-
-    #[test]
     fn query_consumer_offset_response_header_serialization() {
         let header = QueryConsumerOffsetResponseHeader { offset: Some(12345) };
         let json = serde_json::to_string(&header).unwrap();

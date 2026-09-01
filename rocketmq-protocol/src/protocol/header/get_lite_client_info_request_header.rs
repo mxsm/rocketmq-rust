@@ -72,15 +72,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn get_lite_client_info_request_header_defaults_max_count() {
-        let header = GetLiteClientInfoRequestHeader::default();
-        assert_eq!(header.max_count, 1000);
-        assert!(header.parent_topic.is_none());
-        assert!(header.group.is_none());
-        assert!(header.client_id.is_none());
-    }
-
-    #[test]
     fn get_lite_client_info_request_header_serializes_to_map() {
         let header = GetLiteClientInfoRequestHeader {
             parent_topic: Some("parent".into()),
@@ -127,7 +118,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_max_count_uses_java_default() {
+    fn default_paths_use_java_max_count() {
+        let default = GetLiteClientInfoRequestHeader::default();
+        assert!(default.parent_topic.is_none());
+        assert!(default.group.is_none());
+        assert!(default.client_id.is_none());
+        assert_eq!(default.max_count, 1000);
+
         let header = <GetLiteClientInfoRequestHeader as FromMap>::from(&HashMap::new()).unwrap();
         assert_eq!(header.max_count, 1000);
     }

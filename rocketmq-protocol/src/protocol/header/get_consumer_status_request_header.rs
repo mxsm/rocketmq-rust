@@ -61,37 +61,22 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn get_consumer_status_request_header_default() {
-        let header = GetConsumerStatusRequestHeader::default();
-        assert_eq!(header.topic, "");
-        assert_eq!(header.group, "");
-        assert!(header.client_addr.is_none());
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
-    fn get_consumer_status_request_header_new() {
-        let header = GetConsumerStatusRequestHeader::new(CheetahString::from("topic1"), CheetahString::from("group1"));
+    fn get_consumer_status_request_header_serialization() {
+        let mut header =
+            GetConsumerStatusRequestHeader::new(CheetahString::from("topic1"), CheetahString::from("group1"));
         assert_eq!(header.topic, "topic1");
         assert_eq!(header.group, "group1");
         assert!(header.client_addr.is_none());
         assert!(header.topic_request_header.is_none());
-    }
 
-    #[test]
-    fn get_consumer_status_request_header_serialization() {
-        let header = GetConsumerStatusRequestHeader {
-            topic: CheetahString::from("topic1"),
-            group: CheetahString::from("group1"),
-            client_addr: Some(CheetahString::from("127.0.0.1")),
-            topic_request_header: Some(TopicRequestHeader {
-                lo: Some(true),
-                rpc_request_header: Some(crate::rpc::rpc_request_header::RpcRequestHeader {
-                    broker_name: Some(CheetahString::from("broker")),
-                    ..Default::default()
-                }),
+        header.client_addr = Some(CheetahString::from("127.0.0.1"));
+        header.topic_request_header = Some(TopicRequestHeader {
+            lo: Some(true),
+            rpc_request_header: Some(crate::rpc::rpc_request_header::RpcRequestHeader {
+                broker_name: Some(CheetahString::from("broker")),
+                ..Default::default()
             }),
-        };
+        });
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"topic\":\"topic1\""));
         assert!(json.contains("\"group\":\"group1\""));

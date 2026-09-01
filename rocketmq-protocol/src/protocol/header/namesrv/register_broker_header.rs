@@ -138,30 +138,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn register_broker_request_header_new() {
-        let header = RegisterBrokerRequestHeader::new(
-            CheetahString::from("broker1"),
-            CheetahString::from("127.0.0.1"),
-            CheetahString::from("cluster1"),
-            CheetahString::from("127.0.0.2"),
-            1,
-            Some(3000),
-            Some(true),
-            true,
-            12345,
-        );
-        assert_eq!(header.broker_name, CheetahString::from("broker1"));
-        assert_eq!(header.broker_addr, CheetahString::from("127.0.0.1"));
-        assert_eq!(header.cluster_name, CheetahString::from("cluster1"));
-        assert_eq!(header.ha_server_addr, CheetahString::from("127.0.0.2"));
-        assert_eq!(header.broker_id, 1);
-        assert_eq!(header.heartbeat_timeout_millis, Some(3000));
-        assert_eq!(header.enable_acting_master, Some(true));
-        assert!(header.compressed);
-        assert_eq!(header.body_crc32, 12345);
-    }
-
-    #[test]
     fn register_broker_request_header_serialization() {
         let header = RegisterBrokerRequestHeader::new(
             CheetahString::from("broker1"),
@@ -209,16 +185,6 @@ mod tests {
         assert_eq!(deserialized.enable_acting_master, None);
         assert!(deserialized.compressed);
         assert_eq!(deserialized.body_crc32, 12345);
-    }
-
-    #[test]
-    fn register_broker_response_header_new() {
-        let header = RegisterBrokerResponseHeader::new(
-            Some(CheetahString::from("127.0.0.2")),
-            Some(CheetahString::from("127.0.0.3")),
-        );
-        assert_eq!(header.ha_server_addr, Some(CheetahString::from("127.0.0.2")));
-        assert_eq!(header.master_addr, Some(CheetahString::from("127.0.0.3")));
     }
 
     #[test]

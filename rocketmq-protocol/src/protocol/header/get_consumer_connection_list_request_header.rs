@@ -48,13 +48,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn getters_and_setters() {
+    fn serde_preserves_the_consumer_group() {
         let mut header = GetConsumerConnectionListRequestHeader {
-            consumer_group: CheetahString::from("group1"),
+            consumer_group: CheetahString::new(),
             rpc_request_header: None,
         };
-        assert_eq!(header.get_consumer_group(), "group1");
-        header.set_consumer_group(CheetahString::from("group2"));
-        assert_eq!(header.get_consumer_group(), "group2");
+        header.set_consumer_group(CheetahString::from("group-a"));
+
+        let json = serde_json::to_string(&header).unwrap();
+        assert_eq!(json, r#"{"consumerGroup":"group-a"}"#);
+
+        let decoded: GetConsumerConnectionListRequestHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.get_consumer_group(), "group-a");
     }
 }

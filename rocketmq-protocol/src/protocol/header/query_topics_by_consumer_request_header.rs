@@ -59,27 +59,18 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn constructor_and_accessors_manage_the_group() {
-        let mut header = QueryTopicsByConsumerRequestHeader::new("before");
-
-        assert_eq!(header.get_group(), "before");
+    fn serde_flattens_the_java_rpc_keys() {
+        let mut header = QueryTopicsByConsumerRequestHeader::new("initial-group");
+        assert_eq!(header.get_group(), "initial-group");
         assert!(header.rpc_request_header.is_none());
 
-        header.set_group(CheetahString::from("after"));
-        assert_eq!(header.get_group(), "after");
-    }
-
-    #[test]
-    fn serde_flattens_the_java_rpc_keys() {
-        let header = QueryTopicsByConsumerRequestHeader {
-            group: CheetahString::from("group-a"),
-            rpc_request_header: Some(RpcRequestHeader {
-                namespace: Some(CheetahString::from("namespace-a")),
-                namespaced: Some(true),
-                broker_name: None,
-                oneway: None,
-            }),
-        };
+        header.set_group(CheetahString::from("group-a"));
+        header.rpc_request_header = Some(RpcRequestHeader {
+            namespace: Some(CheetahString::from("namespace-a")),
+            namespaced: Some(true),
+            broker_name: None,
+            oneway: None,
+        });
         let value = serde_json::to_value(&header).unwrap();
 
         assert_eq!(
@@ -94,7 +85,7 @@ mod tests {
         );
 
         let decoded: QueryTopicsByConsumerRequestHeader = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.group, "group-a");
+        assert_eq!(decoded.get_group(), "group-a");
         assert_eq!(
             decoded.rpc_request_header.unwrap().namespace.as_deref(),
             Some("namespace-a")

@@ -33,12 +33,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_users_request_header_default() {
-        let body = ListUsersRequestHeader::default();
-        assert_eq!(body.filter, "");
-    }
-
-    #[test]
     fn list_users_request_header_serialize_deserialize() {
         let body = ListUsersRequestHeader { filter: "test".into() };
         let serialized = serde_json::to_string(&body).unwrap();

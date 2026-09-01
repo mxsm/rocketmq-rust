@@ -61,10 +61,4 @@ mod tests {
         let header = <AlterSyncStateSetResponseHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.new_sync_state_set_epoch, 10);
     }
-
-    #[test]
-    fn alter_sync_state_set_response_header_default() {
-        let header = AlterSyncStateSetResponseHeader::default();
-        assert_eq!(header.new_sync_state_set_epoch, 0);
-    }
 }

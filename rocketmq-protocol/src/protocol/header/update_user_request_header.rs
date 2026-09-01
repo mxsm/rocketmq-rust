@@ -41,21 +41,9 @@ mod tests {
     use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
 
     #[test]
-    fn set_username_replaces_the_current_value() {
-        let mut header = UpdateUserRequestHeader {
-            username: CheetahString::from("before"),
-        };
-
-        header.set_username(CheetahString::from("after"));
-
-        assert_eq!(header.username, "after");
-    }
-
-    #[test]
     fn serde_and_v3_codec_preserve_the_username() {
-        let header = UpdateUserRequestHeader {
-            username: CheetahString::from("user-a"),
-        };
+        let mut header = UpdateUserRequestHeader::default();
+        header.set_username(CheetahString::from("user-a"));
         let json = serde_json::to_string(&header).unwrap();
         let map = header.to_map().unwrap();
 

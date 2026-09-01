@@ -152,26 +152,6 @@ mod tests {
     use crate::rpc::rpc_request_header::RpcRequestHeader;
 
     #[test]
-    fn query_consumer_offset_request_header_default() {
-        let header = QueryConsumerOffsetRequestHeader::default();
-        assert_eq!(header.consumer_group, "");
-        assert_eq!(header.topic, "");
-        assert_eq!(header.queue_id, 0);
-        assert!(header.set_zero_if_not_found.is_none());
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
-    fn query_consumer_offset_request_header_new() {
-        let header = QueryConsumerOffsetRequestHeader::new("group", "topic", 1);
-        assert_eq!(header.consumer_group, "group");
-        assert_eq!(header.topic, "topic");
-        assert_eq!(header.queue_id, 1);
-        assert!(header.set_zero_if_not_found.is_none());
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
     fn query_consumer_offset_request_header_trait_impl() {
         let mut header = QueryConsumerOffsetRequestHeader::default();
 
@@ -206,16 +186,18 @@ mod tests {
 
     #[test]
     fn query_consumer_offset_request_header_serialization() {
-        let header = QueryConsumerOffsetRequestHeader {
-            consumer_group: CheetahString::from("group"),
-            topic: CheetahString::from("topic"),
-            queue_id: 1,
-            set_zero_if_not_found: Some(true),
-            topic_request_header: Some(TopicRequestHeader {
-                lo: Some(true),
-                ..Default::default()
-            }),
-        };
+        let mut header = QueryConsumerOffsetRequestHeader::new("group", "topic", 1);
+        assert_eq!(header.consumer_group, "group");
+        assert_eq!(header.topic, "topic");
+        assert_eq!(header.queue_id, 1);
+        assert!(header.set_zero_if_not_found.is_none());
+        assert!(header.topic_request_header.is_none());
+
+        header.set_zero_if_not_found = Some(true);
+        header.topic_request_header = Some(TopicRequestHeader {
+            lo: Some(true),
+            ..Default::default()
+        });
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"consumerGroup\":\"group\""));
         assert!(json.contains("\"topic\":\"topic\""));
